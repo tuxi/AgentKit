@@ -1,7 +1,14 @@
 # AgentKit
-AgentKit is a Swift framework for building modern AI Agent experiences on Apple platforms.
+> Build modern AI Agent experiences for Apple platforms.
 
-It provides a production-ready conversation UI, event-driven rendering, session management, and a transport protocol that works with any agent runtime.
+*AgentKit* is an open-source Swift framework for building production-quality AI Agent applications on *iOS*, *macOS*.
 
-AgentKit is transport-agnostic and server-agnostic. It can connect to CodeAgent, DreamAI, OpenAI-compatible services, or any custom agent backend.
-# AgentKit
+It provides everything needed to build a modern conversational agent interface:
+* 💬 Conversation UI
+* ⚡ Streaming responses
+* 🧠 Thinking / Tool / Observation timeline
+* ✅ Human approval workflow
+* 📋 Todo visualization
+* 📎 Artifact & Inspector
+* 🔄 Event-driven runtime
+* 🌐 Transport-agnostic networking
