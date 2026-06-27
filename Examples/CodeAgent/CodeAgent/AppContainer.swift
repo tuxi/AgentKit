@@ -28,6 +28,7 @@ final class AppContainer {
     private func registerClientTools() {
         Task {
             await toolRegistry.register(DeviceInfoTool())
+            await toolRegistry.register(ScreenshotTool())
         }
     }
 
