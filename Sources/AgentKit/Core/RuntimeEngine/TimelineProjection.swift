@@ -21,10 +21,13 @@ public struct TimelineProjection: Sendable {
     }
 
     /// Project the graph into a chronological timeline.
-    /// Walks .next edges from root, converts each GraphNode → ExecutionNode, applies merge.
+    /// Walks .next edges from root, converts each GraphNode → ExecutionNode,
+    /// merge → reorder thinking first → merge again (thinking fragments may now be adjacent).
     public func project(_ graph: ExecutionGraph) -> [ExecutionNode] {
         let rawNodes = graph.linearWalk().compactMap { projectNode($0) }
-        return applyMerge(rawNodes)
+        let merged = applyMerge(rawNodes)
+        let ordered = prioritizeThinking(merged)
+        return applyMerge(ordered)
     }
 
     /// Convert a single GraphNode to an ExecutionNode.
@@ -124,6 +127,44 @@ public struct TimelineProjection: Sendable {
             error: graphNode.status == .failed ? payload.output : nil
         )
         return ToolSemanticCompiler.compile(mutableItem, turnID: graphNode.turnID)
+    }
+
+    // MARK: - Render priority
+
+    /// Ensure thinking nodes render before assistant message nodes within each turn.
+    /// Stable reorder: only swaps when thinking appears after assistant text.
+    /// If the server sends events in correct order (thinking first), this is a no-op.
+    private func prioritizeThinking(_ nodes: [ExecutionNode]) -> [ExecutionNode] {
+        // Indexed stable sort: preserve relative order except for the thinking-before-assistant rule
+        var indexed = nodes.enumerated().map { (index: $0.offset, node: $0.element) }
+        indexed.sort { a, b in
+            // Only reorder within the same turn
+            guard a.node.turnID == b.node.turnID else {
+                return a.index < b.index
+            }
+            // thinking nodes should appear before assistant message nodes
+            let aIsThinking = isThinkingKind(a.node.kind)
+            let bIsThinking = isThinkingKind(b.node.kind)
+            let aIsAssistant = isAssistantKind(a.node.kind)
+            let bIsAssistant = isAssistantKind(b.node.kind)
+
+            if aIsThinking && bIsAssistant { return true }
+            if aIsAssistant && bIsThinking { return false }
+
+            // Preserve original order for all other combinations
+            return a.index < b.index
+        }
+        return indexed.map { $0.node }
+    }
+
+    private func isThinkingKind(_ kind: ExecutionNodeKind) -> Bool {
+        if case .thinking = kind { return true }
+        return false
+    }
+
+    private func isAssistantKind(_ kind: ExecutionNodeKind) -> Bool {
+        if case .message(let p) = kind, p.role == .assistant { return true }
+        return false
     }
 
     // MARK: - Merge

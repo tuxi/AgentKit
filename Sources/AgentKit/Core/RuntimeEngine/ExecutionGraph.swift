@@ -29,6 +29,9 @@ public struct ExecutionGraph: Sendable {
     /// Ordered edge IDs for traversal (maintains insertion order for topological sort).
     public var edgeOrder: [EdgeID] = []
 
+    /// Cached last node ID — avoids O(n) traversal on every append.
+    var lastNodeID: NodeID?
+
     public init() {}
 
     // MARK: - Mutations

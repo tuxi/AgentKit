@@ -463,14 +463,19 @@ public struct ExecutionReducer: Sendable {
 
     private mutating func handleTodoUpdated(turnID: String, todos: [TodoItem], ts: TimeInterval,
                                              graph: inout ExecutionGraph) -> [NodeID] {
-        // Represent todos as a system node for now
         let text = todos.map { "[\($0.status.rawValue)] \($0.content)" }.joined(separator: "\n")
         let nodeID = "\(turnID)_todos"
         let payload = SystemPayload(kind: .modelActivity, text: text,
                                      metadata: ["type": "todos", "count": String(todos.count)])
         let node = GraphNode(id: nodeID, kind: .system, payload: .system(payload),
                              status: .completed, timestamp: ts, turnID: turnID)
-        appendNode(node, to: &graph)
+
+        // Update existing node — don't create duplicate edges (branches)
+        if graph.nodes[nodeID] != nil {
+            graph.upsertNode(node)
+        } else {
+            appendNode(node, to: &graph)
+        }
         return [nodeID]
     }
 
@@ -522,12 +527,14 @@ public struct ExecutionReducer: Sendable {
     // MARK: - Helpers
 
     /// Append a node to the graph, linking it via .next edge from the previous last node.
+    /// Uses cached lastNodeID for O(1) instead of O(n) traversal.
     private mutating func appendNode(_ node: GraphNode, to graph: inout ExecutionGraph) {
-        if let lastID = graph.lastNode?.id {
+        if let lastID = graph.lastNodeID {
             let edge = GraphEdge(from: lastID, to: node.id, type: .next)
             graph.addEdge(edge)
         }
         graph.upsertNode(node)
+        graph.lastNodeID = node.id
     }
 }
 

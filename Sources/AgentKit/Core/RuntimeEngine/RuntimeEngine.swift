@@ -21,13 +21,20 @@ public struct RuntimeSnapshot: Sendable {
     /// Token & timing from the most recent model_finished event.
     public let modelStats: ModelStats?
     public let isLive: Bool
+    /// Monotonic counter — increments on every snapshot yield.
+    /// UI uses this to trigger auto-scroll during streaming.
+    public let generation: UInt64
+    /// When the current model invocation started. Non-nil = model is actively thinking.
+    public let modelStartedAt: Date?
 
     public init(graph: ExecutionGraph, timeline: [ExecutionNode],
                 pendingApproval: ApprovalRequest? = nil,
                 pendingPlanApproval: PlanApprovalRequest? = nil,
                 latestTodos: [TodoItem] = [],
                 modelStats: ModelStats? = nil,
-                isLive: Bool = false) {
+                isLive: Bool = false,
+                generation: UInt64 = 0,
+                modelStartedAt: Date? = nil) {
         self.graph = graph
         self.timeline = timeline
         self.pendingApproval = pendingApproval
@@ -35,6 +42,8 @@ public struct RuntimeSnapshot: Sendable {
         self.latestTodos = latestTodos
         self.modelStats = modelStats
         self.isLive = isLive
+        self.generation = generation
+        self.modelStartedAt = modelStartedAt
     }
 
     /// Empty snapshot for initial state.
@@ -98,15 +107,21 @@ public actor RuntimeEngine {
     /// Stats from the most recent model_finished event.
     private var _modelStats: ModelStats?
 
+    /// When the current model invocation started. Non-nil = model is thinking.
+    private var _modelStartedAt: Date?
+
     /// Whether the live WebSocket is connected.
     private var isLive: Bool = false
 
     /// UI continuation for RuntimeSnapshot stream.
     private var continuation: AsyncStream<RuntimeSnapshot>.Continuation?
 
-    /// Coalescing timer for delta events (50ms debounce).
+    /// Coalescing timer for delta events (16ms debounce).
     private var flushTask: Task<Void, Never>?
     private var pendingFlush: Bool = false
+
+    /// Monotonic snapshot counter for scroll tracking.
+    private var generation: UInt64 = 0
 
     // MARK: - Init
 
@@ -135,8 +150,13 @@ public actor RuntimeEngine {
         if case .todoUpdated(_, let todos) = event {
             _latestTodos = todos
         }
-        // Track model stats from model_finished
+        // Track model started
+        if case .modelStarted = event {
+            _modelStartedAt = Date()
+        }
+        // Track model stats from model_finished + clear thinking timer
         if case .modelFinished(_, let promptTokens, let elapsedMs, _) = event {
+            _modelStartedAt = nil
             if let tokens = promptTokens, let ms = elapsedMs, tokens > 0 || ms > 0 {
                 _modelStats = ModelStats(promptTokens: tokens, elapsedMs: ms)
             }
@@ -145,6 +165,7 @@ public actor RuntimeEngine {
         if case .turnStarted = event {
             _pendingApproval = nil
             _modelStats = nil
+            _modelStartedAt = nil
         }
 
         // Reduce into graph
@@ -228,11 +249,14 @@ public actor RuntimeEngine {
             pendingPlanApproval: _pendingPlanApproval,
             latestTodos: _latestTodos,
             modelStats: _modelStats,
-            isLive: isLive
+            isLive: isLive,
+            generation: generation,
+            modelStartedAt: _modelStartedAt
         )
     }
 
     private func yieldSnapshot() {
+        generation += 1
         let snapshot = buildSnapshot()
         continuation?.yield(snapshot)
         pendingFlush = false

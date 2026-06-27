@@ -37,6 +37,17 @@ public struct ChronologicalTimelineView: View {
                             .id(presentation.id)
                     }
 
+                    // Thinking timer — live counter while model is processing
+                    if snapshot.modelStartedAt != nil || snapshot.modelStats != nil {
+                        ThinkingTimerView(
+                            modelStartedAt: snapshot.modelStartedAt,
+                            modelStats: snapshot.modelStats,
+                            isLive: snapshot.isLive
+                        )
+                        .id("thinking_timer")
+                        .padding(.top, 4)
+                    }
+
                     // Model stats bar (token usage + timing)
                     if let stats = snapshot.modelStats {
                         HStack(spacing: 8) {
@@ -61,11 +72,12 @@ public struct ChronologicalTimelineView: View {
                 }
                 .padding()
             }
-            .onChange(of: snapshot.timeline.count) { _, _ in
-                scrollToBottom(proxy: proxy)
-            }
-            .onChange(of: snapshot.timeline.last?.id) { _, _ in
-                scrollToBottom(proxy: proxy)
+            .onChange(of: snapshot.generation) { _, _ in
+                // Auto-scroll on every snapshot update during live streaming.
+                // generation increments even when timeline.count is unchanged (token_delta updates).
+                if snapshot.isLive {
+                    scrollToBottom(proxy: proxy)
+                }
             }
         }
     }

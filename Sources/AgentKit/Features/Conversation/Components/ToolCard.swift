@@ -17,7 +17,6 @@ struct ToolCard: View {
     init(tool: ToolNodePayload, store: WorkspaceStore) {
         self.tool = tool
         self.store = store
-        // Auto-expand while running
         self._isExpanded = State(initialValue: tool.status == .running)
     }
 
@@ -134,6 +133,14 @@ struct ToolCard: View {
         .padding(.vertical, 6)
         .background(.quaternary.opacity(0.5))
         .clipShape(RoundedRectangle(cornerRadius: 8))
+        .onChange(of: tool.status) { _, newStatus in
+            // Auto-expand when tool starts running (streaming output arriving)
+            if newStatus == .running {
+                withAnimation(.easeOut(duration: 0.15)) {
+                    isExpanded = true
+                }
+            }
+        }
     }
 
     // MARK: - Helpers
