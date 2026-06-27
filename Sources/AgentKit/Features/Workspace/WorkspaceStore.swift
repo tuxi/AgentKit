@@ -58,8 +58,11 @@ public final class WorkspaceStore {
 
     // MARK: - Runtime Client
 
-    /// 与 CodeAgent Runtime 通信的客户端（agent-wire v1）。
+    /// 与 Agent Runtime 通信的客户端（agent-wire v1）。
     public let client: RuntimeClient
+
+    /// 客户端工具注册表。
+    private let toolRegistry: ToolRegistry
 
     // MARK: - ViewModels
 
@@ -71,8 +74,9 @@ public final class WorkspaceStore {
 
     // MARK: - Init
 
-    public init(client: RuntimeClient = DefaultAgentClient()) {
+    public init(client: RuntimeClient = DefaultAgentClient(), toolRegistry: ToolRegistry = ToolRegistry()) {
         self.client = client
+        self.toolRegistry = toolRegistry
         self.listViewModel = ConversationListViewModel(client: client)
     }
 
@@ -82,7 +86,7 @@ public final class WorkspaceStore {
     private func connectToConversation(_ conversation: ConversationRef) async {
         // 已由 commitDraft 构建并连接好（首条消息路径）→ 不重复连接。
         if activeConversationViewModel?.conversation?.id == conversation.id { return }
-        let vm = ConversationViewModel(client: client)
+        let vm = ConversationViewModel(client: client, toolRegistry: toolRegistry)
         await vm.connect(to: conversation)
         activeConversationViewModel = vm
     }
@@ -115,9 +119,9 @@ public final class WorkspaceStore {
         draft?.state = .committing
         do {
             let ref = try await client.createConversation(workspacePath: workspace.url.path)
-            let vm = ConversationViewModel(client: client, workspace: workspace)
+            let vm = ConversationViewModel(client: client, toolRegistry: toolRegistry, workspace: workspace)
             await vm.connect(to: ref)
-            await vm.sendMessage(firstMessage)
+            await vm.send(input: .text(firstMessage))
 
             // 草稿 → 真实会话
             activeConversationViewModel = vm

@@ -3,7 +3,13 @@
 //  AgentKit
 //
 //  向后兼容别名。新代码请直接使用 `RuntimeClient` 协议。
-//  `DefaultAgentClient` 是 RuntimeClient 的唯一实现。
+//  `DefaultAgentClient` 现在是 thin facade over `AgentTransport`。
+//
+//  Protocol: AgentKit Runtime Protocol v1.1
+//
+//  架构：
+//    UI → RuntimeClient → DefaultAgentClient (facade)
+//       → AgentTransport → CodeAgentTransport (impl)
 //
 
 import Foundation

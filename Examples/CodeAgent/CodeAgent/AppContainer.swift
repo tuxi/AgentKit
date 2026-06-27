@@ -2,27 +2,40 @@
 //  AppContainer.swift
 //  CodeAgent
 //
-//  Created by xiaoyuan on 2026/6/25.
+//  Example app dependency container.
+//  Demonstrates: client tool registration for P1 client tool execution.
 //
 
 import Foundation
 import AgentKit
 
-
 @Observable
 final class AppContainer {
-    
+
     let wsClient: WebSocketClient
-    
+
+    /// 客户端工具注册表 — 注册本地可执行工具。
+    let toolRegistry: ToolRegistry
+
     init(wsClient: WebSocketClient) {
         self.wsClient = wsClient
+        self.toolRegistry = ToolRegistry()
+
+        // P1: 注册客户端工具（Go 服务端无法执行的本地工具）
+        registerClientTools()
     }
-    
+
+    private func registerClientTools() {
+        Task {
+            await toolRegistry.register(DeviceInfoTool())
+        }
+    }
+
     func makeAgentClient() -> RuntimeClient {
         return DefaultAgentClient()
     }
-    
+
     func makeAgentDependencies() -> AgentDependencies {
-        AgentDependencies(client: makeAgentClient())
+        AgentDependencies(client: makeAgentClient(), toolRegistry: toolRegistry)
     }
 }

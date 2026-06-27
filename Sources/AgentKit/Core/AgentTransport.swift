@@ -1,0 +1,109 @@
+//
+//  AgentTransport.swift
+//  AgentKit
+//
+//  Agent Runtime Boundary — the single protocol boundary between
+//  AgentKit UI and any backend runtime.
+//
+//  This is NOT an "HTTP/WS abstraction". It is the Agent Runtime Boundary —
+//  all communication between UI and backend flows through this protocol.
+//
+//  Protocol: AgentKit Runtime Protocol v1.1 §AgentTransport
+//
+
+import Foundation
+
+// MARK: - AgentTransport
+
+/// Agent Runtime Boundary 协议。
+///
+/// 这是 UI 层与任何 backend runtime 之间的**唯一边界**。
+/// 实现方可替换：`CodeAgentTransport` / `DreamAITransport` / `MockTransport`。
+///
+/// ## 三层语义
+/// - **Session lifecycle**: `createConversation` / `attach` / `disconnect`
+/// - **Input plane**: `send(input:)`
+/// - **Control plane**: `approve` / `cancelTurn`
+/// - **History plane**: `getEvents` / `getMessages` / `getConversationDetail`
+/// - **Capability discovery**: `capabilities()`
+///
+/// ## Session model
+/// ```
+/// ConversationRef  = server-owned runtime identity
+/// attach(sessionID) = bind to existing server session (NOT create)
+/// disconnect()      = release transport binding (session lives on server)
+/// ```
+public protocol AgentTransport: Sendable {
+    /// Session 标识类型。默认为 `String`（`ConversationRef.id`）。
+    associatedtype SessionID = String
+
+    // MARK: - Session lifecycle
+
+    /// 在 backend 创建新的 runtime session。
+    /// - Returns: server-assigned `ConversationRef`（含 `id`）。
+    func createConversation(workspacePath: String) async throws -> ConversationRef
+
+    /// 列出 backend 内存中的活跃 session。
+    func listConversations() async throws -> [ConversationRef]
+
+    /// 绑定到已存在的 server-owned session，返回事件流。
+    ///
+    /// - Important: `attach` 不是创建新 session。
+    ///   `sessionID` 必须是 `createConversation()` 返回的 server-assigned id。
+    ///
+    /// - Parameter sessionID: server-assigned session identifier。
+    /// - Returns: `AsyncStream<AgentEvent>` — 持续产出事件直到连接断开。
+    func attach(sessionID: String) async throws -> AsyncStream<AgentEvent>
+
+    /// 释放传输层绑定。session 仍在 server 端存活。
+    func disconnect() async
+
+    // MARK: - Session state
+
+    /// 当前是否已连接到 backend session。
+    var isConnected: Bool { get }
+
+    /// 当前绑定的 session ID，未连接时为 `nil`。
+    var activeSessionID: String? { get }
+
+    // MARK: - Input
+
+    /// 发送结构化输入到 backend。
+    func send(input: AgentInput) async
+
+    // MARK: - Control plane
+
+    /// 回复工具审批请求。`id` 对应 `approval_request.id`。
+    func approve(id: String, value: Bool) async
+
+    /// 回复 Plan Mode 审批请求。`id` 对应 `plan_approval_request.id`。
+    func approvePlan(id: String, value: Bool) async
+
+    /// 取消当前正在执行的 turn。
+    func cancelTurn() async
+
+    // MARK: - History plane
+
+    /// 会话概要（由已记录事件派生）。
+    func getConversationDetail(id: String) async throws -> ConversationDetail
+
+    /// 对话主干消息（user/assistant）。
+    func getMessages(conversationID: String) async throws -> [Message]
+
+    /// 历史事件 — 用于 Timeline 回放。
+    func getEvents(conversationID: String) async throws -> [AgentEvent]
+
+    // MARK: - Tool registration
+
+    /// 向服务端注册客户端可执行工具。
+    /// 应在连接建立后（handshake 完成后）尽快调用。
+    func registerTools(_ tools: [ClientToolInfo]) async
+
+    // MARK: - Capability discovery
+
+    /// Backend runtime 能力声明。
+    ///
+    /// `async` 语义：未来可能 server-driven / dynamic feature gating。
+    /// UI 据此决定渲染策略，不写死 backend 能力判断。
+    func capabilities() async -> AgentCapabilityFlags
+}

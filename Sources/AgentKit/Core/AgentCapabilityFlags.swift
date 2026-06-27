@@ -1,0 +1,54 @@
+//
+//  AgentCapabilityFlags.swift
+//  AgentKit
+//
+//  Backend runtime capability declaration.
+//  UI reads this to adapt rendering — no hardcoded backend assumptions.
+//
+//  Protocol: AgentKit Runtime Protocol v1.1 §AgentCapabilityFlags
+//
+
+import Foundation
+
+// MARK: - AgentCapabilityFlags
+
+/// Backend runtime 能力声明。
+///
+/// 用 `OptionSet` 而非固定 struct：未来新增能力只需加 `static let`，
+/// 不破坏 API 兼容性。
+///
+/// ```swift
+/// let caps = await transport.capabilities()
+/// if caps.contains(.toolStreaming) { showLiveStdout() }
+/// ```
+public struct AgentCapabilityFlags: OptionSet, Sendable {
+    public let rawValue: UInt64
+
+    public init(rawValue: UInt64) {
+        self.rawValue = rawValue
+    }
+
+    // MARK: - Capabilities
+
+    /// 支持 `token_delta` 实时流式推送。
+    public static let streaming = AgentCapabilityFlags(rawValue: 1 << 0)
+    /// 支持 `thinking` 独立流。
+    public static let thinking = AgentCapabilityFlags(rawValue: 1 << 1)
+    /// 支持 `tool_stdout` / `tool_stderr` 实时 IO。
+    public static let toolStreaming = AgentCapabilityFlags(rawValue: 1 << 2)
+    /// 支持 `AgentInput` 携带 image。
+    public static let imageInput = AgentCapabilityFlags(rawValue: 1 << 3)
+    /// 支持 `plan_approval_request`。
+    public static let planMode = AgentCapabilityFlags(rawValue: 1 << 4)
+    /// 支持 `task_started` / `task_finished` 子 agent 事件。
+    public static let subagents = AgentCapabilityFlags(rawValue: 1 << 5)
+    /// 支持 wire-level session resume。
+    public static let sessionResume = AgentCapabilityFlags(rawValue: 1 << 6)
+    /// 支持客户端工具执行（tool_started executor: "client" + tool_result 回传）。
+    public static let clientToolExecution = AgentCapabilityFlags(rawValue: 1 << 7)
+
+    // MARK: - Presets
+
+    /// CodeAgent v1 默认能力集。
+    public static let `default`: AgentCapabilityFlags = [.streaming, .thinking]
+}

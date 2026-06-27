@@ -7,8 +7,20 @@
 
 import Foundation
 
-/// 会话引用：对应 `POST /v1/conversations` 与 `GET /v1/conversations` 的返回值。
-/// v1 只返回 `id`，metadata（title / model / 时间）属于 P1-B。
+/// 会话引用 — server-owned runtime execution context 的客户端句柄。
+///
+/// ## Session model (v1.1)
+/// - `id` 是 server-assigned execution context UUID，不是客户端生成的
+/// - `connect(conversationID:)` = attach 到已存在的 server session，不是创建新 session
+/// - session 的生命周期由 backend 管理（内存态 / 持久化）
+/// - 一个 client 同时只 attach 一个 session（一个 WebSocket 连接）
+///
+/// ## 三者关系
+/// ```
+/// ConversationRef         = server state identity
+/// AgentTransport.attach() = transport binding (WebSocket)
+/// RuntimeEngine           = UI-side state projection
+/// ```
 public struct ConversationRef: Identifiable, Hashable, Sendable, Codable {
     public let id: String
     public let workspacePath: String

@@ -24,8 +24,8 @@ public struct WorkspaceView: View {
 
     public init(dependencies: AgentDependencies) {
         self.dependencies = dependencies
-        // 从依赖注入 RuntimeClient 到 WorkspaceStore
-        self._store = State(initialValue: WorkspaceStore(client: dependencies.client))
+        // 从依赖注入 RuntimeClient + ToolRegistry 到 WorkspaceStore
+        self._store = State(initialValue: WorkspaceStore(client: dependencies.client, toolRegistry: dependencies.toolRegistry))
     }
 
     public var body: some View {

@@ -2,8 +2,15 @@
 //  RuntimeClient.swift
 //  AgentKit
 //
-//  RuntimeClient 协议 — Swift 侧消费 agent-wire v1 的唯一入口。
+//  RuntimeClient 协议 — AgentKit UI 消费 Agent Runtime 的唯一入口。
 //  ViewModel 只依赖此协议，不直接接触 HTTP / WebSocket / WireFrame。
+//
+//  Protocol: AgentKit Runtime Protocol v1.1 §RuntimeClient
+//
+//  架构分层：
+//     UI → RuntimeClient (facade protocol)
+//        → AgentTransport (runtime boundary protocol)
+//        → CodeAgentTransport / DreamAITransport / MockTransport
 //
 
 import Foundation
@@ -11,21 +18,35 @@ import Foundation
 // MARK: - RuntimeClient protocol
 
 public protocol RuntimeClient: Sendable {
-    /// 新建会话。
-    /// - Parameter workspacePath: 工作区路径（v1 服务端忽略，但按协议写入）。
-    /// - Returns: 包含服务端分配 `id` 的引用。
+    /// 在 backend 创建新的 runtime session。
+    /// - Parameter workspacePath: 工作区路径。
+    /// - Returns: 包含 server-assigned `id` 的 `ConversationRef`。
     func createConversation(workspacePath: String) async throws -> ConversationRef
 
-    /// 列出当前内存中的会话。
+    /// 列出 backend 内存中的活跃 session。
     func listConversations() async throws -> [ConversationRef]
 
-    /// 连接指定会话的事件流。
-    /// - Parameter conversationID: 会话 id。
-    /// - Returns: 一个 `AsyncStream`，持续产生 `AgentEvent` 直到连接断开。
+    /// 绑定到已存在的 server-owned session，返回事件流。
+    ///
+    /// ⚠️ `connect` = attach to server-owned session, NOT create session.
+    ///
+    /// - Parameter conversationID: server-assigned session id。
+    /// - Returns: `AsyncStream<AgentEvent>` — 持续产出事件直到连接断开。
     func connect(conversationID: String) async throws -> AsyncStream<AgentEvent>
 
-    /// 驱动一轮对话（fire-and-forget）。真正响应来自 event stream。
-    func sendMessage(_ text: String) async
+    /// 发送结构化输入到 backend runtime。
+    ///
+    /// 替代 `sendMessage(String)`。输入语义：execution graph continuation edge。
+    ///
+    /// ```swift
+    /// await client.send(input: .text("Hello"))
+    /// await client.send(input: .toolResult(ToolResultContent(toolUseID: "call_1", content: "...")))
+    /// ```
+    func send(input: AgentInput) async
+
+    /// 向服务端注册客户端可执行工具。
+    /// 应在连接建立后调用，服务端据此知道哪些工具可委托给客户端。
+    func registerTools(_ tools: [ClientToolInfo]) async
 
     /// 审批回复 — 对应某条 `approval_request`。
     func sendApproval(id: String, approved: Bool) async
@@ -36,10 +57,10 @@ public protocol RuntimeClient: Sendable {
     /// 取消当前正在执行的 turn。
     func cancelTurn() async
 
-    /// 断开当前连接。
+    /// 断开当前连接。session 仍在 server 端存活。
     func disconnect() async
 
-    // MARK: - 历史读取（§2）
+    // MARK: - 历史读取
 
     /// 会话概要（由已记录事件派生）。
     func getConversationDetail(id: String) async throws -> ConversationDetail
@@ -50,4 +71,15 @@ public protocol RuntimeClient: Sendable {
     /// 历史事件 — 用于 Timeline 回放。
     /// 推荐恢复流程：先调此方法渲染历史，再调 `connect()` 收增量。
     func getEvents(conversationID: String) async throws -> [AgentEvent]
+}
+
+// MARK: - Backward compatibility
+
+extension RuntimeClient {
+    /// 向后兼容：纯文本消息发送。
+    /// - Deprecated: 使用 `send(input: .text(...))` 替代。
+    @available(*, deprecated, message: "Use send(input: .text(...))")
+    public func sendMessage(_ text: String) async {
+        await send(input: .text(text))
+    }
 }

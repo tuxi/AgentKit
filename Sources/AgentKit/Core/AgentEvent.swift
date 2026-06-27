@@ -94,10 +94,12 @@ extension AgentEvent {
             return .thinking(turnID: turnID, text: wire.text ?? "")
 
         case "tool_started":
+            let executor = ToolExecutor(rawValue: wire.executor ?? "") ?? .server
             let tool = ToolCall(
                 callID: callID ?? "",
                 toolName: wire.toolName ?? "unknown",
-                toolArgs: wire.toolArgs
+                toolArgs: wire.toolArgs,
+                executor: executor
             )
             return .toolStarted(turnID: turnID, callID: callID ?? "", tool: tool)
 

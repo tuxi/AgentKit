@@ -48,6 +48,8 @@ struct WireFrame: Decodable {
     let ratio: Double?
     let chunk: String?
     let err: String?
+    let executor: String?           // v1.1: "server" | "client" (tool_started)
+    let capabilities: [String]?     // v1.1: hello 帧声明的能力列表
 
     enum CodingKeys: String, CodingKey {
         case type, kind, at, step, id, server
@@ -70,6 +72,8 @@ struct WireFrame: Decodable {
         case summaryChars = "summary_chars"
         case protocolVersion = "protocol_version"
         case deadlineMs = "deadline_ms"
+        case executor
+        case capabilities
     }
 }
 
@@ -88,7 +92,104 @@ struct WireTodo: Decodable {
 
 // MARK: - Outgoing message encodable structs
 
-/// 出站：驱动一个 turn。
+/// 出站：AgentInput wire encoding（v1.1）。
+/// 替代 `OutgoingSendMessage`，支持结构化输入。
+struct OutgoingAgentInput: Encodable {
+    let type = "agent_input"
+    let kind: String                // "text" | "tool_result" | "command" | "system"
+    let text: String?
+    let toolResult: OutgoingToolResult?
+    let metadata: [String: String]?
+    // system command fields
+    let command: String?            // system command name
+    let commandKey: String?
+    let commandValue: String?
+
+    enum CodingKeys: String, CodingKey {
+        case type, kind, text, metadata, command
+        case toolResult = "tool_result"
+        case commandKey = "command_key"
+        case commandValue = "command_value"
+    }
+
+    /// 从 `AgentInput` 编码。
+    static func from(input: AgentInput) -> OutgoingAgentInput {
+        switch input.kind {
+        case .text:
+            return OutgoingAgentInput(
+                kind: "text", text: input.text, toolResult: nil,
+                metadata: input.metadata, command: nil, commandKey: nil, commandValue: nil
+            )
+        case .toolResult:
+            let tr = input.toolResult.map {
+                OutgoingToolResult(toolUseID: $0.toolUseID, content: $0.content, isError: $0.isError)
+            }
+            return OutgoingAgentInput(
+                kind: "tool_result", text: nil, toolResult: tr,
+                metadata: input.metadata, command: nil, commandKey: nil, commandValue: nil
+            )
+        case .command:
+            return OutgoingAgentInput(
+                kind: "command", text: input.text, toolResult: nil,
+                metadata: input.metadata, command: nil, commandKey: nil, commandValue: nil
+            )
+        case .system(let cmd):
+            switch cmd {
+            case .patchContext(let key, let value):
+                return OutgoingAgentInput(
+                    kind: "system", text: nil, toolResult: nil,
+                    metadata: input.metadata,
+                    command: "patch_context", commandKey: key, commandValue: value
+                )
+            case .updateMemory(let key, let value):
+                return OutgoingAgentInput(
+                    kind: "system", text: nil, toolResult: nil,
+                    metadata: input.metadata,
+                    command: "update_memory", commandKey: key, commandValue: value
+                )
+            case .overridePlan(let planID):
+                return OutgoingAgentInput(
+                    kind: "system", text: nil, toolResult: nil,
+                    metadata: input.metadata,
+                    command: "override_plan", commandKey: nil, commandValue: planID
+                )
+            }
+        }
+    }
+}
+
+/// 出站：toolResult payload。
+struct OutgoingToolResult: Encodable {
+    let toolUseID: String
+    let content: String
+    let isError: Bool
+
+    enum CodingKeys: String, CodingKey {
+        case content
+        case toolUseID = "tool_use_id"
+        case isError = "is_error"
+    }
+}
+
+/// 出站：向服务端注册客户端工具（握手后立即发送）。
+struct OutgoingRegisterTools: Encodable {
+    let type = "register_tools"
+    let tools: [OutgoingClientToolDef]
+}
+
+struct OutgoingClientToolDef: Encodable {
+    let name: String
+    let description: String
+    let inputSchema: JSONValue?
+
+    enum CodingKeys: String, CodingKey {
+        case name, description
+        case inputSchema = "input_schema"
+    }
+}
+
+/// 出站：驱动一个 turn（v1 兼容）。
+@available(*, deprecated, message: "Use OutgoingAgentInput")
 struct OutgoingSendMessage: Encodable {
     let type = "send_message"
     let text: String

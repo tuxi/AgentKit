@@ -16,12 +16,21 @@ public struct ToolCall: Sendable, Hashable {
     public let toolName: String
     /// 结构化 JSON 对象，如 `{"command": "git push"}`。
     public let toolArgs: JSONValue?
+    /// v1.1：工具执行位置。"server"（默认）| "client"。
+    public let executor: ToolExecutor
 
-    public init(callID: String, toolName: String, toolArgs: JSONValue?) {
+    public init(callID: String, toolName: String, toolArgs: JSONValue?, executor: ToolExecutor = .server) {
         self.callID = callID
         self.toolName = toolName
         self.toolArgs = toolArgs
+        self.executor = executor
     }
+}
+
+/// 工具执行位置。
+public enum ToolExecutor: String, Sendable, Hashable {
+    case server
+    case client
 }
 
 // MARK: - ToolResult

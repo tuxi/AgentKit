@@ -48,13 +48,15 @@ public final class ConversationViewModel {
     public private(set) var messages: [Message] = []
 
     private let client: RuntimeClient
+    private let toolRegistry: ToolRegistry
     private var streamTask: Task<Void, Never>?
     private var snapshotTask: Task<Void, Never>?
 
     // MARK: - Init
 
-    public init(client: RuntimeClient, workspace: Workspace? = nil) {
+    public init(client: RuntimeClient, toolRegistry: ToolRegistry = ToolRegistry(), workspace: Workspace? = nil) {
         self.client = client
+        self.toolRegistry = toolRegistry
         self.workspace = workspace
     }
 
@@ -101,6 +103,12 @@ public final class ConversationViewModel {
 
         // Phase 2: 连接实时流 → feed to engine
         do {
+            // P1: 必须在 connect() 之前注册工具（onHandshake 闭包在 attach 时捕获 pendingTools）
+            let toolInfos = await toolRegistry.registeredToolInfos
+            if !toolInfos.isEmpty {
+                await client.registerTools(toolInfos)
+            }
+
             let eventStream = try await client.connect(conversationID: conversation.id)
             isConnected = true
             await eng.markLive()
@@ -117,9 +125,15 @@ public final class ConversationViewModel {
         }
     }
 
+    /// 发送结构化输入，驱动一轮对话。
+    public func send(input: AgentInput) async {
+        await client.send(input: input)
+    }
+
     /// 发送消息，驱动一轮对话。
+    @available(*, deprecated, message: "Use send(input: .text(...))")
     public func sendMessage(_ text: String) async {
-        await client.sendMessage(text)
+        await client.send(input: .text(text))
     }
 
     /// 回复审批请求。
@@ -184,10 +198,47 @@ public final class ConversationViewModel {
 
     /// v2: delegate to engine. ViewModel does NOT reduce.
     private func handleEvent(_ event: AgentEvent, engine: RuntimeEngine) async {
-        // Mirror to legacy state for backward compat during transition
         state.reduce(event)
-        // v2: engine ingests the event → reduces → projects → publishes snapshot
         await engine.ingest(event)
+
+        // P1: 拦截客户端工具执行
+        if case .toolStarted(_, let callID, let tool) = event,
+           tool.executor == .client {
+            Task { await executeClientTool(callID: callID, tool: tool) }
+        }
+    }
+
+    // MARK: - Client tool execution
+
+    /// 在本地执行客户端工具，并将结果回传给服务端。
+    private func executeClientTool(callID: String, tool: ToolCall) async {
+        // 查找已注册的本地工具
+        guard let clientTool = await toolRegistry.find(name: tool.toolName) else {
+            await client.send(input: .toolResult(ToolResultContent(
+                toolUseID: callID,
+                content: "No local handler registered for tool: \(tool.toolName)",
+                isError: true
+            )))
+            return
+        }
+
+        // 执行
+        let result: String
+        let isError: Bool
+        do {
+            result = try await clientTool.execute(args: tool.toolArgs)
+            isError = false
+        } catch {
+            result = error.localizedDescription
+            isError = true
+        }
+
+        // 回传
+        await client.send(input: .toolResult(ToolResultContent(
+            toolUseID: callID,
+            content: result,
+            isError: isError
+        )))
     }
 
     /// Mirror engine snapshot to legacy ConversationState for backward compat.

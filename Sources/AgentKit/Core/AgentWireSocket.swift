@@ -29,8 +29,15 @@ public final class AgentWireSocket: @unchecked Sendable {
     /// 握手状态：hello 帧到达前，所有消息都缓存或忽略。
     private var handshakeComplete = false
 
-    /// 确保只连接一次。
-    private var isConnected = false
+    /// hello 帧中声明的 server capabilities。
+    private(set) var serverCapabilities: [String] = []
+
+    /// hello 帧中的 server 标识。
+    private(set) var serverIdentifier: String?
+
+    /// 握手完成回调 — 在 hello 帧验证通过后、handshakeComplete 置 true 之后调用。
+    /// CodeAgentTransport 用此回调发送 `register_tools`。
+    var onHandshake: (@Sendable () -> Void)?
 
     // MARK: - Init
 
@@ -45,6 +52,14 @@ public final class AgentWireSocket: @unchecked Sendable {
         continuation?.finish()
         wsClient.disconnect()
     }
+
+    // MARK: - Session state
+
+    /// 当前是否已连接。
+    public var isConnected: Bool { handshakeComplete && wsClient.state == .connected }
+
+    /// 当前绑定的 session ID。
+    public var activeSessionID: String? { isConnected ? conversationID : nil }
 
     // MARK: - Public API
 
@@ -71,15 +86,12 @@ public final class AgentWireSocket: @unchecked Sendable {
                 self?.handleFrame(data: data)
             }
 
-            // 连接成功回调
-            self.wsClient.onConnected = { [weak self] in
-                self?.isConnected = true
-            }
+            // 连接成功回调（isConnected 由 computed property 自动派生）
+            self.wsClient.onConnected = {}
 
             // 断开回调 — 终止流
             self.wsClient.onDisconnected = { [weak self] _ in
                 self?.handshakeComplete = false
-                self?.isConnected = false
                 self?.continuation?.finish()
                 self?.continuation = nil
             }
@@ -89,9 +101,16 @@ public final class AgentWireSocket: @unchecked Sendable {
         }
     }
 
+    /// 发送结构化输入（fire-and-forget）。响应来自 event stream。
+    public func send(input: AgentInput) {
+        let outgoing = OutgoingAgentInput.from(input: input)
+        send(outgoing: outgoing)
+    }
+
     /// 发送消息（fire-and-forget）。响应来自 event stream。
+    @available(*, deprecated, message: "Use send(input:)")
     public func sendMessage(_ text: String) {
-        send(outgoing: OutgoingSendMessage(text: text))
+        send(input: .text(text))
     }
 
     /// 发送审批回复。
@@ -109,12 +128,21 @@ public final class AgentWireSocket: @unchecked Sendable {
         send(outgoing: OutgoingCancelTurn())
     }
 
+    /// 向服务端注册客户端工具。在握手完成后调用。
+    public func sendRegisterTools(_ tools: [ClientToolInfo]) {
+        let outgoing = OutgoingRegisterTools(
+            tools: tools.map {
+                OutgoingClientToolDef(name: $0.name, description: $0.description, inputSchema: $0.inputSchema)
+            }
+        )
+        send(outgoing: outgoing)
+    }
+
     /// 主动断开。
     public func disconnect() {
         continuation?.finish()
         continuation = nil
         handshakeComplete = false
-        isConnected = false
         wsClient.disconnect()
     }
 
@@ -122,7 +150,6 @@ public final class AgentWireSocket: @unchecked Sendable {
 
     private func handleFrame(data: Data) {
         guard let frame = try? decoder.decode(WireFrame.self, from: data) else {
-            // 无法解码的帧：忽略（前向兼容）
             return
         }
 
@@ -149,6 +176,10 @@ public final class AgentWireSocket: @unchecked Sendable {
                 return
             }
             handshakeComplete = true
+            serverCapabilities = frame.capabilities ?? []
+            serverIdentifier = frame.server
+            // 通知 transport 层握手完成（用于发送 register_tools 等）
+            onHandshake?()
             // hello 帧是内部握手，不暴露给 UI
 
         case "approval_request":
@@ -168,10 +199,7 @@ public final class AgentWireSocket: @unchecked Sendable {
     // MARK: - Event frame dispatch
 
     private func handleEventFrame(frame: WireFrame) {
-        guard handshakeComplete else {
-            // 握手未完成前收到的非握手帧：忽略
-            return
-        }
+        guard handshakeComplete else { return }
 
         if let event = AgentEvent.from(wire: frame) {
             continuation?.yield(event)

@@ -129,7 +129,7 @@ public struct ConversationDetailView: View {
                     : "输入消息…",
                 isEnabled: vm.snapshot.pendingApproval == nil && vm.snapshot.pendingPlanApproval == nil
             ) { text in
-                await vm.sendMessage(text)
+                await vm.send(input: .text(text))
                 return true
             }
         }
