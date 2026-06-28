@@ -22,12 +22,27 @@ public struct TimelineProjection: Sendable {
 
     /// Project the graph into a chronological timeline.
     /// Walks .next edges from root, converts each GraphNode → ExecutionNode,
-    /// merge → reorder thinking first → merge again (thinking fragments may now be adjacent).
+    /// merge → reorder thinking first → reorder tools before model_finished
+    /// → merge again (adjacent fragments may now merge).
     public func project(_ graph: ExecutionGraph) -> [ExecutionNode] {
         let rawNodes = graph.linearWalk().compactMap { projectNode($0) }
         let merged = applyMerge(rawNodes)
-        let ordered = prioritizeThinking(merged)
-        return applyMerge(ordered)
+        let thinkOrdered = prioritizeThinking(merged)
+        let modelOrdered = reorderModelFinished(thinkOrdered)
+        // DEBUG: verify model_finished is after its tools
+        let debugSeq = modelOrdered.map { n in
+            switch n.kind {
+            case .system(let p) where p.kind == .modelActivity:
+                return p.text.contains("Model finished") ? "■" : "▶"
+            case .tool: return "🔧"
+            case .system(let p) where p.kind == .observation: return "👁"
+            case .thinking: return "T"
+            case .message(let p): return p.role == .user ? "U" : "A"
+            default: return "·"
+            }
+        }
+        print("📐 [Projection] after reorder: \(debugSeq.joined())")
+        return applyMerge(modelOrdered)
     }
 
     /// Convert a single GraphNode to an ExecutionNode.
@@ -164,6 +179,66 @@ public struct TimelineProjection: Sendable {
 
     private func isAssistantKind(_ kind: ExecutionNodeKind) -> Bool {
         if case .message(let p) = kind, p.role == .assistant { return true }
+        return false
+    }
+
+    // MARK: - Model-finished reorder
+
+    /// Within each model-invocation block (model_started through the next
+    /// model_started or turn boundary), move `model_finished` to the end.
+    /// This makes the token-cost summary render after all the content the
+    /// model produced — tools, observations, thinking, AND assistant text.
+    ///
+    /// Before: ▶ model_started → ■ model_finished → 🔧 → A
+    /// After:  ▶ model_started → 🔧 → A → ■ model_finished
+    private func reorderModelFinished(_ nodes: [ExecutionNode]) -> [ExecutionNode] {
+        var result: [ExecutionNode] = []
+        var block: [ExecutionNode] = []
+
+        for node in nodes {
+            // A new model_started (or user message) ends the current block
+            if isModelStartedNode(node) || isUserMessageNode(node) {
+                flushBlock(&block, into: &result)
+            }
+            block.append(node)
+        }
+        flushBlock(&block, into: &result)
+        return result
+    }
+
+    /// Write the accumulated block to `result`, moving model_finished to the end.
+    private func flushBlock(_ block: inout [ExecutionNode], into result: inout [ExecutionNode]) {
+        guard !block.isEmpty else { return }
+        if let mfIdx = block.firstIndex(where: { isModelFinishedNode($0) }) {
+            let mf = block.remove(at: mfIdx)
+            block.append(mf)
+        }
+        result.append(contentsOf: block)
+        block.removeAll()
+    }
+
+    private func isModelStartedNode(_ node: ExecutionNode) -> Bool {
+        if case .system(let p) = node.kind,
+           p.kind == .modelActivity,
+           p.text.contains("Model invoked") {
+            return true
+        }
+        return false
+    }
+
+    private func isModelFinishedNode(_ node: ExecutionNode) -> Bool {
+        if case .system(let p) = node.kind,
+           p.kind == .modelActivity,
+           p.text.contains("Model finished") {
+            return true
+        }
+        return false
+    }
+
+    private func isUserMessageNode(_ node: ExecutionNode) -> Bool {
+        if case .message(let p) = node.kind, p.role == .user {
+            return true
+        }
         return false
     }
 
