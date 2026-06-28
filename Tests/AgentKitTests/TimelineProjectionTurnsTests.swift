@@ -1,0 +1,140 @@
+//
+//  TimelineProjectionTurnsTests.swift
+//  AgentKitTests
+//
+//  Phase B: Turn → Block projection. Lifecycle folds into the footer; text and
+//  tools stay interleaved; live and history converge on the same structure.
+//
+
+import XCTest
+@testable import AgentKit
+
+final class TimelineProjectionTurnsTests: XCTestCase {
+
+    private func reduce(_ events: [AgentEvent]) -> ExecutionGraph {
+        var reducer = ExecutionReducer()
+        var graph = ExecutionGraph()
+        for e in events { _ = reducer.reduce(e, into: &graph) }
+        return graph
+    }
+
+    private func tool(_ callID: String, _ name: String) -> ToolCall {
+        ToolCall(callID: callID, toolName: name, toolArgs: nil)
+    }
+    private func result(_ callID: String, _ name: String) -> ToolResult {
+        ToolResult(callID: callID, toolName: name, observation: "ok", error: nil, elapsedMs: 5)
+    }
+
+    /// Block-kind tag for order assertions.
+    private func tags(_ blocks: [TurnBlock]) -> [String] {
+        blocks.map { block in
+            switch block {
+            case .text: return "text"
+            case .thinking: return "thinking"
+            case .toolGroup: return "tools"
+            case .artifact: return "artifact"
+            case .system: return "system"
+            }
+        }
+    }
+
+    // Live turn: thinking → text → tool → text. Lifecycle → footer, not blocks.
+    func testInterleavedTurnFoldsBlocksAndFooter() {
+        let turn = "t1"
+        let graph = reduce([
+            .turnStarted(turnID: turn, text: "do it"),
+            .modelStarted(turnID: turn, invocationID: "inv1"),
+            .thinking(turnID: turn, text: "let me look"),
+            .tokenDelta(turnID: turn, text: "Checking"),
+            .toolStarted(turnID: turn, callID: "c1", tool: tool("c1", "grep")),
+            .toolFinished(turnID: turn, callID: "c1", result: result("c1", "grep")),
+            .modelFinished(turnID: turn, promptTokens: 1200, elapsedMs: 30, err: nil),
+            .modelStarted(turnID: turn, invocationID: "inv2"),
+            .tokenDelta(turnID: turn, text: "Done"),
+            .modelFinished(turnID: turn, promptTokens: 1500, elapsedMs: 20, err: nil),
+            .turnFinished(turnID: turn, text: "Done"),
+        ])
+
+        let turns = TimelineProjection().projectTurns(graph, isLive: true)
+        XCTAssertEqual(turns.count, 1)
+        let t = turns[0]
+
+        XCTAssertEqual(t.userPrompt?.text, "do it")
+        // No "model invoked/finished" blocks; interleaved order preserved.
+        XCTAssertEqual(tags(t.blocks), ["thinking", "text", "tools", "text"])
+
+        // Footer aggregates the two invocations.
+        XCTAssertNotNil(t.footer)
+        XCTAssertEqual(t.footer?.invocationCount, 2)
+        XCTAssertEqual(t.footer?.elapsedMs, 50)      // 30 + 20
+        XCTAssertEqual(t.footer?.promptTokens, 1500) // last invocation
+
+        // The two text segments are distinct and positioned right.
+        let texts: [String] = t.blocks.compactMap {
+            if case .text(_, let p) = $0 { return p.text }; return nil
+        }
+        XCTAssertEqual(texts, ["Checking", "Done"])
+    }
+
+    // No lifecycle/text reorder leaks: assistant text is NOT forced to the end.
+    func testAssistantTextNotPinnedToEnd() {
+        let turn = "t1"
+        let graph = reduce([
+            .turnStarted(turnID: turn, text: "q"),
+            .modelStarted(turnID: turn, invocationID: "inv1"),
+            .tokenDelta(turnID: turn, text: "first"),
+            .toolStarted(turnID: turn, callID: "c1", tool: tool("c1", "grep")),
+            .toolFinished(turnID: turn, callID: "c1", result: result("c1", "grep")),
+            .modelFinished(turnID: turn, promptTokens: 10, elapsedMs: 1, err: nil),
+        ])
+        let turns = TimelineProjection().projectTurns(graph, isLive: true)
+        // text BEFORE tools — not sunk below them.
+        XCTAssertEqual(tags(turns[0].blocks), ["text", "tools"])
+    }
+
+    // Two consecutive same-name tools fold into one group with an ×N summary.
+    func testConsecutiveToolsMergeIntoGroup() {
+        let turn = "t1"
+        let graph = reduce([
+            .turnStarted(turnID: turn, text: "q"),
+            .modelStarted(turnID: turn, invocationID: "inv1"),
+            .toolStarted(turnID: turn, callID: "c1", tool: tool("c1", "read_file")),
+            .toolFinished(turnID: turn, callID: "c1", result: result("c1", "read_file")),
+            .toolStarted(turnID: turn, callID: "c2", tool: tool("c2", "read_file")),
+            .toolFinished(turnID: turn, callID: "c2", result: result("c2", "read_file")),
+        ])
+        let turns = TimelineProjection().projectTurns(graph, isLive: false)
+        XCTAssertEqual(tags(turns[0].blocks), ["tools"])
+        guard case .toolGroup(let g) = turns[0].blocks[0] else { return XCTFail("expected group") }
+        XCTAssertEqual(g.tools.count, 2)
+        XCTAssertEqual(g.summary, "read_file ×2")
+    }
+
+    // Live and cold-history of the SAME turn converge on the same block tags.
+    func testLiveAndHistoryConverge() {
+        let turn = "t1"
+        // Live: streamed deltas.
+        let live = reduce([
+            .turnStarted(turnID: turn, text: "q"),
+            .modelStarted(turnID: turn, invocationID: "inv1"),
+            .tokenDelta(turnID: turn, text: "Answer"),
+            .toolStarted(turnID: turn, callID: "c1", tool: tool("c1", "grep")),
+            .toolFinished(turnID: turn, callID: "c1", result: result("c1", "grep")),
+            .modelFinished(turnID: turn, promptTokens: 10, elapsedMs: 1, err: nil),
+        ])
+        // History-style: same shape, text delivered as a single delta run.
+        let history = reduce([
+            .turnStarted(turnID: turn, text: "q"),
+            .modelStarted(turnID: turn, invocationID: "inv1"),
+            .tokenDelta(turnID: turn, text: "Answer"),
+            .toolStarted(turnID: turn, callID: "c1", tool: tool("c1", "grep")),
+            .toolFinished(turnID: turn, callID: "c1", result: result("c1", "grep")),
+            .modelFinished(turnID: turn, promptTokens: 10, elapsedMs: 1, err: nil),
+            .turnFinished(turnID: turn, text: "Answer"),
+        ])
+        let lt = TimelineProjection().projectTurns(live, isLive: true)[0]
+        let ht = TimelineProjection().projectTurns(history, isLive: false)[0]
+        XCTAssertEqual(tags(lt.blocks), tags(ht.blocks))
+        XCTAssertEqual(tags(lt.blocks), ["text", "tools"])
+    }
+}

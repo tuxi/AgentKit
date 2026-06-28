@@ -20,34 +20,131 @@ public struct TimelineProjection: Sendable {
         self.mergePolicy = mergePolicy
     }
 
-    /// Project the graph into a chronological timeline.
-    /// Walks .next edges from root, converts each GraphNode → ExecutionNode,
-    /// merge → reorder thinking first → reorder tools before model_finished
-    /// → merge again (adjacent fragments may now merge).
-    public func project(_ graph: ExecutionGraph) -> [ExecutionNode] {
+    /// Project the graph into nodes in **natural (arrival) order**.
+    /// Walks .next edges → GraphNode → ExecutionNode → merge adjacent fragments.
+    /// Does NOT apply any reorder pass (thinking-first / assistant-to-end /
+    /// model_finished) — callers that need structural ordering (the Turn → Block
+    /// projection) consume this so text and tools stay interleaved as they arrived.
+    public func projectNodes(_ graph: ExecutionGraph) -> [ExecutionNode] {
         let rawNodes = graph.linearWalk().compactMap { projectNode($0) }
-        let merged = applyMerge(rawNodes)
-        let thinkOrdered = prioritizeThinking(merged)
+        return applyMerge(rawNodes)
+    }
+
+    /// Project the graph into a chronological timeline (legacy flat renderer).
+    /// = projectNodes → thinking-first → reorder assistant to turn end → reorder
+    /// model_finished → merge again (adjacent fragments may now merge).
+    public func project(_ graph: ExecutionGraph) -> [ExecutionNode] {
+        let thinkOrdered = prioritizeThinking(projectNodes(graph))
         // Assistant before model_finished: if the assistant must be moved to
         // the turn end (live streaming split), do it before model_finished
         // reorder so that the cost summary ends up after its content.
         let asstOrdered = reorderAssistantToTurnEnd(thinkOrdered)
         let modelOrdered = reorderModelFinished(asstOrdered)
+        return applyMerge(modelOrdered)
+    }
 
-        // DEBUG: verify timeline order
-        let debugSeq = modelOrdered.map { n in
-            switch n.kind {
-            case .system(let p) where p.kind == .modelActivity:
-                return p.metadata["phase"] == "finished" ? "■" : "▶"
-            case .tool: return "🔧"
-            case .system(let p) where p.kind == .observation: return "👁"
-            case .thinking: return "T"
-            case .message(let p): return p.role == .user ? "U" : "A"
-            default: return "·"
+    // MARK: - Turn → Block projection
+
+    /// Fold the natural-order node stream into `[ConversationTurn]`.
+    /// One turn per `turnID`; inside a turn, blocks follow arrival order so text
+    /// and tools stay interleaved. Lifecycle (`model invoked/finished`) is not a
+    /// block — it folds into the turn footer. `isLive` marks the runtime as
+    /// streaming; only the last turn is treated as live.
+    public func projectTurns(_ graph: ExecutionGraph, isLive: Bool = false) -> [ConversationTurn] {
+        let nodes = projectNodes(graph)
+        guard !nodes.isEmpty else { return [] }
+
+        // Split into contiguous per-turn runs (empty turnID attaches to current).
+        var runs: [(turnID: String, nodes: [ExecutionNode])] = []
+        for node in nodes {
+            if var last = runs.last, last.turnID == node.turnID || node.turnID.isEmpty {
+                last.nodes.append(node)
+                runs[runs.count - 1] = last
+            } else {
+                runs.append((node.turnID, [node]))
             }
         }
-//        print("📐 [Projection] after reorder: \(debugSeq.joined())")
-        return applyMerge(modelOrdered)
+
+        return runs.enumerated().map { idx, run in
+            buildTurn(turnID: run.turnID, nodes: run.nodes,
+                      isLive: isLive && idx == runs.count - 1)
+        }
+    }
+
+    private func buildTurn(turnID: String, nodes: [ExecutionNode], isLive: Bool) -> ConversationTurn {
+        var userPrompt: MessageNodePayload?
+        var blocks: [TurnBlock] = []
+        var pendingTools: [ToolNodePayload] = []
+        var footerTokens = 0, footerElapsed = 0, footerCount = 0
+        var sawFinished = false
+
+        func flushTools() {
+            guard let first = pendingTools.first else { return }
+            blocks.append(.toolGroup(ToolGroup(id: first.callID, tools: pendingTools,
+                                               activeToolCallID: nil)))
+            pendingTools.removeAll()
+        }
+
+        for node in nodes {
+            switch node.kind {
+            case .message(let p) where p.role == .user:
+                userPrompt = p
+            case .message(let p):
+                flushTools()
+                blocks.append(.text(id: node.id, p))
+            case .thinking(let p):
+                flushTools()
+                blocks.append(.thinking(id: node.id, p))
+            case .tool(let p):
+                pendingTools.append(p)
+            case .artifact(let p):
+                flushTools()
+                blocks.append(.artifact(id: node.id, p.node))
+            case .system(let p):
+                if p.kind == .modelActivity, let phase = p.metadata["phase"] {
+                    // Model lifecycle → footer / spinner, never a block.
+                    if phase == "finished" {
+                        sawFinished = true
+                        footerCount += 1
+                        if let t = p.metadata["promptTokens"], let v = Int(t) { footerTokens = v }
+                        if let e = p.metadata["elapsedMs"], let v = Int(e) { footerElapsed += v }
+                    }
+                } else if p.kind == .contextCompact || p.kind == .skillLoaded {
+                    // Demoted meta — not rendered in the main flow for now.
+                    break
+                } else {
+                    // observation / reflection / error / subagent / approval.
+                    flushTools()
+                    blocks.append(.system(id: node.id, p))
+                }
+            }
+        }
+        flushTools()
+
+        // Decide which tool stays expanded, then inject into every group.
+        let active = activeToolCallID(in: blocks, isLive: isLive)
+        let finalBlocks: [TurnBlock] = blocks.map { block in
+            guard case .toolGroup(let g) = block else { return block }
+            return .toolGroup(ToolGroup(id: g.id, tools: g.tools, activeToolCallID: active))
+        }
+
+        let footer = sawFinished
+            ? TurnStats(promptTokens: footerTokens, elapsedMs: footerElapsed, invocationCount: footerCount)
+            : nil
+        return ConversationTurn(id: turnID, userPrompt: userPrompt,
+                                blocks: finalBlocks, footer: footer, isLive: isLive)
+    }
+
+    /// The tool that should be expanded in a turn. Live turns only; once the
+    /// assistant is answering after the tools (last block is text) → collapse
+    /// all; otherwise expand the most recently invoked tool.
+    private func activeToolCallID(in blocks: [TurnBlock], isLive: Bool) -> String? {
+        guard isLive else { return nil }
+        if case .text = blocks.last { return nil }
+        for block in blocks.reversed() {
+            if case .toolGroup(let g) = block { return g.tools.last?.callID }
+        }
+        return nil
     }
 
     /// Convert a single GraphNode to an ExecutionNode.
