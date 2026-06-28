@@ -15,16 +15,20 @@ public struct ChronologicalTimelineView: View {
     let snapshot: RuntimeSnapshot
     private let presenter = ExecutionPresenter()
 
-    /// The currently-active (running) tool callID. Only one tool card is
-    /// expanded at a time — matching Claude Code behaviour.
-    @State private var activeToolCallID: String? = nil
-
     public init(snapshot: RuntimeSnapshot) {
         self.snapshot = snapshot
     }
 
     public var body: some View {
         let presentations = presenter.present(snapshot.timeline)
+
+        // Single source of truth for "which tool is expanded": the parent
+        // derives the currently-running tool from the snapshot and hands the
+        // same value to every card. Cards never coordinate with each other —
+        // that's what broke before (sibling @Binding writes don't propagate
+        // within a render pass). When no tool is running this is nil and all
+        // cards collapse, matching the Claude Code mac app behaviour.
+        let activeToolCallID = activeToolCallID(in: presentations)
 
         ScrollViewReader { proxy in
             ScrollView {
@@ -39,7 +43,7 @@ public struct ChronologicalTimelineView: View {
                     ForEach(presentations) { presentation in
                         ExecutionNodeCardView(
                             presentation: presentation,
-                            activeToolCallID: $activeToolCallID
+                            activeToolCallID: activeToolCallID
                         )
                         .id(presentation.id)
                     }
@@ -95,6 +99,19 @@ public struct ChronologicalTimelineView: View {
                 proxy.scrollTo(last.id, anchor: .bottom)
             }
         }
+    }
+
+    /// The callID of the tool that should be expanded — the most recent tool
+    /// still in `.running`. Returns nil when no tool is running, collapsing all
+    /// cards. Scanning in reverse means the latest-invoked tool wins when
+    /// several run in parallel.
+    private func activeToolCallID(in presentations: [ExecutionPresentation]) -> String? {
+        for presentation in presentations.reversed() {
+            if case .tool(let payload) = presentation.node.kind, payload.status == .running {
+                return payload.callID
+            }
+        }
+        return nil
     }
 
     private func isNodeStreaming(_ node: ExecutionNode) -> Bool {

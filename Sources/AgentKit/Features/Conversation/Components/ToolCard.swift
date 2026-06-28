@@ -11,18 +11,19 @@ import SwiftUI
 struct ToolCard: View {
     let tool: ToolNodePayload
     let store: WorkspaceStore
-    /// The currently-active (running) tool callID. Only one tool in the
-    /// timeline is expanded at a time, matching Claude Code behaviour.
-    @Binding var activeToolCallID: String?
+    /// The callID of the tool the parent timeline wants expanded (the currently
+    /// running one). Read-only — only one tool is expanded at a time, matching
+    /// Claude Code behaviour. The card never writes this back or coordinates
+    /// with its siblings.
+    let activeToolCallID: String?
     @State private var isExpanded: Bool
 
-    init(tool: ToolNodePayload, store: WorkspaceStore, activeToolCallID: Binding<String?>) {
+    init(tool: ToolNodePayload, store: WorkspaceStore, activeToolCallID: String?) {
         self.tool = tool
         self.store = store
-        self._activeToolCallID = activeToolCallID
-        // Expand if running AND no other tool has claimed the active slot yet
-        let isRunning = tool.status == .running
-        self._isExpanded = State(initialValue: isRunning)
+        self.activeToolCallID = activeToolCallID
+        // Expand iff the parent designated this card as the active one.
+        self._isExpanded = State(initialValue: tool.callID == activeToolCallID)
     }
 
     var body: some View {
@@ -136,32 +137,14 @@ struct ToolCard: View {
         .padding(.vertical, 6)
         .background(.quaternary.opacity(0.5))
         .clipShape(RoundedRectangle(cornerRadius: 8))
-        .onChange(of: tool.status) { _, newStatus in
-            switch newStatus {
-            case .running:
-                // Claim the active slot — only I expand, others collapse
-                activeToolCallID = tool.callID
-                withAnimation(.easeOut(duration: 0.15)) {
-                    isExpanded = true
-                }
-            case .completed, .failed:
-                // Done running — collapse and release the active slot
-                withAnimation(.easeOut(duration: 0.15)) {
-                    isExpanded = false
-                }
-                if activeToolCallID == tool.callID {
-                    activeToolCallID = nil
-                }
-            default:
-                break
-            }
-        }
         .onChange(of: activeToolCallID) { _, newID in
-            // Another tool claimed the active slot — I collapse
-            if newID != tool.callID {
-                withAnimation(.easeOut(duration: 0.15)) {
-                    isExpanded = false
-                }
+            // The parent re-designated the active tool: expand iff it's me,
+            // collapse otherwise. This fires when a tool starts running (I
+            // become active) and when it finishes (active moves on or clears),
+            // so there's no need to also watch tool.status. A user's manual
+            // tap still toggles isExpanded freely in between.
+            withAnimation(.easeOut(duration: 0.15)) {
+                isExpanded = (newID == tool.callID)
             }
         }
     }
