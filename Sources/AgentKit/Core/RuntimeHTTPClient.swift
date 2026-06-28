@@ -15,7 +15,7 @@ struct RuntimeHTTPClient: Sendable {
     private let session: URLSession
     private let decoder: JSONDecoder
 
-    init(host: String = "127.0.0.1", port: Int = 8787) {
+    init(host: String = "192.168.1.4", port: Int = 8787) {
         guard let url = URL(string: "http://\(host):\(port)") else {
             fatalError("Invalid runtime base URL: http://\(host):\(port)")
         }

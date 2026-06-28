@@ -41,7 +41,7 @@ public final class AgentWireSocket: @unchecked Sendable {
 
     // MARK: - Init
 
-    public init(host: String = "127.0.0.1", port: Int = 8787, conversationID: String) {
+    public init(host: String = "192.168.1.4", port: Int = 8787, conversationID: String) {
         self.host = host
         self.port = port
         self.conversationID = conversationID

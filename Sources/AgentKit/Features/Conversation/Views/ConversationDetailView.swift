@@ -7,6 +7,9 @@
 //    2. 活跃会话 → 事件时间线 + 冻结的工作区 chip + 发送消息的输入框
 //    3. 未选中 → ContentUnavailableView
 //
+//  iOS: 采用 ScrollView + safeAreaInset(.bottom) 模式，输入栏自动浮于键盘之上。
+//  macOS: safeAreaInset(.bottom) 无视觉影响，布局与原先 VStack 一致。
+//
 
 import SwiftUI
 
@@ -49,29 +52,35 @@ public struct ConversationDetailView: View {
     // MARK: - Draft (no session yet)
 
     private var draftView: some View {
-        VStack(spacing: 0) {
-            ContentUnavailableView {
-                Label("新建会话", systemImage: "sparkles")
-            } description: {
-                Text(store.draft?.workspace == nil
-                     ? "先选择一个工作区，再描述你的任务"
-                     : "描述一个任务，发送后将创建会话并锁定工作区")
-            }
-            .frame(maxHeight: .infinity)
+        ScrollView {
+            VStack(spacing: 0) {
+                ContentUnavailableView {
+                    Label("新建会话", systemImage: "sparkles")
+                } description: {
+                    Text(store.draft?.workspace == nil
+                         ? "先选择一个工作区，再描述你的任务"
+                         : "描述一个任务，发送后将创建会话并锁定工作区")
+                }
+                .frame(maxHeight: .infinity)
 
-            if case .failed(let message) = store.draft?.state {
-                failureBanner(message)
+                if case .failed(let message) = store.draft?.state {
+                    failureBanner(message)
+                }
             }
+        }
+        .safeAreaInset(edge: .bottom, spacing: 0) {
+            VStack(spacing: 0) {
+                WorkspaceChipBar()
 
-            WorkspaceChipBar()
-
-            ChatComposer(
-                placeholder: "描述一个任务…",
-                isEnabled: store.draft?.canCommit ?? false
-            ) { text in
-                await store.commitDraft(firstMessage: text)
-                return store.draft == nil   // draft 被清空 = 提交成功
+                ChatComposer(
+                    placeholder: "描述一个任务…",
+                    isEnabled: store.draft?.canCommit ?? false
+                ) { text in
+                    await store.commitDraft(firstMessage: text)
+                    return store.draft == nil   // draft 被清空 = 提交成功
+                }
             }
+            .background(.bar)
         }
     }
 
@@ -91,50 +100,53 @@ public struct ConversationDetailView: View {
     // MARK: - Active session
 
     private func activeView(vm: ConversationViewModel) -> some View {
-        VStack(spacing: 0) {
-            ConversationTimelineView(viewModel: vm)
-
-            // ── 计划审批拦截栏（Plan Mode）──
-            if let plan = vm.snapshot.pendingPlanApproval {
-                PlanApprovalBar(
-                    plan: plan,
-                    onApprove: {
-                        Task { await vm.approvePlan(id: plan.id, approved: true) }
-                    },
-                    onReject: {
-                        Task { await vm.approvePlan(id: plan.id, approved: false) }
+        ConversationTimelineView(viewModel: vm)
+            .safeAreaInset(edge: .bottom, spacing: 0) {
+                VStack(spacing: 0) {
+                    // ── 计划审批拦截栏（Plan Mode）──
+                    if let plan = vm.snapshot.pendingPlanApproval {
+                        PlanApprovalBar(
+                            plan: plan,
+                            onApprove: {
+                                Task { await vm.approvePlan(id: plan.id, approved: true) }
+                            },
+                            onReject: {
+                                Task { await vm.approvePlan(id: plan.id, approved: false) }
+                            }
+                        )
+                        .transition(.move(edge: .bottom).combined(with: .opacity))
                     }
-                )
-                .transition(.move(edge: .bottom).combined(with: .opacity))
-            }
 
-            // ── 工具审批拦截栏（阻断 input pipeline）──
-            if let approval = vm.snapshot.pendingApproval {
-                ApprovalBar(
-                    request: approval,
-                    onApprove: {
-                        Task { await vm.approve(id: approval.id, approved: true) }
-                    },
-                    onReject: {
-                        Task { await vm.approve(id: approval.id, approved: false) }
+                    // ── 工具审批拦截栏（阻断 input pipeline）──
+                    if let approval = vm.snapshot.pendingApproval {
+                        ApprovalBar(
+                            request: approval,
+                            onApprove: {
+                                Task { await vm.approve(id: approval.id, approved: true) }
+                            },
+                            onReject: {
+                                Task { await vm.approve(id: approval.id, approved: false) }
+                            }
+                        )
+                        .transition(.move(edge: .bottom).combined(with: .opacity))
                     }
-                )
-                .transition(.move(edge: .bottom).combined(with: .opacity))
-            }
 
-            WorkspaceChipBar()          // 冻结：只读 chip
-            ChatComposer(
-                placeholder: (vm.snapshot.pendingApproval != nil || vm.snapshot.pendingPlanApproval != nil)
-                    ? "审批中 — 请选择「允许」或「拒绝」"
-                    : "输入消息…",
-                isEnabled: vm.snapshot.pendingApproval == nil && vm.snapshot.pendingPlanApproval == nil
-            ) { text in
-                await vm.send(input: .text(text))
-                return true
+                    WorkspaceChipBar()          // 冻结：只读 chip
+
+                    ChatComposer(
+                        placeholder: (vm.snapshot.pendingApproval != nil || vm.snapshot.pendingPlanApproval != nil)
+                            ? "审批中 — 请选择「允许」或「拒绝」"
+                            : "输入消息…",
+                        isEnabled: vm.snapshot.pendingApproval == nil && vm.snapshot.pendingPlanApproval == nil
+                    ) { text in
+                        await vm.send(input: .text(text))
+                        return true
+                    }
+                }
+                .background(.bar)
+                .animation(.easeOut(duration: 0.25), value: vm.snapshot.pendingApproval != nil)
+                .animation(.easeOut(duration: 0.25), value: vm.snapshot.pendingPlanApproval != nil)
             }
-        }
-        .animation(.easeOut(duration: 0.25), value: vm.snapshot.pendingApproval != nil)
-        .animation(.easeOut(duration: 0.25), value: vm.snapshot.pendingPlanApproval != nil)
     }
 
     // MARK: - Toolbar

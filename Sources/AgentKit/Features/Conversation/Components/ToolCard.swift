@@ -255,7 +255,7 @@ private struct DiffInlineView: View {
                 }
             }
             .frame(maxHeight: 200)
-            .background(Color(nsColor: .textBackgroundColor))
+            .background(Color.codeBlockBackground)
             .clipShape(RoundedRectangle(cornerRadius: 4))
             .overlay(
                 RoundedRectangle(cornerRadius: 4)

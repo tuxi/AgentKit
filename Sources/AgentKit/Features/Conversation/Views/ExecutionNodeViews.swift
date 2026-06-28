@@ -19,35 +19,11 @@ struct ExecutionNodeCardView: View {
         Group {
             switch presentation.node.kind {
             case .message(let payload):
-                VStack {
-                    MessageBubble(
-                        text: payload.text,
-                        role: payload.role,
-                        isStreaming: payload.isStreaming
-                    )
-                    if payload.role == .assistant {
-                        HStack {
-                            Button {
-                                Clipboard.copy(payload.text)
-                            } label: {
-                                Image(systemName: "document.on.document")
-                            }
-                            Spacer()
-                        }
-                    }
-                    if payload.role == .user {
-                        if payload.role == .user {
-                            HStack {
-                                Spacer()
-                                Button {
-                                    Clipboard.copy(payload.text)
-                                } label: {
-                                    Image(systemName: "document.on.document")
-                                }
-                            }
-                        }
-                    }
-                }
+                MessageBubble(
+                    text: payload.text,
+                    role: payload.role,
+                    isStreaming: payload.isStreaming
+                )
             case .thinking(let payload):
                 ThinkingCard(
                     text: payload.text,

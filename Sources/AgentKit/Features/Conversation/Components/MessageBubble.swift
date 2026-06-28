@@ -27,7 +27,7 @@ struct MessageBubble: View {
             }
 
             if role == .user { Spacer() }
-
+            
             Group {
                 if role == .assistant {
                     // Rich Markdown rendering for assistant messages
@@ -55,6 +55,7 @@ struct MessageBubble: View {
                 }
             }
             .clipShape(RoundedRectangle(cornerRadius: 12))
+
 
             if role == .assistant { Spacer() }
 

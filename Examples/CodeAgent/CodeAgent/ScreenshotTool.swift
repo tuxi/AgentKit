@@ -2,9 +2,12 @@
 //  ScreenshotTool.swift
 //  CodeAgent
 //
-//  P1 Demo: 耗时客户端工具 — 屏幕截图。
+//  P1 Demo: 耗时客户端工具 — 屏幕截图（macOS 专用）。
 //  使用 ScreenCaptureKit 原生 API，自动触发系统权限弹窗并等待用户授权。
+//  iOS 不支持此工具（ScreenCaptureKit 仅在 macOS 上可用）。
 //
+
+#if os(macOS)
 
 import Foundation
 import ScreenCaptureKit
@@ -125,3 +128,4 @@ enum ScreenshotError: LocalizedError {
         }
     }
 }
+#endif

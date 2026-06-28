@@ -19,7 +19,7 @@ public final class WorkspaceStore {
 
     // MARK: - Tab & Selection
 
-    public var selectedTab: SidebarTab = .workflow {
+    public var selectedTab: SidebarTab = .code {
         didSet {
             guard oldValue != selectedTab else { return }
             selectedConversation = nil

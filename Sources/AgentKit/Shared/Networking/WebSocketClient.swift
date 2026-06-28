@@ -130,7 +130,9 @@ public class WebSocketClient: NSObject, @unchecked Sendable {
     
     private var isAppActive: Bool {
 #if os(iOS)
-        return UIApplication.shared.applicationState == .active
+        return MainActor.assumeIsolated {
+            UIApplication.shared.applicationState == .active
+        }
 #else
         // macOS 上只要 App 没退出且电脑没休眠，就视为 Active
         return true
@@ -546,17 +548,19 @@ extension WebSocketClient {
         }
         
         // 3. 立即请求后台执行时间 (最长约 3 分钟)
-        self.backgroundTaskIdentifier = UIApplication.shared.beginBackgroundTask(withName: "WebSocketDisconnectDelay") {
-            // 4. 【系统到期回调】：如果系统时间到期（约 3 分钟），强制执行断开并结束任务
-            DLLog("SocketClient: identifier=\(self.identifier) 后台任务时间到期，强制断开 WebSocket。")
-            self.backgroundDisconnectTimer?.invalidate()
-            self.backgroundDisconnectTimer = nil
-            
-            Task { @MainActor in
-                // 后台超时断开不等于用户主动关闭连接。
-                // 保留重连意图，前台恢复后由 handleAppForeground() 负责重新连接。
-                self.performDisconnection(reason: WebSocketClientError.userDisconnected) // 强制断开
-                self.endBackgroundTask() // 结束任务
+        self.backgroundTaskIdentifier = MainActor.assumeIsolated {
+            UIApplication.shared.beginBackgroundTask(withName: "WebSocketDisconnectDelay") {
+                // 4. 【系统到期回调】：如果系统时间到期（约 3 分钟），强制执行断开并结束任务
+                DLLog("SocketClient: identifier=\(self.identifier) 后台任务时间到期，强制断开 WebSocket。")
+                self.backgroundDisconnectTimer?.invalidate()
+                self.backgroundDisconnectTimer = nil
+
+                Task { @MainActor in
+                    // 后台超时断开不等于用户主动关闭连接。
+                    // 保留重连意图，前台恢复后由 handleAppForeground() 负责重新连接。
+                    self.performDisconnection(reason: WebSocketClientError.userDisconnected) // 强制断开
+                    self.endBackgroundTask() // 结束任务
+                }
             }
         }
         
@@ -622,8 +626,10 @@ extension WebSocketClient {
     private func endBackgroundTask() {
 #if os(iOS)
         if self.backgroundTaskIdentifier != .invalid {
-            UIApplication.shared.endBackgroundTask(self.backgroundTaskIdentifier)
-            self.backgroundTaskIdentifier = .invalid
+            MainActor.assumeIsolated {
+                UIApplication.shared.endBackgroundTask(self.backgroundTaskIdentifier)
+                self.backgroundTaskIdentifier = .invalid
+            }
         }
 #endif
     }

@@ -8,15 +8,17 @@
 import SwiftUI
 
 /// 跨平台的三栏工作区外壳：
-/// 左 `SidebarView`（Tab + 列表） | 中 `ConversationDetailView`（对话详情） | 右 `.inspector`（点击详情）。
 ///
-/// - macOS：`NavigationSplitView` 呈现并排三栏，右栏为可收起的 inspector。
-/// - iOS：`NavigationSplitView` 自动折叠为导航栈，inspector 自动变为 sheet。
+/// - **macOS / iPad (regular)**：`NavigationSplitView` 并排二栏，右侧 inspector 可收起。
+/// - **iPhone (compact)**：`NavigationStack` — 侧栏为根视图，选中会话/新建草稿时 push 到详情，
+///   inspector 自动变为 sheet。这是 iOS 聊天应用的标准导航模式。
 ///
 /// 平台 Root 视图只需 `WorkspaceView(dependencies:)` 一行接入。
 public struct WorkspaceView: View {
 
     private let dependencies: AgentDependencies
+
+    @Environment(\.horizontalSizeClass) private var horizontalSizeClass
 
     @State private var router = AgentRouter()
     @State private var store: WorkspaceStore
@@ -24,14 +26,73 @@ public struct WorkspaceView: View {
 
     public init(dependencies: AgentDependencies) {
         self.dependencies = dependencies
-        // 从依赖注入 RuntimeClient + ToolRegistry 到 WorkspaceStore
         self._store = State(initialValue: WorkspaceStore(client: dependencies.client, toolRegistry: dependencies.toolRegistry))
     }
 
     public var body: some View {
+        if horizontalSizeClass == .compact {
+            iOSCompactLayout
+        } else {
+            standardLayout
+        }
+    }
+
+    // MARK: - iPhone (compact) — NavigationStack
+
+    @ViewBuilder
+    private var iOSCompactLayout: some View {
+        NavigationStack(path: $router.path) {
+            SidebarView()
+                .navigationDestination(for: AgentNavigationDestination.self) { destination in
+                    Group {
+                        switch destination {
+                        case .conversationDetail(let conversation):
+                            ConversationDetailView(conversation: conversation)
+                        case .draft:
+                            ConversationDetailView(conversation: nil)
+                        }
+                    }
+                    .inspector(isPresented: $store.isInspectorPresented) {
+                        InspectorView(selection: store.inspectorSelection)
+                    }
+                }
+        }
+        .withAgentSheetDestinations(sheetDestinations: $router.presentedSheet, dependencies: dependencies)
+        .withAgentCoverDestinations(coverDestinations: $router.presentedCover, dependencies: dependencies)
+        .onChange(of: store.selectedConversation) { _, newValue in
+            guard let ref = newValue else { return }
+            // 选中会话 → push 到详情
+            pushToDetailIfNeeded(.conversationDetail(conversation: ref))
+        }
+        .onChange(of: store.draft) { _, newValue in
+            if newValue != nil {
+                // 新建草稿 → push 到详情
+                pushToDetailIfNeeded(.draft)
+            }
+        }
+        .onChange(of: router.path) { _, newPath in
+            // 用户返回侧栏时清除选中态，确保再次点同一行仍可触发 push
+            if newPath.isEmpty {
+                store.selectedConversation = nil
+            }
+        }
+        .environment(router)
+        .environment(store)
+    }
+
+    /// 仅在当前 path 为空时 push（避免重复压栈）。
+    private func pushToDetailIfNeeded(_ destination: AgentNavigationDestination) {
+        guard router.path.isEmpty else { return }
+        router.navigate(to: destination)
+    }
+
+    // MARK: - iPad / macOS (regular) — NavigationSplitView
+
+    @ViewBuilder
+    private var standardLayout: some View {
         NavigationSplitView(columnVisibility: $columnVisibility) {
             SidebarView()
-                .navigationSplitViewColumnWidth(min: 200, ideal: 260, max: 360)
+                .platformSidebarColumnWidth()
         } detail: {
             NavigationStack(path: $router.path) {
                 ConversationDetailView(conversation: store.selectedConversation)
@@ -39,12 +100,36 @@ public struct WorkspaceView: View {
             }
             .inspector(isPresented: $store.isInspectorPresented) {
                 InspectorView(selection: store.inspectorSelection)
-                    .inspectorColumnWidth(min: 280, ideal: 320, max: 480)
+                    .platformInspectorColumnWidth()
             }
         }
         .withAgentSheetDestinations(sheetDestinations: $router.presentedSheet, dependencies: dependencies)
         .withAgentCoverDestinations(coverDestinations: $router.presentedCover, dependencies: dependencies)
         .environment(router)
         .environment(store)
+    }
+}
+
+// MARK: - Platform-Adaptive Column Widths
+
+private extension View {
+    /// 跨平台的侧栏列宽：macOS 用 min/max 范围，iOS 用固定值。
+    @ViewBuilder
+    func platformSidebarColumnWidth() -> some View {
+        #if os(iOS)
+        self.navigationSplitViewColumnWidth(320)
+        #else
+        self.navigationSplitViewColumnWidth(min: 200, ideal: 260, max: 360)
+        #endif
+    }
+
+    /// 跨平台的 inspector 列宽：macOS 用 min/max 范围，iOS 用固定值。
+    @ViewBuilder
+    func platformInspectorColumnWidth() -> some View {
+        #if os(iOS)
+        self.inspectorColumnWidth(320)
+        #else
+        self.inspectorColumnWidth(min: 280, ideal: 320, max: 480)
+        #endif
     }
 }

@@ -33,7 +33,7 @@ public final class CodeAgentTransport: AgentTransport, @unchecked Sendable {
 
     // MARK: - Init
 
-    public init(host: String = "127.0.0.1", port: Int = 8787) {
+    public init(host: String = "192.168.1.4", port: Int = 8787) {
         self.host = host
         self.port = port
         self.http = RuntimeHTTPClient(host: host, port: port)
@@ -154,7 +154,7 @@ public final class DefaultAgentClient: RuntimeClient, @unchecked Sendable {
     }
 
     /// 便捷初始化：连接本地 CodeAgent backend。
-    public convenience init(host: String = "127.0.0.1", port: Int = 8787) {
+    public convenience init(host: String = "192.168.1.4", port: Int = 8787) {
         self.init(transport: CodeAgentTransport(host: host, port: port))
     }
 

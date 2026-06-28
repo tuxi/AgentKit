@@ -18,6 +18,8 @@ extension View {
             switch destination {
             case .conversationDetail(let conversation):
                 ConversationDetailView(conversation: conversation)
+            case .draft:
+                ConversationDetailView(conversation: nil)
             }
         }
     }

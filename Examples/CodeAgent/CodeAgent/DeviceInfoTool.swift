@@ -28,8 +28,9 @@ struct DeviceInfoTool: ClientTool {
         // 操作系统
 #if os(iOS)
         info.append("platform: iOS")
-        info.append("system_version: \(UIDevice.current.systemVersion)")
-        info.append("device_model: \(UIDevice.current.model)")
+        let device = MainActor.assumeIsolated { UIDevice.current }
+        info.append("system_version: \(device.systemVersion)")
+        info.append("device_model: \(device.model)")
 #elseif os(macOS)
         info.append("platform: macOS")
         let processInfo = ProcessInfo.processInfo
