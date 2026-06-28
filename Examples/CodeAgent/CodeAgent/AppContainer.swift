@@ -28,6 +28,7 @@ final class AppContainer {
     private func registerClientTools() {
         Task {
             await toolRegistry.register(DeviceInfoTool())
+            await toolRegistry.register(CameraCaptureTool())
 #if os(macOS)
             // ScreenshotTool 仅 macOS 可用（依赖 ScreenCaptureKit）
             await toolRegistry.register(ScreenshotTool())
