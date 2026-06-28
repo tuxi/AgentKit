@@ -28,11 +28,14 @@ public struct TimelineProjection: Sendable {
         let rawNodes = graph.linearWalk().compactMap { projectNode($0) }
         let merged = applyMerge(rawNodes)
         let thinkOrdered = prioritizeThinking(merged)
-        let modelOrdered = reorderModelFinished(thinkOrdered)
-        let assistantOrdered = reorderAssistantToTurnEnd(modelOrdered)
+        // Assistant before model_finished: if the assistant must be moved to
+        // the turn end (live streaming split), do it before model_finished
+        // reorder so that the cost summary ends up after its content.
+        let asstOrdered = reorderAssistantToTurnEnd(thinkOrdered)
+        let modelOrdered = reorderModelFinished(asstOrdered)
 
         // DEBUG: verify timeline order
-        let debugSeq = assistantOrdered.map { n in
+        let debugSeq = modelOrdered.map { n in
             switch n.kind {
             case .system(let p) where p.kind == .modelActivity:
                 return p.metadata["phase"] == "finished" ? "■" : "▶"
@@ -44,7 +47,7 @@ public struct TimelineProjection: Sendable {
             }
         }
 //        print("📐 [Projection] after reorder: \(debugSeq.joined())")
-        return applyMerge(assistantOrdered)
+        return applyMerge(modelOrdered)
     }
 
     /// Convert a single GraphNode to an ExecutionNode.

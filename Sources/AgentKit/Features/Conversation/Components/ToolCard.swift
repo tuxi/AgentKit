@@ -14,12 +14,15 @@ struct ToolCard: View {
     /// The currently-active (running) tool callID. Only one tool in the
     /// timeline is expanded at a time, matching Claude Code behaviour.
     @Binding var activeToolCallID: String?
+    /// When the assistant answer appears in this turn, all tools collapse.
+    let hasAssistant: Bool
     @State private var isExpanded: Bool
 
-    init(tool: ToolNodePayload, store: WorkspaceStore, activeToolCallID: Binding<String?>) {
+    init(tool: ToolNodePayload, store: WorkspaceStore, activeToolCallID: Binding<String?>, hasAssistant: Bool) {
         self.tool = tool
         self.store = store
         self._activeToolCallID = activeToolCallID
+        self.hasAssistant = hasAssistant
         // Expand if running AND no other tool has claimed the active slot yet
         let isRunning = tool.status == .running
         self._isExpanded = State(initialValue: isRunning)
@@ -139,16 +142,13 @@ struct ToolCard: View {
         .onChange(of: tool.status) { _, newStatus in
             switch newStatus {
             case .running:
-                // Claim the active slot — only I expand, others collapse
                 activeToolCallID = tool.callID
                 withAnimation(.easeOut(duration: 0.15)) {
                     isExpanded = true
                 }
             case .completed, .failed:
-                // Done running — collapse and release the active slot
-                withAnimation(.easeOut(duration: 0.15)) {
-                    isExpanded = false
-                }
+                // Release the slot but stay expanded — the next tool
+                // claiming the slot is what collapses me.
                 if activeToolCallID == tool.callID {
                     activeToolCallID = nil
                 }
@@ -157,8 +157,17 @@ struct ToolCard: View {
             }
         }
         .onChange(of: activeToolCallID) { _, newID in
-            // Another tool claimed the active slot — I collapse
-            if newID != tool.callID {
+            // Collapse only when ANOTHER tool claims the slot (non-nil, different ID).
+            // Don't collapse when the slot is simply released (nil).
+            if let newID, newID != tool.callID {
+                withAnimation(.easeOut(duration: 0.15)) {
+                    isExpanded = false
+                }
+            }
+        }
+        .onChange(of: hasAssistant) { _, appeared in
+            // The assistant answer appeared — time to collapse all tools.
+            if appeared, tool.status != .running {
                 withAnimation(.easeOut(duration: 0.15)) {
                     isExpanded = false
                 }

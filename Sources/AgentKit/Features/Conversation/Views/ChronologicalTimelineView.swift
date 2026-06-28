@@ -26,6 +26,13 @@ public struct ChronologicalTimelineView: View {
     public var body: some View {
         let presentations = presenter.present(snapshot.timeline)
 
+        // Collapse all tools once the assistant answer appears in the live turn.
+        // History replay: always false (isLive = false), tools stay collapsed.
+        let hasAssistant = snapshot.isLive && snapshot.timeline.contains { node in
+            if case .message(let p) = node.kind, p.role == .assistant { return true }
+            return false
+        }
+
         ScrollViewReader { proxy in
             ScrollView {
                 LazyVStack(alignment: .leading, spacing: 6) {
@@ -39,7 +46,8 @@ public struct ChronologicalTimelineView: View {
                     ForEach(presentations) { presentation in
                         ExecutionNodeCardView(
                             presentation: presentation,
-                            activeToolCallID: $activeToolCallID
+                            activeToolCallID: $activeToolCallID,
+                            hasAssistant: hasAssistant
                         )
                         .id(presentation.id)
                     }
