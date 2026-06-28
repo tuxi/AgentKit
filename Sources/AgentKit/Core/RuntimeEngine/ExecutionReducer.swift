@@ -141,6 +141,7 @@ public struct ExecutionReducer: Sendable {
         internalState.streamingThinking = ""
         internalState.activeToolCallIDs = []
         internalState.lastNodeOfKind = [:]
+        internalState.turnHadAssistantText = false
 
         // Defensive: server may return duplicate turn_started with the same
         // turnID. Disambiguate so the graph chain and node identity stay sound.
@@ -163,8 +164,12 @@ public struct ExecutionReducer: Sendable {
 
     private mutating func handleTurnFinished(turnID: String, text: String, ts: TimeInterval,
                                               graph: inout ExecutionGraph) -> [NodeID] {
-        // If server sent the full assistant text in turn_finished, use it
-        if !text.isEmpty, internalState.streamingAssistant.isEmpty {
+        // If server sent the full assistant text in turn_finished, use it —
+        // but only for a cold replay (no deltas streamed this turn). In a live
+        // turn the text already exists as finalized segments; creating another
+        // node here would duplicate the final answer.
+        if !text.isEmpty, internalState.streamingAssistant.isEmpty,
+           !internalState.turnHadAssistantText {
             // Defensive: duplicate turn IDs (server bug) would cause
             // assistant node ID collision → diamond pattern in graph.
             let baseID = "\(turnID)_assistant"
@@ -212,6 +217,7 @@ public struct ExecutionReducer: Sendable {
     private mutating func handleTokenDelta(turnID: String, text: String, ts: TimeInterval,
                                             graph: inout ExecutionGraph) -> [NodeID] {
         internalState.streamingAssistant += text
+        internalState.turnHadAssistantText = true
 
         if let prevID = internalState.lastNodeOfKind[.assistantMessage],
            var prevNode = graph.nodes[prevID] {
@@ -220,7 +226,11 @@ public struct ExecutionReducer: Sendable {
             graph.upsertNode(prevNode)
             return [prevID]
         } else {
-            let nodeID = "\(turnID)_assistant"
+            // Segmented per text run: a fresh node each time text resumes after
+            // a tool / new invocation (see finalizeStreamingAssistant). Keeps
+            // multi-invocation answers as separate, correctly-positioned blocks
+            // instead of one concatenated node forced to the turn end.
+            let nodeID = "\(turnID)_assistant_\(internalState.nextAssistantSeq)"
             let node = GraphNode(
                 id: nodeID, kind: .assistantMessage,
                 payload: .assistantMessage(text: internalState.streamingAssistant),
@@ -230,6 +240,23 @@ public struct ExecutionReducer: Sendable {
             appendNode(node, to: &graph)
             return [nodeID]
         }
+    }
+
+    /// Finalize the current streaming assistant node and reset the accumulator
+    /// so the next `token_delta` starts a new segment. Mirrors the thinking
+    /// finalize logic. Called at text-segment boundaries: when a tool starts
+    /// (text interrupted) and when a model invocation finishes.
+    private mutating func finalizeStreamingAssistant(_ graph: inout ExecutionGraph) {
+        guard !internalState.streamingAssistant.isEmpty else { return }
+        if let prevID = internalState.lastNodeOfKind[.assistantMessage],
+           var prevNode = graph.nodes[prevID] {
+            prevNode.status = .completed
+            prevNode.payload = .assistantMessage(text: internalState.streamingAssistant)
+            graph.upsertNode(prevNode)
+        }
+        internalState.streamingAssistant = ""
+        internalState.lastNodeOfKind[.assistantMessage] = nil
+        internalState.nextAssistantSeq += 1
     }
 
     private mutating func handleThinking(turnID: String, text: String, ts: TimeInterval,
@@ -276,6 +303,9 @@ public struct ExecutionReducer: Sendable {
             internalState.streamingThinking = ""
             internalState.lastNodeOfKind[.thinking] = nil
         }
+        // Assistant text is interrupted by the tool — close the current segment
+        // so any text after the tool starts a fresh block.
+        finalizeStreamingAssistant(&graph)
 
         let nodeID = callID
         let payload = ToolExecPayload(callID: callID, toolName: toolName, args: args)
@@ -419,6 +449,9 @@ public struct ExecutionReducer: Sendable {
             internalState.streamingThinking = ""
             internalState.lastNodeOfKind[.thinking] = nil
         }
+        // Close the assistant text segment for this invocation so the next
+        // invocation's text becomes a separate block.
+        finalizeStreamingAssistant(&graph)
 
         let nodeID = "\(turnID)_model_\(UUID().uuidString.prefix(8))"
 
@@ -592,4 +625,9 @@ struct ReducerInternal: Sendable {
     var currentTurnID: String? = nil
     var currentInvocationID: String? = nil
     var nextThinkingSeq: Int = 0
+    var nextAssistantSeq: Int = 0
+    /// True once any assistant token_delta streamed in the current turn.
+    /// Distinguishes a live (delta-streamed) turn from a cold history replay
+    /// where the full answer arrives only in turn_finished.
+    var turnHadAssistantText: Bool = false
 }
