@@ -15,10 +15,6 @@ public struct ChronologicalTimelineView: View {
     let snapshot: RuntimeSnapshot
     private let presenter = ExecutionPresenter()
 
-    /// The currently-active (running) tool callID. Only one tool card is
-    /// expanded at a time — matching Claude Code behaviour.
-    @State private var activeToolCallID: String? = nil
-
     public init(snapshot: RuntimeSnapshot) {
         self.snapshot = snapshot
     }
@@ -26,12 +22,12 @@ public struct ChronologicalTimelineView: View {
     public var body: some View {
         let presentations = presenter.present(snapshot.timeline)
 
-        // Collapse all tools once the assistant answer appears in the live turn.
-        // History replay: always false (isLive = false), tools stay collapsed.
-        let hasAssistant = snapshot.isLive && snapshot.timeline.contains { node in
-            if case .message(let p) = node.kind, p.role == .assistant { return true }
-            return false
-        }
+        // Single source of truth for "which tool is expanded": the parent
+        // derives it from the snapshot and hands the same read-only value to
+        // every card. Cards never coordinate with each other — sibling @Binding
+        // writes don't propagate within a render pass, which was the original
+        // bug. See activeToolCallID(in:) for the live/assistant UX rules.
+        let activeToolCallID = activeToolCallID(in: presentations)
 
         ScrollViewReader { proxy in
             ScrollView {
@@ -46,8 +42,7 @@ public struct ChronologicalTimelineView: View {
                     ForEach(presentations) { presentation in
                         ExecutionNodeCardView(
                             presentation: presentation,
-                            activeToolCallID: $activeToolCallID,
-                            hasAssistant: hasAssistant
+                            activeToolCallID: activeToolCallID
                         )
                         .id(presentation.id)
                     }
@@ -103,6 +98,31 @@ public struct ChronologicalTimelineView: View {
                 proxy.scrollTo(last.id, anchor: .bottom)
             }
         }
+    }
+
+    /// The callID of the tool that should be expanded — the single source of
+    /// truth for tool-card expansion. Rules (matching the Claude Code mac app):
+    ///   • History replay (`isLive == false`): nil → every card collapsed.
+    ///   • Once the assistant answer appears in the live turn: nil → collapse all.
+    ///   • Otherwise: the most recently invoked tool. It stays expanded across
+    ///     its own completion until the next tool is invoked (which takes over
+    ///     the slot) or the assistant replies — avoids a collapse/expand flicker
+    ///     between sequential tools.
+    private func activeToolCallID(in presentations: [ExecutionPresentation]) -> String? {
+        guard snapshot.isLive else { return nil }
+
+        let hasAssistant = snapshot.timeline.contains { node in
+            if case .message(let p) = node.kind, p.role == .assistant { return true }
+            return false
+        }
+        guard !hasAssistant else { return nil }
+
+        for presentation in presentations.reversed() {
+            if case .tool(let payload) = presentation.node.kind {
+                return payload.callID
+            }
+        }
+        return nil
     }
 
     private func isNodeStreaming(_ node: ExecutionNode) -> Bool {

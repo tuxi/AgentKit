@@ -14,10 +14,9 @@ import SwiftUI
 struct ExecutionNodeCardView: View {
     let presentation: ExecutionPresentation
     @Environment(WorkspaceStore.self) private var store
-    @Binding var activeToolCallID: String?
-    /// True when the current turn already has an assistant message —
-    /// signals tool cards to collapse.
-    let hasAssistant: Bool
+    /// Computed by the parent timeline — the callID of the tool that should be
+    /// expanded. Read-only here; cards never write it back.
+    let activeToolCallID: String?
 
     var body: some View {
         Group {
@@ -36,9 +35,7 @@ struct ExecutionNodeCardView: View {
                 .padding(.leading, 8)
 
             case .tool(let payload):
-                ToolCard(tool: payload, store: store,
-                         activeToolCallID: $activeToolCallID,
-                         hasAssistant: hasAssistant)
+                ToolCard(tool: payload, store: store, activeToolCallID: activeToolCallID)
                     .padding(.leading, 8)
 
             case .artifact(let payload):

@@ -11,21 +11,19 @@ import SwiftUI
 struct ToolCard: View {
     let tool: ToolNodePayload
     let store: WorkspaceStore
-    /// The currently-active (running) tool callID. Only one tool in the
-    /// timeline is expanded at a time, matching Claude Code behaviour.
-    @Binding var activeToolCallID: String?
-    /// When the assistant answer appears in this turn, all tools collapse.
-    let hasAssistant: Bool
+    /// The callID of the tool the parent timeline wants expanded. Read-only —
+    /// only one tool is expanded at a time, matching Claude Code behaviour. The
+    /// card never writes this back or coordinates with its siblings; the parent
+    /// (ChronologicalTimelineView.activeToolCallID) owns all the rules.
+    let activeToolCallID: String?
     @State private var isExpanded: Bool
 
-    init(tool: ToolNodePayload, store: WorkspaceStore, activeToolCallID: Binding<String?>, hasAssistant: Bool) {
+    init(tool: ToolNodePayload, store: WorkspaceStore, activeToolCallID: String?) {
         self.tool = tool
         self.store = store
-        self._activeToolCallID = activeToolCallID
-        self.hasAssistant = hasAssistant
-        // Expand if running AND no other tool has claimed the active slot yet
-        let isRunning = tool.status == .running
-        self._isExpanded = State(initialValue: isRunning)
+        self.activeToolCallID = activeToolCallID
+        // Expand iff the parent designated this card as the active one.
+        self._isExpanded = State(initialValue: tool.callID == activeToolCallID)
     }
 
     var body: some View {
@@ -139,38 +137,16 @@ struct ToolCard: View {
         .padding(.vertical, 6)
         .background(.quaternary.opacity(0.5))
         .clipShape(RoundedRectangle(cornerRadius: 8))
-        .onChange(of: tool.status) { _, newStatus in
-            switch newStatus {
-            case .running:
-                activeToolCallID = tool.callID
-                withAnimation(.easeOut(duration: 0.15)) {
-                    isExpanded = true
-                }
-            case .completed, .failed:
-                // Release the slot but stay expanded — the next tool
-                // claiming the slot is what collapses me.
-                if activeToolCallID == tool.callID {
-                    activeToolCallID = nil
-                }
-            default:
-                break
-            }
-        }
         .onChange(of: activeToolCallID) { _, newID in
-            // Collapse only when ANOTHER tool claims the slot (non-nil, different ID).
-            // Don't collapse when the slot is simply released (nil).
-            if let newID, newID != tool.callID {
-                withAnimation(.easeOut(duration: 0.15)) {
-                    isExpanded = false
-                }
-            }
-        }
-        .onChange(of: hasAssistant) { _, appeared in
-            // The assistant answer appeared — time to collapse all tools.
-            if appeared, tool.status != .running {
-                withAnimation(.easeOut(duration: 0.15)) {
-                    isExpanded = false
-                }
+            // The parent re-designated the active tool: expand iff it's me,
+            // collapse otherwise. This single read-only reaction covers every
+            // case the old @Binding coordination tried to handle — a tool
+            // starting (I become active), the slot moving to the next tool, and
+            // the assistant answer arriving (parent clears the slot → collapse
+            // all). A user's manual tap still toggles isExpanded freely between
+            // these events.
+            withAnimation(.easeOut(duration: 0.15)) {
+                isExpanded = (newID == tool.callID)
             }
         }
     }

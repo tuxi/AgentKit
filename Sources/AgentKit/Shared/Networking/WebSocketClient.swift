@@ -403,14 +403,14 @@ public class WebSocketClient: NSObject, @unchecked Sendable {
             DLLog("WebSocketClient: identifier=\(identifier) ❌ 无法监听，webSocketTask 为 nil。")
             return
         }
-        
+
         // 递归监听必须在 webSocketTask?.resume() 之后立即调用
         task.receive { [weak self] result in
             guard let self = self else { return }
-            
+
             // 确保所有状态更新和回调都在主线程
             DispatchQueue.main.async {
-                
+
                 switch result {
                 case .success(let message):
                     switch message {
@@ -422,16 +422,21 @@ public class WebSocketClient: NSObject, @unchecked Sendable {
                     @unknown default:
                         DLLog("WebSocketClient: identifier=\(self.identifier) ⚠️ 收到未知类型的 WebSocket 消息")
                     }
-                    
-                    // 成功接收后，继续监听下一条消息
-                    // ✅ 只有在已经连接状态下才继续监听
-                    if case .connected = self.state {
-                        // 在某些极端情况下（比如服务端频繁关闭连接），给递归加一点延迟以避免 CPU 过高
-                        DispatchQueue.main.asyncAfter(deadline: .now() + 0.05) {
-                            self.listen()
-                        }
+
+                    // 成功接收后，继续监听下一条消息。
+                    // ⚠️ 不要用 `if case .connected` 作为重新监听的条件：第一帧的 receive
+                    // 回调可能早于 didOpenWithProtocol 把状态翻成 .connected（两者从不同的
+                    // 内部队列切回主线程，顺序不确定）。一旦在 .connecting 时收到首帧，监听链
+                    // 就会断掉，后续所有事件被静默丢弃，直到重连——这正是 tool_started /
+                    // turn_started 偶发丢帧、退出重进即恢复的根因。
+                    // 改为以「task 仍是当前活跃 task」为续监听条件：断开/重连时 webSocketTask
+                    // 会被置 nil 或替换，旧 task 的 receive 会走 .failure 分支，不会重复监听。
+                    guard self.webSocketTask === task else {
+                        DLLog("WebSocketClient: identifier=\(self.identifier) 收到旧 task 的消息，停止该监听链。")
+                        return
                     }
-                    
+                    self.listen()
+
                 case .failure(let error):
                     // 常见错误类型检查
                     let nsError = error as NSError
