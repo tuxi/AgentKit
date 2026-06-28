@@ -116,7 +116,7 @@ public struct ExecutionGraph: Sendable {
                 case .toolCall: return "🔧"
                 case .observation: return "👁"
                 case .system(let p):
-                    return p.text.contains("started") ? "▶" : "■"
+                    return p.metadata["phase"] == "finished" ? "■" : "▶"
                 default: return "·"
                 }
             }()
@@ -137,6 +137,9 @@ public struct GraphNode: Identifiable, Sendable {
     public var status: NodeStatus
     public var timestamp: TimeInterval
     public let turnID: String
+    /// v1.2: Identifies which model invocation produced this node.
+    /// nil for user messages and turn-boundary events. Set by appendNode.
+    public var invocationID: String?
 
     public init(
         id: NodeID,
@@ -144,7 +147,8 @@ public struct GraphNode: Identifiable, Sendable {
         payload: NodePayload,
         status: NodeStatus = .running,
         timestamp: TimeInterval = Date().timeIntervalSince1970,
-        turnID: String
+        turnID: String,
+        invocationID: String? = nil
     ) {
         self.id = id
         self.kind = kind
@@ -152,6 +156,7 @@ public struct GraphNode: Identifiable, Sendable {
         self.status = status
         self.timestamp = timestamp
         self.turnID = turnID
+        self.invocationID = invocationID
     }
 }
 

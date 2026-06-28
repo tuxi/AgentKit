@@ -17,12 +17,17 @@ public struct ExecutionNode: Identifiable, Sendable {
     public let kind: ExecutionNodeKind
     public let timestamp: TimeInterval
     public let turnID: String
+    /// v1.2: Identifies which model invocation produced this node.
+    /// Used by TimelineProjection to group content before model_finished.
+    public let invocationID: String?
 
-    public init(id: NodeID, kind: ExecutionNodeKind, timestamp: TimeInterval, turnID: String) {
+    public init(id: NodeID, kind: ExecutionNodeKind, timestamp: TimeInterval,
+                turnID: String, invocationID: String? = nil) {
         self.id = id
         self.kind = kind
         self.timestamp = timestamp
         self.turnID = turnID
+        self.invocationID = invocationID
     }
 }
 

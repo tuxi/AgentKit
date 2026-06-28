@@ -22,7 +22,7 @@ public enum AgentEvent: Sendable {
     case turnFinished(turnID: String, text: String)
 
     // ── 模型 ──
-    case modelStarted(turnID: String?)
+    case modelStarted(turnID: String?, invocationID: String?)
     case modelFinished(turnID: String?, promptTokens: Int?, elapsedMs: Int?, err: String?)
 
     // ── 流式文本 ──
@@ -77,7 +77,7 @@ extension AgentEvent {
             return .turnFinished(turnID: turnID ?? "", text: wire.text ?? "")
 
         case "model_started":
-            return .modelStarted(turnID: turnID)
+            return .modelStarted(turnID: turnID, invocationID: wire.invocationId)
 
         case "model_finished":
             return .modelFinished(

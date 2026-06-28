@@ -52,7 +52,7 @@ struct ToolCard: View {
                             .clipShape(Capsule())
                     }
 
-                    Spacer()
+//                    Spacer()
 
                     if let elapsed = tool.elapsedMs {
                         Text(formatElapsed(elapsed))

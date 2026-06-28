@@ -29,11 +29,11 @@ public struct TimelineProjection: Sendable {
         let merged = applyMerge(rawNodes)
         let thinkOrdered = prioritizeThinking(merged)
         let modelOrdered = reorderModelFinished(thinkOrdered)
-        // DEBUG: verify model_finished is after its tools
+        // DEBUG: verify model_finished is after its content
         let debugSeq = modelOrdered.map { n in
             switch n.kind {
             case .system(let p) where p.kind == .modelActivity:
-                return p.text.contains("Model finished") ? "■" : "▶"
+                return p.metadata["phase"] == "finished" ? "■" : "▶"
             case .tool: return "🔧"
             case .system(let p) where p.kind == .observation: return "👁"
             case .thinking: return "T"
@@ -119,7 +119,8 @@ public struct TimelineProjection: Sendable {
 
         return ExecutionNode(
             id: graphNode.id, kind: kind,
-            timestamp: graphNode.timestamp, turnID: graphNode.turnID
+            timestamp: graphNode.timestamp, turnID: graphNode.turnID,
+            invocationID: graphNode.invocationID
         )
     }
 
@@ -184,43 +185,77 @@ public struct TimelineProjection: Sendable {
 
     // MARK: - Model-finished reorder
 
-    /// Within each model-invocation block (model_started through the next
-    /// model_started or turn boundary), move `model_finished` to the end.
-    /// This makes the token-cost summary render after all the content the
-    /// model produced — tools, observations, thinking, AND assistant text.
+    /// Move `model_finished` to the end of its group so the token-cost
+    /// summary renders after the content the model produced.
     ///
-    /// Before: ▶ model_started → ■ model_finished → 🔧 → A
-    /// After:  ▶ model_started → 🔧 → A → ■ model_finished
+    /// When `invocationID` is available (v1.2+), groups are precise.
+    /// Falls back to `model_started` boundaries for older servers.
+    ///
+    /// Before: ▶ → ■ → 🔧 → A
+    /// After:  ▶ → 🔧 → A → ■
     private func reorderModelFinished(_ nodes: [ExecutionNode]) -> [ExecutionNode] {
+        guard nodes.count > 1 else { return nodes }
+
+        // If any node carries an invocationID, use precise grouping
+        let hasInvocationID = nodes.contains(where: { $0.invocationID != nil })
+        if hasInvocationID {
+            return reorderByInvocationID(nodes)
+        }
+        // Fallback: group by model_started boundaries
+        return reorderByModelStartedBlocks(nodes)
+    }
+
+    // MARK: v1.2 precise grouping
+
+    private func reorderByInvocationID(_ nodes: [ExecutionNode]) -> [ExecutionNode] {
+        var result: [ExecutionNode] = []
+        var group: [ExecutionNode] = []
+        var currentInvID: String? = nil
+
+        for node in nodes {
+            let invID = node.invocationID
+            if invID != currentInvID {
+                flushModelFinishedGroup(&group, into: &result)
+                currentInvID = invID
+            }
+            group.append(node)
+        }
+        flushModelFinishedGroup(&group, into: &result)
+        return result
+    }
+
+    // MARK: v1.1 fallback grouping
+
+    private func reorderByModelStartedBlocks(_ nodes: [ExecutionNode]) -> [ExecutionNode] {
         var result: [ExecutionNode] = []
         var block: [ExecutionNode] = []
 
         for node in nodes {
-            // A new model_started (or user message) ends the current block
             if isModelStartedNode(node) || isUserMessageNode(node) {
-                flushBlock(&block, into: &result)
+                flushModelFinishedGroup(&block, into: &result)
             }
             block.append(node)
         }
-        flushBlock(&block, into: &result)
+        flushModelFinishedGroup(&block, into: &result)
         return result
     }
 
-    /// Write the accumulated block to `result`, moving model_finished to the end.
-    private func flushBlock(_ block: inout [ExecutionNode], into result: inout [ExecutionNode]) {
-        guard !block.isEmpty else { return }
-        if let mfIdx = block.firstIndex(where: { isModelFinishedNode($0) }) {
-            let mf = block.remove(at: mfIdx)
-            block.append(mf)
+    // MARK: helpers
+
+    private func flushModelFinishedGroup(_ group: inout [ExecutionNode], into result: inout [ExecutionNode]) {
+        guard !group.isEmpty else { return }
+        if let mfIdx = group.firstIndex(where: { isModelFinishedNode($0) }) {
+            let mf = group.remove(at: mfIdx)
+            group.append(mf)
         }
-        result.append(contentsOf: block)
-        block.removeAll()
+        result.append(contentsOf: group)
+        group.removeAll()
     }
 
     private func isModelStartedNode(_ node: ExecutionNode) -> Bool {
         if case .system(let p) = node.kind,
            p.kind == .modelActivity,
-           p.text.contains("Model invoked") {
+           p.metadata["phase"] == "started" {
             return true
         }
         return false
@@ -229,7 +264,7 @@ public struct TimelineProjection: Sendable {
     private func isModelFinishedNode(_ node: ExecutionNode) -> Bool {
         if case .system(let p) = node.kind,
            p.kind == .modelActivity,
-           p.text.contains("Model finished") {
+           p.metadata["phase"] == "finished" {
             return true
         }
         return false

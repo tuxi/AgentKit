@@ -271,7 +271,7 @@ extension ConversationState {
         // ── 模型 ──
 
         case .modelStarted:
-            break // no-op
+            break // no-op (new invocationID field ignored by legacy state)
 
         case .modelFinished:
             break // no-op

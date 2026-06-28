@@ -79,7 +79,8 @@ public struct ExecutionReducer: Sendable {
                                    text: text, ts: ts, graph: &graph)
 
         // ── Model lifecycle (previously ignored!) ──
-        case .modelStarted(let turnID):
+        case .modelStarted(let turnID, let invocationID):
+            internalState.currentInvocationID = invocationID
             return handleModelStarted(turnID: turnID ?? internalState.currentTurnID ?? "",
                                       ts: ts, graph: &graph)
 
@@ -135,6 +136,7 @@ public struct ExecutionReducer: Sendable {
     private mutating func handleTurnStarted(turnID: String, text: String, ts: TimeInterval,
                                              graph: inout ExecutionGraph) -> [NodeID] {
         internalState.currentTurnID = turnID
+        internalState.currentInvocationID = nil  // turn boundaries reset invocation tracking
         internalState.streamingAssistant = ""
         internalState.streamingThinking = ""
         internalState.activeToolCallIDs = []
@@ -550,13 +552,18 @@ public struct ExecutionReducer: Sendable {
 
     /// Append a node to the graph, linking it via .next edge from the previous last node.
     /// Uses cached lastNodeID for O(1) instead of O(n) traversal.
+    /// Automatically stamps `invocationID` from the reducer's tracked current invocation.
     private mutating func appendNode(_ node: GraphNode, to graph: inout ExecutionGraph) {
+        var mutableNode = node
+        if mutableNode.invocationID == nil {
+            mutableNode.invocationID = internalState.currentInvocationID
+        }
         if let lastID = graph.lastNodeID {
-            let edge = GraphEdge(from: lastID, to: node.id, type: .next)
+            let edge = GraphEdge(from: lastID, to: mutableNode.id, type: .next)
             graph.addEdge(edge)
         }
-        graph.upsertNode(node)
-        graph.lastNodeID = node.id
+        graph.upsertNode(mutableNode)
+        graph.lastNodeID = mutableNode.id
     }
 }
 
@@ -569,5 +576,6 @@ struct ReducerInternal: Sendable {
     var activeToolCallIDs: Set<String> = []
     var lastNodeOfKind: [GraphNodeKind: NodeID] = [:]
     var currentTurnID: String? = nil
+    var currentInvocationID: String? = nil
     var nextThinkingSeq: Int = 0
 }

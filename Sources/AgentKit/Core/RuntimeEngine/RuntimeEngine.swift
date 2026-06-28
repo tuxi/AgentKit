@@ -151,7 +151,7 @@ public actor RuntimeEngine {
             _latestTodos = todos
         }
         // Track model started
-        if case .modelStarted = event {
+        if case .modelStarted(_, _) = event {
             _modelStartedAt = Date()
         }
         // Track model stats from model_finished + clear thinking timer

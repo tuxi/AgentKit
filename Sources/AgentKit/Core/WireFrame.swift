@@ -50,6 +50,7 @@ struct WireFrame: Decodable {
     let err: String?
     let executor: String?           // v1.1: "server" | "client" (tool_started)
     let capabilities: [String]?     // v1.1: hello 帧声明的能力列表
+    let invocationId: String?       // v1.2: 同一个模型调用产生的所有事件共享此 ID
 
     enum CodingKeys: String, CodingKey {
         case type, kind, at, step, id, server
@@ -59,6 +60,7 @@ struct WireFrame: Decodable {
         case parentSessionId = "parent_session_id"
         case turnId = "turn_id"
         case callId = "call_id"
+        case invocationId = "invocation_id"
         case toolName = "tool_name"
         case toolArgs = "tool_args"
         case planId = "plan_id"
