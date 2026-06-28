@@ -13,8 +13,8 @@ struct ToolCard: View {
     let store: WorkspaceStore
     /// The callID of the tool the parent timeline wants expanded. Read-only —
     /// only one tool is expanded at a time, matching Claude Code behaviour. The
-    /// card never writes this back or coordinates with its siblings; the parent
-    /// (ChronologicalTimelineView.activeToolCallID) owns all the rules.
+    /// card never writes this back or coordinates with its siblings; the
+    /// projection (TimelineProjection.activeToolCallID) owns all the rules.
     let activeToolCallID: String?
     @State private var isExpanded: Bool
 

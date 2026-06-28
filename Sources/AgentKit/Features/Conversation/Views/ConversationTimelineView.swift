@@ -19,6 +19,6 @@ public struct ConversationTimelineView: View {
     }
 
     public var body: some View {
-        ChronologicalTimelineView(snapshot: viewModel.snapshot)
+        TurnTimelineView(snapshot: viewModel.snapshot)
     }
 }
