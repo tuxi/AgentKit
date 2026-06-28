@@ -15,6 +15,10 @@ public struct ChronologicalTimelineView: View {
     let snapshot: RuntimeSnapshot
     private let presenter = ExecutionPresenter()
 
+    /// The currently-active (running) tool callID. Only one tool card is
+    /// expanded at a time — matching Claude Code behaviour.
+    @State private var activeToolCallID: String? = nil
+
     public init(snapshot: RuntimeSnapshot) {
         self.snapshot = snapshot
     }
@@ -33,8 +37,11 @@ public struct ChronologicalTimelineView: View {
                     }
 
                     ForEach(presentations) { presentation in
-                        ExecutionNodeCardView(presentation: presentation)
-                            .id(presentation.id)
+                        ExecutionNodeCardView(
+                            presentation: presentation,
+                            activeToolCallID: $activeToolCallID
+                        )
+                        .id(presentation.id)
                     }
 
                     // Thinking timer — live counter while model is processing

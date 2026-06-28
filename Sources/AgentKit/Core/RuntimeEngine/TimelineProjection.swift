@@ -29,8 +29,10 @@ public struct TimelineProjection: Sendable {
         let merged = applyMerge(rawNodes)
         let thinkOrdered = prioritizeThinking(merged)
         let modelOrdered = reorderModelFinished(thinkOrdered)
-        // DEBUG: verify model_finished is after its content
-        let debugSeq = modelOrdered.map { n in
+        let assistantOrdered = reorderAssistantToTurnEnd(modelOrdered)
+
+        // DEBUG: verify timeline order
+        let debugSeq = assistantOrdered.map { n in
             switch n.kind {
             case .system(let p) where p.kind == .modelActivity:
                 return p.metadata["phase"] == "finished" ? "■" : "▶"
@@ -41,8 +43,8 @@ public struct TimelineProjection: Sendable {
             default: return "·"
             }
         }
-        print("📐 [Projection] after reorder: \(debugSeq.joined())")
-        return applyMerge(modelOrdered)
+//        print("📐 [Projection] after reorder: \(debugSeq.joined())")
+        return applyMerge(assistantOrdered)
     }
 
     /// Convert a single GraphNode to an ExecutionNode.
@@ -272,6 +274,48 @@ public struct TimelineProjection: Sendable {
 
     private func isUserMessageNode(_ node: ExecutionNode) -> Bool {
         if case .message(let p) = node.kind, p.role == .user {
+            return true
+        }
+        return false
+    }
+
+    // MARK: - Assistant reorder
+
+    /// Within each turn, move the assistant message node to the end.
+    /// During live streaming the first `token_delta` creates the assistant
+    /// node early; subsequent model invocations and tools append after it.
+    /// This pass ensures the final answer always renders at the bottom.
+    ///
+    /// Before: U → ▶ → 🔧 → A → ▶ → 🔧   (assistant stuck mid-turn)
+    /// After:  U → ▶ → 🔧 → ▶ → 🔧 → A   (assistant at turn end)
+    private func reorderAssistantToTurnEnd(_ nodes: [ExecutionNode]) -> [ExecutionNode] {
+        var result: [ExecutionNode] = []
+        var turnNodes: [ExecutionNode] = []
+        var currentTurnID: String? = nil
+
+        for node in nodes {
+            if node.turnID != currentTurnID {
+                flushTurnToEnd(&turnNodes, into: &result)
+                currentTurnID = node.turnID
+            }
+            turnNodes.append(node)
+        }
+        flushTurnToEnd(&turnNodes, into: &result)
+        return result
+    }
+
+    private func flushTurnToEnd(_ turnNodes: inout [ExecutionNode], into result: inout [ExecutionNode]) {
+        guard !turnNodes.isEmpty else { return }
+        if let asstIdx = turnNodes.firstIndex(where: { isAssistantMessageNode($0) }) {
+            let asst = turnNodes.remove(at: asstIdx)
+            turnNodes.append(asst)
+        }
+        result.append(contentsOf: turnNodes)
+        turnNodes.removeAll()
+    }
+
+    private func isAssistantMessageNode(_ node: ExecutionNode) -> Bool {
+        if case .message(let p) = node.kind, p.role == .assistant {
             return true
         }
         return false

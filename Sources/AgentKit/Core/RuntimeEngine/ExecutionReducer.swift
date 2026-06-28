@@ -406,6 +406,20 @@ public struct ExecutionReducer: Sendable {
                                                elapsedMs: Int?, err: String?,
                                                ts: TimeInterval,
                                                graph: inout ExecutionGraph) -> [NodeID] {
+        // Finalize the thinking block from this model invocation.
+        // Without this, thinking from the next invocation merges into
+        // the old node, corrupting both content and timeline position.
+        if !internalState.streamingThinking.isEmpty {
+            if let prevID = internalState.lastNodeOfKind[.thinking],
+               var prevNode = graph.nodes[prevID] {
+                prevNode.status = .completed
+                prevNode.payload = .thinking(text: internalState.streamingThinking)
+                graph.upsertNode(prevNode)
+            }
+            internalState.streamingThinking = ""
+            internalState.lastNodeOfKind[.thinking] = nil
+        }
+
         let nodeID = "\(turnID)_model_\(UUID().uuidString.prefix(8))"
 
         if let err {

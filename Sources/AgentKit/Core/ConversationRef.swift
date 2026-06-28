@@ -24,7 +24,11 @@ import Foundation
 public struct ConversationRef: Identifiable, Hashable, Sendable, Codable {
     public let id: String
     public let workspacePath: String
-    public let name: String?
+    public var name: String?
+    
+    var uiID: String {
+        return id + (name ?? "-")
+    }
 
     enum CodingKeys: String, CodingKey {
         case id

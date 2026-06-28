@@ -67,7 +67,7 @@ struct ConversationListView: View {
                     .listRowSeparator(.hidden)
             }
 
-            ForEach(filteredConversations) { ref in
+            ForEach(filteredConversations, id: \.uiID) { ref in
                 ConversationRow(ref: ref)
                     .tag(ref)
                     #if os(iOS)
@@ -104,7 +104,9 @@ struct ConversationListView: View {
             }
             Button("确定") {
                 if let target = renameTarget, !renameText.trimmingCharacters(in: .whitespaces).isEmpty {
-                    Task { await viewModel.renameConversation(target, name: renameText.trimmingCharacters(in: .whitespaces)) }
+                    Task {
+                        await viewModel.renameConversation(target, name: renameText.trimmingCharacters(in: .whitespaces))
+                    }
                 }
                 renameTarget = nil
             }

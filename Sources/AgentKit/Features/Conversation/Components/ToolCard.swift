@@ -11,13 +11,18 @@ import SwiftUI
 struct ToolCard: View {
     let tool: ToolNodePayload
     let store: WorkspaceStore
-
+    /// The currently-active (running) tool callID. Only one tool in the
+    /// timeline is expanded at a time, matching Claude Code behaviour.
+    @Binding var activeToolCallID: String?
     @State private var isExpanded: Bool
 
-    init(tool: ToolNodePayload, store: WorkspaceStore) {
+    init(tool: ToolNodePayload, store: WorkspaceStore, activeToolCallID: Binding<String?>) {
         self.tool = tool
         self.store = store
-        self._isExpanded = State(initialValue: tool.status == .running)
+        self._activeToolCallID = activeToolCallID
+        // Expand if running AND no other tool has claimed the active slot yet
+        let isRunning = tool.status == .running
+        self._isExpanded = State(initialValue: isRunning)
     }
 
     var body: some View {
@@ -132,10 +137,30 @@ struct ToolCard: View {
         .background(.quaternary.opacity(0.5))
         .clipShape(RoundedRectangle(cornerRadius: 8))
         .onChange(of: tool.status) { _, newStatus in
-            // Auto-expand when tool starts running (streaming output arriving)
-            if newStatus == .running {
+            switch newStatus {
+            case .running:
+                // Claim the active slot — only I expand, others collapse
+                activeToolCallID = tool.callID
                 withAnimation(.easeOut(duration: 0.15)) {
                     isExpanded = true
+                }
+            case .completed, .failed:
+                // Done running — collapse and release the active slot
+                withAnimation(.easeOut(duration: 0.15)) {
+                    isExpanded = false
+                }
+                if activeToolCallID == tool.callID {
+                    activeToolCallID = nil
+                }
+            default:
+                break
+            }
+        }
+        .onChange(of: activeToolCallID) { _, newID in
+            // Another tool claimed the active slot — I collapse
+            if newID != tool.callID {
+                withAnimation(.easeOut(duration: 0.15)) {
+                    isExpanded = false
                 }
             }
         }

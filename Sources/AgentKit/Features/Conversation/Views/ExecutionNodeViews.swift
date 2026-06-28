@@ -14,6 +14,8 @@ import SwiftUI
 struct ExecutionNodeCardView: View {
     let presentation: ExecutionPresentation
     @Environment(WorkspaceStore.self) private var store
+    /// Shared across all tool cards so only the currently-running one expands.
+    @Binding var activeToolCallID: String?
 
     var body: some View {
         Group {
@@ -32,7 +34,7 @@ struct ExecutionNodeCardView: View {
                 .padding(.leading, 8)
 
             case .tool(let payload):
-                ToolCard(tool: payload, store: store)
+                ToolCard(tool: payload, store: store, activeToolCallID: $activeToolCallID)
                     .padding(.leading, 8)
 
             case .artifact(let payload):
