@@ -185,7 +185,35 @@ public actor RuntimeEngine {
     public func importHistory(_ events: [AgentEvent]) {
         for event in events {
             let _ = reducer.reduce(event, into: &graph)
+
+            // Track side-effects that ingest() normally handles:
+            // pending approvals (tool + plan) must survive conversation switching
+            if case .approvalRequest(_, let request) = event {
+                _pendingApproval = request
+            }
+            if case .planApprovalRequest(_, let plan) = event {
+                _pendingPlanApproval = plan
+            }
+            // Clear on resolution (approval nodes in graph track resolved state)
+            if case .approvalRequest = event {} // no-op, handled above
         }
+
+        // Scan graph: if approval nodes are resolved, clear pending state
+        // If approval was rejected, mark associated running tool nodes as failed
+        for node in graph.nodes.values {
+            if case .approval(let payload) = node.payload, payload.resolved {
+                _pendingApproval = nil
+                if payload.approved == false {
+                    for (_, var toolNode) in graph.nodes where toolNode.status == .running {
+                        if case .toolCall(let tp) = toolNode.payload, tp.toolName == payload.toolName {
+                            toolNode.status = .failed
+                            graph.upsertNode(toolNode)
+                        }
+                    }
+                }
+            }
+        }
+
         isLive = false
         yieldSnapshot()
     }
@@ -203,15 +231,30 @@ public actor RuntimeEngine {
     /// Resolve an approval (called by ViewModel when user approves/rejects).
     public func resolveApproval(requestID: String, approved: Bool) {
         _pendingApproval = nil
-        let nodeID = "approval_\(requestID)"
-        graph.updateNode(nodeID) { node in
+        let approvalNodeID = "approval_\(requestID)"
+        var rejectedToolName: String?
+
+        graph.updateNode(approvalNodeID) { node in
             if case .approval(var payload) = node.payload {
                 payload.resolved = true
                 payload.approved = approved
+                rejectedToolName = payload.toolName
                 node.payload = .approval(payload)
                 node.status = .completed
             }
         }
+
+        // When rejected, mark all running tool nodes with matching name as failed.
+        // This prevents stuck spinners after switching conversations and replaying history.
+        if !approved, let toolName = rejectedToolName {
+            for (_, var node) in graph.nodes where node.status == .running {
+                if case .toolCall(let p) = node.payload, p.toolName == toolName {
+                    node.status = .failed
+                    graph.upsertNode(node)
+                }
+            }
+        }
+
         yieldSnapshot()
     }
 

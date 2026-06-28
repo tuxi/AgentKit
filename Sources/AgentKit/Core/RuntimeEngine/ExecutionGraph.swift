@@ -106,6 +106,10 @@ public struct ExecutionGraph: Sendable {
             }
             current = edges.values.first { $0.from == id && $0.type == .next }?.to
         }
+        // DEBUG: verify order — user messages should appear monotonically
+        let userNodes = result.filter { if case .userInput = $0.payload { return true }; return false }
+        let userIDs = userNodes.map { $0.id }
+        print("📜 [Graph] linearWalk: \(result.count) nodes, user order: \(userIDs)")
         return result
     }
 }

@@ -42,6 +42,7 @@ struct MessageBubble: View {
                     Text(text)
                         .font(.body)
                         .foregroundStyle(.white)
+                        .textSelection(.enabled)
                 }
             }
             .padding(.horizontal, 12)

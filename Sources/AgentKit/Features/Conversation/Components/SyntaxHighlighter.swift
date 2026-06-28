@@ -5,6 +5,7 @@
 //  Lightweight regex-based syntax highlighter for code blocks.
 //  Supports Swift, Python, Bash, JSON, YAML, JavaScript, TypeScript, Go.
 //  Outputs AttributedString ready for SwiftUI Text rendering.
+//  Cross-platform: uses SwiftUI.Color (not NSColor/UIColor).
 //
 
 import SwiftUI
@@ -19,8 +20,8 @@ public struct SyntaxHighlighter {
         let rules = rulesFor(language: language)
         var attributed = AttributedString(code)
         // Default monospace font
-        attributed.font = .monospacedSystemFont(ofSize: 12, weight: .regular)
-        attributed.foregroundColor = .labelColor
+        attributed.font = .system(size: 12, weight: .regular, design: .monospaced)
+        attributed.foregroundColor = .primary
 
         // Apply each rule — later rules override earlier ones (higher priority)
         for rule in rules {
@@ -63,7 +64,7 @@ public struct SyntaxHighlighter {
 
 private struct HighlightRule: Sendable {
     let pattern: String
-    let color: NSColor
+    let color: Color
     let isBold: Bool
     let isRegex: Bool
 }
@@ -75,7 +76,7 @@ private extension SyntaxHighlighter {
 
         // ── Universal rules (applied to all languages) ──
         // Numbers
-        rules.append(HighlightRule(pattern: "\\b\\d+\\.?\\d*\\b", color: .systemOrange, isBold: false, isRegex: true))
+        rules.append(HighlightRule(pattern: "\\b\\d+\\.?\\d*\\b", color: .orange, isBold: false, isRegex: true))
 
         // ── Language-specific rules ──
         switch language.lowercased() {
@@ -98,11 +99,11 @@ private extension SyntaxHighlighter {
         }
 
         // ── Strings (highest priority, applied last) ──
-        rules.append(HighlightRule(pattern: "\"[^\"]*\"", color: .systemRed, isBold: false, isRegex: true))
-        rules.append(HighlightRule(pattern: "`[^`]*`", color: .systemRed, isBold: false, isRegex: true))
+        rules.append(HighlightRule(pattern: "\"[^\"]*\"", color: .red, isBold: false, isRegex: true))
+        rules.append(HighlightRule(pattern: "`[^`]*`", color: .red, isBold: false, isRegex: true))
         // Single-line comments
-        rules.append(HighlightRule(pattern: "//.*", color: .systemGreen, isBold: false, isRegex: true))
-        rules.append(HighlightRule(pattern: "#.*", color: .systemGreen, isBold: false, isRegex: true))
+        rules.append(HighlightRule(pattern: "//.*", color: .green, isBold: false, isRegex: true))
+        rules.append(HighlightRule(pattern: "#.*", color: .green, isBold: false, isRegex: true))
 
         return rules
     }
@@ -122,9 +123,9 @@ private extension SyntaxHighlighter {
                         "typealias", "get", "set", "willSet", "didSet", "weak", "unowned"]
         let kwPattern = "\\b(" + keywords.joined(separator: "|") + ")\\b"
         return [
-            HighlightRule(pattern: kwPattern, color: .systemPink, isBold: true, isRegex: true),
+            HighlightRule(pattern: kwPattern, color: .pink, isBold: true, isRegex: true),
             // Type annotations
-            HighlightRule(pattern: ":\\s*\\b[A-Z][A-Za-z0-9]*\\b", color: .systemTeal, isBold: false, isRegex: true),
+            HighlightRule(pattern: ":\\s*\\b[A-Z][A-Za-z0-9]*\\b", color: .teal, isBold: false, isRegex: true),
         ]
     }
 
@@ -136,9 +137,9 @@ private extension SyntaxHighlighter {
                         "async", "await", "self", "print"]
         let kwPattern = "\\b(" + keywords.joined(separator: "|") + ")\\b"
         return [
-            HighlightRule(pattern: kwPattern, color: .systemPink, isBold: true, isRegex: true),
+            HighlightRule(pattern: kwPattern, color: .pink, isBold: true, isRegex: true),
             // Decorators
-            HighlightRule(pattern: "@\\w+", color: .systemPurple, isBold: false, isRegex: true),
+            HighlightRule(pattern: "@\\w+", color: .purple, isBold: false, isRegex: true),
         ]
     }
 
@@ -148,28 +149,28 @@ private extension SyntaxHighlighter {
                         "local", "source", "echo", "cd", "ls", "cat", "grep", "sed", "awk"]
         let kwPattern = "\\b(" + keywords.joined(separator: "|") + ")\\b"
         return [
-            HighlightRule(pattern: kwPattern, color: .systemPink, isBold: true, isRegex: true),
+            HighlightRule(pattern: kwPattern, color: .pink, isBold: true, isRegex: true),
             // Variables
-            HighlightRule(pattern: "\\$[A-Za-z_][A-Za-z0-9_]*", color: .systemMint, isBold: false, isRegex: true),
-            HighlightRule(pattern: "\\$\\{[^}]+\\}", color: .systemMint, isBold: false, isRegex: true),
+            HighlightRule(pattern: "\\$[A-Za-z_][A-Za-z0-9_]*", color: .mint, isBold: false, isRegex: true),
+            HighlightRule(pattern: "\\$\\{[^}]+\\}", color: .mint, isBold: false, isRegex: true),
         ]
     }
 
     static var jsonRules: [HighlightRule] {
         return [
             // Keys
-            HighlightRule(pattern: "\"[^\"]+\"\\s*:", color: .systemBlue, isBold: false, isRegex: true),
+            HighlightRule(pattern: "\"[^\"]+\"\\s*:", color: .blue, isBold: false, isRegex: true),
             // Booleans and null
-            HighlightRule(pattern: "\\b(true|false|null)\\b", color: .systemOrange, isBold: true, isRegex: true),
+            HighlightRule(pattern: "\\b(true|false|null)\\b", color: .orange, isBold: true, isRegex: true),
         ]
     }
 
     static var yamlRules: [HighlightRule] {
         return [
             // Keys
-            HighlightRule(pattern: "^\\s*[A-Za-z_][A-Za-z0-9_]*\\s*:", color: .systemBlue, isBold: false, isRegex: true),
+            HighlightRule(pattern: "^\\s*[A-Za-z_][A-Za-z0-9_]*\\s*:", color: .blue, isBold: false, isRegex: true),
             // Booleans
-            HighlightRule(pattern: "\\b(true|false|null|yes|no)\\b", color: .systemOrange, isBold: true, isRegex: true),
+            HighlightRule(pattern: "\\b(true|false|null|yes|no)\\b", color: .orange, isBold: true, isRegex: true),
         ]
     }
 
@@ -182,9 +183,9 @@ private extension SyntaxHighlighter {
                         "interface", "type", "enum", "implements"]
         let kwPattern = "\\b(" + keywords.joined(separator: "|") + ")\\b"
         return [
-            HighlightRule(pattern: kwPattern, color: .systemPink, isBold: true, isRegex: true),
+            HighlightRule(pattern: kwPattern, color: .pink, isBold: true, isRegex: true),
             // Arrow functions
-            HighlightRule(pattern: "=>", color: .systemPurple, isBold: false, isRegex: true),
+            HighlightRule(pattern: "=>", color: .purple, isBold: false, isRegex: true),
         ]
     }
 
@@ -196,7 +197,7 @@ private extension SyntaxHighlighter {
                         "nil", "true", "false", "error", "string", "int", "bool"]
         let kwPattern = "\\b(" + keywords.joined(separator: "|") + ")\\b"
         return [
-            HighlightRule(pattern: kwPattern, color: .systemPink, isBold: true, isRegex: true),
+            HighlightRule(pattern: kwPattern, color: .pink, isBold: true, isRegex: true),
         ]
     }
 
@@ -205,7 +206,7 @@ private extension SyntaxHighlighter {
                         "const", "class", "import", "export", "true", "false", "null", "nil"]
         let kwPattern = "\\b(" + keywords.joined(separator: "|") + ")\\b"
         return [
-            HighlightRule(pattern: kwPattern, color: .systemPink, isBold: true, isRegex: true),
+            HighlightRule(pattern: kwPattern, color: .pink, isBold: true, isRegex: true),
         ]
     }
 
@@ -227,7 +228,7 @@ private extension SyntaxHighlighter {
 
             // Apply bold weight if specified
             if rule.isBold {
-                attributed[attrRange].font = .monospacedSystemFont(ofSize: 12, weight: .semibold)
+                attributed[attrRange].font = .system(size: 12, weight: .semibold, design: .monospaced)
             }
         }
     }
