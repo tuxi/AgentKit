@@ -20,6 +20,9 @@ public struct ConversationDetail: Sendable, Codable, Hashable {
     /// 用于历史会话在 UI 上回显其工作区绑定。
     public let workspacePath: String?
 
+    /// 会话名称（用户自定义）。
+    public let name: String?
+
     enum CodingKeys: String, CodingKey {
         case id
         case turnCount = "turn_count"
@@ -27,6 +30,7 @@ public struct ConversationDetail: Sendable, Codable, Hashable {
         case createdAt = "created_at"
         case updatedAt = "updated_at"
         case workspacePath = "workspace_path"
+        case name
     }
 
     public init(from decoder: Decoder) throws {
@@ -37,5 +41,6 @@ public struct ConversationDetail: Sendable, Codable, Hashable {
         createdAt = try c.decode(String.self, forKey: .createdAt)
         updatedAt = try c.decode(String.self, forKey: .updatedAt)
         workspacePath = try c.decodeIfPresent(String.self, forKey: .workspacePath)
+        name = try c.decodeIfPresent(String.self, forKey: .name)
     }
 }

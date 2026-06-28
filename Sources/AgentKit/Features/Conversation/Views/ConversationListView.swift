@@ -19,6 +19,11 @@ struct ConversationListView: View {
     /// 搜索过滤文本（由父视图 `.searchable` 驱动）。
     var searchText: String = ""
 
+    // MARK: - 重命名状态
+
+    @State private var renameTarget: ConversationRef? = nil
+    @State private var renameText: String = ""
+
     init(viewModel: ConversationListViewModel,
          selected: Binding<ConversationRef?>,
          searchText: String = "") {
@@ -35,6 +40,7 @@ struct ConversationListView: View {
         }
         return conversations.filter { ref in
             ref.id.localizedCaseInsensitiveContains(searchText)
+                || (ref.name ?? "").localizedCaseInsensitiveContains(searchText)
         }
     }
 
@@ -74,11 +80,38 @@ struct ConversationListView: View {
                         }
                     }
                     #endif
+                    .contextMenu {
+                        Button {
+                            renameTarget = ref
+                            renameText = ref.name ?? ""
+                        } label: {
+                            Label("重命名", systemImage: "pencil")
+                        }
+                    }
             }
         }
         .listStyle(.sidebar)
         .task {
             await viewModel.refresh()
+        }
+        .alert("重命名会话", isPresented: Binding(
+            get: { renameTarget != nil },
+            set: { if !$0 { renameTarget = nil } }
+        )) {
+            TextField("名称", text: $renameText)
+            Button("取消", role: .cancel) {
+                renameTarget = nil
+            }
+            Button("确定") {
+                if let target = renameTarget, !renameText.trimmingCharacters(in: .whitespaces).isEmpty {
+                    Task { await viewModel.renameConversation(target, name: renameText.trimmingCharacters(in: .whitespaces)) }
+                }
+                renameTarget = nil
+            }
+        } message: {
+            if let target = renameTarget {
+                Text("为会话 \(target.id.prefix(8))… 设置新名称")
+            }
         }
         .toolbar {
             ToolbarItem {
@@ -100,7 +133,7 @@ private struct ConversationRow: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 4) {
-            Text(ref.id)
+            Text(ref.name ?? ref.id)
                 .font(.body)
                 .lineLimit(1)
 
@@ -109,8 +142,11 @@ private struct ConversationRow: View {
                       systemImage: "folder")
                     .font(.caption)
                 Spacer()
-                Text("v1")
-                    .font(.caption2)
+                if ref.name != nil {
+                    Text(ref.id.prefix(8) + "…")
+                        .font(.caption2)
+                        .foregroundStyle(.tertiary)
+                }
             }
             .foregroundStyle(.secondary)
         }

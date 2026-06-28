@@ -68,6 +68,7 @@ public struct ConversationDetailView: View {
                 }
             }
         }
+        .scrollDismissesKeyboard(.interactively)
         .safeAreaInset(edge: .bottom, spacing: 0) {
             VStack(spacing: 0) {
                 WorkspaceChipBar()

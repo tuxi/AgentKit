@@ -46,6 +46,9 @@ public protocol AgentTransport: Sendable {
     /// 列出 backend 内存中的活跃 session。
     func listConversations() async throws -> [ConversationRef]
 
+    /// 修改会话名称。
+    func renameConversation(id: String, name: String) async throws -> ConversationRef
+
     /// 绑定到已存在的 server-owned session，返回事件流。
     ///
     /// - Important: `attach` 不是创建新 session。

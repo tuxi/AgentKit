@@ -68,4 +68,17 @@ public final class ConversationListViewModel {
             return nil
         }
     }
+
+    /// 重命名会话。
+    public func renameConversation(_ ref: ConversationRef, name: String) async {
+        do {
+            let updated = try await client.renameConversation(id: ref.id, name: name)
+            // 原地替换列表中的旧引用
+            if let idx = conversations.firstIndex(where: { $0.id == ref.id }) {
+                conversations[idx] = updated
+            }
+        } catch {
+            errorMessage = error.localizedDescription
+        }
+    }
 }

@@ -122,7 +122,7 @@ public struct ExecutionGraph: Sendable {
             }()
             return "\(kindStr)[\(String(n.turnID.suffix(6)))]"
         }
-        print("📜 [Graph] linearWalk: \(result.count) nodes → \(summary.joined())")
+//        print("📜 [Graph] linearWalk: \(result.count) nodes → \(summary.joined())")
         return result
     }
 }

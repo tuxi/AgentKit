@@ -49,6 +49,10 @@ public final class CodeAgentTransport: AgentTransport, @unchecked Sendable {
         try await http.listConversations()
     }
 
+    public func renameConversation(id: String, name: String) async throws -> ConversationRef {
+        try await http.renameConversation(id: id, name: name)
+    }
+
     public func attach(sessionID: String) async throws -> AsyncStream<AgentEvent> {
         await disconnect()
 
@@ -168,6 +172,10 @@ public final class DefaultAgentClient: RuntimeClient, @unchecked Sendable {
 
     public func listConversations() async throws -> [ConversationRef] {
         try await transport.listConversations()
+    }
+
+    public func renameConversation(id: String, name: String) async throws -> ConversationRef {
+        try await transport.renameConversation(id: id, name: name)
     }
 
     public func connect(conversationID: String) async throws -> AsyncStream<AgentEvent> {

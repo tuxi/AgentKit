@@ -24,17 +24,20 @@ import Foundation
 public struct ConversationRef: Identifiable, Hashable, Sendable, Codable {
     public let id: String
     public let workspacePath: String
-    
+    public let name: String?
+
     enum CodingKeys: String, CodingKey {
         case id
         case workspacePath = "workspace_path"
+        case name
     }
 
-    public init(id: String, workspacePath: String) {
+    public init(id: String, workspacePath: String, name: String? = nil) {
         self.id = id
         self.workspacePath = workspacePath
+        self.name = name
     }
-    
+
     public static func == (lhs: Self, rhs: Self) -> Bool {
         return lhs.id == rhs.id
     }

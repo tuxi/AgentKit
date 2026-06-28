@@ -74,6 +74,23 @@ struct RuntimeHTTPClient: Sendable {
         return try decoder.decode(ConversationDetail.self, from: data)
     }
 
+    /// `PATCH /v1/conversations/{id}` — 修改会话名称。
+    func renameConversation(id: String, name: String) async throws -> ConversationRef {
+        let url = baseURL
+            .appendingPathComponent("v1/conversations")
+            .appendingPathComponent(id)
+        var request = URLRequest(url: url)
+        request.httpMethod = "PATCH"
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+
+        let body: [String: String] = ["name": name]
+        request.httpBody = try JSONEncoder().encode(body)
+
+        let (data, response) = try await session.data(for: request)
+        try validateHTTP(response, data: data)
+        return try decoder.decode(ConversationRef.self, from: data)
+    }
+
     /// `GET /v1/conversations/{id}/messages` — 对话主干。
     func getMessages(conversationID: String) async throws -> [Message] {
         let url = baseURL
