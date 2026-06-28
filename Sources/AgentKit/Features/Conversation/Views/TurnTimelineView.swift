@@ -45,21 +45,18 @@ public struct TurnTimelineView: View {
                         )
                         .id("thinking_timer")
                     }
-
-                    // Bottom anchor for live auto-scroll.
-                    Color.clear
-                        .frame(height: 1)
-                        .id("__bottom__")
                 }
                 .padding()
             }
             .onChange(of: snapshot.generation) { _, _ in
-                // Keep the bottom pinned during live streaming. No animation:
-                // generation bumps ~60fps on token deltas, and animating each
-                // one makes the content (esp. a running tool card) jitter.
-                if snapshot.isLive {
-                    proxy.scrollTo("__bottom__", anchor: .bottom)
-                }
+                // Keep the latest turn's bottom in view during live streaming.
+                // Scroll to the real last turn (a laid-out element) rather than a
+                // zero-height anchor — the anchor sits after a lazily-laid-out
+                // timer and overshoots into blank space when a tool card expands.
+                // No animation: generation bumps ~60fps on token deltas; animating
+                // each one makes the content (esp. a running tool) jitter.
+                guard snapshot.isLive, let lastID = turns.last?.id else { return }
+                proxy.scrollTo(lastID, anchor: .bottom)
             }
         }
     }
