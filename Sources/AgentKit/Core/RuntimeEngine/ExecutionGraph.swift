@@ -106,10 +106,23 @@ public struct ExecutionGraph: Sendable {
             }
             current = edges.values.first { $0.from == id && $0.type == .next }?.to
         }
-        // DEBUG: verify order — user messages should appear monotonically
-        let userNodes = result.filter { if case .userInput = $0.payload { return true }; return false }
-        let userIDs = userNodes.map { $0.id }
-        print("📜 [Graph] linearWalk: \(result.count) nodes, user order: \(userIDs)")
+        // DEBUG: verify chrono order
+        let summary = result.map { n in
+            let kindStr: String = {
+                switch n.payload {
+                case .userInput: return "U"
+                case .thinking: return "T"
+                case .assistantMessage: return "A"
+                case .toolCall: return "🔧"
+                case .observation: return "👁"
+                case .system(let p):
+                    return p.text.contains("started") ? "▶" : "■"
+                default: return "·"
+                }
+            }()
+            return "\(kindStr)[\(String(n.turnID.suffix(6)))]"
+        }
+        print("📜 [Graph] linearWalk: \(result.count) nodes → \(summary.joined())")
         return result
     }
 }

@@ -107,6 +107,8 @@ public final class CodeAgentTransport: AgentTransport, @unchecked Sendable {
 
     public func getEvents(conversationID: String) async throws -> [AgentEvent] {
         let wireFrames = try await http.getEvents(conversationID: conversationID)
+        // Server returns events in chronological order (ORDER BY at ASC).
+        // No client-side sorting needed.
         return wireFrames.compactMap { AgentEvent.from(wire: $0) }
     }
 

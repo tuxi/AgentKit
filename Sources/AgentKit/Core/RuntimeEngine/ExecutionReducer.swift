@@ -140,7 +140,16 @@ public struct ExecutionReducer: Sendable {
         internalState.activeToolCallIDs = []
         internalState.lastNodeOfKind = [:]
 
-        let nodeID = "turn_\(turnID)_user"
+        // Defensive: server may return duplicate turn_started with the same
+        // turnID. Disambiguate so the graph chain and node identity stay sound.
+        let baseID = "turn_\(turnID)_user"
+        var nodeID = baseID
+        if graph.nodes[nodeID] != nil {
+            var suffix = 2
+            while graph.nodes["\(baseID)_v\(suffix)"] != nil { suffix += 1 }
+            nodeID = "\(baseID)_v\(suffix)"
+            print("⚠️ [Reducer] duplicate turn_started for \(turnID) → using \(nodeID)")
+        }
         let node = GraphNode(
             id: nodeID, kind: .userInput,
             payload: .userInput(text: text),
@@ -154,7 +163,16 @@ public struct ExecutionReducer: Sendable {
                                               graph: inout ExecutionGraph) -> [NodeID] {
         // If server sent the full assistant text in turn_finished, use it
         if !text.isEmpty, internalState.streamingAssistant.isEmpty {
-            let nodeID = "\(turnID)_assistant"
+            // Defensive: duplicate turn IDs (server bug) would cause
+            // assistant node ID collision → diamond pattern in graph.
+            let baseID = "\(turnID)_assistant"
+            var nodeID = baseID
+            if graph.nodes[nodeID] != nil {
+                var suffix = 2
+                while graph.nodes["\(baseID)_v\(suffix)"] != nil { suffix += 1 }
+                nodeID = "\(baseID)_v\(suffix)"
+                print("⚠️ [Reducer] duplicate assistant node for \(turnID) → using \(nodeID)")
+            }
             let node = GraphNode(
                 id: nodeID, kind: .assistantMessage,
                 payload: .assistantMessage(text: text),
@@ -217,7 +235,8 @@ public struct ExecutionReducer: Sendable {
         internalState.streamingThinking += text
 
         if let prevID = internalState.lastNodeOfKind[.thinking],
-           var prevNode = graph.nodes[prevID] {
+           var prevNode = graph.nodes[prevID],
+           prevNode.status == .running {
             prevNode.payload = .thinking(text: internalState.streamingThinking)
             prevNode.timestamp = ts
             graph.upsertNode(prevNode)
@@ -242,7 +261,9 @@ public struct ExecutionReducer: Sendable {
                                              args: JSONValue?, ts: TimeInterval,
                                              graph: inout ExecutionGraph) -> [NodeID] {
         internalState.activeToolCallIDs.insert(callID)
-        // Thinking block is finalized when a tool starts
+        // Thinking block is finalized when a tool starts.
+        // Clear tracking so the next thinking block creates a fresh node
+        // instead of reusing the old one (which would put it out of order).
         if !internalState.streamingThinking.isEmpty {
             if let prevID = internalState.lastNodeOfKind[.thinking],
                var prevNode = graph.nodes[prevID] {
@@ -251,6 +272,7 @@ public struct ExecutionReducer: Sendable {
                 graph.upsertNode(prevNode)
             }
             internalState.streamingThinking = ""
+            internalState.lastNodeOfKind[.thinking] = nil
         }
 
         let nodeID = callID
