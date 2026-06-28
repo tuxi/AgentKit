@@ -141,7 +141,6 @@ public struct ExecutionReducer: Sendable {
         internalState.streamingThinking = ""
         internalState.activeToolCallIDs = []
         internalState.lastNodeOfKind = [:]
-        internalState.turnHadAssistantText = false
 
         // Defensive: server may return duplicate turn_started with the same
         // turnID. Disambiguate so the graph chain and node identity stay sound.
@@ -164,41 +163,48 @@ public struct ExecutionReducer: Sendable {
 
     private mutating func handleTurnFinished(turnID: String, text: String, ts: TimeInterval,
                                               graph: inout ExecutionGraph) -> [NodeID] {
-        // If server sent the full assistant text in turn_finished, use it —
-        // but only for a cold replay (no deltas streamed this turn). In a live
-        // turn the text already exists as finalized segments; creating another
-        // node here would duplicate the final answer.
-        if !text.isEmpty, internalState.streamingAssistant.isEmpty,
-           !internalState.turnHadAssistantText {
-            // Defensive: duplicate turn IDs (server bug) would cause
-            // assistant node ID collision → diamond pattern in graph.
-            let baseID = "\(turnID)_assistant"
-            var nodeID = baseID
-            if graph.nodes[nodeID] != nil {
-                var suffix = 2
-                while graph.nodes["\(baseID)_v\(suffix)"] != nil { suffix += 1 }
-                nodeID = "\(baseID)_v\(suffix)"
-                print("⚠️ [Reducer] duplicate assistant node for \(turnID) → using \(nodeID)")
-            }
-            let node = GraphNode(
-                id: nodeID, kind: .assistantMessage,
-                payload: .assistantMessage(text: text),
-                status: .completed, timestamp: ts, turnID: turnID
-            )
-            appendNode(node, to: &graph)
-            internalState.lastNodeOfKind[.assistantMessage] = nodeID
-            internalState.streamingAssistant = ""
-        } else if !internalState.streamingAssistant.isEmpty {
-            // Finalize any streaming assistant text
-            let prevID = internalState.lastNodeOfKind[.assistantMessage]
-            if let prevID, var prevNode = graph.nodes[prevID] {
+        // 1. Finalize any in-progress streaming assistant segment.
+        if !internalState.streamingAssistant.isEmpty {
+            if let prevID = internalState.lastNodeOfKind[.assistantMessage],
+               var prevNode = graph.nodes[prevID] {
                 prevNode.payload = .assistantMessage(text: internalState.streamingAssistant)
                 prevNode.status = .completed
                 graph.upsertNode(prevNode)
             }
             internalState.streamingAssistant = ""
         }
-        // Finalize streaming thinking
+
+        // 2. Ensure the authoritative final answer is present exactly once.
+        //    turn_finished.text is the complete assistant message. If the last
+        //    assistant segment already holds it (streamed answer), we're done;
+        //    otherwise it was delivered only here (cold replay or a non-streamed
+        //    answer) — append it. Content compare avoids both dropping the
+        //    answer and duplicating an already-streamed one.
+        if !text.isEmpty {
+            // Compare against the actual last assistant node in the graph (the
+            // tracked pointer is cleared at each segment boundary, so it can't
+            // be used here).
+            let lastText = graph.linearWalk().last { node in
+                if case .assistantMessage = node.payload { return true }
+                return false
+            }.flatMap { node -> String? in
+                if case .assistantMessage(let t) = node.payload { return t }
+                return nil
+            }
+            if lastText != text {
+                let nodeID = "\(turnID)_assistant_\(internalState.nextAssistantSeq)"
+                internalState.nextAssistantSeq += 1
+                let node = GraphNode(
+                    id: nodeID, kind: .assistantMessage,
+                    payload: .assistantMessage(text: text),
+                    status: .completed, timestamp: ts, turnID: turnID
+                )
+                appendNode(node, to: &graph)
+                internalState.lastNodeOfKind[.assistantMessage] = nodeID
+            }
+        }
+
+        // 3. Finalize streaming thinking
         if !internalState.streamingThinking.isEmpty {
             let prevID = internalState.lastNodeOfKind[.thinking]
             if let prevID, var prevNode = graph.nodes[prevID] {
@@ -217,7 +223,6 @@ public struct ExecutionReducer: Sendable {
     private mutating func handleTokenDelta(turnID: String, text: String, ts: TimeInterval,
                                             graph: inout ExecutionGraph) -> [NodeID] {
         internalState.streamingAssistant += text
-        internalState.turnHadAssistantText = true
 
         if let prevID = internalState.lastNodeOfKind[.assistantMessage],
            var prevNode = graph.nodes[prevID] {
@@ -626,8 +631,4 @@ struct ReducerInternal: Sendable {
     var currentInvocationID: String? = nil
     var nextThinkingSeq: Int = 0
     var nextAssistantSeq: Int = 0
-    /// True once any assistant token_delta streamed in the current turn.
-    /// Distinguishes a live (delta-streamed) turn from a cold history replay
-    /// where the full answer arrives only in turn_finished.
-    var turnHadAssistantText: Bool = false
 }

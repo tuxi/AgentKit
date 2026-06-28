@@ -135,11 +135,22 @@ public struct TimelineProjection: Sendable {
                                 blocks: finalBlocks, footer: footer, isLive: isLive)
     }
 
-    /// The tool that should be expanded in a turn. Live turns only; once the
-    /// assistant is answering after the tools (last block is text) → collapse
-    /// all; otherwise expand the most recently invoked tool.
+    /// The tool that should be expanded in a turn. Live turns only.
+    /// Priority: a currently-running tool stays expanded (stable while it
+    /// executes, even if the assistant streams text alongside it — avoids
+    /// expand/collapse flicker). If nothing is running and the assistant is
+    /// answering after the tools (last block is text) → collapse all. Otherwise
+    /// keep the most recently invoked tool expanded.
     private func activeToolCallID(in blocks: [TurnBlock], isLive: Bool) -> String? {
         guard isLive else { return nil }
+        // A running tool wins — keep it open until it finishes.
+        for block in blocks.reversed() {
+            if case .toolGroup(let g) = block,
+               let running = g.tools.last(where: { $0.status == .running }) {
+                return running.callID
+            }
+        }
+        // Nothing running: collapse once the assistant starts answering.
         if case .text = blocks.last { return nil }
         for block in blocks.reversed() {
             if case .toolGroup(let g) = block { return g.tools.last?.callID }

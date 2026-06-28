@@ -79,6 +79,30 @@ final class ExecutionReducerTests: XCTestCase {
         XCTAssertEqual(assistantTexts(graph), ["full answer"])
     }
 
+    // Final answer delivered ONLY in turn_finished (not streamed), after an
+    // earlier streamed segment + tool. It must be appended, not dropped.
+    func testFinalAnswerFromTurnFinishedIsAppended() {
+        var reducer = ExecutionReducer()
+        var graph = ExecutionGraph()
+        let turn = "t1"
+
+        let events: [AgentEvent] = [
+            .turnStarted(turnID: turn, text: "hi"),
+            .modelStarted(turnID: turn, invocationID: "inv1"),
+            .tokenDelta(turnID: turn, text: "Let me check"),
+            .toolStarted(turnID: turn, callID: "c1",
+                         tool: ToolCall(callID: "c1", toolName: "grep", toolArgs: nil)),
+            .toolFinished(turnID: turn, callID: "c1",
+                          result: ToolResult(callID: "c1", toolName: "grep",
+                                             observation: "ok", error: nil)),
+            .modelFinished(turnID: turn, promptTokens: 1, elapsedMs: 1, err: nil),
+            .turnFinished(turnID: turn, text: "Here is the answer"),
+        ]
+        for e in events { _ = reducer.reduce(e, into: &graph) }
+
+        XCTAssertEqual(assistantTexts(graph), ["Let me check", "Here is the answer"])
+    }
+
     // Live with a single invocation finalized by turn_finished (streaming text
     // not closed by a model_finished) must not duplicate the final answer.
     func testLiveSingleSegmentNoDuplicateOnTurnFinished() {

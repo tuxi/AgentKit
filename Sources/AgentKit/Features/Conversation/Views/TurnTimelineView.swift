@@ -54,11 +54,11 @@ public struct TurnTimelineView: View {
                 .padding()
             }
             .onChange(of: snapshot.generation) { _, _ in
-                // Auto-scroll on every snapshot update during live streaming.
+                // Keep the bottom pinned during live streaming. No animation:
+                // generation bumps ~60fps on token deltas, and animating each
+                // one makes the content (esp. a running tool card) jitter.
                 if snapshot.isLive {
-                    withAnimation {
-                        proxy.scrollTo("__bottom__", anchor: .bottom)
-                    }
+                    proxy.scrollTo("__bottom__", anchor: .bottom)
                 }
             }
         }
