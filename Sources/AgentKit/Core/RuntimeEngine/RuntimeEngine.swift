@@ -26,6 +26,9 @@ public struct RuntimeSnapshot: Sendable {
     public let generation: UInt64
     /// When the current model invocation started. Non-nil = model is actively thinking.
     public let modelStartedAt: Date?
+    /// When the current turn started (turn_started → turn_finished). Non-nil =
+    /// the agent is actively working on a turn. Drives the live working indicator.
+    public let turnStartedAt: Date?
 
     public init(graph: ExecutionGraph, timeline: [ExecutionNode],
                 pendingApproval: ApprovalRequest? = nil,
@@ -34,7 +37,8 @@ public struct RuntimeSnapshot: Sendable {
                 modelStats: ModelStats? = nil,
                 isLive: Bool = false,
                 generation: UInt64 = 0,
-                modelStartedAt: Date? = nil) {
+                modelStartedAt: Date? = nil,
+                turnStartedAt: Date? = nil) {
         self.graph = graph
         self.timeline = timeline
         self.pendingApproval = pendingApproval
@@ -44,6 +48,7 @@ public struct RuntimeSnapshot: Sendable {
         self.isLive = isLive
         self.generation = generation
         self.modelStartedAt = modelStartedAt
+        self.turnStartedAt = turnStartedAt
     }
 
     /// Empty snapshot for initial state.
@@ -109,6 +114,8 @@ public actor RuntimeEngine {
 
     /// When the current model invocation started. Non-nil = model is thinking.
     private var _modelStartedAt: Date?
+    /// Set on turn_started, cleared on turn_finished — drives the live working indicator.
+    private var _turnStartedAt: Date?
 
     /// Whether the live WebSocket is connected.
     private var isLive: Bool = false
@@ -161,10 +168,16 @@ public actor RuntimeEngine {
                 _modelStats = ModelStats(promptTokens: tokens, elapsedMs: ms)
             }
         }
-        // Clear per-turn state on turn boundary
+        // Turn lifecycle: a turn is "active" from turn_started to turn_finished.
+        // Drives the live working indicator (and its turn-level timer).
         if case .turnStarted = event {
             _pendingApproval = nil
             _modelStats = nil
+            _modelStartedAt = nil
+            _turnStartedAt = Date()
+        }
+        if case .turnFinished = event {
+            _turnStartedAt = nil
             _modelStartedAt = nil
         }
 
@@ -294,7 +307,8 @@ public actor RuntimeEngine {
             modelStats: _modelStats,
             isLive: isLive,
             generation: generation,
-            modelStartedAt: _modelStartedAt
+            modelStartedAt: _modelStartedAt,
+            turnStartedAt: _turnStartedAt
         )
     }
 

@@ -36,12 +36,14 @@ public struct TurnTimelineView: View {
                             .id(turn.id)
                     }
 
-                    // Live "model is thinking" indicator between/after turns.
-                    if snapshot.modelStartedAt != nil || snapshot.modelStats != nil {
+                    // Live "agent working" indicator — only while a turn is
+                    // actively running. Disappears when the turn finishes (no
+                    // "thinking finished" line); completed stats are in the footer.
+                    if snapshot.isLive, snapshot.turnStartedAt != nil {
                         ThinkingTimerView(
-                            modelStartedAt: snapshot.modelStartedAt,
-                            modelStats: snapshot.modelStats,
-                            isLive: snapshot.isLive
+                            turnStartedAt: snapshot.turnStartedAt,
+                            isThinking: snapshot.modelStartedAt != nil,
+                            modelStats: snapshot.modelStats
                         )
                         .id("thinking_timer")
                     }

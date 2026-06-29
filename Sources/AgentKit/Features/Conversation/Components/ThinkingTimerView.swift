@@ -2,52 +2,46 @@
 //  ThinkingTimerView.swift
 //  AgentKit
 //
-//  Live thinking duration display.
-//  Shows "思考中... 3.2s" while model is actively processing,
-//  and "思考完成 (1.9s)" when model_finished arrives.
-//
-//  Uses TimelineView for smooth 0.5s-updating counter.
+//  Live "agent working" indicator, shown only WHILE a turn is active
+//  (turn_started → turn_finished). Branded (Code Agent + icon) with a turn-level
+//  timer, matching Claude Code's persistent logo+timer. There is no "thinking
+//  finished" state — a completed turn shows its stats in the turn footer, so the
+//  indicator simply disappears when the turn ends (no misleading "done" line).
 //
 
 import SwiftUI
 
-// MARK: - ThinkingTimerView
-
-/// Shows thinking progress — elapsed time since model started.
-/// Use when `snapshot.modelStartedAt` is non-nil or `snapshot.modelStats` is available.
 struct ThinkingTimerView: View {
-    let modelStartedAt: Date?
+    /// Non-nil while the turn is active — the indicator's lifetime.
+    let turnStartedAt: Date?
+    /// The model is actively generating (vs. running a tool).
+    let isThinking: Bool
+    /// Latest token count, if a model invocation has finished this turn.
     let modelStats: ModelStats?
-    let isLive: Bool
 
     var body: some View {
-        if let startedAt = modelStartedAt, isLive {
-            // Model is actively thinking — show live timer
+        if let started = turnStartedAt {
             TimelineView(.periodic(from: .now, by: 0.5)) { _ in
-                let elapsed = Date().timeIntervalSince(startedAt)
-                HStack(spacing: 4) {
-                    ProgressView()
-                        .scaleEffect(0.5)
-                        .frame(width: 12, height: 12)
-                    Text("思考中... \(formatSeconds(elapsed))")
+                let elapsed = Date().timeIntervalSince(started)
+                HStack(spacing: 6) {
+                    Image(systemName: "sparkles")
                         .font(.caption2)
                         .foregroundStyle(.secondary)
+
+                    HStack(spacing: 4) {
+                        Text("Code Agent")
+                        Text("· \(formatSeconds(elapsed))")
+                        if let tokens = modelStats?.promptTokens, tokens > 0 {
+                            Text("· \(modelStats!.formattedTokens) tokens")
+                        }
+                        if isThinking {
+                            Text("· 思考中…")
+                        }
+                    }
+                    .shimmering(active: isThinking)
                 }
-            }
-        } else if let stats = modelStats {
-            // Model finished — show final elapsed time
-            HStack(spacing: 4) {
-                Image(systemName: "checkmark.circle")
-                    .font(.caption2)
-                    .foregroundStyle(.green)
-                Text("思考完成 (\(stats.formattedElapsed))")
-                    .font(.caption2)
-                    .foregroundStyle(.secondary)
-                if stats.promptTokens > 0 {
-                    Text("· \(stats.formattedTokens) tokens")
-                        .font(.caption2)
-                        .foregroundStyle(.tertiary)
-                }
+                .font(.caption2)
+                .foregroundStyle(.secondary)
             }
         }
     }
