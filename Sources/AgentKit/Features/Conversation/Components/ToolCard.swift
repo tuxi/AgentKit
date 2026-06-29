@@ -33,25 +33,22 @@ struct ToolCard: View {
                         .font(.caption)
                         .foregroundStyle(statusColor)
 
-                    Text(tool.toolName)
-                        .font(.caption.weight(.medium))
-                        .lineLimit(1)
-
-                    // Inline target (e.g. the file path) — shows "what it's doing"
-                    // without expanding into variable-height output.
-                    if !tool.argsSummary.isEmpty {
-                        Text(tool.argsSummary)
-                            .font(.caption2)
-                            .foregroundStyle(.tertiary)
+                    // Name + inline target ("what it's doing"). Shimmers while
+                    // running so the line animates without expanding output.
+                    HStack(spacing: 6) {
+                        Text(tool.toolName)
+                            .font(.caption.weight(.medium))
                             .lineLimit(1)
-                            .truncationMode(.middle)
-                    }
 
-                    if tool.status == .running {
-                        ProgressView()
-                            .scaleEffect(0.5)
-                            .frame(width: 12, height: 12)
+                        if !tool.argsSummary.isEmpty {
+                            Text(tool.argsSummary)
+                                .font(.caption2)
+                                .foregroundStyle(.tertiary)
+                                .lineLimit(1)
+                                .truncationMode(.middle)
+                        }
                     }
+                    .shimmering(active: tool.status == .running)
 
                     if tool.isAutoApproved {
                         Text("auto")

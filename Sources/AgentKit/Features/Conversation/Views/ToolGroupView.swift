@@ -36,27 +36,28 @@ struct ToolGroupView: View {
                             .font(.caption)
                             .foregroundStyle(headerColor)
 
-                        Text(group.summary)
-                            .font(.caption.weight(.medium))
-                            .lineLimit(1)
+                        // Summary + inline "current action". The whole text run
+                        // shimmers while a tool is running — the line animates
+                        // ("it's here now") instead of expanding.
+                        HStack(spacing: 6) {
+                            Text(group.summary)
+                                .font(.caption.weight(.medium))
+                                .lineLimit(1)
 
-                        // Single inline "current action" — appears/disappears as
-                        // the running tool changes; never restructures the block.
-                        if let running {
-                            Image(systemName: "arrow.right")
-                                .font(.caption2)
-                                .foregroundStyle(.tertiary)
-                            if !running.argsSummary.isEmpty {
-                                Text(running.argsSummary)
+                            if let running {
+                                Image(systemName: "arrow.right")
                                     .font(.caption2)
                                     .foregroundStyle(.tertiary)
-                                    .lineLimit(1)
-                                    .truncationMode(.middle)
+                                if !running.argsSummary.isEmpty {
+                                    Text(running.argsSummary)
+                                        .font(.caption2)
+                                        .foregroundStyle(.tertiary)
+                                        .lineLimit(1)
+                                        .truncationMode(.middle)
+                                }
                             }
-                            ProgressView()
-                                .scaleEffect(0.5)
-                                .frame(width: 12, height: 12)
                         }
+                        .shimmering(active: running != nil)
 
                         Spacer()
 
