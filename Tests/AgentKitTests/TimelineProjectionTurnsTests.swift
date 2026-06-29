@@ -110,6 +110,31 @@ final class TimelineProjectionTurnsTests: XCTestCase {
         XCTAssertEqual(g.summary, "read_file ×2")
     }
 
+    // A run of different-name tools splits into same-name groups.
+    func testToolsSplitBySameNameRuns() {
+        let turn = "t1"
+        let graph = reduce([
+            .turnStarted(turnID: turn, text: "q"),
+            .modelStarted(turnID: turn, invocationID: "inv1"),
+            .toolStarted(turnID: turn, callID: "c1", tool: tool("c1", "read_file")),
+            .toolFinished(turnID: turn, callID: "c1", result: result("c1", "read_file")),
+            .toolStarted(turnID: turn, callID: "c2", tool: tool("c2", "read_file")),
+            .toolFinished(turnID: turn, callID: "c2", result: result("c2", "read_file")),
+            .toolStarted(turnID: turn, callID: "c3", tool: tool("c3", "grep")),
+            .toolFinished(turnID: turn, callID: "c3", result: result("c3", "grep")),
+            .toolStarted(turnID: turn, callID: "c4", tool: tool("c4", "read_file")),
+            .toolFinished(turnID: turn, callID: "c4", result: result("c4", "read_file")),
+        ])
+        let turns = TimelineProjection().projectTurns(graph, isLive: false)
+        // read_file ×2 | grep | read_file → 3 groups.
+        XCTAssertEqual(tags(turns[0].blocks), ["tools", "tools", "tools"])
+        let summaries = turns[0].blocks.compactMap { block -> String? in
+            if case .toolGroup(let g) = block { return g.summary }
+            return nil
+        }
+        XCTAssertEqual(summaries, ["read_file ×2", "grep", "read_file"])
+    }
+
     // Live and cold-history of the SAME turn converge on the same block tags.
     func testLiveAndHistoryConverge() {
         let turn = "t1"

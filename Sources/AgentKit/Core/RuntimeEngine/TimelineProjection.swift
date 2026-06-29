@@ -96,6 +96,11 @@ public struct TimelineProjection: Sendable {
                 flushTools()
                 blocks.append(.thinking(id: node.id, p))
             case .tool(let p):
+                // Group only consecutive SAME-NAME tools, so a run renders as
+                // "read_file ×4" then "grep" rather than one mixed blob.
+                if let last = pendingTools.last, last.toolName != p.toolName {
+                    flushTools()
+                }
                 pendingTools.append(p)
             case .artifact(let p):
                 flushTools()

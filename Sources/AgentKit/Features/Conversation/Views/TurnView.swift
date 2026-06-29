@@ -43,11 +43,7 @@ struct TurnView: View {
             ThinkingCard(text: payload.text, isStreaming: payload.isStreaming)
 
         case .toolGroup(let group):
-            // Phase C: render each tool with the existing card. Phase D folds
-            // these into a single ×N line.
-            ForEach(group.tools, id: \.callID) { tool in
-                ToolCard(tool: tool, store: store, activeToolCallID: group.activeToolCallID)
-            }
+            ToolGroupView(group: group, store: store)
 
         case .artifact(_, let node):
             ArtifactCard(artifact: node, store: store)
