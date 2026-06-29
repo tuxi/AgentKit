@@ -2,10 +2,14 @@
 //  ToolGroupView.swift
 //  AgentKit
 //
-//  Renders a ToolGroup (a run of consecutive same-name tools).
-//  • A single tool, or any tool still running → individual ToolCard(s), so the
-//    active tool stays visible while it executes.
-//  • A finished run of 2+ → one compact "name ×N" row, expandable to the list.
+//  Renders a ToolGroup (a run of consecutive same-name tools) with a STABLE
+//  footprint across its whole lifecycle — no "growing list → sudden ×N collapse"
+//  thrash. Eager merge:
+//  • single tool → one stable ToolCard (target shown inline, output on tap).
+//  • a run of N → one compact block: "read_file ×N" + a single inline status
+//    line for the currently-running tool ("→ design.md ⟳"). Tap to expand the
+//    full list. Completed tools fold into the count; nothing auto-expands into
+//    variable-height output, so the layout never jumps.
 //
 
 import SwiftUI
@@ -16,23 +20,46 @@ struct ToolGroupView: View {
 
     @State private var isExpanded = false
 
-    private var anyRunning: Bool { group.tools.contains { $0.status == .running } }
-    private var canMerge: Bool { group.tools.count > 1 && !anyRunning }
+    private var running: ToolNodePayload? { group.tools.last { $0.status == .running } }
+    private var hasFailure: Bool { group.tools.contains { $0.status == .failed } }
 
     var body: some View {
-        if canMerge {
+        if group.tools.count == 1 {
+            ToolCard(tool: group.tools[0], store: store)
+        } else {
             VStack(alignment: .leading, spacing: 4) {
                 Button {
                     withAnimation(.easeOut(duration: 0.15)) { isExpanded.toggle() }
                 } label: {
                     HStack(spacing: 6) {
-                        Image(systemName: mergedIcon)
+                        Image(systemName: headerIcon)
                             .font(.caption)
-                            .foregroundStyle(mergedColor)
+                            .foregroundStyle(headerColor)
+
                         Text(group.summary)
                             .font(.caption.weight(.medium))
                             .lineLimit(1)
+
+                        // Single inline "current action" — appears/disappears as
+                        // the running tool changes; never restructures the block.
+                        if let running {
+                            Image(systemName: "arrow.right")
+                                .font(.caption2)
+                                .foregroundStyle(.tertiary)
+                            if !running.argsSummary.isEmpty {
+                                Text(running.argsSummary)
+                                    .font(.caption2)
+                                    .foregroundStyle(.tertiary)
+                                    .lineLimit(1)
+                                    .truncationMode(.middle)
+                            }
+                            ProgressView()
+                                .scaleEffect(0.5)
+                                .frame(width: 12, height: 12)
+                        }
+
                         Spacer()
+
                         Image(systemName: isExpanded ? "chevron.up" : "chevron.down")
                             .font(.caption2)
                     }
@@ -42,7 +69,7 @@ struct ToolGroupView: View {
 
                 if isExpanded {
                     ForEach(group.tools, id: \.callID) { tool in
-                        ToolCard(tool: tool, store: store, activeToolCallID: nil)
+                        ToolCard(tool: tool, store: store)
                     }
                 }
             }
@@ -50,14 +77,16 @@ struct ToolGroupView: View {
             .padding(.vertical, 6)
             .background(.quaternary.opacity(0.5))
             .clipShape(RoundedRectangle(cornerRadius: 8))
-        } else {
-            ForEach(group.tools, id: \.callID) { tool in
-                ToolCard(tool: tool, store: store, activeToolCallID: group.activeToolCallID)
-            }
         }
     }
 
-    private var hasFailure: Bool { group.tools.contains { $0.status == .failed } }
-    private var mergedIcon: String { hasFailure ? "xmark.circle" : "checkmark.circle" }
-    private var mergedColor: Color { hasFailure ? .red : .green }
+    private var headerIcon: String {
+        if running != nil { return "hourglass" }
+        return hasFailure ? "xmark.circle" : "checkmark.circle"
+    }
+
+    private var headerColor: Color {
+        if running != nil { return .secondary }
+        return hasFailure ? .red : .green
+    }
 }

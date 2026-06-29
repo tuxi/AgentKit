@@ -75,8 +75,7 @@ public struct TimelineProjection: Sendable {
 
         func flushTools() {
             guard let first = pendingTools.first else { return }
-            blocks.append(.toolGroup(ToolGroup(id: first.callID, tools: pendingTools,
-                                               activeToolCallID: nil)))
+            blocks.append(.toolGroup(ToolGroup(id: first.callID, tools: pendingTools)))
             pendingTools.removeAll()
         }
 
@@ -127,41 +126,11 @@ public struct TimelineProjection: Sendable {
         flushTools()
         blocks = mergeAdjacentNarration(blocks)
 
-        // Decide which tool stays expanded, then inject into every group.
-        let active = activeToolCallID(in: blocks, isLive: isLive)
-        let finalBlocks: [TurnBlock] = blocks.map { block in
-            guard case .toolGroup(let g) = block else { return block }
-            return .toolGroup(ToolGroup(id: g.id, tools: g.tools, activeToolCallID: active))
-        }
-
         let footer = sawFinished
             ? TurnStats(promptTokens: footerTokens, elapsedMs: footerElapsed, invocationCount: footerCount)
             : nil
         return ConversationTurn(id: turnID, userPrompt: userPrompt,
-                                blocks: finalBlocks, footer: footer, isLive: isLive)
-    }
-
-    /// The tool that should be expanded in a turn. Live turns only.
-    /// Priority: a currently-running tool stays expanded (stable while it
-    /// executes, even if the assistant streams text alongside it — avoids
-    /// expand/collapse flicker). If nothing is running and the assistant is
-    /// answering after the tools (last block is text) → collapse all. Otherwise
-    /// keep the most recently invoked tool expanded.
-    private func activeToolCallID(in blocks: [TurnBlock], isLive: Bool) -> String? {
-        guard isLive else { return nil }
-        // A running tool wins — keep it open until it finishes.
-        for block in blocks.reversed() {
-            if case .toolGroup(let g) = block,
-               let running = g.tools.last(where: { $0.status == .running }) {
-                return running.callID
-            }
-        }
-        // Nothing running: collapse once the assistant starts answering.
-        if case .text = blocks.last { return nil }
-        for block in blocks.reversed() {
-            if case .toolGroup(let g) = block { return g.tools.last?.callID }
-        }
-        return nil
+                                blocks: blocks, footer: footer, isLive: isLive)
     }
 
     /// Collapse adjacent assistant-text blocks when one is a prefix of the other.

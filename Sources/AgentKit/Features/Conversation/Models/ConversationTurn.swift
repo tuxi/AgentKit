@@ -54,27 +54,22 @@ public enum TurnBlock: Identifiable, Sendable {
 
 // MARK: - ToolGroup
 
-/// Consecutive tool calls folded into one group. Phase C renders each tool;
-/// Phase D collapses to a single `×N` line.
+/// A run of consecutive same-name tool calls, rendered as one stable, compact
+/// block (eager merge): completed tools fold into a count, the running one shows
+/// a single inline status line, details on tap. See ToolGroupView.
 public struct ToolGroup: Identifiable, Sendable {
     public let id: String                  // = first tool's callID
     public let tools: [ToolNodePayload]
-    /// The callID the parent wants expanded (read-only, owned by projection).
-    public let activeToolCallID: String?
 
-    public init(id: String, tools: [ToolNodePayload], activeToolCallID: String?) {
+    public init(id: String, tools: [ToolNodePayload]) {
         self.id = id
         self.tools = tools
-        self.activeToolCallID = activeToolCallID
     }
 
-    /// Collapsed label: "grep" / "read_file ×3" / "4 tools".
+    /// Collapsed label: "grep" / "read_file ×3".
     public var summary: String {
         guard let first = tools.first else { return "" }
-        if tools.count == 1 { return first.toolName }
-        let names = Set(tools.map { $0.toolName })
-        if names.count == 1 { return "\(first.toolName) ×\(tools.count)" }
-        return "\(tools.count) tools"
+        return tools.count == 1 ? first.toolName : "\(first.toolName) ×\(tools.count)"
     }
 }
 

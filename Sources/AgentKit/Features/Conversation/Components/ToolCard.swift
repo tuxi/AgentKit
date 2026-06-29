@@ -11,19 +11,13 @@ import SwiftUI
 struct ToolCard: View {
     let tool: ToolNodePayload
     let store: WorkspaceStore
-    /// The callID of the tool the parent timeline wants expanded. Read-only —
-    /// only one tool is expanded at a time, matching Claude Code behaviour. The
-    /// card never writes this back or coordinates with its siblings; the
-    /// projection (TimelineProjection.activeToolCallID) owns all the rules.
-    let activeToolCallID: String?
-    @State private var isExpanded: Bool
+    /// Collapsed by default; the user taps to see args/output. Fixed-height when
+    /// collapsed (one line) so a running tool never thrashes the layout.
+    @State private var isExpanded = false
 
-    init(tool: ToolNodePayload, store: WorkspaceStore, activeToolCallID: String?) {
+    init(tool: ToolNodePayload, store: WorkspaceStore) {
         self.tool = tool
         self.store = store
-        self.activeToolCallID = activeToolCallID
-        // Expand iff the parent designated this card as the active one.
-        self._isExpanded = State(initialValue: tool.callID == activeToolCallID)
     }
 
     var body: some View {
@@ -42,6 +36,16 @@ struct ToolCard: View {
                     Text(tool.toolName)
                         .font(.caption.weight(.medium))
                         .lineLimit(1)
+
+                    // Inline target (e.g. the file path) — shows "what it's doing"
+                    // without expanding into variable-height output.
+                    if !tool.argsSummary.isEmpty {
+                        Text(tool.argsSummary)
+                            .font(.caption2)
+                            .foregroundStyle(.tertiary)
+                            .lineLimit(1)
+                            .truncationMode(.middle)
+                    }
 
                     if tool.status == .running {
                         ProgressView()
@@ -137,18 +141,6 @@ struct ToolCard: View {
         .padding(.vertical, 6)
         .background(.quaternary.opacity(0.5))
         .clipShape(RoundedRectangle(cornerRadius: 8))
-        .onChange(of: activeToolCallID) { _, newID in
-            // The parent re-designated the active tool: expand iff it's me,
-            // collapse otherwise. This single read-only reaction covers every
-            // case the old @Binding coordination tried to handle — a tool
-            // starting (I become active), the slot moving to the next tool, and
-            // the assistant answer arriving (parent clears the slot → collapse
-            // all). A user's manual tap still toggles isExpanded freely between
-            // these events.
-            withAnimation(.easeOut(duration: 0.15)) {
-                isExpanded = (newID == tool.callID)
-            }
-        }
     }
 
     // MARK: - Helpers
@@ -301,5 +293,26 @@ private struct DiffLineView: View {
             .padding(.horizontal, 8)
             .padding(.vertical, 0.5)
             .background(style.bg)
+    }
+}
+
+// MARK: - Args summary
+
+extension ToolNodePayload {
+    /// One-line target for a collapsed header (file path / command / query).
+    /// Empty when there's nothing concise to show.
+    var argsSummary: String {
+        guard case .object(let dict)? = args else { return "" }
+        let preferred = ["path", "file_path", "file", "command", "cmd",
+                         "query", "pattern", "url", "name"]
+        let pick: String? =
+            preferred.lazy.compactMap { dict[$0]?.stringValue }.first { !$0.isEmpty }
+            ?? dict.keys.sorted().lazy.compactMap { dict[$0]?.stringValue }.first { !$0.isEmpty }
+        guard let value = pick, !value.isEmpty else { return "" }
+        // File-like values: show the last path component.
+        let display = value.contains("/")
+            ? (value.split(separator: "/").last.map(String.init) ?? value)
+            : value
+        return display.count > 48 ? String(display.prefix(48)) + "…" : display
     }
 }
