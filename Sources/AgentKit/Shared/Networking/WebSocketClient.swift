@@ -100,6 +100,11 @@ public class WebSocketClient: NSObject, @unchecked Sendable {
     // true: 意外断开时重连 (默认)
     // false: 主动断开，不重连
     private var shouldReconnect = true
+    // 是否为「用户/应用主动断开」或「鉴权失效(401/4001)」。
+    // 与 shouldReconnect 的关键区别：达到最大重连次数只是「暂停当前退避循环」，
+    // 不应永久禁止恢复——那种情况下此标志保持 false，因此网络恢复 / 回到前台 /
+    // 用户发送消息时仍可自动复活。只有 disconnect() 与鉴权失效才会把它置 true。
+    private var userInitiatedDisconnect = false
     private let maxReconnectAttempts = 10
     
     // MARK: - 心跳机制
@@ -118,6 +123,9 @@ public class WebSocketClient: NSObject, @unchecked Sendable {
     private var networkMonitor: NWPathMonitor?
     private let networkQueue = DispatchQueue(label: "socket.client.network.monitor")
     private var hasInitialNetworkStatus = false
+    // 最近一次网络可用性（由 NWPathMonitor 在主线程更新）。
+    // 离线时不消耗重连预算，等待网络恢复时再发起连接。
+    private var isNetworkSatisfied = true
     
     // MARK: - 回调 (统一在主线程调用)
     public var onReceive: (@Sendable (Data) -> Void)?
@@ -180,6 +188,10 @@ public class WebSocketClient: NSObject, @unchecked Sendable {
             // 允许从断开或断开中状态启动连接
             // 明确设置意图：只要调用了 connect，就意味着希望连接保持
             self.shouldReconnect = true
+            // 一次新的连接意味着「不再处于用户主动断开」状态，并重置失败计数，
+            // 让重连预算从头开始（startConnecting 从 attempt=1 起算）。
+            self.userInitiatedDisconnect = false
+            self.pingFailureCount = 0
             // 启动连接，尝试次数从 1 开始
             self.startConnecting(attempt: 1)
             DLLog("WebSocketClient.connect() identifier=\(identifier) 从断开或断开中状态启动连接")
@@ -192,6 +204,15 @@ public class WebSocketClient: NSObject, @unchecked Sendable {
             DLLog("WebSocketClient.startConnecting() identifier=\(identifier) 正在连接中，拒绝本次连接")
             return
         }
+
+        // 离线时不消耗重连预算：保持断开，结束当前退避链。
+        // 网络恢复时由 NWPathMonitor 的 pathUpdateHandler 重新发起 connect()。
+        guard isNetworkSatisfied else {
+            DLLog("WebSocketClient.startConnecting() identifier=\(identifier) 网络不可用，跳过第 \(attempt) 次尝试，等待网络恢复。")
+            self.state = .disconnected(nil)
+            return
+        }
+
         self.state = .connecting(attempt: attempt)
         
         Task {
@@ -247,6 +268,8 @@ public class WebSocketClient: NSObject, @unchecked Sendable {
         self.isSending = false
         // 状态更新：明确标记为用户主动断开，并进入 disconnecting 状态
         self.shouldReconnect = false
+        // 用户主动断开：禁止一切自动复活（网络恢复 / 前台 / 发送消息都不再触发重连）。
+        self.userInitiatedDisconnect = true
         // 状态更新：进入 disconnecting
         if case .connected = self.state {
             self.state = .disconnecting
@@ -263,6 +286,8 @@ public class WebSocketClient: NSObject, @unchecked Sendable {
         if let wsError = reason as? WebSocketClientError,
            case .unauthorized = wsError {
             self.shouldReconnect = false
+            // 鉴权失效属于「不可自动恢复」：除非重新 connect()，否则不再尝试。
+            self.userInitiatedDisconnect = true
             self.stopNetworkMonitor()
         }
         
@@ -320,9 +345,13 @@ public class WebSocketClient: NSObject, @unchecked Sendable {
         // 检查重连次数 (使用 nextAttempt)
         guard nextAttempt <= maxReconnectAttempts else {
             self.state = .disconnected(WebSocketClientError.maxReconnectAttemptsReached)
+            // 仅停止「当前这轮退避循环」，不设 userInitiatedDisconnect。
+            // 故意保留 networkMonitor 运行：一旦网络恢复 / 回到前台 / 用户发送消息，
+            // 都会重新 connect() 复活（attempt 从 1 重新计数）。这正是修复
+            // 「长时间放置后必须退出详情页才能重连」的关键。
             self.shouldReconnect = false
             self.onDisconnected?(WebSocketClientError.maxReconnectAttemptsReached)
-            DLLog("WebSocketClient.reconnectHandler() identifier=\(identifier) trigger=\(trigger.rawValue) 重连达到最大次数，停止重连。")
+            DLLog("WebSocketClient.reconnectHandler() identifier=\(identifier) trigger=\(trigger.rawValue) 重连达到最大次数，暂停退避；保留网络监控，等待网络恢复/前台/发送时复活。")
             return
         }
         
@@ -463,6 +492,13 @@ public class WebSocketClient: NSObject, @unchecked Sendable {
         // 确保队列操作和发送启动在主线程安全进行
         Task { @MainActor in
             self.sendQueue.append(text)
+            // 用户主动发送 = 明确的恢复意图：若处于「非用户主动断开」的断开态
+            // （含达到最大重连次数后的暂停态），立即复活连接。消息已入队，
+            // 连接成功后由 didOpen → trySendNext 自动冲刷。
+            if case .disconnected = self.state, !self.userInitiatedDisconnect {
+                DLLog("WebSocketClient.send() identifier=\(self.identifier) 当前断开，发送动作触发自动重连。")
+                self.connect()
+            }
             self.trySendNext()
         }
     }
@@ -515,16 +551,22 @@ extension WebSocketClient {
         let monitor = NWPathMonitor()
         monitor.pathUpdateHandler = { [weak self] path in
             guard let self = self else { return }
-            
-            if path.status == .satisfied {// 当用户授权网络访问或网络恢复后
-                DispatchQueue.main.async {
-                    if case .disconnected = self.state, self.shouldReconnect {
-                        DLLog("WebSocketClient：identifier=\(self.identifier) 网络恢复，自动尝试重新连接 WebSocket...")
+            let satisfied = (path.status == .satisfied)
+
+            DispatchQueue.main.async {
+                self.isNetworkSatisfied = satisfied
+
+                if satisfied {// 当用户授权网络访问或网络恢复后
+                    // 闸门用 userInitiatedDisconnect 而非 shouldReconnect：
+                    // 达到最大重连次数后 shouldReconnect 为 false，但只要不是用户/鉴权断开，
+                    // 网络恢复仍应复活。connect() 会把 attempt 重置为 1（重连预算清零）。
+                    if case .disconnected = self.state, !self.userInitiatedDisconnect {
+                        DLLog("WebSocketClient：identifier=\(self.identifier) 网络恢复，重置重连预算并自动尝试重新连接 WebSocket...")
                         self.connect()
                     }
+                } else {
+                    DLLog("WebSocketClient：identifier=\(self.identifier) 网络不可用，等待恢复...")
                 }
-            } else {
-                DLLog("WebSocketClient：identifier=\(identifier) 网络不可用，等待恢复...")
             }
         }
         
@@ -590,12 +632,11 @@ extension WebSocketClient {
         self.endBackgroundTask() // 释放后台执行时间
         
         // 2. 检查是否需要重新连接
-        // 只有当应重连 (shouldReconnect=true) 且当前处于断开状态时，才尝试恢复连接。
-        // shouldReconnect 在 connect() 中被设为 true。
-        if self.shouldReconnect, case .disconnected(_) = self.state {
+        // 只要不是用户主动断开 / 鉴权失效，且当前处于断开状态，就尝试恢复连接。
+        // 用 userInitiatedDisconnect 作闸门，确保「达到最大重连次数后暂停」的连接
+        // 也能在回到前台时复活。connect() 会重新把 shouldReconnect 置 true。
+        if !self.userInitiatedDisconnect, case .disconnected(_) = self.state {
             DLLog("WebSocketClient: identifier=\(identifier) 应用回到前台，尝试恢复连接...")
-            // 重新设置 shouldReconnect 为 true (如果它之前被 background 逻辑设为 false)
-            self.shouldReconnect = true
             self.connect()
         }
     }
@@ -653,6 +694,8 @@ extension WebSocketClient: URLSessionTaskDelegate {
                     guard let self = self else { return }
                     // 1. 停止重连意图，防止无限重试 401 的请求
                     self.shouldReconnect = false
+                    // 鉴权失效不可自动恢复（前台/网络恢复/发送都不再触发）。
+                    self.userInitiatedDisconnect = true
                     self.stopNetworkMonitor()
                     
                     // 2. 触发回调（UI 层会收到这个通知去 logout）
