@@ -39,9 +39,6 @@ struct TurnView: View {
         case .text(_, let payload):
             MessageBubble(text: payload.text, role: payload.role, isStreaming: payload.isStreaming)
 
-        case .thinking(_, let payload):
-            ThinkingCard(text: payload.text, isStreaming: payload.isStreaming)
-
         case .toolGroup(let group):
             ToolGroupView(group: group, store: store)
 

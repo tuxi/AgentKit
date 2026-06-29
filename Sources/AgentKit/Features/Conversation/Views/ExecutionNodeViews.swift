@@ -2,52 +2,11 @@
 //  ExecutionNodeViews.swift
 //  AgentKit
 //
-//  Per-node-type card views for the chronological timeline.
-//  ExecutionNodeCardView dispatches by ExecutionNodeKind.
+//  Shared per-node card views used by the Turn → Block renderer:
+//  SystemEventRow (observation / reflection / error / meta) and ArtifactCard.
 //
 
 import SwiftUI
-
-// MARK: - ExecutionNodeCardView
-
-/// Dispatcher: renders one ExecutionPresentation as the appropriate card.
-struct ExecutionNodeCardView: View {
-    let presentation: ExecutionPresentation
-    @Environment(WorkspaceStore.self) private var store
-    /// Computed by the parent timeline — the callID of the tool that should be
-    /// expanded. Read-only here; cards never write it back.
-    let activeToolCallID: String?
-
-    var body: some View {
-        Group {
-            switch presentation.node.kind {
-            case .message(let payload):
-                MessageBubble(
-                    text: payload.text,
-                    role: payload.role,
-                    isStreaming: payload.isStreaming
-                )
-            case .thinking(let payload):
-                ThinkingCard(
-                    text: payload.text,
-                    isStreaming: payload.isStreaming
-                )
-                .padding(.leading, 8)
-
-            case .tool(let payload):
-                ToolCard(tool: payload, store: store, activeToolCallID: activeToolCallID)
-                    .padding(.leading, 8)
-
-            case .artifact(let payload):
-                ArtifactCard(artifact: payload.node, store: store)
-                    .padding(.leading, 8)
-
-            case .system(let payload):
-                SystemEventRow(payload: payload)
-            }
-        }
-    }
-}
 
 // MARK: - SystemEventRow
 

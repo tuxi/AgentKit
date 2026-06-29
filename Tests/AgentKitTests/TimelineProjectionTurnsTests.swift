@@ -30,7 +30,6 @@ final class TimelineProjectionTurnsTests: XCTestCase {
         blocks.map { block in
             switch block {
             case .text: return "text"
-            case .thinking: return "thinking"
             case .toolGroup: return "tools"
             case .artifact: return "artifact"
             case .system: return "system"

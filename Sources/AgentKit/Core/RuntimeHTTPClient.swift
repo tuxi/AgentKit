@@ -117,6 +117,7 @@ struct RuntimeHTTPClient: Sendable {
 
         let (data, response) = try await session.data(for: request)
         try validateHTTP(response, data: data)
+//        DLLog(String(data: data, encoding: .utf8)!)
         return try decoder.decode([WireFrame].self, from: data)
     }
 

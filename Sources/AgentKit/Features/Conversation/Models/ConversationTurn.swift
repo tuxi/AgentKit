@@ -34,9 +34,10 @@ public struct ConversationTurn: Identifiable, Sendable {
 // MARK: - TurnBlock
 
 /// One ordered block inside a turn. Text can repeat (interleaved with tools).
+/// Note: `thinking` events project into `.text` (assistant narration), so there
+/// is no separate thinking block — see TimelineProjection.buildTurn.
 public enum TurnBlock: Identifiable, Sendable {
     case text(id: String, MessageNodePayload)
-    case thinking(id: String, ThinkingNodePayload)
     case toolGroup(ToolGroup)
     case artifact(id: String, ArtifactNode)
     case system(id: String, SystemNodePayload)   // observation / reflection / error only
@@ -44,7 +45,6 @@ public enum TurnBlock: Identifiable, Sendable {
     public var id: String {
         switch self {
         case .text(let id, _): return id
-        case .thinking(let id, _): return id
         case .toolGroup(let g): return g.id
         case .artifact(let id, _): return id
         case .system(let id, _): return id
