@@ -175,10 +175,27 @@ public class WebSocketClient: NSObject, @unchecked Sendable {
     
     // MARK: - 连接与断开
     
+    /// Serialize state mutations onto the main thread. All of this client's
+    /// mutable state (sendQueue, state, webSocketTask, timers…) is only ever
+    /// touched on main; public entry points can be called from background
+    /// queues (e.g. the SwiftUI Observation didSet chain), so they must hop here
+    /// or they race the main-thread send/listen/ping paths → EXC_BAD_ACCESS.
+    private func runOnMain(_ work: @escaping @Sendable () -> Void) {
+        if Thread.isMainThread {
+            work()
+        } else {
+            DispatchQueue.main.async(execute: work)
+        }
+    }
+
     /**
      开始连接 WebSocket。
      */
     public func connect() {
+        runOnMain { self._connect() }
+    }
+
+    private func _connect() {
         switch self.state {
         case .connected, .connecting(_):
             // 已经连接或正在连接，忽略请求
@@ -264,6 +281,10 @@ public class WebSocketClient: NSObject, @unchecked Sendable {
     
     // 用户主动断开
     public func disconnect() {
+        runOnMain { self._disconnect() }
+    }
+
+    private func _disconnect() {
         self.sendQueue.removeAll()
         self.isSending = false
         // 状态更新：明确标记为用户主动断开，并进入 disconnecting 状态
