@@ -6,12 +6,22 @@
 //  and renders each as one continuous message. Replaces the flat, per-event
 //  ChronologicalTimelineView. See docs/conversation_turn_ui_design.md.
 //
+//  Auto-scroll follows the stream ONLY while the user is at the bottom
+//  ("follow mode"). Scrolling up pauses it (so the user isn't yanked back);
+//  a "jump to latest" button brings them back and re-pins.
+//
 
 import SwiftUI
 
 public struct TurnTimelineView: View {
     let snapshot: RuntimeSnapshot
     private let projection = TimelineProjection()
+
+    /// Follow mode: true while the user is at/near the bottom.
+    @State private var isPinnedToBottom = true
+    @State private var viewportHeight: CGFloat = 0
+
+    private let bottomID = "__timeline_bottom__"
 
     public init(snapshot: RuntimeSnapshot) {
         self.snapshot = snapshot
@@ -21,45 +31,107 @@ public struct TurnTimelineView: View {
         // Natural-order Turn → Block projection (live ⇔ history identical path).
         let turns = projection.projectTurns(snapshot.graph, isLive: snapshot.isLive)
 
-        ScrollViewReader { proxy in
-            ScrollView {
-                LazyVStack(alignment: .leading, spacing: 12) {
-                    // Sticky todo panel — agent's current task plan.
-                    if !snapshot.latestTodos.isEmpty {
-                        TodoPanel(todos: snapshot.latestTodos)
-                            .id("todo_panel")
-                            .padding(.bottom, 6)
-                    }
+        GeometryReader { outer in
+            ScrollViewReader { proxy in
+                ScrollView {
+                    LazyVStack(alignment: .leading, spacing: 12) {
+                        // Sticky todo panel — agent's current task plan.
+                        if !snapshot.latestTodos.isEmpty {
+                            TodoPanel(todos: snapshot.latestTodos)
+                                .id("todo_panel")
+                                .padding(.bottom, 6)
+                        }
 
-                    ForEach(turns) { turn in
-                        TurnView(turn: turn)
-                            .id(turn.id)
-                    }
+                        ForEach(turns) { turn in
+                            TurnView(turn: turn)
+                                .id(turn.id)
+                        }
 
-                    // Live "agent working" indicator — only while a turn is
-                    // actively running. Disappears when the turn finishes (no
-                    // "thinking finished" line); completed stats are in the footer.
-                    if snapshot.isLive, snapshot.turnStartedAt != nil {
-                        ThinkingTimerView(
-                            turnStartedAt: snapshot.turnStartedAt,
-                            isThinking: snapshot.modelStartedAt != nil,
-                            modelStats: snapshot.modelStats
-                        )
-                        .id("thinking_timer")
+                        // Live "agent working" indicator — only while a turn is
+                        // actively running. Disappears when the turn finishes.
+                        if snapshot.isLive, snapshot.turnStartedAt != nil {
+                            ThinkingTimerView(
+                                turnStartedAt: snapshot.turnStartedAt,
+                                isThinking: snapshot.modelStartedAt != nil,
+                                modelStats: snapshot.modelStats
+                            )
+                            .id("thinking_timer")
+                        }
+
+                        // Bottom sentinel: scroll target + follow-mode probe.
+                        Color.clear
+                            .frame(height: 1)
+                            .id(bottomID)
+                            .background(
+                                GeometryReader { g in
+                                    Color.clear.preference(
+                                        key: BottomOffsetKey.self,
+                                        value: g.frame(in: .named("turnScroll")).maxY
+                                    )
+                                }
+                            )
+                    }
+                    .padding()
+                }
+                .coordinateSpace(name: "turnScroll")
+                .onChange(of: snapshot.generation) { _, _ in
+                    // Follow the stream only while pinned — never yank a user
+                    // who has scrolled up. No animation: generation bumps ~60fps.
+                    guard isPinnedToBottom else { return }
+                    proxy.scrollTo(bottomID, anchor: .bottom)
+                }
+                .onPreferenceChange(BottomOffsetKey.self) { bottomMaxY in
+                    updatePin(bottomMaxY: bottomMaxY)
+                }
+                .overlay(alignment: .bottomTrailing) {
+                    if !isPinnedToBottom {
+                        jumpToLatestButton(proxy: proxy)
                     }
                 }
-                .padding()
             }
-            .onChange(of: snapshot.generation) { _, _ in
-                // Keep the latest turn's bottom in view during live streaming.
-                // Scroll to the real last turn (a laid-out element) rather than a
-                // zero-height anchor — the anchor sits after a lazily-laid-out
-                // timer and overshoots into blank space when a tool card expands.
-                // No animation: generation bumps ~60fps on token deltas; animating
-                // each one makes the content (esp. a running tool) jitter.
-                guard snapshot.isLive, let lastID = turns.last?.id else { return }
-                proxy.scrollTo(lastID, anchor: .bottom)
-            }
+            .onAppear { viewportHeight = outer.size.height }
+            .onChange(of: outer.size.height) { _, h in viewportHeight = h }
         }
+    }
+
+    /// Distance of the bottom sentinel below the visible viewport bottom.
+    /// ~0 → at bottom; large → user scrolled up. Hysteresis avoids flicker.
+    private func updatePin(bottomMaxY: CGFloat) {
+        guard viewportHeight > 0 else { return }
+        let distance = bottomMaxY - viewportHeight
+        if distance > 120 {
+            if isPinnedToBottom { isPinnedToBottom = false }
+        } else if distance < 40 {
+            if !isPinnedToBottom { isPinnedToBottom = true }
+        }
+    }
+
+    private func jumpToLatestButton(proxy: ScrollViewProxy) -> some View {
+        Button {
+            withAnimation(.easeOut(duration: 0.2)) {
+                proxy.scrollTo(bottomID, anchor: .bottom)
+            }
+            isPinnedToBottom = true
+        } label: {
+            Image(systemName: "arrow.down")
+                .font(.system(size: 13, weight: .semibold))
+                .foregroundStyle(.secondary)
+                .frame(width: 30, height: 30)
+                .background(.regularMaterial, in: Circle())
+                .overlay(Circle().strokeBorder(.separator, lineWidth: 0.5))
+        }
+        .buttonStyle(.plain)
+        .padding(.trailing, 14)
+        .padding(.bottom, 10)
+        .transition(.opacity.combined(with: .scale))
+    }
+}
+
+// MARK: - Follow-mode probe
+
+private struct BottomOffsetKey: PreferenceKey {
+    static var defaultValue: CGFloat { 0 }
+    static func reduce(value: inout CGFloat, nextValue: () -> CGFloat) {
+        value = nextValue()
     }
 }
