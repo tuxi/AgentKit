@@ -59,7 +59,7 @@ struct ToolGroupView: View {
                         }
                         .shimmering(active: running != nil)
 
-                        Spacer()
+//                        Spacer()
 
                         Image(systemName: isExpanded ? "chevron.up" : "chevron.down")
                             .font(.caption2)

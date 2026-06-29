@@ -25,12 +25,36 @@ struct TurnView: View {
                 ForEach(turn.blocks) { block in
                     blockView(block)
                 }
-                if let footer = turn.footer {
-                    footerView(footer)
-                }
+                bottomRow
             }
             .padding(.leading, 8)
         }
+    }
+
+    /// One action/footer row per turn: a single copy button (copies the whole
+    /// reply, Claude-Code style) + the token/timing footer.
+    @ViewBuilder
+    private var bottomRow: some View {
+        let copyText = assistantText
+        if (!copyText.isEmpty && !turn.isLive) || turn.footer != nil {
+            HStack(spacing: 12) {
+                if !copyText.isEmpty && !turn.isLive {
+                    TurnCopyButton(text: copyText)
+                }
+                if let footer = turn.footer {
+                    footerStats(footer)
+                }
+                Spacer()
+            }
+            .padding(.top, 2)
+        }
+    }
+
+    /// The turn's assistant prose — every `.text` block joined.
+    private var assistantText: String {
+        turn.blocks
+            .compactMap { if case .text(_, let p) = $0 { return p.text } else { return nil } }
+            .joined(separator: "\n\n")
     }
 
     @ViewBuilder
@@ -50,7 +74,7 @@ struct TurnView: View {
         }
     }
 
-    private func footerView(_ stats: TurnStats) -> some View {
+    private func footerStats(_ stats: TurnStats) -> some View {
         HStack(spacing: 8) {
             Label("\(stats.formattedTokens) tokens", systemImage: "text.word.spacing")
             Label(stats.formattedElapsed, systemImage: "clock")
@@ -60,6 +84,27 @@ struct TurnView: View {
         }
         .font(.caption2)
         .foregroundStyle(.tertiary)
-        .padding(.top, 2)
+    }
+}
+
+// MARK: - TurnCopyButton
+
+/// One copy button per turn — copies the whole assistant reply.
+private struct TurnCopyButton: View {
+    let text: String
+    @State private var copied = false
+
+    var body: some View {
+        Button {
+            Clipboard.copy(text)
+            copied = true
+            DispatchQueue.main.asyncAfter(deadline: .now() + 1.2) { copied = false }
+        } label: {
+            Image(systemName: copied ? "checkmark" : "doc.on.doc")
+                .font(.caption2)
+                .foregroundStyle(copied ? Color.green : Color.secondary)
+        }
+        .buttonStyle(.plain)
+        .help("复制回复")
     }
 }

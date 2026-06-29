@@ -14,84 +14,29 @@ struct MessageBubble: View {
     var isStreaming: Bool = false
 
     var body: some View {
-        VStack {
-            HStack(alignment: .top, spacing: 8) {
-                if role == .assistant {
-                    // Assistant avatar / indicator
-                    VStack {
-                        Image(systemName: "brain.head.profile")
-                            .font(.caption2)
-                            .foregroundStyle(.secondary)
-                        Spacer()
-                    }
-                    .padding(.top, 4)
-                }
-
-                if role == .user { Spacer() }
-                
-                Group {
-                    if role == .assistant {
-                        // Rich Markdown rendering for assistant messages
-                        VStack(alignment: .leading, spacing: 4) {
-                            MarkdownRenderer(text: text)
-                            if isStreaming {
-                                BlinkingCursor()
-                            }
-                        }
-                    } else {
-                        // User messages stay plain text
-                        Text(text)
-                            .font(.body)
-                            .foregroundStyle(.white)
-                            .textSelection(.enabled)
-                    }
-                }
-                .padding(.horizontal, 12)
-                .padding(.vertical, 8)
-                .background {
-                    if role == .user {
-                        Color.accentColor
-                    } else {
-                        Color.clear
-                    }
-                }
-                .clipShape(RoundedRectangle(cornerRadius: 12))
-
-
-                if role == .assistant { Spacer() }
-
-                if role == .user {
-                    VStack {
-                        Image(systemName: "person.circle.fill")
-                            .font(.caption2)
-                            .foregroundStyle(.secondary)
-                        Spacer()
-                    }
-                    .padding(.top, 4)
+        if role == .user {
+            // User prompt — right-aligned accent bubble.
+            HStack {
+                Spacer(minLength: 40)
+                Text(text)
+                    .font(.body)
+                    .foregroundStyle(.white)
+                    .textSelection(.enabled)
+                    .padding(.horizontal, 12)
+                    .padding(.vertical, 8)
+                    .background(Color.accentColor)
+                    .clipShape(RoundedRectangle(cornerRadius: 12))
+            }
+        } else {
+            // Assistant reply — flush-left prose, no avatar, no per-message
+            // chrome. One copy button lives at the turn level (see TurnView).
+            VStack(alignment: .leading, spacing: 4) {
+                MarkdownRenderer(text: text)
+                if isStreaming {
+                    BlinkingCursor()
                 }
             }
-            .padding(.horizontal, 4)
-            
-            Button {
-                Clipboard.copy(text)
-            } label: {
-                if role == .assistant {
-                    HStack {
-                        Image(systemName: "document.on.document")
-                            .font(.system(size: 13))
-                        Spacer()
-                    }
-                    .padding(.leading, 35)
-                } else {
-                    HStack {
-                        Spacer()
-                        Image(systemName: "document.on.document")
-                            .font(.system(size: 13))
-                    }
-                    .padding(.trailing, 35)
-                }
-            }
-            .buttonStyle(.plain)
+            .frame(maxWidth: .infinity, alignment: .leading)
         }
     }
 }
