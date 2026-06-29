@@ -60,8 +60,9 @@ final class TimelineProjectionTurnsTests: XCTestCase {
         let t = turns[0]
 
         XCTAssertEqual(t.userPrompt?.text, "do it")
-        // No "model invoked/finished" blocks; interleaved order preserved.
-        XCTAssertEqual(tags(t.blocks), ["thinking", "text", "tools", "text"])
+        // No "model invoked/finished" blocks. Thinking renders as an assistant
+        // reply (text), interleaved with tools.
+        XCTAssertEqual(tags(t.blocks), ["text", "text", "tools", "text"])
 
         // Footer aggregates the two invocations.
         XCTAssertNotNil(t.footer)
@@ -69,11 +70,31 @@ final class TimelineProjectionTurnsTests: XCTestCase {
         XCTAssertEqual(t.footer?.elapsedMs, 50)      // 30 + 20
         XCTAssertEqual(t.footer?.promptTokens, 1500) // last invocation
 
-        // The two text segments are distinct and positioned right.
+        // Narration ("let me look") + replies, in arrival order.
         let texts: [String] = t.blocks.compactMap {
             if case .text(_, let p) = $0 { return p.text }; return nil
         }
-        XCTAssertEqual(texts, ["Checking", "Done"])
+        XCTAssertEqual(texts, ["let me look", "Checking", "Done"])
+    }
+
+    // Same narration on both `thinking` and `token_delta` shows once, not twice.
+    func testDuplicateThinkingAndTokenMergeToOne() {
+        let turn = "t1"
+        let graph = reduce([
+            .turnStarted(turnID: turn, text: "q"),
+            .modelStarted(turnID: turn, invocationID: "inv1"),
+            .tokenDelta(turnID: turn, text: "Let me trace the data flow"),
+            .thinking(turnID: turn, text: "Let me trace the data flow"),
+            .toolStarted(turnID: turn, callID: "c1", tool: tool("c1", "grep")),
+            .toolFinished(turnID: turn, callID: "c1", result: result("c1", "grep")),
+        ])
+        let turns = TimelineProjection().projectTurns(graph, isLive: true)
+        // One narration block, not two identical ones.
+        XCTAssertEqual(tags(turns[0].blocks), ["text", "tools"])
+        let texts = turns[0].blocks.compactMap { block -> String? in
+            if case .text(_, let p) = block { return p.text }; return nil
+        }
+        XCTAssertEqual(texts, ["Let me trace the data flow"])
     }
 
     // No lifecycle/text reorder leaks: assistant text is NOT forced to the end.

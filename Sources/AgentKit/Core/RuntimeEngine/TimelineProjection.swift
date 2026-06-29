@@ -88,8 +88,13 @@ public struct TimelineProjection: Sendable {
                 flushTools()
                 blocks.append(.text(id: node.id, p))
             case .thinking(let p):
+                // This agent uses `thinking` events as the assistant's spoken
+                // narration between tools ("let me expand each commit…"), not
+                // hidden reasoning. Render it as an assistant reply so the turn
+                // reads as reply → tool → reply → … → answer (Claude Code style).
                 flushTools()
-                blocks.append(.thinking(id: node.id, p))
+                blocks.append(.text(id: node.id,
+                    MessageNodePayload(role: .assistant, text: p.text, isStreaming: p.isStreaming)))
             case .tool(let p):
                 // Group only consecutive SAME-NAME tools, so a run renders as
                 // "read_file ×4" then "grep" rather than one mixed blob.
@@ -120,6 +125,7 @@ public struct TimelineProjection: Sendable {
             }
         }
         flushTools()
+        blocks = mergeAdjacentNarration(blocks)
 
         // Decide which tool stays expanded, then inject into every group.
         let active = activeToolCallID(in: blocks, isLive: isLive)
@@ -156,6 +162,33 @@ public struct TimelineProjection: Sendable {
             if case .toolGroup(let g) = block { return g.tools.last?.callID }
         }
         return nil
+    }
+
+    /// Collapse adjacent assistant-text blocks when one is a prefix of the other.
+    /// The server emits the same narration on both the `thinking` and
+    /// `token_delta` channels; without this the conversation shows each reply
+    /// twice. Prefix (not just equality) handles the two channels streaming at
+    /// different rates — the shorter is folded into the longer, keeping the first
+    /// block's identity stable.
+    private func mergeAdjacentNarration(_ blocks: [TurnBlock]) -> [TurnBlock] {
+        var result: [TurnBlock] = []
+        for block in blocks {
+            if case .text(_, let p) = block {
+                let cur = p.text.trimmingCharacters(in: .whitespacesAndNewlines)
+                if !cur.isEmpty, let last = result.last, case .text(let lid, let lp) = last {
+                    let prev = lp.text.trimmingCharacters(in: .whitespacesAndNewlines)
+                    if !prev.isEmpty, prev.hasPrefix(cur) || cur.hasPrefix(prev) {
+                        let longer = cur.count >= prev.count ? p.text : lp.text
+                        let streaming = p.isStreaming || lp.isStreaming
+                        result[result.count - 1] = .text(id: lid,
+                            MessageNodePayload(role: .assistant, text: longer, isStreaming: streaming))
+                        continue
+                    }
+                }
+            }
+            result.append(block)
+        }
+        return result
     }
 
     /// Convert a single GraphNode to an ExecutionNode.
