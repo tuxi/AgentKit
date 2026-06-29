@@ -36,9 +36,13 @@ struct TurnView: View {
     @ViewBuilder
     private var bottomRow: some View {
         let copyText = assistantText
-        if (!copyText.isEmpty && !turn.isLive) || turn.footer != nil {
+        // Show copy once there's text that isn't actively streaming — NOT gated
+        // on session liveness (turn.isLive stays true for the whole live
+        // session, which hid the button until you reloaded into history).
+        let canCopy = !copyText.isEmpty && !isAnswerStreaming
+        if canCopy || turn.footer != nil {
             HStack(spacing: 12) {
-                if !copyText.isEmpty && !turn.isLive {
+                if canCopy {
                     TurnCopyButton(text: copyText)
                 }
                 if let footer = turn.footer {
@@ -55,6 +59,14 @@ struct TurnView: View {
         turn.blocks
             .compactMap { if case .text(_, let p) = $0 { return p.text } else { return nil } }
             .joined(separator: "\n\n")
+    }
+
+    /// True while the latest text block is still streaming in.
+    private var isAnswerStreaming: Bool {
+        for block in turn.blocks.reversed() {
+            if case .text(_, let p) = block { return p.isStreaming }
+        }
+        return false
     }
 
     @ViewBuilder
