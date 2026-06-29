@@ -106,23 +106,6 @@ public struct ExecutionGraph: Sendable {
             }
             current = edges.values.first { $0.from == id && $0.type == .next }?.to
         }
-        // DEBUG: verify chrono order
-        let summary = result.map { n in
-            let kindStr: String = {
-                switch n.payload {
-                case .userInput: return "U"
-                case .thinking: return "T"
-                case .assistantMessage: return "A"
-                case .toolCall: return "🔧"
-                case .observation: return "👁"
-                case .system(let p):
-                    return p.metadata["phase"] == "finished" ? "■" : "▶"
-                default: return "·"
-                }
-            }()
-            return "\(kindStr)[\(String(n.turnID.suffix(6)))]"
-        }
-//        print("📜 [Graph] linearWalk: \(result.count) nodes → \(summary.joined())")
         return result
     }
 }

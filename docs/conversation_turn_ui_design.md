@@ -3,6 +3,29 @@
 > 对话详情页的渲染规范。目标：一轮对话（turn）在视觉上是**一条连续的消息**，
 > 而不是一串平级事件卡片 —— 对齐 Claude Code / Cursor 的 agent turn 体验。
 
+## Status — 已实现（addendum, 2026-06）
+
+Turn → Block 模型已落地（Phase A–E），实机验证通过。落地过程中有一处**关键修正**，
+与下文初版设计不同，以本节为准：
+
+- **`thinking` 事件 = 助手的对话叙述，不是隐藏推理，不折叠。** wire 帧实证：
+  `kind:"thinking"` 的 text 是「改动涉及 11 个文件…让我逐个 commit 展开：」这类对用户说的话。
+  服务端把同一段叙述**同时发到 `thinking` 和 `token_delta` 两条通道**。因此：
+  - `thinking` 渲染为 **inline 助手回复文本**（与工具交错），而非折叠的紫色 ThinkingCard。
+  - `TimelineProjection.mergeAdjacentNarration` 把相邻、互为前缀的助手文本合并，吃掉两通道的重复。
+  - 效果就是 Claude Code 的体感：回复 → 工具 → 回复 → … → 最终答案。
+  - 下文「Projection 规则」里 `.thinking → 折叠 block」与「View 层」里「ThinkingCard 斜体折叠」**已作废**。
+- **助手文本分段**（reducer，Phase A）+ **turn_finished 按内容去重**：保证最终答案不丢、不重复。
+- **生命周期**（model invoked/finished）→ turn footer，不进内容；三个 reorder pass 已删除（Phase E）。
+- **工具**：连续同名合并为 `read_file ×N`（完成且 >1 才折叠；运行中保持独立展开）。
+
+**Live / History 一致性**：投影层已一致（live 与 history 走同一个 `projectTurns`）。剩余差异是
+**服务端**对失败 turn 未持久化全部中间内容（live 有、history 缺）——属服务端待办，非客户端。
+
+**已知遗留（优化项，未做）**：多轮对话后工具合并/折叠时偶有 UI 跳动。
+
+---
+
 ## TL;DR
 
 把渲染模型从 **「扁平事件流 → 每个 node 一张卡」** 升级为 **「Turn → Block 两层树」**：
