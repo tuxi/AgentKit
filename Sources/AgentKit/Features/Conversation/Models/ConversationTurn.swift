@@ -29,6 +29,12 @@ public struct ConversationTurn: Identifiable, Sendable {
         self.footer = footer
         self.isLive = isLive
     }
+
+    /// Nothing worth rendering — skip (e.g. a stray leading run with only
+    /// demoted meta events).
+    public var isEmpty: Bool {
+        userPrompt == nil && blocks.isEmpty && footer == nil
+    }
 }
 
 // MARK: - TurnBlock

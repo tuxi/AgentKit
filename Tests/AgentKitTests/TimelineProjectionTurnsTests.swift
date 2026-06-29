@@ -155,6 +155,29 @@ final class TimelineProjectionTurnsTests: XCTestCase {
         XCTAssertEqual(summaries, ["read_file ×2", "grep", "read_file"])
     }
 
+    // A restarted server can REUSE turn_id within one session. Turns must still
+    // render as distinct, ordered turns with distinct ids (ForEach safety).
+    func testReusedTurnIDProducesDistinctOrderedTurns() {
+        var reducer = ExecutionReducer()
+        var graph = ExecutionGraph()
+        let events: [AgentEvent] = [
+            .turnStarted(turnID: "turn_1", text: "first"),
+            .turnFinished(turnID: "turn_1", text: "reply 1"),
+            .turnStarted(turnID: "turn_2", text: "second"),
+            .turnFinished(turnID: "turn_2", text: "reply 2"),
+            // server restart → turn_id reset, reuses "turn_1"
+            .turnStarted(turnID: "turn_1", text: "third"),
+            .turnFinished(turnID: "turn_1", text: "reply 3"),
+        ]
+        for e in events { _ = reducer.reduce(e, into: &graph) }
+
+        let turns = TimelineProjection().projectTurns(graph)
+        XCTAssertEqual(turns.count, 3)
+        XCTAssertEqual(turns.map { $0.userPrompt?.text }, ["first", "second", "third"])
+        // All ids distinct → SwiftUI ForEach won't drop/reorder.
+        XCTAssertEqual(Set(turns.map(\.id)).count, 3)
+    }
+
     // Live and cold-history of the SAME turn converge on the same block tags.
     func testLiveAndHistoryConverge() {
         let turn = "t1"

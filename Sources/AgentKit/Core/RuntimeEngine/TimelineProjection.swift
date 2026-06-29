@@ -49,24 +49,35 @@ public struct TimelineProjection: Sendable {
         let nodes = projectNodes(graph)
         guard !nodes.isEmpty else { return [] }
 
-        // Split into contiguous per-turn runs (empty turnID attaches to current).
-        var runs: [(turnID: String, nodes: [ExecutionNode])] = []
+        // Split into turns at each user prompt (turn_started). `turn_id` is NOT
+        // a reliable boundary or identity: a restarted server can reuse the same
+        // turn_id within one session, so we cut on the user message and identify
+        // each turn by its first node's UNIQUE id (the reducer disambiguates
+        // colliding node ids with `_v2`). Keying turns on a colliding turn_id
+        // would give ForEach duplicate ids → dropped/reordered/scroll-shuffled.
+        var runs: [[ExecutionNode]] = []
         for node in nodes {
-            if var last = runs.last, last.turnID == node.turnID || node.turnID.isEmpty {
-                last.nodes.append(node)
-                runs[runs.count - 1] = last
+            if runs.isEmpty || isUserMessageNode(node) {
+                runs.append([node])
             } else {
-                runs.append((node.turnID, [node]))
+                runs[runs.count - 1].append(node)
             }
         }
 
-        return runs.enumerated().map { idx, run in
-            buildTurn(turnID: run.turnID, nodes: run.nodes,
-                      isLive: isLive && idx == runs.count - 1)
-        }
+        return runs.enumerated()
+            .map { idx, run in buildTurn(nodes: run, isLive: isLive && idx == runs.count - 1) }
+            .filter { !$0.isEmpty }
     }
 
-    private func buildTurn(turnID: String, nodes: [ExecutionNode], isLive: Bool) -> ConversationTurn {
+    private func isUserMessageNode(_ node: ExecutionNode) -> Bool {
+        if case .message(let p) = node.kind, p.role == .user { return true }
+        return false
+    }
+
+    private func buildTurn(nodes: [ExecutionNode], isLive: Bool) -> ConversationTurn {
+        // Unique, stable id = first node's id (the user node, created once).
+        // Never the raw turn_id, which can collide across a server restart.
+        let turnUID = nodes.first?.id ?? UUID().uuidString
         var userPrompt: MessageNodePayload?
         var blocks: [TurnBlock] = []
         var pendingTools: [ToolNodePayload] = []
@@ -129,7 +140,7 @@ public struct TimelineProjection: Sendable {
         let footer = sawFinished
             ? TurnStats(promptTokens: footerTokens, elapsedMs: footerElapsed, invocationCount: footerCount)
             : nil
-        return ConversationTurn(id: turnID, userPrompt: userPrompt,
+        return ConversationTurn(id: turnUID, userPrompt: userPrompt,
                                 blocks: blocks, footer: footer, isLive: isLive)
     }
 
