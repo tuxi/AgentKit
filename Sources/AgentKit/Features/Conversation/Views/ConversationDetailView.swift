@@ -74,8 +74,9 @@ public struct ConversationDetailView: View {
                 WorkspaceChipBar()
 
                 ChatComposer(
-                    placeholder: "描述一个任务…",
-                    isEnabled: store.draft?.canCommit ?? false
+                    placeholder: store.isPreparingWorkspace ? "正在准备工作区…" : "描述一个任务…",
+                    // 准备工作区（clone/import）期间 workspace 未就绪 → 禁止发送。
+                    isEnabled: (store.draft?.canCommit ?? false) && !store.isPreparingWorkspace
                 ) { text in
                     await store.commitDraft(firstMessage: text)
                     return store.draft == nil   // draft 被清空 = 提交成功

@@ -72,6 +72,12 @@ public final class CodeAgentTransport: AgentTransport, @unchecked Sendable {
         socket = nil
     }
 
+    // MARK: - AgentTransport: Repos
+
+    public func cloneRepo(url: String, ref: String?) async throws -> ClonedRepo {
+        try await http.cloneRepo(url: url, ref: ref)
+    }
+
     // MARK: - AgentTransport: Session state
 
     public var isConnected: Bool { socket?.isConnected ?? false }
@@ -214,6 +220,10 @@ public final class DefaultAgentClient: RuntimeClient, @unchecked Sendable {
 
     public func disconnect() async {
         await transport.disconnect()
+    }
+
+    public func cloneRepo(url: String, ref: String?) async throws -> ClonedRepo {
+        try await transport.cloneRepo(url: url, ref: ref)
     }
 
     public func getConversationDetail(id: String) async throws -> ConversationDetail {

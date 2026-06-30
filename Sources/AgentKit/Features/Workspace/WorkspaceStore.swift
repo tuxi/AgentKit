@@ -54,6 +54,10 @@ public final class WorkspaceStore {
     /// macOS 上 `isAvailable == false`，UI 回退到任意文件夹选择。
     public let projects = ProjectsStore()
 
+    /// 是否正在准备草稿的工作区（clone / import 进行中）。
+    /// 此间 workspace 尚未就绪 → UI 应禁止再选目录、禁止发消息。
+    public private(set) var isPreparingWorkspace = false
+
     public private(set) var inspectorSelection: InspectorSelection?
     public var isInspectorPresented: Bool = false
 
@@ -109,6 +113,25 @@ public final class WorkspaceStore {
         guard draft != nil else { return }
         let workspace = try projects.createProject(named: name)
         selectWorkspace(workspace)
+    }
+
+    /// 从外部文件夹 copy-in 一个项目到 Documents、命名为 `name`，并选入当前草稿（iOS）。
+    public func importAndSelectProject(from sourceURL: URL, named name: String) async throws {
+        guard draft != nil else { return }
+        isPreparingWorkspace = true
+        defer { isPreparingWorkspace = false }
+        let workspace = try await projects.importProject(from: sourceURL, named: name)
+        selectWorkspace(workspace)
+    }
+
+    /// clone 公开 GitHub 仓库到 Documents（runtime go-git）并选入当前草稿（iOS）。
+    public func cloneAndSelectProject(url: String, ref: String? = nil) async throws {
+        guard draft != nil else { return }
+        isPreparingWorkspace = true
+        defer { isPreparingWorkspace = false }
+        let cloned = try await client.cloneRepo(url: url, ref: ref)
+        projects.reload()   // 让新 clone 的目录出现在项目列表
+        selectWorkspace(Workspace(url: URL(fileURLWithPath: cloned.workspacePath)))
     }
 
     /// 在草稿中选择/切换工作区（仅草稿期可变）。

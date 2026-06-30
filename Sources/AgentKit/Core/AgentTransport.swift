@@ -61,6 +61,12 @@ public protocol AgentTransport: Sendable {
     /// 释放传输层绑定。session 仍在 server 端存活。
     func disconnect() async
 
+    // MARK: - Repos
+
+    /// clone 一个公开 GitHub 仓库到 backend 的 workspace 根下，返回其工作区路径。
+    /// 默认实现抛 `unsupported`（mock / 不支持的 backend）。
+    func cloneRepo(url: String, ref: String?) async throws -> ClonedRepo
+
     // MARK: - Session state
 
     /// 当前是否已连接到 backend session。
@@ -109,4 +115,13 @@ public protocol AgentTransport: Sendable {
     /// `async` 语义：未来可能 server-driven / dynamic feature gating。
     /// UI 据此决定渲染策略，不写死 backend 能力判断。
     func capabilities() async -> AgentCapabilityFlags
+}
+
+// MARK: - Default impls
+
+extension AgentTransport {
+    /// 默认不支持 clone（mock / 旧 backend）。CodeAgentTransport 覆盖。
+    public func cloneRepo(url: String, ref: String?) async throws -> ClonedRepo {
+        throw RuntimeHTTPError.unsupported
+    }
 }

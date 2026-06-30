@@ -75,13 +75,38 @@ public final class AgentRuntime: @unchecked Sendable {
     // copy into Application Support/skills (global/user-level)
     private static func installBundledSkillsIfNeeded() {
         let fm = FileManager.default
-        // 全局/用户级 skills — 放到 Application Support，所有 workspace 都能用。
-        // Go runtime 侧 cfg.GlobalSkillsDir = dataDir/skills = Application Support/skills。
-        let dst = fm.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
-            .appendingPathComponent("skills")
-        guard !fm.fileExists(atPath: dst.path) else { return }
-        guard let src = Bundle.module.url(forResource: "skills", withExtension: nil) else { return }
-        try? fm.copyItem(at: src, to: dst)
+        
+        // 1. 获取 Application Support 目录
+        let appSupportDir = fm.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
+        let dst = appSupportDir.appendingPathComponent("skills")
+        
+        do {
+            // 确保 Application Support 目录本身存在（非常重要！如果这个目录不存在，copyItem 会失败）
+            if !fm.fileExists(atPath: appSupportDir.path) {
+                try fm.createDirectory(at: appSupportDir, withIntermediateDirectories: true, attributes: nil)
+            }
+            
+            // 2. 正确检查 dst 是否存在
+            // 注意：iOS 16 之后建议用 dst.path，或者保险起见用 dst.path(percentEncoded: false)
+            var isDirectory: ObjCBool = false
+            let exists = fm.fileExists(atPath: dst.path, isDirectory: &isDirectory)
+            
+            if exists {
+                // 明确存在才删除
+                try fm.removeItem(at: dst)
+            }
+            
+            // 3. 执行拷贝
+            guard let src = Bundle.module.url(forResource: "skills", withExtension: nil) else {
+                print("Error: Source bundle 'skills' not found")
+                return
+            }
+            
+            try fm.copyItem(at: src, to: dst)
+            
+        } catch {
+            print("Failed to install bundled skills: \(error)")
+        }
     }
 
     public func endpoint() -> String { server?.endpoint() ?? "" }  // ws://127.0.0.1:<port>

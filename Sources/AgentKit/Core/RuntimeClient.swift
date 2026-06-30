@@ -74,6 +74,12 @@ public protocol RuntimeClient: Sendable {
     /// 历史事件 — 用于 Timeline 回放。
     /// 推荐恢复流程：先调此方法渲染历史，再调 `connect()` 收增量。
     func getEvents(conversationID: String) async throws -> [AgentEvent]
+
+    // MARK: - Repos
+
+    /// clone 一个公开 GitHub 仓库到 backend 的 workspace 根下，返回其工作区路径。
+    /// 默认实现抛 `unsupported`（mock backend）。
+    func cloneRepo(url: String, ref: String?) async throws -> ClonedRepo
 }
 
 // MARK: - Backward compatibility
@@ -84,5 +90,10 @@ extension RuntimeClient {
     @available(*, deprecated, message: "Use send(input: .text(...))")
     public func sendMessage(_ text: String) async {
         await send(input: .text(text))
+    }
+
+    /// 默认不支持 clone（mock backend）。`DefaultAgentClient` 覆盖。
+    public func cloneRepo(url: String, ref: String?) async throws -> ClonedRepo {
+        throw RuntimeHTTPError.unsupported
     }
 }

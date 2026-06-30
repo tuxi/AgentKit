@@ -126,6 +126,32 @@ struct RuntimeHTTPClient: Sendable {
         return try decoder.decode([WireFrame].self, from: data)
     }
 
+    /// `POST /v1/repos/clone` — go-git 把公开仓库 clone 进 workspaceRoot/<name> 下。
+    /// 同步：阻塞到 clone 完成。clone 可能慢 → 单独设较长超时（默认 60s 不够）。
+    func cloneRepo(url repoURL: String, ref: String?) async throws -> ClonedRepo {
+        let endpoint = try resolveBaseURL().appendingPathComponent("v1/repos/clone")
+        var request = URLRequest(url: endpoint)
+        request.httpMethod = "POST"
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        request.timeoutInterval = 180   // clone 同步、可能慢
+
+        var body: [String: String] = ["url": repoURL]
+        if let ref, !ref.isEmpty { body["ref"] = ref }
+        request.httpBody = try JSONEncoder().encode(body)
+
+        let (data, response) = try await session.data(for: request)
+        // 不走 validateHTTP：clone 的 404=repo_not_found 等结构化错误带消息体，
+        // 直接透传 body 供 LocalizedError 提取，避免被通用 .notFound 吞掉。
+        guard let http = response as? HTTPURLResponse else {
+            throw RuntimeHTTPError.invalidResponse
+        }
+        guard (200...201).contains(http.statusCode) else {
+            throw RuntimeHTTPError.unexpectedStatus(http.statusCode,
+                                                    body: String(data: data, encoding: .utf8) ?? "")
+        }
+        return try decoder.decode(ClonedRepo.self, from: data)
+    }
+
     /// `GET /healthz` — 存活探针。
     func healthCheck() async throws -> Bool {
         let url = try resolveBaseURL().appendingPathComponent("healthz")
@@ -160,6 +186,18 @@ struct RuntimeHTTPClient: Sendable {
     }
 }
 
+// MARK: - Clone result
+
+/// `POST /v1/repos/clone` 返回。host 主要用 `workspacePath` 建会话；
+/// `workspaceRef` 与 workspace-path spec 一致（持久身份），此处可选解码。
+public struct ClonedRepo: Decodable, Sendable {
+    public let workspacePath: String
+
+    enum CodingKeys: String, CodingKey {
+        case workspacePath = "workspace_path"
+    }
+}
+
 // MARK: - Errors
 
 enum RuntimeHTTPError: Error {
@@ -167,4 +205,32 @@ enum RuntimeHTTPError: Error {
     case notFound
     case runtimeNotStarted
     case unexpectedStatus(Int, body: String)
+    /// 当前 client/transport 不支持该能力（如 mock）。
+    case unsupported
+}
+
+extension RuntimeHTTPError: LocalizedError {
+    var errorDescription: String? {
+        switch self {
+        case .invalidResponse:   return "服务器响应无效。"
+        case .notFound:          return "未找到。"
+        case .runtimeNotStarted: return "运行时尚未启动。"
+        case .unsupported:       return "当前后端不支持该操作。"
+        case .unexpectedStatus(let code, let body):
+            let msg = Self.extractMessage(from: body)
+            return msg.isEmpty ? "请求失败（HTTP \(code)）。" : msg
+        }
+    }
+
+    /// 从结构化错误体提取可读消息（`{"error":...}` / `{"message":...}`），失败则回退原文。
+    private static func extractMessage(from body: String) -> String {
+        let trimmed = body.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard let data = trimmed.data(using: .utf8),
+              let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
+            return trimmed
+        }
+        if let e = obj["error"] as? String { return e }
+        if let m = obj["message"] as? String { return m }
+        return trimmed
+    }
 }

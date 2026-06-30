@@ -19,10 +19,23 @@ struct WorkspaceChipBar: View {
     @State private var isNewProjectPresented = false
     @State private var newProjectName = ""
     @State private var createError: String?
+    // 导入命名（iOS copy-in）：picker 选完后暂存源 URL，弹命名框确认后再复制。
+    @State private var pendingImportURL: URL?
+    @State private var importName = ""
+    @State private var isImportNamePresented = false
+    // GitHub clone（iOS）。
+    @State private var isGitHubPromptPresented = false
+    @State private var gitHubURL = ""
 
     var body: some View {
         HStack(spacing: 6) {
             content
+            if store.isPreparingWorkspace {
+                ProgressView().controlSize(.small)
+                Text("准备工作区…")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
             Spacer(minLength: 0)
         }
         .padding(.horizontal, 12)
@@ -41,6 +54,24 @@ struct WorkspaceChipBar: View {
             Button("Create") { createProject() }
         } message: {
             Text("在 Documents 下创建一个新项目目录。")
+        }
+        .alert("导入文件夹", isPresented: $isImportNamePresented) {
+            TextField("项目名", text: $importName)
+            Button("取消", role: .cancel) { pendingImportURL = nil }
+            Button("导入") { confirmImport() }
+        } message: {
+            Text("将复制进 Documents。可改名以区分不同来源（iOS 无法自动获取来源 App 名）。")
+        }
+        .alert("从 GitHub 导入", isPresented: $isGitHubPromptPresented) {
+            TextField("https://github.com/owner/repo", text: $gitHubURL)
+                .autocorrectionDisabled()
+                #if os(iOS)
+                .textInputAutocapitalization(.never)
+                #endif
+            Button("取消", role: .cancel) { }
+            Button("Clone") { cloneFromGitHub() }
+        } message: {
+            Text("clone 公开仓库到 Documents（浅克隆）。")
         }
         .alert(
             "无法创建项目",
@@ -154,6 +185,17 @@ struct WorkspaceChipBar: View {
                 } label: {
                     Label("New Project…", systemImage: "folder.badge.plus")
                 }
+                Button {
+                    isImporterPresented = true
+                } label: {
+                    Label("Import Folder…", systemImage: "square.and.arrow.down")
+                }
+                Button {
+                    gitHubURL = ""
+                    isGitHubPromptPresented = true
+                } label: {
+                    Label("Import from GitHub…", systemImage: "arrow.down.circle")
+                }
             } else {
                 // macOS：无工作区根 → 任意文件夹选择。
                 Divider()
@@ -169,6 +211,7 @@ struct WorkspaceChipBar: View {
         .menuStyle(.borderlessButton)
         .menuIndicator(.hidden)
         .fixedSize()
+        .disabled(store.isPreparingWorkspace)   // clone/import 进行中禁止再选目录
     }
 
     private func workspaceButton(_ ws: Workspace) -> some View {
@@ -187,13 +230,45 @@ struct WorkspaceChipBar: View {
         }
     }
 
+    private func confirmImport() {
+        guard let url = pendingImportURL else { return }
+        pendingImportURL = nil
+        let name = importName
+        Task {
+            do {
+                try await store.importAndSelectProject(from: url, named: name)
+            } catch {
+                createError = error.localizedDescription
+            }
+        }
+    }
+
+    private func cloneFromGitHub() {
+        let url = gitHubURL.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !url.isEmpty else { return }
+        Task {
+            do {
+                try await store.cloneAndSelectProject(url: url)
+            } catch {
+                createError = error.localizedDescription
+            }
+        }
+    }
+
     private func handleImport(_ result: Result<[URL], Error>) {
         guard case .success(let urls) = result, let url = urls.first else { return }
-        // 取得 security-scoped 访问，生命周期统一交给 RecentWorkspacesStore 管理
-        // （进入 recents 即持有、被挤出/退出时释放）。先行 begin 以便 Workspace.init
-        // 能读取 .git/HEAD；selectWorkspace → touch 会再次 begin（幂等）。
+        #if os(iOS)
+        // iOS：copy-in —— 先弹命名框（iOS 拿不到来源 App 名，预填智能默认名供确认/改名），
+        // 确认后再复制进 Documents（源 scope 仅复制期间临时持有，不持久化 bookmark）。
+        pendingImportURL = url
+        importName = ProjectsStore.suggestedName(forImporting: url)
+        isImportNamePresented = true
+        #else
+        // macOS：原地选择外部文件夹（无沙盒，外部 server 有全 FS 访问）。
+        // scope 生命周期统一交给 RecentWorkspacesStore 管理（进入 recents 即持有、挤出即释放）。
         store.recentWorkspaces.beginAccess(to: url)
         store.selectWorkspace(Workspace(url: url))
+        #endif
     }
 
     // MARK: - Chip

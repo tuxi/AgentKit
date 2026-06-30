@@ -63,16 +63,90 @@ public final class ProjectsStore {
     @discardableResult
     public func createProject(named rawName: String) throws -> Workspace {
         guard let root else { throw ProjectsError.noRoot }
-        let name = rawName.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !name.isEmpty, !name.contains("/"), !name.hasPrefix(".") else {
-            throw ProjectsError.invalidName
-        }
+        let name = try Self.validatedName(rawName)
         let dir = root.appendingPathComponent(name, isDirectory: true)
         let fm = FileManager.default
         guard !fm.fileExists(atPath: dir.path) else { throw ProjectsError.alreadyExists(name) }
         try fm.createDirectory(at: dir, withIntermediateDirectories: false)
         reload()
         return Workspace(url: dir)
+    }
+
+    /// **copy-in**：把外部文件夹复制进根下、命名为 `rawName`，返回新项目 Workspace。
+    /// 源 URL 为 security-scoped（document picker 授予）→ 仅在复制期间临时持有访问权、
+    /// 用完即停，**不持久化 bookmark**（这正是 copy-in 相对 in-place 的优势）。
+    /// 复制在后台线程执行，避免大目录阻塞 UI。名称冲突时自动加序号（不覆盖）。
+    @discardableResult
+    public func importProject(from sourceURL: URL, named rawName: String) async throws -> Workspace {
+        guard let root else { throw ProjectsError.noRoot }
+        let name = try Self.validatedName(rawName)
+        let dest = Self.uniqueDestination(for: name, in: root)
+        try await Task.detached(priority: .userInitiated) {
+            let scoped = sourceURL.startAccessingSecurityScopedResource()
+            defer { if scoped { sourceURL.stopAccessingSecurityScopedResource() } }
+            try FileManager.default.copyItem(at: sourceURL, to: dest)
+        }.value
+        reload()
+        return Workspace(url: dest)
+    }
+
+    /// 为「导入外部文件夹」推荐一个项目名。
+    /// iOS 不会把来源 App 名直接给我们（沙盒容器路径是 UUID），故按可靠度回退：
+    ///   1) iCloud 容器路径含 `iCloud~com~vendor~App` → 解析出 App 名（最可靠）；
+    ///   2) 非通用的 `lastPathComponent`（如已是项目名）；
+    ///   3) 父目录名（非 UUID/通用名）；
+    ///   4) 回退 "Imported"。
+    /// 最终仍由用户在导入弹窗里确认/修改。
+    public static func suggestedName(forImporting url: URL) -> String {
+        let generic: Set<String> = ["Documents", "Library", "tmp", "Caches", "Mobile Documents"]
+
+        // (1) iCloud 容器：.../Mobile Documents/iCloud~com~apple~Pages/Documents
+        if let segment = url.pathComponents.first(where: { $0.hasPrefix("iCloud~") }) {
+            let bundleID = segment.dropFirst("iCloud~".count).replacingOccurrences(of: "~", with: ".")
+            if let app = bundleID.split(separator: ".").last, !app.isEmpty {
+                return String(app)
+            }
+        }
+        // (2) lastPathComponent，若不是通用名
+        let last = url.lastPathComponent
+        if !last.isEmpty, !generic.contains(last) {
+            return last
+        }
+        // (3) 父目录名，若非 UUID / 通用名
+        let parent = url.deletingLastPathComponent().lastPathComponent
+        if !parent.isEmpty, !generic.contains(parent), !looksLikeUUID(parent) {
+            return parent
+        }
+        return "Imported"
+    }
+
+    // MARK: - Helpers
+
+    /// 校验项目名：去空白后非空、不含 "/"、不以 "." 开头。
+    private static func validatedName(_ rawName: String) throws -> String {
+        let name = rawName.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !name.isEmpty, !name.contains("/"), !name.hasPrefix(".") else {
+            throw ProjectsError.invalidName
+        }
+        return name
+    }
+
+    /// 形如容器 UUID（36 字符、4 个连字符）→ 不适合当项目名。
+    private static func looksLikeUUID(_ s: String) -> Bool {
+        s.count == 36 && s.filter { $0 == "-" }.count == 4
+    }
+
+    /// 在 root 下为 name 找一个不冲突的目标 URL（已存在则追加 " 2"、" 3"…）。
+    private static func uniqueDestination(for name: String, in root: URL) -> URL {
+        let fm = FileManager.default
+        let base = name.isEmpty ? "Imported" : name
+        var candidate = root.appendingPathComponent(base, isDirectory: true)
+        var i = 2
+        while fm.fileExists(atPath: candidate.path) {
+            candidate = root.appendingPathComponent("\(base) \(i)", isDirectory: true)
+            i += 1
+        }
+        return candidate
     }
 }
 
