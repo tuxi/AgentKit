@@ -140,7 +140,9 @@ private struct ConversationRow: View {
                 .lineLimit(1)
 
             HStack(spacing: 6) {
-                Label(ref.workspacePath.isEmpty ? "通用" : ref.workspacePath,
+                Label(ref.workspacePath.isEmpty
+                        ? "通用"
+                        : URL(fileURLWithPath: ref.workspacePath).lastPathComponent,
                       systemImage: "folder")
                     .font(.caption)
                 Spacer()

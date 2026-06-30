@@ -37,7 +37,14 @@ final class AppContainer {
     }
 
     func makeAgentClient() -> RuntimeClient {
-        return DefaultAgentClient()
+        #if os(iOS)
+        // iOS: 内嵌 CodeAgent Runtime，从 AgentRuntime.shared 读取动态端口
+        return DefaultAgentClient.fromRuntime()
+        #else
+        // macOS: 连接独立运行的 CodeAgent server
+        let env = RuntimeEnvironment(host: "127.0.0.1", port: 8787)
+        return DefaultAgentClient(environment: env)
+        #endif
     }
 
     func makeAgentDependencies() -> AgentDependencies {

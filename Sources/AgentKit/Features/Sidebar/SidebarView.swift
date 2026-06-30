@@ -16,6 +16,7 @@ public struct SidebarView: View {
 
     @Environment(WorkspaceStore.self) private var store
     @State private var searchText = ""
+    @State private var showSettings = false
 
     public init() {}
 
@@ -34,6 +35,19 @@ public struct SidebarView: View {
             #endif
         }
         .navigationTitle(store.selectedTab.title)
+        .toolbar {
+            ToolbarItem(placement: .primaryAction) {
+                Button {
+                    showSettings = true
+                } label: {
+                    Image(systemName: "gearshape")
+                }
+                .accessibilityLabel("设置")
+            }
+        }
+        .sheet(isPresented: $showSettings) {
+            SettingsView()
+        }
         #if os(iOS)
         .searchable(
             text: $searchText,

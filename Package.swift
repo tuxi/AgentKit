@@ -20,14 +20,23 @@ let package = Package(
         .package(url: "https://github.com/swiftlang/swift-markdown", branch: "main"),
     ],
     targets: [
+        .binaryTarget(
+            name: "CodeAgentRuntime",
+            path: "Frameworks/CodeAgentRuntime.xcframework"
+        ),
         // Targets are the basic building blocks of a package, defining a module or a test suite.
         // Targets can depend on other targets in this package and products from dependencies.
         .target(
             name: "AgentKit",
             dependencies: [
                 .product(name: "Markdown", package: "swift-markdown"),
+                .target(name: "CodeAgentRuntime", condition: .when(platforms: [.iOS])),
             ],
-            path: "Sources/AgentKit"
+            path: "Sources/AgentKit",
+            resources: [
+                // iOS 内嵌 runtime 的默认 config，经 Bundle.module 读取传给 MobileStart。
+                .copy("Resources/config.yaml"),
+            ]
         ),
         .testTarget(
             name: "AgentKitTests",

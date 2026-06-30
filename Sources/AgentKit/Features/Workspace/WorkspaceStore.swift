@@ -50,6 +50,10 @@ public final class WorkspaceStore {
     /// 最近打开的工作区（持久化，供草稿选择/预选）。
     public let recentWorkspaces = RecentWorkspacesStore()
 
+    /// 端侧工作区根（iOS = Documents）下的项目目录（供草稿选择 / 新建）。
+    /// macOS 上 `isAvailable == false`，UI 回退到任意文件夹选择。
+    public let projects = ProjectsStore()
+
     public private(set) var inspectorSelection: InspectorSelection?
     public var isInspectorPresented: Bool = false
 
@@ -96,7 +100,15 @@ public final class WorkspaceStore {
     /// 点击「+」：不调用任何 API，仅创建本地草稿。预选最近使用的工作区。
     public func beginDraft() {
         selectedConversation = nil          // 经 didSet 清掉活跃 VM
+        projects.reload()                   // 项目目录可能被「文件」App 改动，开草稿时刷新
         draft = SessionDraft(workspace: recentWorkspaces.mostRecent)
+    }
+
+    /// 在 Documents 根下创建新项目并选入当前草稿（iOS）。失败时抛 `ProjectsError`。
+    public func createAndSelectProject(named name: String) throws {
+        guard draft != nil else { return }
+        let workspace = try projects.createProject(named: name)
+        selectWorkspace(workspace)
     }
 
     /// 在草稿中选择/切换工作区（仅草稿期可变）。

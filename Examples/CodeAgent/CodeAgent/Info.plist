@@ -4,6 +4,12 @@
 <dict>
 	<key>NSPhotoLibraryAddUsageDescription</key>
 	<string>CodeAgent 需要将拍摄的照片保存到您的相册。</string>
+	<!-- 让沙盒 Documents 出现在「文件」App 的「我的 iPhone/CodeAgent」下：
+	     用户可拖入/AirDrop/解压文件，内嵌 runtime 对这些目录天然有读写权（无需 security scope）。 -->
+	<key>UIFileSharingEnabled</key>
+	<true/>
+	<key>LSSupportsOpeningDocumentsInPlace</key>
+	<true/>
 	<key>NSAppTransportSecurity</key>
 	<dict>
 		<key>NSAllowsArbitraryLoads</key>

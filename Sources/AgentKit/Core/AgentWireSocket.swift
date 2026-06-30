@@ -15,8 +15,7 @@ public final class AgentWireSocket: @unchecked Sendable {
 
     // MARK: - State
 
-    private let host: String
-    private let port: Int
+    private let environment: RuntimeEnvironment
     private let conversationID: String
     private let decoder = JSONDecoder()
 
@@ -41,9 +40,8 @@ public final class AgentWireSocket: @unchecked Sendable {
 
     // MARK: - Init
 
-    public init(host: String = "192.168.1.4", port: Int = 8787, conversationID: String) {
-        self.host = host
-        self.port = port
+    public init(environment: RuntimeEnvironment, conversationID: String) {
+        self.environment = environment
         self.conversationID = conversationID
         self.wsClient = WebSocketClient(identifier: "agent-wire.\(conversationID)")
     }
@@ -73,11 +71,19 @@ public final class AgentWireSocket: @unchecked Sendable {
             }
             self.continuation = continuation
 
-            let url = URL(string: "ws://\(self.host):\(self.port)/v1/conversations/\(self.conversationID)/stream")!
+            let conversationID = self.conversationID
 
-            // 配置连接校验（v1 无 auth，仅返回 URLRequest）
+            // 连接校验（v1 无 auth）。validator 在每次连接尝试（含重连）时被调用，
+            // 这里**每次现算 URL** —— environment 是惰性 provider：runtime 进后台 Stop()、
+            // 回前台 Start() 会换一个 OS 动态分配的 ephemeral port，只有现算才能读到新端口
+            // （旧实现把含端口的 URL 在闭包外捕获死了，重启后重连仍连旧死口）。
+            // 端口未就绪（≤0 → wsURL 为 nil）时返回 nil，由 WebSocketClient 当作 preflight
+            // 失败退避重试，待 runtime 起来后自然连上（前台重连由其 handleAppForeground 触发）。
             self.wsClient.connectionValidatorRequest = { [weak self] in
-                guard self != nil else { return nil }
+                guard let self,
+                      let wsBase = self.environment.wsURL,
+                      let url = URL(string: "\(wsBase)/v1/conversations/\(conversationID)/stream")
+                else { return nil }
                 return URLRequest(url: url)
             }
 

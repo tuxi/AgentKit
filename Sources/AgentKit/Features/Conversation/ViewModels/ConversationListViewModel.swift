@@ -39,15 +39,33 @@ public final class ConversationListViewModel {
     }
 
     /// 拉取会话列表。
+    ///
+    /// 进入 App 时 `.task` 可能早于 `AgentRuntime.start()`（scenePhase .active）执行，
+    /// 此时内嵌 runtime 端口未分配 → `listConversations` 抛 `runtimeNotStarted`，且 start 之后
+    /// 无人重新触发 → 列表恒空。故对该错误做**有界轮询重试**，等端口就绪后自然拉到。
+    /// macOS（固定端口）`baseURL` 永不为 nil，不会进重试分支，行为不变。
     public func refresh() async {
         isLoading = true
         errorMessage = nil
-        do {
-            conversations = try await client.listConversations()
-        } catch {
-            errorMessage = error.localizedDescription
+        defer { isLoading = false }
+
+        let maxAttempts = 30          // ≈ 30 × 150ms = 4.5s，覆盖冷启动 start() 的延迟
+        for attempt in 1...maxAttempts {
+            do {
+                conversations = try await client.listConversations()
+                errorMessage = nil
+                return
+            } catch {
+                if let httpError = error as? RuntimeHTTPError,
+                   case .runtimeNotStarted = httpError,
+                   attempt < maxAttempts {
+                    try? await Task.sleep(for: .milliseconds(150))
+                    continue            // runtime 尚未 start → 等端口就绪重试
+                }
+                errorMessage = error.localizedDescription
+                return
+            }
         }
-        isLoading = false
     }
 
     /// 新建会话。

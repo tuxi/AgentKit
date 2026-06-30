@@ -1,0 +1,45 @@
+# iOS 端内嵌 runtime 的裁剪版 config（随 AgentKit 打进 bundle，由 AgentRuntime 读取）。
+#
+# 与服务端全量 config 的差异（均为 iOS 沙盒/单 key 约束所致）：
+#   1. 去掉 `workspace` 块 —— 工作区根由 MobileStart 的 workspaceDir 参数（= Documents）决定，
+#      不能让 config.workspace.root 覆盖，否则 relativize/re-anchor + 项目列表全失效。
+#   2. 去掉 `hooks` —— gofmt / run_command 走 sh -c（fork/exec），iOS 沙盒禁。
+#   3. 只保留 deepseek / deepseek-pro —— 仅注入了 DEEPSEEK_API_KEY；qwen/glm/ollama 需各自的
+#      key 或 localhost，故不在 iOS 暴露。
+#
+# 注意：api_key_env 只引用环境变量名，key 由 secretsJSON 注入（走 Keychain），此文件不含明文密钥。
+
+default_model: deepseek-pro
+
+models:
+  deepseek:
+    provider: openai
+    base_url: "https://api.deepseek.com"
+    # model must support function calling
+    model: "deepseek-v4-flash"
+    api_key_env: DEEPSEEK_API_KEY
+    temperature: 0.2
+    context_window: 128000
+    input_price_per_million: 0.27
+    output_price_per_million: 1.10
+    cache_input_price_per_million: 0.027
+
+  deepseek-pro:
+    provider: openai
+    base_url: "https://api.deepseek.com"
+    model: "deepseek-v4-pro"
+    api_key_env: DEEPSEEK_API_KEY
+    context_window: 128000
+
+agent:
+  max_steps: 32
+  compact_ratio: 0.5
+  subagent_model: deepseek
+
+provider:
+  request_timeout_seconds: 600
+  max_retries: 5
+  backoff_millis: 500
+  max_backoff_seconds: 8
+
+currency: "$"

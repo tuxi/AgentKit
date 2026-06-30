@@ -8,7 +8,6 @@
 
 /* Begin PBXBuildFile section */
 		D09F66AA2FEF54C8001B7D87 /* AgentKit in Frameworks */ = {isa = PBXBuildFile; productRef = D09F66A92FEF54C8001B7D87 /* AgentKit */; };
-		D09F66BC2FEF5D58001B7D87 /* AgentKit in Frameworks */ = {isa = PBXBuildFile; productRef = D09F66BB2FEF5D58001B7D87 /* AgentKit */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
@@ -43,7 +42,6 @@
 			buildActionMask = 2147483647;
 			files = (
 				D09F66AA2FEF54C8001B7D87 /* AgentKit in Frameworks */,
-				D09F66BC2FEF5D58001B7D87 /* AgentKit in Frameworks */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -96,7 +94,6 @@
 			name = CodeAgent;
 			packageProductDependencies = (
 				D09F66A92FEF54C8001B7D87 /* AgentKit */,
-				D09F66BB2FEF5D58001B7D87 /* AgentKit */,
 			);
 			productName = CodeAgent;
 			productReference = D01D7D102FEBDBEA0097461D /* CodeAgent.app */;
@@ -405,10 +402,8 @@
 			isa = XCSwiftPackageProductDependency;
 			productName = AgentKit;
 		};
-		D09F66BB2FEF5D58001B7D87 /* AgentKit */ = {
-			isa = XCSwiftPackageProductDependency;
-			productName = AgentKit;
-		};
+
+
 /* End XCSwiftPackageProductDependency section */
 	};
 	rootObject = D01D7D082FEBDBEA0097461D /* Project object */;

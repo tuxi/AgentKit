@@ -16,6 +16,9 @@ struct WorkspaceChipBar: View {
 
     @Environment(WorkspaceStore.self) private var store
     @State private var isImporterPresented = false
+    @State private var isNewProjectPresented = false
+    @State private var newProjectName = ""
+    @State private var createError: String?
 
     var body: some View {
         HStack(spacing: 6) {
@@ -24,12 +27,29 @@ struct WorkspaceChipBar: View {
         }
         .padding(.horizontal, 12)
         .padding(.vertical, 6)
+        .onAppear { store.projects.reload() }
         .fileImporter(
             isPresented: $isImporterPresented,
             allowedContentTypes: [.folder],
             allowsMultipleSelection: false
         ) { result in
             handleImport(result)
+        }
+        .alert("New Project", isPresented: $isNewProjectPresented) {
+            TextField("Project name", text: $newProjectName)
+            Button("Cancel", role: .cancel) { }
+            Button("Create") { createProject() }
+        } message: {
+            Text("在 Documents 下创建一个新项目目录。")
+        }
+        .alert(
+            "无法创建项目",
+            isPresented: Binding(get: { createError != nil },
+                                 set: { if !$0 { createError = nil } })
+        ) {
+            Button("好", role: .cancel) { createError = nil }
+        } message: {
+            Text(createError ?? "")
         }
     }
 
@@ -111,19 +131,37 @@ struct WorkspaceChipBar: View {
             if !store.recentWorkspaces.workspaces.isEmpty {
                 Section("Recent") {
                     ForEach(store.recentWorkspaces.workspaces) { ws in
-                        Button {
-                            store.selectWorkspace(ws)
-                        } label: {
-                            Label(ws.name, systemImage: "folder")
-                        }
+                        workspaceButton(ws)
                     }
                 }
             }
-            Divider()
-            Button {
-                isImporterPresented = true
-            } label: {
-                Label("Open folder…", systemImage: "folder.badge.plus")
+
+            if store.projects.isAvailable {
+                // iOS：Documents 项目列表（排除已在 Recent 中的，避免重复）。
+                let recentIDs = Set(store.recentWorkspaces.workspaces.map(\.id))
+                let others = store.projects.projects.filter { !recentIDs.contains($0.id) }
+                if !others.isEmpty {
+                    Section("Projects") {
+                        ForEach(others) { ws in
+                            workspaceButton(ws)
+                        }
+                    }
+                }
+                Divider()
+                Button {
+                    newProjectName = ""
+                    isNewProjectPresented = true
+                } label: {
+                    Label("New Project…", systemImage: "folder.badge.plus")
+                }
+            } else {
+                // macOS：无工作区根 → 任意文件夹选择。
+                Divider()
+                Button {
+                    isImporterPresented = true
+                } label: {
+                    Label("Open folder…", systemImage: "folder.badge.plus")
+                }
             }
         } label: {
             label()
@@ -133,11 +171,28 @@ struct WorkspaceChipBar: View {
         .fixedSize()
     }
 
+    private func workspaceButton(_ ws: Workspace) -> some View {
+        Button {
+            store.selectWorkspace(ws)
+        } label: {
+            Label(ws.name, systemImage: "folder")
+        }
+    }
+
+    private func createProject() {
+        do {
+            try store.createAndSelectProject(named: newProjectName)
+        } catch {
+            createError = error.localizedDescription
+        }
+    }
+
     private func handleImport(_ result: Result<[URL], Error>) {
         guard case .success(let urls) = result, let url = urls.first else { return }
-        // 取得 security-scoped 访问（document picker / open panel 授予）。
-        // 绑定层阶段：开启后随会话生命周期持有，不在此显式释放。
-        _ = url.startAccessingSecurityScopedResource()
+        // 取得 security-scoped 访问，生命周期统一交给 RecentWorkspacesStore 管理
+        // （进入 recents 即持有、被挤出/退出时释放）。先行 begin 以便 Workspace.init
+        // 能读取 .git/HEAD；selectWorkspace → touch 会再次 begin（幂等）。
+        store.recentWorkspaces.beginAccess(to: url)
         store.selectWorkspace(Workspace(url: url))
     }
 

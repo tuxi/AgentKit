@@ -22,6 +22,12 @@ public final class RecentWorkspacesStore {
     private let key = "code_agent.recent_workspaces.bookmarks"
     private let maxCount = 8
 
+    /// 当前持有 security scope 的目录（path → url）。
+    /// iOS：从 document picker / bookmark 取得的「沙盒外」目录需在访问期间持有 scope，
+    /// 否则内嵌 runtime（同进程）无权读写。沙盒内目录（Documents 子目录）`start` 返回
+    /// false → 不计入、无需释放。生命周期与 recents 列表对齐：进入即 begin，被挤出即 end。
+    private var heldScopes: [String: URL] = [:]
+
     public init(defaults: UserDefaults = .standard) {
         self.defaults = defaults
         load()
@@ -29,23 +35,46 @@ public final class RecentWorkspacesStore {
 
     // MARK: - Public API
 
+    /// 取得并持有对该目录的 security-scoped 访问（幂等）。
+    /// 沙盒内目录无需 scope（`start` 返回 false）→ 静默忽略、不计入 `heldScopes`。
+    /// 导入新目录时由 `WorkspaceChipBar` 先行调用，使 `Workspace.init` 能读取 `.git/HEAD`。
+    public func beginAccess(to url: URL) {
+        let path = url.path
+        guard heldScopes[path] == nil else { return }   // 已持有 → 幂等
+        if url.startAccessingSecurityScopedResource() {
+            heldScopes[path] = url
+        }
+    }
+
+    /// 释放对某 path 的 scope（若持有）。
+    private func endAccess(_ path: String) {
+        guard let url = heldScopes.removeValue(forKey: path) else { return }
+        url.stopAccessingSecurityScopedResource()
+    }
+
     /// 标记一个工作区为「刚使用」：移到队首并持久化。
     public func touch(_ workspace: Workspace) {
+        beginAccess(to: workspace.url)
         workspaces.removeAll { $0.id == workspace.id }
         workspaces.insert(workspace, at: 0)
         if workspaces.count > maxCount {
+            // 被挤出的工作区释放其 scope（id == url.path）。
+            for ws in workspaces[maxCount...] { endAccess(ws.id) }
             workspaces = Array(workspaces.prefix(maxCount))
         }
         persist()
     }
 
-    /// 从持久化的 bookmark 恢复列表。
+    /// 从持久化的 bookmark 恢复列表，并为每个恢复的目录重新取得 scope。
+    /// 关键：bookmark 解析得到的是 security-scoped URL，必须重新 `startAccessing…`，
+    /// 否则重启后 recents 虽在列表里却无访问权（旧实现遗漏了这一步）。
     public func load() {
         guard let datas = defaults.array(forKey: key) as? [Data] else {
             workspaces = []
             return
         }
         workspaces = datas.compactMap { Self.resolveBookmark($0) }
+        for ws in workspaces { beginAccess(to: ws.url) }
     }
 
     // MARK: - Persistence

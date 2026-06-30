@@ -25,18 +25,16 @@ public final class CodeAgentTransport: AgentTransport, @unchecked Sendable {
     private let http: RuntimeHTTPClient
     private var socket: AgentWireSocket?
 
-    private let host: String
-    private let port: Int
+    private let environment: RuntimeEnvironment
 
     /// 待注册的客户端工具列表。在握手后自动发送。
     private var pendingTools: [ClientToolInfo] = []
 
     // MARK: - Init
 
-    public init(host: String = "192.168.1.4", port: Int = 8787) {
-        self.host = host
-        self.port = port
-        self.http = RuntimeHTTPClient(host: host, port: port)
+    public init(environment: RuntimeEnvironment) {
+        self.environment = environment
+        self.http = RuntimeHTTPClient(environment: environment)
     }
 
     // MARK: - AgentTransport: Session lifecycle
@@ -56,7 +54,7 @@ public final class CodeAgentTransport: AgentTransport, @unchecked Sendable {
     public func attach(sessionID: String) async throws -> AsyncStream<AgentEvent> {
         await disconnect()
 
-        let newSocket = AgentWireSocket(host: host, port: port, conversationID: sessionID)
+        let newSocket = AgentWireSocket(environment: environment, conversationID: sessionID)
 
         // 握手完成后自动发送待注册的客户端工具
         let tools = pendingTools
@@ -159,10 +157,22 @@ public final class DefaultAgentClient: RuntimeClient, @unchecked Sendable {
         self.transport = transport
     }
 
-    /// 便捷初始化：连接本地 CodeAgent backend。
-    public convenience init(host: String = "192.168.1.4", port: Int = 8787) {
-        self.init(transport: CodeAgentTransport(host: host, port: port))
+    /// 便捷初始化：连接指定 Runtime。
+    public convenience init(environment: RuntimeEnvironment) {
+        self.init(transport: CodeAgentTransport(environment: environment))
     }
+
+    /// 便捷初始化：使用默认占位环境。调用方应在 Runtime 启动后替换为真实端口。
+    public convenience init() {
+        self.init(environment: .placeholder)
+    }
+
+    #if os(iOS)
+    /// 便捷初始化：从 `AgentRuntime.shared` 读取已启动 server 的动态端口。
+    public static func fromRuntime() -> DefaultAgentClient {
+        DefaultAgentClient(environment: .fromRuntime())
+    }
+    #endif
 
     // MARK: - RuntimeClient conformance
 

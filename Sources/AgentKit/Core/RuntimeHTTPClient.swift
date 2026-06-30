@@ -11,24 +11,29 @@ import Foundation
 // MARK: - RuntimeHTTPClient
 
 struct RuntimeHTTPClient: Sendable {
-    let baseURL: URL
+    private let environment: RuntimeEnvironment
     private let session: URLSession
     private let decoder: JSONDecoder
 
-    init(host: String = "192.168.1.4", port: Int = 8787) {
-        guard let url = URL(string: "http://\(host):\(port)") else {
-            fatalError("Invalid runtime base URL: http://\(host):\(port)")
-        }
-        self.baseURL = url
+    init(environment: RuntimeEnvironment) {
+        self.environment = environment
         self.session = URLSession(configuration: .ephemeral)
         self.decoder = JSONDecoder()
+    }
+
+    /// 每次调用时从 environment 延迟取 baseURL（Avoids snapshot stale port）。
+    private func resolveBaseURL() throws -> URL {
+        guard let url = environment.baseURL else {
+            throw RuntimeHTTPError.runtimeNotStarted
+        }
+        return url
     }
 
     // MARK: - Endpoints
 
     /// `POST /v1/conversations`
     func createConversation(workspacePath: String) async throws -> ConversationRef {
-        let url = baseURL.appendingPathComponent("v1/conversations")
+        let url = try resolveBaseURL().appendingPathComponent("v1/conversations")
         var request = URLRequest(url: url)
         request.httpMethod = "POST"
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
@@ -38,9 +43,9 @@ struct RuntimeHTTPClient: Sendable {
         }
 
         let body: [String: String] = ["workspace_path": workspacePath]
-        
+
         DLLog(body)
-        
+
         request.httpBody = try JSONEncoder().encode(body)
 
         let (data, response) = try await session.data(for: request)
@@ -50,7 +55,7 @@ struct RuntimeHTTPClient: Sendable {
 
     /// `GET /v1/conversations`
     func listConversations() async throws -> [ConversationRef] {
-        let url = baseURL.appendingPathComponent("v1/conversations")
+        let url = try resolveBaseURL().appendingPathComponent("v1/conversations")
         var request = URLRequest(url: url)
         request.httpMethod = "GET"
 
@@ -63,7 +68,7 @@ struct RuntimeHTTPClient: Sendable {
 
     /// `GET /v1/conversations/{id}` — 会话概要。
     func getConversationDetail(id: String) async throws -> ConversationDetail {
-        let url = baseURL
+        let url = try resolveBaseURL()
             .appendingPathComponent("v1/conversations")
             .appendingPathComponent(id)
         var request = URLRequest(url: url)
@@ -76,7 +81,7 @@ struct RuntimeHTTPClient: Sendable {
 
     /// `PATCH /v1/conversations/{id}` — 修改会话名称。
     func renameConversation(id: String, name: String) async throws -> ConversationRef {
-        let url = baseURL
+        let url = try resolveBaseURL()
             .appendingPathComponent("v1/conversations")
             .appendingPathComponent(id)
         var request = URLRequest(url: url)
@@ -93,7 +98,7 @@ struct RuntimeHTTPClient: Sendable {
 
     /// `GET /v1/conversations/{id}/messages` — 对话主干。
     func getMessages(conversationID: String) async throws -> [Message] {
-        let url = baseURL
+        let url = try resolveBaseURL()
             .appendingPathComponent("v1/conversations")
             .appendingPathComponent(conversationID)
             .appendingPathComponent("messages")
@@ -108,7 +113,7 @@ struct RuntimeHTTPClient: Sendable {
     /// `GET /v1/conversations/{id}/events` — 历史事件（WireEvent 格式，用于 Timeline 回放）。
     /// 返回原始 `[WireFrame]`，由调用方转为 `[AgentEvent]`。
     func getEvents(conversationID: String) async throws -> [WireFrame] {
-        let url = baseURL
+        let url = try resolveBaseURL()
             .appendingPathComponent("v1/conversations")
             .appendingPathComponent(conversationID)
             .appendingPathComponent("events")
@@ -123,7 +128,7 @@ struct RuntimeHTTPClient: Sendable {
 
     /// `GET /healthz` — 存活探针。
     func healthCheck() async throws -> Bool {
-        let url = baseURL.appendingPathComponent("healthz")
+        let url = try resolveBaseURL().appendingPathComponent("healthz")
         var request = URLRequest(url: url)
         request.httpMethod = "GET"
 
@@ -160,5 +165,6 @@ struct RuntimeHTTPClient: Sendable {
 enum RuntimeHTTPError: Error {
     case invalidResponse
     case notFound
+    case runtimeNotStarted
     case unexpectedStatus(Int, body: String)
 }
