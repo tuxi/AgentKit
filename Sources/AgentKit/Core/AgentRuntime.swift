@@ -33,6 +33,8 @@ public final class AgentRuntime: @unchecked Sendable {
         let model = AgentSettings.model
         // 模型路由 config（裁剪版，随 bundle 打包）。读不到则传 ""，回退 runtime 内置默认。
         let configYAML = Self.bundledConfigYAML()
+        
+        Self.installBundledSkillsIfNeeded()
 
         var error: NSError?
         // MobileStart 是 C 函数，NSError** 需显式传入（不会自动转 throwing）
@@ -68,6 +70,18 @@ public final class AgentRuntime: @unchecked Sendable {
             return ""
         }
         return text
+    }
+    
+    // copy into Application Support/skills (global/user-level)
+    private static func installBundledSkillsIfNeeded() {
+        let fm = FileManager.default
+        // 全局/用户级 skills — 放到 Application Support，所有 workspace 都能用。
+        // Go runtime 侧 cfg.GlobalSkillsDir = dataDir/skills = Application Support/skills。
+        let dst = fm.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
+            .appendingPathComponent("skills")
+        guard !fm.fileExists(atPath: dst.path) else { return }
+        guard let src = Bundle.module.url(forResource: "skills", withExtension: nil) else { return }
+        try? fm.copyItem(at: src, to: dst)
     }
 
     public func endpoint() -> String { server?.endpoint() ?? "" }  // ws://127.0.0.1:<port>
