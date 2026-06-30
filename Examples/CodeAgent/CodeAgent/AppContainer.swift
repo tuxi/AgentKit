@@ -29,6 +29,7 @@ final class AppContainer {
         Task {
             await toolRegistry.register(DeviceInfoTool())
             await toolRegistry.register(CameraCaptureTool())
+            await toolRegistry.register(DownloadFileTool())
 #if os(macOS)
             // ScreenshotTool 仅 macOS 可用（依赖 ScreenCaptureKit）
             await toolRegistry.register(ScreenshotTool())

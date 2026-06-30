@@ -402,8 +402,6 @@
 			isa = XCSwiftPackageProductDependency;
 			productName = AgentKit;
 		};
-
-
 /* End XCSwiftPackageProductDependency section */
 	};
 	rootObject = D01D7D082FEBDBEA0097461D /* Project object */;
