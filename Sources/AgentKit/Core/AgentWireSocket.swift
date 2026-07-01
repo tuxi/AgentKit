@@ -25,6 +25,11 @@ public final class AgentWireSocket: @unchecked Sendable {
     /// AsyncStream 的 continuation，用于向 UI 推送 AgentEvent。
     private var continuation: AsyncStream<AgentEvent>.Continuation?
 
+    /// Explicit disconnects are terminal for the UI stream. Transient socket drops are not:
+    /// `WebSocketClient` owns retry/reconnect, so keeping the same continuation alive lets
+    /// the current ConversationViewModel resume receiving events after reconnect.
+    private var isExplicitDisconnect = false
+
     /// 握手状态：hello 帧到达前，所有消息都缓存或忽略。
     private var handshakeComplete = false
 
@@ -62,7 +67,7 @@ public final class AgentWireSocket: @unchecked Sendable {
     // MARK: - Public API
 
     /// 连接 WebSocket 并返回事件流。
-    /// - Returns: `AsyncStream<AgentEvent>` — 持续产出事件直到连接断开或流取消。
+    /// - Returns: `AsyncStream<AgentEvent>` — 持续产出事件直到主动 disconnect 或流取消。
     public func connect() -> AsyncStream<AgentEvent> {
         AsyncStream { [weak self] continuation in
             guard let self else {
@@ -70,6 +75,7 @@ public final class AgentWireSocket: @unchecked Sendable {
                 return
             }
             self.continuation = continuation
+            self.isExplicitDisconnect = false
 
             let conversationID = self.conversationID
 
@@ -95,11 +101,16 @@ public final class AgentWireSocket: @unchecked Sendable {
             // 连接成功回调（isConnected 由 computed property 自动派生）
             self.wsClient.onConnected = {}
 
-            // 断开回调 — 终止流
+            // 断开回调。
+            // 注意：意外断开不能 finish 上层 AsyncStream。底层 WebSocketClient 会自动重连；
+            // 如果这里 finish，ConversationViewModel 的 streamTask 会永久结束，后续重连收到的
+            // 事件无人消费，表现为“发送成功但当前 UI 没响应，退出重进才看到历史”。
             self.wsClient.onDisconnected = { [weak self] _ in
-                self?.handshakeComplete = false
-                self?.continuation?.finish()
-                self?.continuation = nil
+                guard let self else { return }
+                self.handshakeComplete = false
+                guard self.isExplicitDisconnect else { return }
+                self.continuation?.finish()
+                self.continuation = nil
             }
 
             // 发起连接
@@ -146,6 +157,7 @@ public final class AgentWireSocket: @unchecked Sendable {
 
     /// 主动断开。
     public func disconnect() {
+        isExplicitDisconnect = true
         continuation?.finish()
         continuation = nil
         handshakeComplete = false
