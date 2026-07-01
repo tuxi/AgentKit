@@ -12,53 +12,36 @@ import SwiftUI
 struct TurnView: View {
     let turn: ConversationTurn
     @Environment(WorkspaceStore.self) private var store
+    @Environment(\.openURL) private var openURL
+    @State private var documentState = TranscriptDocumentState()
 
     var body: some View {
+        let transcript = TurnTranscriptBuilder.build(turn: turn, state: documentState)
+
         VStack(alignment: .leading, spacing: 6) {
-            // User prompt
-            if let user = turn.userPrompt {
-                MessageBubble(text: user.text, role: .user)
+            NativeTranscriptView(transcript: transcript) { action in
+                handleTranscriptAction(action)
             }
 
-            // Assistant activity — one continuous stream of blocks.
-            VStack(alignment: .leading, spacing: 4) {
-                ForEach(turn.blocks) { block in
-                    blockView(block)
-                }
-                bottomRow
-            }
-            .padding(.leading, 8)
+            bottomRow(copyText: transcript.copyText)
         }
     }
 
-    /// One action/footer row per turn: a single copy button (copies the whole
-    /// reply, Claude-Code style) + the token/timing footer.
+    /// One copy button per turn. The selectable transcript already contains the
+    /// turn footer, so this row stays quiet.
     @ViewBuilder
-    private var bottomRow: some View {
-        let copyText = assistantText
+    private func bottomRow(copyText: String) -> some View {
         // Show copy once there's text that isn't actively streaming — NOT gated
         // on session liveness (turn.isLive stays true for the whole live
         // session, which hid the button until you reloaded into history).
         let canCopy = !copyText.isEmpty && !isAnswerStreaming
-        if canCopy || turn.footer != nil {
+        if canCopy {
             HStack(spacing: 12) {
-                if canCopy {
-                    TurnCopyButton(text: copyText)
-                }
-                if let footer = turn.footer {
-                    footerStats(footer)
-                }
+                TurnCopyButton(text: copyText)
                 Spacer()
             }
             .padding(.top, 2)
         }
-    }
-
-    /// The turn's assistant prose — every `.text` block joined.
-    private var assistantText: String {
-        turn.blocks
-            .compactMap { if case .text(_, let p) = $0 { return p.text } else { return nil } }
-            .joined(separator: "\n\n")
     }
 
     /// True while the latest text block is still streaming in.
@@ -69,33 +52,99 @@ struct TurnView: View {
         return false
     }
 
-    @ViewBuilder
-    private func blockView(_ block: TurnBlock) -> some View {
-        switch block {
-        case .text(_, let payload):
-            MessageBubble(text: payload.text, role: payload.role, isStreaming: payload.isStreaming)
+    private func handleTranscriptAction(_ action: TranscriptAction) {
+        switch action {
+        case .toggleTool(let callID):
+            documentState.toggleTool(callID: callID)
 
-        case .toolGroup(let group):
-            ToolGroupView(group: group, store: store)
+        case .openArtifact(let callID):
+            guard let artifact = artifact(callID: callID) else { return }
+            openInInspector(artifact)
 
-        case .artifact(_, let node):
-            ArtifactCard(artifact: node, store: store)
+        case .openAsset(let reference):
+            openAsset(reference)
 
-        case .system(_, let payload):
-            SystemEventRow(payload: payload)
+        case .openURL(let raw):
+            guard let url = URL(string: raw) else { return }
+            openURL(url)
+
+        case .openPath(let path):
+            if let artifact = artifact(path: path) {
+                openInInspector(artifact)
+            } else {
+                Clipboard.copy(path)
+            }
         }
     }
 
-    private func footerStats(_ stats: TurnStats) -> some View {
-        HStack(spacing: 8) {
-            Label("\(stats.formattedTokens) tokens", systemImage: "text.word.spacing")
-            Label(stats.formattedElapsed, systemImage: "clock")
-            if stats.invocationCount > 1 {
-                Label("\(stats.invocationCount)×", systemImage: "cpu")
+    private func openAsset(_ reference: AssetReference) {
+        switch reference.kind {
+        case .url:
+            guard let url = URL(string: reference.target) else { return }
+            openURL(url)
+
+        case .artifact:
+            if let callID = reference.resolvedArtifactCallID,
+               let artifact = artifact(callID: callID) {
+                openInInspector(artifact)
+            } else if let artifact = artifact(path: reference.target) {
+                openInInspector(artifact)
+            } else {
+                Clipboard.copy(reference.target)
+            }
+
+        case .filePath:
+            if let artifact = artifact(path: reference.target) {
+                openInInspector(artifact)
+            } else {
+                Clipboard.copy(reference.target)
             }
         }
-        .font(.caption2)
-        .foregroundStyle(.tertiary)
+    }
+
+    private func artifact(callID: String) -> ArtifactNode? {
+        for block in turn.blocks {
+            switch block {
+            case .toolGroup(let group):
+                for tool in group.tools where tool.callID == callID {
+                    return tool.artifact
+                }
+            case .artifact(_, let node) where node.callID == callID:
+                return node
+            default:
+                break
+            }
+        }
+        return nil
+    }
+
+    private func artifact(path: String) -> ArtifactNode? {
+        for block in turn.blocks {
+            switch block {
+            case .toolGroup(let group):
+                for tool in group.tools {
+                    if let artifact = tool.artifact, artifact.path == path {
+                        return artifact
+                    }
+                }
+            case .artifact(_, let node) where node.path == path:
+                return node
+            default:
+                break
+            }
+        }
+        return nil
+    }
+
+    private func openInInspector(_ artifact: ArtifactNode) {
+        switch artifact.content {
+        case .file(let payload):
+            store.showInspector(.file(payload))
+        case .diff(let payload):
+            store.showInspector(.diff(payload))
+        case .terminal(let payload):
+            store.showInspector(.terminal(payload))
+        }
     }
 }
 
