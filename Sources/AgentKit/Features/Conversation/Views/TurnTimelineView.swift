@@ -12,6 +12,9 @@
 //
 
 import SwiftUI
+#if os(iOS)
+import UIKit
+#endif
 
 public struct TurnTimelineView: View {
     let snapshot: RuntimeSnapshot
@@ -71,8 +74,10 @@ public struct TurnTimelineView: View {
                                 }
                             )
                     }
+                    .frame(maxWidth: .infinity, alignment: .leading)
                     .padding()
                 }
+                .background(timelineBackground)
                 .coordinateSpace(name: "turnScroll")
                 .onChange(of: snapshot.generation) { _, _ in
                     // Follow the stream only while pinned — never yank a user
@@ -92,6 +97,7 @@ public struct TurnTimelineView: View {
             .onAppear { viewportHeight = outer.size.height }
             .onChange(of: outer.size.height) { _, h in viewportHeight = h }
         }
+        .background(timelineBackground.ignoresSafeArea())
     }
 
     /// Distance of the bottom sentinel below the visible viewport bottom.
@@ -124,6 +130,18 @@ public struct TurnTimelineView: View {
         .padding(.trailing, 14)
         .padding(.bottom, 10)
         .transition(.opacity.combined(with: .scale))
+    }
+
+    private var timelineBackground: Color {
+        #if os(iOS)
+        Color(uiColor: UIColor { traits in
+            traits.userInterfaceStyle == .dark
+                ? UIColor(red: 0.12, green: 0.12, blue: 0.11, alpha: 1)
+                : .systemBackground
+        })
+        #else
+        Color.clear
+        #endif
     }
 }
 

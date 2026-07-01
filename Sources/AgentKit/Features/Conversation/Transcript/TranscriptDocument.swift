@@ -49,9 +49,16 @@ struct AttributedTranscript {
 
 enum TurnTranscriptBuilder {
 
-    static func build(turn: ConversationTurn, state: TranscriptDocumentState) -> AttributedTranscript {
+    static func build(
+        turn: ConversationTurn,
+        state: TranscriptDocumentState,
+        animationFrame: Int = 0
+    ) -> AttributedTranscript {
         let assetIndex = AssetIndex(turn: turn)
-        var builder = TranscriptAttributedBuilder(assetIndex: assetIndex)
+        var builder = TranscriptAttributedBuilder(
+            assetIndex: assetIndex,
+            animationFrame: animationFrame
+        )
 
         if let user = turn.userPrompt {
             builder.appendHeading("You")
@@ -235,12 +242,14 @@ private struct TranscriptAttributedBuilder {
 
     private var attributed = NSMutableAttributedString()
     private let assetIndex: AssetIndex
+    private let animationFrame: Int
     private(set) var actions: [String: TranscriptAction] = [:]
     private var copyParts: [String] = []
     private var nextActionIndex = 0
 
-    init(assetIndex: AssetIndex) {
+    init(assetIndex: AssetIndex, animationFrame: Int) {
         self.assetIndex = assetIndex
+        self.animationFrame = animationFrame
     }
 
     mutating func appendHeading(_ text: String) {
@@ -662,7 +671,7 @@ private struct TranscriptAttributedBuilder {
         for match in regex.matches(in: text.string, range: range) {
             text.addAttribute(.foregroundColor, value: color, range: match.range)
             if bold {
-                text.addAttribute(.font, value: PlatformFont.monospacedSystemFont(ofSize: 12, weight: .semibold), range: match.range)
+                text.addAttribute(.font, value: PlatformFont.monospacedSystemFont(ofSize: codeFontSize, weight: .semibold), range: match.range)
             }
         }
     }
@@ -704,15 +713,15 @@ private struct TranscriptAttributedBuilder {
 
     private var bodyAttributes: [NSAttributedString.Key: Any] {
         [
-            .font: PlatformFont.systemFont(ofSize: 14),
+            .font: PlatformFont.systemFont(ofSize: bodyFontSize),
             .foregroundColor: primaryColor,
-            .paragraphStyle: paragraphStyle(spacingAfter: 2)
+            .paragraphStyle: paragraphStyle(spacingAfter: bodySpacingAfter)
         ]
     }
 
     private var headingAttributes: [NSAttributedString.Key: Any] {
         [
-            .font: PlatformFont.boldSystemFont(ofSize: 13),
+            .font: PlatformFont.boldSystemFont(ofSize: headingFontSize),
             .foregroundColor: secondaryColor,
             .paragraphStyle: paragraphStyle(spacingAfter: 2)
         ]
@@ -721,9 +730,9 @@ private struct TranscriptAttributedBuilder {
     private func markdownHeadingAttributes(level: Int) -> [NSAttributedString.Key: Any] {
         let size: CGFloat
         switch level {
-        case 1: size = 20
-        case 2: size = 17
-        default: size = 15
+        case 1: size = markdownH1FontSize
+        case 2: size = markdownH2FontSize
+        default: size = markdownH3FontSize
         }
         return [
             .font: PlatformFont.boldSystemFont(ofSize: size),
@@ -734,7 +743,7 @@ private struct TranscriptAttributedBuilder {
 
     private var metaAttributes: [NSAttributedString.Key: Any] {
         [
-            .font: PlatformFont.systemFont(ofSize: 12),
+            .font: PlatformFont.systemFont(ofSize: metaFontSize),
             .foregroundColor: tertiaryColor,
             .paragraphStyle: paragraphStyle(spacingAfter: 2)
         ]
@@ -742,7 +751,7 @@ private struct TranscriptAttributedBuilder {
 
     private var labelAttributes: [NSAttributedString.Key: Any] {
         [
-            .font: PlatformFont.boldSystemFont(ofSize: 12),
+            .font: PlatformFont.boldSystemFont(ofSize: labelFontSize),
             .foregroundColor: secondaryColor,
             .paragraphStyle: paragraphStyle(spacingAfter: 0)
         ]
@@ -750,7 +759,7 @@ private struct TranscriptAttributedBuilder {
 
     private var toolTargetAttributes: [NSAttributedString.Key: Any] {
         [
-            .font: PlatformFont.systemFont(ofSize: 12),
+            .font: PlatformFont.systemFont(ofSize: metaFontSize),
             .foregroundColor: secondaryColor,
             .paragraphStyle: paragraphStyle(spacingAfter: 0)
         ]
@@ -758,7 +767,7 @@ private struct TranscriptAttributedBuilder {
 
     private var toolRailAttributes: [NSAttributedString.Key: Any] {
         [
-            .font: PlatformFont.systemFont(ofSize: 13),
+            .font: PlatformFont.systemFont(ofSize: toolDetailFontSize),
             .foregroundColor: tertiaryColor,
             .paragraphStyle: paragraphStyle(spacingAfter: 0)
         ]
@@ -769,7 +778,7 @@ private struct TranscriptAttributedBuilder {
         tone: ToolTranscriptStatusTone
     ) -> [NSAttributedString.Key: Any] {
         [
-            .font: PlatformFont.systemFont(ofSize: 13, weight: .semibold),
+            .font: PlatformFont.systemFont(ofSize: toolIconFontSize, weight: .semibold),
             .foregroundColor: toolColor(for: family, tone: tone),
             .paragraphStyle: paragraphStyle(spacingAfter: 0)
         ]
@@ -780,7 +789,7 @@ private struct TranscriptAttributedBuilder {
         nested: Bool
     ) -> [NSAttributedString.Key: Any] {
         var attrs: [NSAttributedString.Key: Any] = [
-            .font: PlatformFont.systemFont(ofSize: nested ? 13 : 14, weight: .regular),
+            .font: PlatformFont.systemFont(ofSize: nested ? toolNestedFontSize : toolTitleFontSize, weight: .regular),
             .foregroundColor: tone == .failed ? failedColor : primaryColor,
             .paragraphStyle: paragraphStyle(spacingAfter: 1)
         ]
@@ -794,7 +803,7 @@ private struct TranscriptAttributedBuilder {
         for tone: ToolTranscriptStatusTone
     ) -> [NSAttributedString.Key: Any] {
         [
-            .font: PlatformFont.systemFont(ofSize: 14, weight: .regular),
+            .font: PlatformFont.systemFont(ofSize: toolTitleFontSize, weight: .regular),
             .foregroundColor: tone == .failed ? failedColor : secondaryColor,
             .paragraphStyle: paragraphStyle(spacingAfter: 1)
         ]
@@ -802,7 +811,7 @@ private struct TranscriptAttributedBuilder {
 
     private var toolDetailAttributes: [NSAttributedString.Key: Any] {
         [
-            .font: PlatformFont.systemFont(ofSize: 13),
+            .font: PlatformFont.systemFont(ofSize: toolDetailFontSize),
             .foregroundColor: tertiaryColor,
             .paragraphStyle: paragraphStyle(spacingAfter: 0)
         ]
@@ -812,7 +821,7 @@ private struct TranscriptAttributedBuilder {
         for tone: ToolTranscriptStatusTone
     ) -> [NSAttributedString.Key: Any] {
         [
-            .font: PlatformFont.systemFont(ofSize: 12, weight: .medium),
+            .font: PlatformFont.systemFont(ofSize: toolStatusFontSize, weight: .medium),
             .foregroundColor: statusColor(for: tone),
             .paragraphStyle: paragraphStyle(spacingAfter: 0)
         ]
@@ -820,7 +829,7 @@ private struct TranscriptAttributedBuilder {
 
     private var toolChevronAttributes: [NSAttributedString.Key: Any] {
         [
-            .font: PlatformFont.systemFont(ofSize: 13, weight: .regular),
+            .font: PlatformFont.systemFont(ofSize: toolDetailFontSize, weight: .regular),
             .foregroundColor: tertiaryColor,
             .paragraphStyle: paragraphStyle(spacingAfter: 0)
         ]
@@ -828,7 +837,7 @@ private struct TranscriptAttributedBuilder {
 
     private var toolDiffAddedAttributes: [NSAttributedString.Key: Any] {
         [
-            .font: PlatformFont.systemFont(ofSize: 13, weight: .medium),
+            .font: PlatformFont.systemFont(ofSize: toolDetailFontSize, weight: .medium),
             .foregroundColor: diffAddedColor,
             .paragraphStyle: paragraphStyle(spacingAfter: 0)
         ]
@@ -836,7 +845,7 @@ private struct TranscriptAttributedBuilder {
 
     private var toolDiffRemovedAttributes: [NSAttributedString.Key: Any] {
         [
-            .font: PlatformFont.systemFont(ofSize: 13, weight: .medium),
+            .font: PlatformFont.systemFont(ofSize: toolDetailFontSize, weight: .medium),
             .foregroundColor: diffRemovedColor,
             .paragraphStyle: paragraphStyle(spacingAfter: 0)
         ]
@@ -844,7 +853,7 @@ private struct TranscriptAttributedBuilder {
 
     private var codeAttributes: [NSAttributedString.Key: Any] {
         [
-            .font: PlatformFont.monospacedSystemFont(ofSize: 12, weight: .regular),
+            .font: PlatformFont.monospacedSystemFont(ofSize: codeFontSize, weight: .regular),
             .foregroundColor: primaryColor,
             .backgroundColor: codeBackgroundColor,
             .paragraphStyle: paragraphStyle(spacingAfter: 2)
@@ -853,7 +862,7 @@ private struct TranscriptAttributedBuilder {
 
     private var codeLabelAttributes: [NSAttributedString.Key: Any] {
         [
-            .font: PlatformFont.monospacedSystemFont(ofSize: 11, weight: .semibold),
+            .font: PlatformFont.monospacedSystemFont(ofSize: codeLabelFontSize, weight: .semibold),
             .foregroundColor: secondaryColor,
             .backgroundColor: codeBackgroundColor,
             .paragraphStyle: paragraphStyle(spacingAfter: 0)
@@ -862,7 +871,7 @@ private struct TranscriptAttributedBuilder {
 
     private var inlineCodeAttributes: [NSAttributedString.Key: Any] {
         [
-            .font: PlatformFont.monospacedSystemFont(ofSize: 13, weight: .regular),
+            .font: PlatformFont.monospacedSystemFont(ofSize: inlineCodeFontSize, weight: .regular),
             .foregroundColor: primaryColor,
             .backgroundColor: inlineCodeBackgroundColor,
             .paragraphStyle: paragraphStyle(spacingAfter: 0)
@@ -906,16 +915,159 @@ private struct TranscriptAttributedBuilder {
 
     private func paragraphStyle(spacingAfter: CGFloat) -> NSParagraphStyle {
         let style = NSMutableParagraphStyle()
-        style.lineSpacing = 2
+        style.lineSpacing = lineSpacing
         style.paragraphSpacing = spacingAfter
+        #if os(iOS)
+        style.lineBreakMode = .byCharWrapping
+        #endif
         return style
+    }
+
+    private var bodyFontSize: CGFloat {
+        #if os(iOS)
+        return 17
+        #else
+        return 14
+        #endif
+    }
+
+    private var headingFontSize: CGFloat {
+        #if os(iOS)
+        return 15
+        #else
+        return 13
+        #endif
+    }
+
+    private var metaFontSize: CGFloat {
+        #if os(iOS)
+        return 14
+        #else
+        return 12
+        #endif
+    }
+
+    private var labelFontSize: CGFloat {
+        #if os(iOS)
+        return 14
+        #else
+        return 12
+        #endif
+    }
+
+    private var toolTitleFontSize: CGFloat {
+        #if os(iOS)
+        return 16
+        #else
+        return 14
+        #endif
+    }
+
+    private var toolNestedFontSize: CGFloat {
+        #if os(iOS)
+        return 15
+        #else
+        return 13
+        #endif
+    }
+
+    private var toolDetailFontSize: CGFloat {
+        #if os(iOS)
+        return 14
+        #else
+        return 13
+        #endif
+    }
+
+    private var toolStatusFontSize: CGFloat {
+        #if os(iOS)
+        return 14
+        #else
+        return 12
+        #endif
+    }
+
+    private var toolIconFontSize: CGFloat {
+        #if os(iOS)
+        return 15
+        #else
+        return 13
+        #endif
+    }
+
+    private var codeFontSize: CGFloat {
+        #if os(iOS)
+        return 15
+        #else
+        return 12
+        #endif
+    }
+
+    private var codeLabelFontSize: CGFloat {
+        #if os(iOS)
+        return 13
+        #else
+        return 11
+        #endif
+    }
+
+    private var inlineCodeFontSize: CGFloat {
+        #if os(iOS)
+        return 16
+        #else
+        return 13
+        #endif
+    }
+
+    private var markdownH1FontSize: CGFloat {
+        #if os(iOS)
+        return 22
+        #else
+        return 20
+        #endif
+    }
+
+    private var markdownH2FontSize: CGFloat {
+        #if os(iOS)
+        return 19
+        #else
+        return 17
+        #endif
+    }
+
+    private var markdownH3FontSize: CGFloat {
+        #if os(iOS)
+        return 17
+        #else
+        return 15
+        #endif
+    }
+
+    private var lineSpacing: CGFloat {
+        #if os(iOS)
+        return 4
+        #else
+        return 2
+        #endif
+    }
+
+    private var bodySpacingAfter: CGFloat {
+        #if os(iOS)
+        return 4
+        #else
+        return 2
+        #endif
     }
 
     private var primaryColor: PlatformColor {
         #if os(macOS)
         return .labelColor
         #else
-        return .label
+        return UIColor { traits in
+            traits.userInterfaceStyle == .dark
+                ? UIColor(red: 0.88, green: 0.86, blue: 0.82, alpha: 1)
+                : .label
+        }
         #endif
     }
 
@@ -923,7 +1075,11 @@ private struct TranscriptAttributedBuilder {
         #if os(macOS)
         return .secondaryLabelColor
         #else
-        return .secondaryLabel
+        return UIColor { traits in
+            traits.userInterfaceStyle == .dark
+                ? UIColor(red: 0.67, green: 0.65, blue: 0.60, alpha: 1)
+                : .secondaryLabel
+        }
         #endif
     }
 
@@ -931,7 +1087,11 @@ private struct TranscriptAttributedBuilder {
         #if os(macOS)
         return .tertiaryLabelColor
         #else
-        return .tertiaryLabel
+        return UIColor { traits in
+            traits.userInterfaceStyle == .dark
+                ? UIColor(red: 0.43, green: 0.42, blue: 0.39, alpha: 1)
+                : .tertiaryLabel
+        }
         #endif
     }
 
@@ -939,7 +1099,11 @@ private struct TranscriptAttributedBuilder {
         #if os(macOS)
         return .controlAccentColor
         #else
-        return .systemBlue
+        return UIColor { traits in
+            traits.userInterfaceStyle == .dark
+                ? UIColor(red: 0.74, green: 0.72, blue: 0.66, alpha: 1)
+                : .systemBlue
+        }
         #endif
     }
 
@@ -947,7 +1111,11 @@ private struct TranscriptAttributedBuilder {
         #if os(macOS)
         return .systemBlue
         #else
-        return .systemBlue
+        return UIColor { traits in
+            traits.userInterfaceStyle == .dark
+                ? UIColor(red: 0.68, green: 0.76, blue: 0.86, alpha: 1)
+                : .systemBlue
+        }
         #endif
     }
 
@@ -955,7 +1123,11 @@ private struct TranscriptAttributedBuilder {
         #if os(macOS)
         return .systemPurple
         #else
-        return .systemPurple
+        return UIColor { traits in
+            traits.userInterfaceStyle == .dark
+                ? UIColor(red: 0.82, green: 0.75, blue: 0.90, alpha: 1)
+                : .systemPurple
+        }
         #endif
     }
 
@@ -963,7 +1135,11 @@ private struct TranscriptAttributedBuilder {
         #if os(macOS)
         return .systemOrange
         #else
-        return .systemOrange
+        return UIColor { traits in
+            traits.userInterfaceStyle == .dark
+                ? UIColor(red: 0.87, green: 0.57, blue: 0.32, alpha: 1)
+                : .systemOrange
+        }
         #endif
     }
 
@@ -971,7 +1147,11 @@ private struct TranscriptAttributedBuilder {
         #if os(macOS)
         return .systemRed
         #else
-        return .systemRed
+        return UIColor { traits in
+            traits.userInterfaceStyle == .dark
+                ? UIColor(red: 1.00, green: 0.36, blue: 0.37, alpha: 1)
+                : .systemRed
+        }
         #endif
     }
 
@@ -979,7 +1159,11 @@ private struct TranscriptAttributedBuilder {
         #if os(macOS)
         return .separatorColor.withAlphaComponent(0.08)
         #else
-        return .tertiarySystemFill
+        return UIColor { traits in
+            traits.userInterfaceStyle == .dark
+                ? UIColor(white: 1, alpha: 0.08)
+                : .tertiarySystemFill
+        }
         #endif
     }
 
@@ -988,7 +1172,10 @@ private struct TranscriptAttributedBuilder {
         tone: ToolTranscriptStatusTone
     ) -> String {
         if tone == .failed { return "!" }
-        if tone == .running { return "●" }
+        if tone == .running {
+            let frames = ["◐", "◓", "◑", "◒"]
+            return frames[abs(animationFrame) % frames.count]
+        }
         switch family {
         case .read: return "□"
         case .list: return "≡"
@@ -1044,7 +1231,11 @@ private struct TranscriptAttributedBuilder {
         #if os(macOS)
         return .textBackgroundColor.withAlphaComponent(0.65)
         #else
-        return .secondarySystemBackground
+        return UIColor { traits in
+            traits.userInterfaceStyle == .dark
+                ? UIColor(red: 0.16, green: 0.16, blue: 0.15, alpha: 1)
+                : .secondarySystemBackground
+        }
         #endif
     }
 
@@ -1052,7 +1243,11 @@ private struct TranscriptAttributedBuilder {
         #if os(macOS)
         return .separatorColor.withAlphaComponent(0.18)
         #else
-        return .tertiarySystemFill
+        return UIColor { traits in
+            traits.userInterfaceStyle == .dark
+                ? UIColor(white: 1, alpha: 0.10)
+                : .tertiarySystemFill
+        }
         #endif
     }
 
@@ -1092,7 +1287,11 @@ private struct TranscriptAttributedBuilder {
         #if os(macOS)
         return .systemGreen
         #else
-        return .systemGreen
+        return UIColor { traits in
+            traits.userInterfaceStyle == .dark
+                ? UIColor(red: 0.42, green: 0.82, blue: 0.46, alpha: 1)
+                : .systemGreen
+        }
         #endif
     }
 
@@ -1100,7 +1299,7 @@ private struct TranscriptAttributedBuilder {
         #if os(macOS)
         return .systemRed
         #else
-        return .systemRed
+        return failedColor
         #endif
     }
 

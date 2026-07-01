@@ -16,8 +16,22 @@ struct TurnView: View {
     @State private var documentState = TranscriptDocumentState()
 
     var body: some View {
-        let transcript = TurnTranscriptBuilder.build(turn: turn, state: documentState)
+        if hasRunningTool {
+            TimelineView(.periodic(from: .now, by: 0.32)) { context in
+                transcriptBody(animationFrame: animationFrame(for: context.date))
+            }
+        } else {
+            transcriptBody(animationFrame: 0)
+        }
+    }
 
+    @ViewBuilder
+    private func transcriptBody(animationFrame: Int) -> some View {
+        let transcript = TurnTranscriptBuilder.build(
+            turn: turn,
+            state: documentState,
+            animationFrame: animationFrame
+        )
         VStack(alignment: .leading, spacing: 6) {
             NativeTranscriptView(transcript: transcript) { action in
                 handleTranscriptAction(action)
@@ -25,6 +39,7 @@ struct TurnView: View {
 
             bottomRow(copyText: transcript.copyText)
         }
+        .frame(maxWidth: .infinity, alignment: .leading)
     }
 
     /// One copy button per turn. The selectable transcript already contains the
@@ -42,6 +57,17 @@ struct TurnView: View {
             }
             .padding(.top, 2)
         }
+    }
+
+    private var hasRunningTool: Bool {
+        turn.blocks.contains { block in
+            guard case .toolGroup(let group) = block else { return false }
+            return group.tools.contains { $0.status == .running }
+        }
+    }
+
+    private func animationFrame(for date: Date) -> Int {
+        Int(date.timeIntervalSinceReferenceDate * 3.0)
     }
 
     /// True while the latest text block is still streaming in.

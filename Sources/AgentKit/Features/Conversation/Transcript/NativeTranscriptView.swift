@@ -11,9 +11,12 @@ struct NativeTranscriptView: View {
     let transcript: AttributedTranscript
     let onAction: (TranscriptAction) -> Void
 
+    #if os(macOS)
     @State private var measuredHeight: CGFloat = 1
+    #endif
 
     var body: some View {
+        #if os(macOS)
         GeometryReader { geometry in
             PlatformTranscriptTextView(
                 attributedText: transcript.attributedString,
@@ -24,6 +27,14 @@ struct NativeTranscriptView: View {
             )
         }
         .frame(height: measuredHeight)
+        #else
+        PlatformTranscriptTextView(
+            attributedText: transcript.attributedString,
+            actions: transcript.actions,
+            onAction: onAction
+        )
+        .frame(maxWidth: .infinity, alignment: .leading)
+        #endif
     }
 }
 
@@ -121,8 +132,6 @@ import UIKit
 private struct PlatformTranscriptTextView: UIViewRepresentable {
     let attributedText: NSAttributedString
     let actions: [String: TranscriptAction]
-    let width: CGFloat
-    @Binding var measuredHeight: CGFloat
     let onAction: (TranscriptAction) -> Void
 
     func makeCoordinator() -> Coordinator {
@@ -137,8 +146,13 @@ private struct PlatformTranscriptTextView: UIViewRepresentable {
         textView.backgroundColor = .clear
         textView.textContainerInset = .zero
         textView.textContainer.lineFragmentPadding = 0
+        textView.textContainer.widthTracksTextView = true
+        textView.textContainer.heightTracksTextView = false
+        textView.textContainer.lineBreakMode = .byCharWrapping
         textView.adjustsFontForContentSizeCategory = false
         textView.linkTextAttributes = [:]
+        textView.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
+        textView.setContentHuggingPriority(.defaultLow, for: .horizontal)
         textView.delegate = context.coordinator
         return textView
     }
@@ -150,17 +164,24 @@ private struct PlatformTranscriptTextView: UIViewRepresentable {
         if textView.attributedText.isEqual(to: attributedText) != true {
             textView.attributedText = attributedText
         }
+    }
 
+    func sizeThatFits(
+        _ proposal: ProposedViewSize,
+        uiView textView: UITextView,
+        context: Context
+    ) -> CGSize? {
+        let width = max(1, proposal.width ?? UIScreen.main.bounds.width)
+        textView.bounds.size.width = width
+        textView.textContainer.size = CGSize(
+            width: width,
+            height: CGFloat.greatestFiniteMagnitude
+        )
         let fitting = textView.sizeThatFits(CGSize(
             width: width,
             height: CGFloat.greatestFiniteMagnitude
         ))
-        let newHeight = max(1, ceil(fitting.height))
-        if abs(newHeight - measuredHeight) > 0.5 {
-            DispatchQueue.main.async {
-                measuredHeight = newHeight
-            }
-        }
+        return CGSize(width: width, height: max(1, ceil(fitting.height)))
     }
 
     final class Coordinator: NSObject, UITextViewDelegate {

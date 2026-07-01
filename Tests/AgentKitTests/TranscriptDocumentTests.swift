@@ -121,6 +121,37 @@ final class TranscriptDocumentTests: XCTestCase {
         XCTAssertEqual(ToolTranscriptPresenter.presentation(for: failed).statusTone, .failed)
     }
 
+    func testRunningToolAnimationFrameChangesTranscriptGlyph() {
+        let tool = ToolNodePayload(
+            callID: "run",
+            toolName: "run_command",
+            args: .object(["command": .string("swift test")]),
+            status: .running
+        )
+        let turn = ConversationTurn(
+            id: "turn",
+            userPrompt: nil,
+            blocks: [.toolGroup(ToolGroup(id: "run", tools: [tool]))],
+            footer: nil,
+            isLive: true
+        )
+
+        let first = TurnTranscriptBuilder.build(
+            turn: turn,
+            state: TranscriptDocumentState(),
+            animationFrame: 0
+        )
+        let second = TurnTranscriptBuilder.build(
+            turn: turn,
+            state: TranscriptDocumentState(),
+            animationFrame: 1
+        )
+
+        XCTAssertTrue(first.attributedString.string.contains("running"))
+        XCTAssertTrue(second.attributedString.string.contains("running"))
+        XCTAssertNotEqual(first.attributedString.string, second.attributedString.string)
+    }
+
     func testDiffSummaryAppearsOnCollapsedToolLine() {
         let diff = """
         @@ -1,1 +1,1 @@
