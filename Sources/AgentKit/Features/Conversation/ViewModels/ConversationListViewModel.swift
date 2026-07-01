@@ -22,6 +22,9 @@ public final class ConversationListViewModel {
     /// 是否正在加载。
     public private(set) var isLoading = false
 
+    /// 列表内容版本号。`ConversationRef` 的 identity 只看 `id`，用版本号显式驱动列表刷新。
+    public private(set) var revision = 0
+
     private let client: RuntimeClient
 
     // MARK: - Init
@@ -36,6 +39,7 @@ public final class ConversationListViewModel {
     public func prepend(_ ref: ConversationRef) {
         guard !conversations.contains(where: { $0.id == ref.id }) else { return }
         conversations.insert(ref, at: 0)
+        revision += 1
     }
 
     /// 拉取会话列表。
@@ -53,6 +57,7 @@ public final class ConversationListViewModel {
         for attempt in 1...maxAttempts {
             do {
                 conversations = try await client.listConversations()
+                revision += 1
                 errorMessage = nil
                 return
             } catch {
@@ -78,6 +83,7 @@ public final class ConversationListViewModel {
         do {
             let ref = try await client.createConversation(workspacePath: workspacePath)
             conversations.insert(ref, at: 0)
+            revision += 1
             isLoading = false
             return ref
         } catch {
@@ -88,15 +94,17 @@ public final class ConversationListViewModel {
     }
 
     /// 重命名会话。
-    public func renameConversation(_ ref: ConversationRef, name: String) async {
+    @discardableResult
+    public func renameConversation(_ ref: ConversationRef, name: String) async -> ConversationRef? {
         do {
             let updated = try await client.renameConversation(id: ref.id, name: name)
-            // 原地替换列表中的旧引用
-            if let idx = conversations.firstIndex(where: { $0.id == ref.id }) {
-                conversations[idx] = updated
-            }
+            // 整体赋回新数组，让 SwiftUI Observation / List diff 明确看到元素内容变化。
+            conversations = conversations.map { $0.id == ref.id ? updated : $0 }
+            revision += 1
+            return updated
         } catch {
             errorMessage = error.localizedDescription
+            return nil
         }
     }
 }

@@ -90,8 +90,8 @@ public struct WorkspaceView: View {
             // 选中会话 → push 到详情
             pushToDetailIfNeeded(.conversationDetail(conversation: ref))
         }
-        .onChange(of: store.draft) { _, newValue in
-            if newValue != nil {
+        .onChange(of: store.draftNavigationRevision) { _, _ in
+            if store.draft != nil {
                 // 新建草稿 → push 到详情
                 pushToDetailIfNeeded(.draft)
             }

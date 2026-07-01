@@ -12,7 +12,7 @@ import SwiftUI
 
 struct ConversationListView: View {
 
-    @State private var viewModel: ConversationListViewModel
+    private let viewModel: ConversationListViewModel
     @Environment(WorkspaceStore.self) private var store
     @Binding var selected: ConversationRef?
 
@@ -45,6 +45,8 @@ struct ConversationListView: View {
     }
 
     var body: some View {
+        let listRevision = viewModel.revision
+
         List(selection: $selected) {
             if viewModel.isLoading {
                 HStack {
@@ -69,6 +71,7 @@ struct ConversationListView: View {
 
             ForEach(filteredConversations, id: \.uiID) { ref in
                 ConversationRow(ref: ref)
+                    .id("\(ref.uiID)-\(listRevision)")
                     .tag(ref)
                     #if os(iOS)
                     .swipeActions(edge: .trailing) {
@@ -103,9 +106,13 @@ struct ConversationListView: View {
                 renameTarget = nil
             }
             Button("确定") {
-                if let target = renameTarget, !renameText.trimmingCharacters(in: .whitespaces).isEmpty {
+                let newName = renameText.trimmingCharacters(in: .whitespaces)
+                if let target = renameTarget, !newName.isEmpty {
                     Task {
-                        await viewModel.renameConversation(target, name: renameText.trimmingCharacters(in: .whitespaces))
+                        if let updated = await viewModel.renameConversation(target, name: newName),
+                           selected?.id == updated.id {
+                            selected = updated
+                        }
                     }
                 }
                 renameTarget = nil

@@ -50,6 +50,9 @@ public final class WorkspaceStore {
     /// `draft == nil` 且 `activeConversationViewModel != nil` → activeSession。
     public private(set) var draft: SessionDraft?
 
+    /// 每次用户请求新建草稿时递增。用于驱动 compact 导航，不依赖 `SessionDraft` 的值相等性。
+    public private(set) var draftNavigationRevision = 0
+
     /// 最近打开的工作区（持久化，供草稿选择/预选）。
     public let recentWorkspaces = RecentWorkspacesStore()
 
@@ -245,6 +248,7 @@ public final class WorkspaceStore {
         selectedConversation = nil          // 经 didSet 清掉活跃 VM
         projects.reload()                   // 项目目录可能被「文件」App 改动，开草稿时刷新
         draft = SessionDraft(workspace: recentWorkspaces.mostRecent)
+        draftNavigationRevision += 1
     }
 
     /// 在 Documents 根下创建新项目并选入当前草稿（iOS）。失败时抛 `ProjectsError`。
