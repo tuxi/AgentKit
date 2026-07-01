@@ -167,6 +167,63 @@ final class TranscriptDocumentTests: XCTestCase {
         XCTAssertTrue(transcript.attributedString.string.contains("+1 -1"))
     }
 
+    func testSystemToolErrorRendersAsProminentFailure() {
+        let turn = ConversationTurn(
+            id: "turn",
+            userPrompt: nil,
+            blocks: [
+                .system(
+                    id: "error",
+                    SystemNodePayload(
+                        kind: .observation,
+                        text: "Tool error: fetch: HTTP 404"
+                    )
+                )
+            ],
+            footer: nil,
+            isLive: false
+        )
+
+        let transcript = TurnTranscriptBuilder.build(
+            turn: turn,
+            state: TranscriptDocumentState()
+        )
+        let rendered = transcript.attributedString.string
+
+        XCTAssertTrue(rendered.contains("! Error"))
+        XCTAssertTrue(rendered.contains("Tool error: fetch: HTTP 404"))
+        XCTAssertNotNil(attributes(in: transcript.attributedString, for: "! Error")[.backgroundColor])
+        XCTAssertNotNil(attributes(in: transcript.attributedString, for: "Tool error")[.foregroundColor])
+    }
+
+    func testMarkdownTableRowsHaveBackground() {
+        let turn = ConversationTurn(
+            id: "turn",
+            userPrompt: nil,
+            blocks: [
+                .text(id: "t1", MessageNodePayload(
+                    role: .assistant,
+                    text: """
+                    | 文件 | 行 | 内容 |
+                    | --- | ---: | --- |
+                    | App.swift | 12 | value |
+                    """
+                ))
+            ],
+            footer: nil,
+            isLive: false
+        )
+
+        let transcript = TurnTranscriptBuilder.build(
+            turn: turn,
+            state: TranscriptDocumentState()
+        )
+
+        XCTAssertTrue(transcript.attributedString.string.contains("TABLE"))
+        XCTAssertNotNil(attributes(in: transcript.attributedString, for: "文件 | 行 | 内容")[.backgroundColor])
+        XCTAssertNotNil(attributes(in: transcript.attributedString, for: "App.swift | 12 | value")[.backgroundColor])
+    }
+
     func testStandaloneArtifactProducesPathAction() {
         let artifact = makeArtifact()
         let turn = ConversationTurn(

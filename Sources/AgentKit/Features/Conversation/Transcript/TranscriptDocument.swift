@@ -80,7 +80,7 @@ enum TurnTranscriptBuilder {
                 appendArtifact(artifact, to: &builder)
 
             case .system(_, let payload):
-                builder.appendMeta("[\(payload.kind.rawValue)] \(payload.text)")
+                appendSystem(payload, to: &builder)
             }
 
             if index < turn.blocks.count - 1 {
@@ -217,6 +217,17 @@ enum TurnTranscriptBuilder {
         }
     }
 
+    private static func appendSystem(
+        _ payload: SystemNodePayload,
+        to builder: inout TranscriptAttributedBuilder
+    ) {
+        if payload.isTranscriptError {
+            builder.appendSystemError(payload.text)
+        } else {
+            builder.appendMeta("[\(payload.kind.rawValue)] \(payload.text)")
+        }
+    }
+
     private static func formattedArgs(_ value: JSONValue?) -> String? {
         guard let value else { return nil }
         if let pretty = value.prettyJSONString, !pretty.isEmpty {
@@ -228,6 +239,19 @@ enum TurnTranscriptBuilder {
 
     private static func groupExpansionID(for group: ToolGroup) -> String {
         "group:\(group.id)"
+    }
+}
+
+private extension SystemNodePayload {
+    var isTranscriptError: Bool {
+        if kind == .error { return true }
+        guard kind == .observation else { return false }
+        let lower = text.lowercased()
+        return lower.contains("tool error")
+            || lower.contains("error:")
+            || lower.contains("failed")
+            || lower.contains("http 4")
+            || lower.contains("http 5")
     }
 }
 
@@ -281,6 +305,12 @@ private struct TranscriptAttributedBuilder {
     mutating func appendMeta(_ text: String) {
         append(text, attributes: metaAttributes)
         copyParts.append(text)
+    }
+
+    mutating func appendSystemError(_ text: String) {
+        append("! Error  ", attributes: systemErrorLabelAttributes)
+        append(text, attributes: systemErrorBodyAttributes)
+        copyParts.append("Error: \(text)")
     }
 
     mutating func appendIndentedLabel(_ text: String) {
@@ -348,7 +378,7 @@ private struct TranscriptAttributedBuilder {
             .components(separatedBy: "\n")
             .map { "  \($0)" }
             .joined(separator: "\n")
-        appendHighlightedCode(indented, language: language)
+        appendHighlightedCode(indented, language: language, attributes: codeAttributes)
         if recordCopy {
             copyParts.append(text)
         }
@@ -484,7 +514,13 @@ private struct TranscriptAttributedBuilder {
         let lines = allRows.map { row in
             row.map { inlinePlainText($0.content) }.joined(separator: " | ")
         }
-        appendCode(lines.joined(separator: "\n"), language: "table", recordCopy: false)
+        append("  TABLE\n", attributes: tableLabelAttributes)
+        let indented = lines
+            .joined(separator: "\n")
+            .components(separatedBy: "\n")
+            .map { "  \($0)" }
+            .joined(separator: "\n")
+        appendHighlightedCode(indented, language: "table", attributes: tableAttributes)
     }
 
     private mutating func appendInlines(
@@ -605,8 +641,12 @@ private struct TranscriptAttributedBuilder {
         }
     }
 
-    private mutating func appendHighlightedCode(_ text: String, language: String?) {
-        let base = NSMutableAttributedString(string: text, attributes: codeAttributes)
+    private mutating func appendHighlightedCode(
+        _ text: String,
+        language: String?,
+        attributes: [NSAttributedString.Key: Any]
+    ) {
+        let base = NSMutableAttributedString(string: text, attributes: attributes)
         applyCodeHighlight(to: base, language: language ?? "")
 
         let matches = AssetReferenceDetector.matches(in: text, assetIndex: assetIndex)
@@ -749,6 +789,24 @@ private struct TranscriptAttributedBuilder {
         ]
     }
 
+    private var systemErrorLabelAttributes: [NSAttributedString.Key: Any] {
+        [
+            .font: PlatformFont.systemFont(ofSize: toolTitleFontSize, weight: .semibold),
+            .foregroundColor: failedColor,
+            .backgroundColor: errorBackgroundColor,
+            .paragraphStyle: paragraphStyle(spacingAfter: 2)
+        ]
+    }
+
+    private var systemErrorBodyAttributes: [NSAttributedString.Key: Any] {
+        [
+            .font: PlatformFont.systemFont(ofSize: bodyFontSize, weight: .medium),
+            .foregroundColor: failedColor,
+            .backgroundColor: errorBackgroundColor,
+            .paragraphStyle: paragraphStyle(spacingAfter: 2)
+        ]
+    }
+
     private var labelAttributes: [NSAttributedString.Key: Any] {
         [
             .font: PlatformFont.boldSystemFont(ofSize: labelFontSize),
@@ -866,6 +924,24 @@ private struct TranscriptAttributedBuilder {
             .foregroundColor: secondaryColor,
             .backgroundColor: codeBackgroundColor,
             .paragraphStyle: paragraphStyle(spacingAfter: 0)
+        ]
+    }
+
+    private var tableLabelAttributes: [NSAttributedString.Key: Any] {
+        [
+            .font: PlatformFont.monospacedSystemFont(ofSize: codeLabelFontSize, weight: .semibold),
+            .foregroundColor: secondaryColor,
+            .backgroundColor: tableBackgroundColor,
+            .paragraphStyle: paragraphStyle(spacingAfter: 0)
+        ]
+    }
+
+    private var tableAttributes: [NSAttributedString.Key: Any] {
+        [
+            .font: PlatformFont.monospacedSystemFont(ofSize: codeFontSize, weight: .regular),
+            .foregroundColor: primaryColor,
+            .backgroundColor: tableBackgroundColor,
+            .paragraphStyle: paragraphStyle(spacingAfter: 2)
         ]
     }
 
@@ -1167,6 +1243,18 @@ private struct TranscriptAttributedBuilder {
         #endif
     }
 
+    private var errorBackgroundColor: PlatformColor {
+        #if os(macOS)
+        return .systemRed.withAlphaComponent(0.08)
+        #else
+        return UIColor { traits in
+            traits.userInterfaceStyle == .dark
+                ? UIColor(red: 0.25, green: 0.08, blue: 0.08, alpha: 1)
+                : UIColor.systemRed.withAlphaComponent(0.08)
+        }
+        #endif
+    }
+
     private func toolIcon(
         for family: ToolTranscriptFamily,
         tone: ToolTranscriptStatusTone
@@ -1233,8 +1321,20 @@ private struct TranscriptAttributedBuilder {
         #else
         return UIColor { traits in
             traits.userInterfaceStyle == .dark
-                ? UIColor(red: 0.16, green: 0.16, blue: 0.15, alpha: 1)
+                ? UIColor(red: 0.18, green: 0.18, blue: 0.17, alpha: 1)
                 : .secondarySystemBackground
+        }
+        #endif
+    }
+
+    private var tableBackgroundColor: PlatformColor {
+        #if os(macOS)
+        return codeBackgroundColor
+        #else
+        return UIColor { traits in
+            traits.userInterfaceStyle == .dark
+                ? UIColor(red: 0.22, green: 0.22, blue: 0.20, alpha: 1)
+                : UIColor.secondarySystemBackground
         }
         #endif
     }
