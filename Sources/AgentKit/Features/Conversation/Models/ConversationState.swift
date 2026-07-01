@@ -137,10 +137,16 @@ public struct TurnGroup: Identifiable, Sendable {
 public enum TurnStatus: Sendable, Hashable {
     /// turn 正在执行（可接收增量事件）。
     case active
+    /// turn 已 checkpoint 并暂停，等待恢复。
+    case paused
+    /// turn 正在从 paused 状态恢复。
+    case resuming
     /// turn 已正常完成。
     case completed
     /// turn 被取消。
     case cancelled
+    /// turn 不可恢复失败。
+    case failed
 }
 
 // MARK: - Sub-structs
@@ -247,6 +253,37 @@ extension ConversationState {
             turn.status = .completed
             turns[turnID] = turn
             if currentTurnID == turnID {
+                currentTurnID = nil
+            }
+            streamingText = ""
+
+        case .turnPaused(let turnID, _, _):
+            guard let tid = turnID ?? currentTurnID,
+                  var turn = turns[tid] else { return }
+            turn.status = .paused
+            turns[tid] = turn
+            if currentTurnID == tid {
+                currentTurnID = nil
+            }
+
+        case .turnResumed(let turnID, _):
+            guard let tid = turnID,
+                  var turn = turns[tid] else { return }
+            turn.status = .resuming
+            turns[tid] = turn
+            currentTurnID = tid
+
+        case .turnFailed(let turnID, let text, let err):
+            guard let tid = turnID ?? currentTurnID,
+                  var turn = turns[tid] else { return }
+            if let text, !text.isEmpty {
+                turn.assistantMessage = text
+            } else if let err, !err.isEmpty {
+                turn.assistantMessage = err
+            }
+            turn.status = .failed
+            turns[tid] = turn
+            if currentTurnID == tid {
                 currentTurnID = nil
             }
             streamingText = ""

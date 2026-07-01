@@ -20,6 +20,12 @@ public enum AgentEvent: Sendable {
     case turnStarted(turnID: String, text: String)
     /// `turn_finished`：当前 turn 结束。
     case turnFinished(turnID: String, text: String)
+    /// `turn_paused`：当前 turn 已 checkpoint 并暂停，等待 ResumeSession。
+    case turnPaused(turnID: String?, text: String?, err: String?)
+    /// `turn_resumed`：服务端已接受 ResumeSession 并开始续跑。
+    case turnResumed(turnID: String?, text: String?)
+    /// `turn_failed`：turn 进入不可恢复失败终态。
+    case turnFailed(turnID: String?, text: String?, err: String?)
 
     // ── 模型 ──
     case modelStarted(turnID: String?, invocationID: String?)
@@ -75,6 +81,15 @@ extension AgentEvent {
 
         case "turn_finished":
             return .turnFinished(turnID: turnID ?? "", text: wire.text ?? "")
+
+        case "turn_paused", "turn.paused":
+            return .turnPaused(turnID: turnID, text: wire.text, err: wire.err)
+
+        case "turn_resumed", "turn.resumed":
+            return .turnResumed(turnID: turnID, text: wire.text)
+
+        case "turn_failed", "turn.failed":
+            return .turnFailed(turnID: turnID, text: wire.text, err: wire.err)
 
         case "model_started":
             return .modelStarted(turnID: turnID, invocationID: wire.invocationId)

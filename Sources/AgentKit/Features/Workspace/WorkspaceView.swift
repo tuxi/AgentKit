@@ -19,6 +19,9 @@ public struct WorkspaceView: View {
     private let dependencies: AgentDependencies
 
     @Environment(\.horizontalSizeClass) private var horizontalSizeClass
+    #if os(iOS)
+    @Environment(\.scenePhase) private var scenePhase
+    #endif
 
     @State private var router = AgentRouter()
     @State private var store: WorkspaceStore
@@ -30,6 +33,29 @@ public struct WorkspaceView: View {
     }
 
     public var body: some View {
+        content
+            #if os(iOS)
+            .task {
+                store.startLifecycleNetworkMonitor()
+                await store.handleAppBecameActive()
+            }
+            .onChange(of: scenePhase) { _, newValue in
+                switch newValue {
+                case .active:
+                    Task { await store.handleAppBecameActive() }
+                case .background:
+                    store.handleAppEnteredBackground()
+                case .inactive:
+                    break
+                @unknown default:
+                    break
+                }
+            }
+            #endif
+    }
+
+    @ViewBuilder
+    private var content: some View {
         if horizontalSizeClass == .compact {
             iOSCompactLayout
         } else {

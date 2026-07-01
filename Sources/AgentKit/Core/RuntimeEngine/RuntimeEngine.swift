@@ -180,6 +180,19 @@ public actor RuntimeEngine {
             _turnStartedAt = nil
             _modelStartedAt = nil
         }
+        if case .turnPaused = event {
+            _turnStartedAt = nil
+            _modelStartedAt = nil
+        }
+        if case .turnFailed = event {
+            _turnStartedAt = nil
+            _modelStartedAt = nil
+        }
+        if case .turnResumed = event {
+            _modelStats = nil
+            _modelStartedAt = nil
+            _turnStartedAt = Date()
+        }
 
         // Reduce into graph
         let _ = reducer.reduce(event, into: &graph)
@@ -206,6 +219,19 @@ public actor RuntimeEngine {
             }
             if case .planApprovalRequest(_, let plan) = event {
                 _pendingPlanApproval = plan
+            }
+            if case .turnPaused = event {
+                _turnStartedAt = nil
+                _modelStartedAt = nil
+            }
+            if case .turnFailed = event {
+                _turnStartedAt = nil
+                _modelStartedAt = nil
+            }
+            if case .turnResumed = event {
+                _modelStats = nil
+                _modelStartedAt = nil
+                _turnStartedAt = Date()
             }
             // Clear on resolution (approval nodes in graph track resolved state)
             if case .approvalRequest = event {} // no-op, handled above

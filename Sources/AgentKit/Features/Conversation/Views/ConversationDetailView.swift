@@ -102,7 +102,23 @@ public struct ConversationDetailView: View {
     // MARK: - Active session
 
     private func activeView(vm: ConversationViewModel) -> some View {
-        ConversationTimelineView(viewModel: vm)
+        let isPaused = vm.lifecycleStatus == "paused"
+            || (vm.lifecycleStatus == nil && store.selectedConversation?.isPaused == true)
+
+        return VStack(spacing: 0) {
+            if isPaused {
+                ResumePausedBar(
+                    pausedAt: vm.pausedAt ?? store.selectedConversation?.pausedDate,
+                    isResuming: store.isResumingPausedConversation,
+                    errorMessage: store.lifecycleErrorMessage
+                ) {
+                    Task { await store.resumeSelectedConversation() }
+                }
+                .transition(.move(edge: .top).combined(with: .opacity))
+            }
+
+            ConversationTimelineView(viewModel: vm)
+        }
             .safeAreaInset(edge: .bottom, spacing: 30) {
                 VStack(spacing: 0) {
                     // ── 计划审批拦截栏（Plan Mode）──
@@ -136,10 +152,12 @@ public struct ConversationDetailView: View {
                     WorkspaceChipBar()          // 冻结：只读 chip
 
                     ChatComposer(
-                        placeholder: (vm.snapshot.pendingApproval != nil || vm.snapshot.pendingPlanApproval != nil)
+                        placeholder: isPaused
+                            ? "会话已暂停 — 点击继续"
+                            : (vm.snapshot.pendingApproval != nil || vm.snapshot.pendingPlanApproval != nil)
                             ? "审批中 — 请选择「允许」或「拒绝」"
                             : "输入消息…",
-                        isEnabled: vm.snapshot.pendingApproval == nil && vm.snapshot.pendingPlanApproval == nil
+                        isEnabled: !isPaused && vm.snapshot.pendingApproval == nil && vm.snapshot.pendingPlanApproval == nil
                     ) { text in
                         await vm.send(input: .text(text))
                         return true
@@ -148,6 +166,7 @@ public struct ConversationDetailView: View {
                 .background(.bar)
                 .animation(.easeOut(duration: 0.25), value: vm.snapshot.pendingApproval != nil)
                 .animation(.easeOut(duration: 0.25), value: vm.snapshot.pendingPlanApproval != nil)
+                .animation(.easeOut(duration: 0.25), value: isPaused)
             }
     }
 
@@ -170,6 +189,71 @@ public struct ConversationDetailView: View {
             }
             .disabled(store.selectedConversation == nil)
         }
+    }
+}
+
+// MARK: - ResumePausedBar
+
+private struct ResumePausedBar: View {
+    let pausedAt: Date?
+    let isResuming: Bool
+    let errorMessage: String?
+    let onResume: () -> Void
+
+    var body: some View {
+        VStack(spacing: 0) {
+            HStack(spacing: 10) {
+                Image(systemName: "pause.circle.fill")
+                    .foregroundStyle(.orange)
+
+                VStack(alignment: .leading, spacing: 2) {
+                    Text("上次任务被系统中断")
+                        .font(.subheadline.weight(.semibold))
+                    Text(subtitle)
+                        .font(.caption)
+                        .foregroundStyle(errorMessage == nil ? Color.secondary : Color.orange)
+                        .lineLimit(2)
+                }
+
+                Spacer()
+
+                Button {
+                    onResume()
+                } label: {
+                    if isResuming {
+                        ProgressView()
+                            .controlSize(.small)
+                    } else {
+                        Label("继续", systemImage: "play.fill")
+                    }
+                }
+                .disabled(isResuming)
+                .buttonStyle(.borderedProminent)
+                .controlSize(.small)
+            }
+            .padding(.horizontal, 12)
+            .padding(.vertical, 10)
+
+            Divider()
+        }
+        .background(.bar)
+    }
+
+    private var subtitle: String {
+        if let errorMessage {
+            return errorMessage
+        }
+        guard let pausedAt else {
+            return "点击继续后，Agent 会从 checkpoint 恢复。"
+        }
+        let interval = Int(Date().timeIntervalSince(pausedAt))
+        if interval < 60 {
+            return "中断于刚刚，点击继续恢复执行。"
+        }
+        if interval < 3600 {
+            return "中断于 \(interval / 60) 分钟前，点击继续恢复执行。"
+        }
+        return "中断于 \(interval / 3600) 小时前，点击继续恢复执行。"
     }
 }
 

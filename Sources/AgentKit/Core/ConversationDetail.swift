@@ -23,6 +23,12 @@ public struct ConversationDetail: Sendable, Codable, Hashable {
     /// 会话名称（用户自定义）。
     public let name: String?
 
+    /// v1.2 lifecycle status from backend metadata.
+    public let turnStatus: String?
+
+    /// Unix seconds when the session was paused.
+    public let pausedAt: Int64?
+
     enum CodingKeys: String, CodingKey {
         case id
         case turnCount = "turn_count"
@@ -31,6 +37,8 @@ public struct ConversationDetail: Sendable, Codable, Hashable {
         case updatedAt = "updated_at"
         case workspacePath = "workspace_path"
         case name
+        case turnStatus = "turn_status"
+        case pausedAt = "paused_at"
     }
 
     public init(from decoder: Decoder) throws {
@@ -42,5 +50,7 @@ public struct ConversationDetail: Sendable, Codable, Hashable {
         updatedAt = try c.decode(String.self, forKey: .updatedAt)
         workspacePath = try c.decodeIfPresent(String.self, forKey: .workspacePath)
         name = try c.decodeIfPresent(String.self, forKey: .name)
+        turnStatus = try c.decodeIfPresent(String.self, forKey: .turnStatus)
+        pausedAt = try c.decodeIfPresent(Int64.self, forKey: .pausedAt)
     }
 }

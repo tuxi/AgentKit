@@ -10,6 +10,9 @@
 //
 
 import SwiftUI
+#if os(iOS)
+import Network
+#endif
 
 /// 三栏工作区的 UI 选中态。
 /// 这里只放"选中态"和 ViewModel 管理，跨栏的二级 push / sheet / cover 由 `AgentRouter` 负责。
@@ -80,6 +83,20 @@ public final class WorkspaceStore {
     /// 当前选中会话的 ViewModel（nil 表示未选中或 mock 模式）。
     public private(set) var activeConversationViewModel: ConversationViewModel?
 
+    /// 手动续跑 paused 会话时的短暂状态。
+    public private(set) var isResumingPausedConversation = false
+
+    /// lifecycle 操作错误（如 ResumeSession 启动失败）。
+    public private(set) var lifecycleErrorMessage: String?
+
+    #if os(iOS)
+    @ObservationIgnored private var networkMonitor: NWPathMonitor?
+    @ObservationIgnored private let networkQueue = DispatchQueue(label: "agentkit.lifecycle.network.monitor")
+    private var hasSeenNetworkPath = false
+    private var isNetworkSatisfied = true
+    private var lastNetworkResumeAttempt: Date?
+    #endif
+
     // MARK: - Init
 
     public init(client: RuntimeClient = DefaultAgentClient(), toolRegistry: ToolRegistry = ToolRegistry()) {
@@ -97,6 +114,128 @@ public final class WorkspaceStore {
         let vm = ConversationViewModel(client: client, toolRegistry: toolRegistry)
         await vm.connect(to: conversation)
         activeConversationViewModel = vm
+    }
+
+    // MARK: - Runtime lifecycle
+
+    /// 启动 host 侧网络恢复监听。用于修复静默 resume transient 失败后卡在 paused 的情况。
+    public func startLifecycleNetworkMonitor() {
+        #if os(iOS)
+        guard networkMonitor == nil else { return }
+
+        let monitor = NWPathMonitor()
+        monitor.pathUpdateHandler = { [weak self] path in
+            let satisfied = path.status == .satisfied
+            Task { @MainActor [weak self] in
+                self?.handleNetworkPathUpdate(isSatisfied: satisfied)
+            }
+        }
+        monitor.start(queue: networkQueue)
+        networkMonitor = monitor
+        #endif
+    }
+
+    /// 前台恢复：同进程 thaw 自动续跑当前会话；冷启动仅刷新 paused 列表，等用户点「继续」。
+    public func handleAppBecameActive() async {
+        #if os(iOS)
+        let wasAlive = AgentRuntime.shared.isAlive
+        _ = try? AgentRuntime.shared.ensureStarted()
+        await listViewModel.refresh()
+
+        guard wasAlive else { return }
+        await resumeCurrentConversation(silent: true)
+        #else
+        await listViewModel.refresh()
+        #endif
+    }
+
+    #if os(iOS)
+    private func handleNetworkPathUpdate(isSatisfied: Bool) {
+        let wasSatisfied = isNetworkSatisfied
+        isNetworkSatisfied = isSatisfied
+
+        guard hasSeenNetworkPath else {
+            hasSeenNetworkPath = true
+            return
+        }
+
+        guard !wasSatisfied, isSatisfied else { return }
+        Task { await retryPausedConversationAfterNetworkRecovery() }
+    }
+
+    private func retryPausedConversationAfterNetworkRecovery() async {
+        guard isCurrentConversationPaused else { return }
+
+        let now = Date()
+        if let lastNetworkResumeAttempt,
+           now.timeIntervalSince(lastNetworkResumeAttempt) < 2 {
+            return
+        }
+        lastNetworkResumeAttempt = now
+
+        await resumeCurrentConversation(silent: true)
+    }
+
+    /// 当前 active/selected 会话是否真处于 `paused`。所有**静默自动续跑**（thaw、网络恢复重试）
+    /// 都必须先过这道闸——否则对 `done`/`running` 的会话也会触发 ResumeSession，导致每次前台重复跑 turn。
+    private var isCurrentConversationPaused: Bool {
+        if activeConversationViewModel?.lifecycleStatus == "paused" {
+            return true
+        }
+        if activeConversationViewModel?.lifecycleStatus == nil,
+           selectedConversation?.isPaused == true {
+            return true
+        }
+        return false
+    }
+    #endif
+
+    /// 后台进入：请求 runtime 做有界 suspend/checkpoint，不销毁 server。
+    public func handleAppEnteredBackground() {
+        #if os(iOS)
+        AgentRuntime.shared.suspendRuntime()
+        #endif
+    }
+
+    /// 用户点击「继续」时调用，显式续跑当前 selected/active session。
+    public func resumeSelectedConversation() async {
+        await resumeCurrentConversation(silent: false)
+    }
+
+    private func resumeCurrentConversation(silent: Bool) async {
+        guard let sessionID = activeConversationViewModel?.conversation?.id ?? selectedConversation?.id else { return }
+
+        #if os(iOS)
+        // 静默续跑（thaw / 网络恢复）只对真正 paused 的会话生效：done/running 时直接 no-op，
+        // 杜绝「每次前台都触发 ResumeSession → 重复 turn」。显式点「继续」(silent==false) 由 UI 保证只在 paused 会话上出现。
+        if silent, !isCurrentConversationPaused { return }
+        #endif
+
+        lifecycleErrorMessage = nil
+        if !silent {
+            isResumingPausedConversation = true
+        }
+        defer {
+            if !silent {
+                isResumingPausedConversation = false
+            }
+        }
+
+        #if os(iOS)
+        do {
+            try AgentRuntime.shared.resumeRuntime(sessionID: sessionID)
+            activeConversationViewModel?.markResumeRequested()
+            await listViewModel.refresh()
+        } catch {
+            if !silent {
+                lifecycleErrorMessage = error.localizedDescription
+            }
+        }
+        #else
+        if !silent {
+            lifecycleErrorMessage = "当前平台不支持端侧续跑。"
+        }
+        #endif
     }
 
     // MARK: - Draft lifecycle (P5.0)

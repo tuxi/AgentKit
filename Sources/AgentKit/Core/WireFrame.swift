@@ -51,6 +51,8 @@ struct WireFrame: Decodable {
     let executor: String?           // v1.1: "server" | "client" (tool_started)
     let capabilities: [String]?     // v1.1: hello 帧声明的能力列表
     let invocationId: String?       // v1.2: 同一个模型调用产生的所有事件共享此 ID
+    let turnStatus: String?         // v1.2 lifecycle status
+    let pausedAt: Int64?            // v1.2 unix seconds
 
     enum CodingKeys: String, CodingKey {
         case type, kind, at, step, id, server
@@ -61,6 +63,8 @@ struct WireFrame: Decodable {
         case turnId = "turn_id"
         case callId = "call_id"
         case invocationId = "invocation_id"
+        case turnStatus = "turn_status"
+        case pausedAt = "paused_at"
         case toolName = "tool_name"
         case toolArgs = "tool_args"
         case planId = "plan_id"

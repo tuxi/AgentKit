@@ -35,6 +35,9 @@ public struct ExecutionReducer: Sendable {
         case .turnFinished(let turnID, let text):
             return handleTurnFinished(turnID: turnID, text: text, ts: ts, graph: &graph)
 
+        case .turnPaused, .turnResumed, .turnFailed:
+            return []
+
         // ── Streaming text ──
         case .tokenDelta(let turnID, let text):
             return handleTokenDelta(turnID: turnID ?? internalState.currentTurnID ?? "",

@@ -25,21 +25,37 @@ public struct ConversationRef: Identifiable, Hashable, Sendable, Codable {
     public let id: String
     public let workspacePath: String
     public var name: String?
+    /// v1.2 lifecycle status from backend metadata: running / paused / resuming / done / failed.
+    public let turnStatus: String?
+    /// Unix seconds when the session was marked paused. Used for cold-start "continue" UI.
+    public let pausedAt: Int64?
+
+    public var isPaused: Bool {
+        turnStatus == "paused"
+    }
+
+    public var pausedDate: Date? {
+        pausedAt.map { Date(timeIntervalSince1970: TimeInterval($0)) }
+    }
     
     var uiID: String {
-        return id + (name ?? "-")
+        return id + (name ?? "-") + (turnStatus ?? "-")
     }
 
     enum CodingKeys: String, CodingKey {
         case id
         case workspacePath = "workspace_path"
         case name
+        case turnStatus = "turn_status"
+        case pausedAt = "paused_at"
     }
 
-    public init(id: String, workspacePath: String, name: String? = nil) {
+    public init(id: String, workspacePath: String, name: String? = nil, turnStatus: String? = nil, pausedAt: Int64? = nil) {
         self.id = id
         self.workspacePath = workspacePath
         self.name = name
+        self.turnStatus = turnStatus
+        self.pausedAt = pausedAt
     }
 
     public static func == (lhs: Self, rhs: Self) -> Bool {

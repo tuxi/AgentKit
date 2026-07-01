@@ -44,6 +44,12 @@ public final class ConversationViewModel {
     /// 会话概要（来自 `GET /v1/conversations/{id}`）。
     public private(set) var detail: ConversationDetail?
 
+    /// v1.2 lifecycle status for the currently selected session.
+    public private(set) var lifecycleStatus: String?
+
+    /// When the current session was marked paused.
+    public private(set) var pausedAt: Date?
+
     /// 对话主干（来自 `GET /v1/conversations/{id}/messages`）。
     public private(set) var messages: [Message] = []
 
@@ -81,6 +87,8 @@ public final class ConversationViewModel {
         self.snapshot = .empty(sessionID: conversation.id)
         state = ConversationState()
         detail = nil
+        lifecycleStatus = conversation.turnStatus
+        pausedAt = conversation.pausedDate
         messages = []
 
         // Create engine for this session
@@ -158,6 +166,12 @@ public final class ConversationViewModel {
         }
     }
 
+    /// Optimistically reflect that ResumeSession was accepted by the host wrapper.
+    public func markResumeRequested() {
+        lifecycleStatus = "resuming"
+        pausedAt = nil
+    }
+
     /// 断开连接。
     public func disconnect() async {
         streamTask?.cancel()
@@ -180,6 +194,10 @@ public final class ConversationViewModel {
         let (detailResult, messagesResult, eventsResult) = await (detailTask, messagesTask, eventsTask)
 
         self.detail = detailResult
+        if let detailResult {
+            lifecycleStatus = detailResult.turnStatus ?? lifecycleStatus
+            pausedAt = detailResult.pausedAt.map { Date(timeIntervalSince1970: TimeInterval($0)) } ?? pausedAt
+        }
         self.messages = messagesResult ?? []
 
         if let events = eventsResult {
@@ -198,6 +216,7 @@ public final class ConversationViewModel {
 
     /// v2: delegate to engine. ViewModel does NOT reduce.
     private func handleEvent(_ event: AgentEvent, engine: RuntimeEngine) async {
+        updateLifecycle(from: event)
         state.reduce(event)
         await engine.ingest(event)
 
@@ -205,6 +224,28 @@ public final class ConversationViewModel {
         if case .toolStarted(_, let callID, let tool) = event,
            tool.executor == .client {
             Task { await executeClientTool(callID: callID, tool: tool) }
+        }
+    }
+
+    private func updateLifecycle(from event: AgentEvent) {
+        switch event {
+        case .turnStarted:
+            lifecycleStatus = "running"
+            pausedAt = nil
+        case .turnFinished:
+            lifecycleStatus = "done"
+            pausedAt = nil
+        case .turnPaused:
+            lifecycleStatus = "paused"
+            pausedAt = Date()
+        case .turnResumed:
+            lifecycleStatus = "resuming"
+            pausedAt = nil
+        case .turnFailed:
+            lifecycleStatus = "failed"
+            pausedAt = nil
+        default:
+            break
         }
     }
 

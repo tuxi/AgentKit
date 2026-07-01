@@ -146,6 +146,11 @@ private struct ConversationRow: View {
                       systemImage: "folder")
                     .font(.caption)
                 Spacer()
+                if ref.isPaused {
+                    Label("已暂停", systemImage: "pause.circle.fill")
+                        .font(.caption2.weight(.medium))
+                        .foregroundStyle(.orange)
+                }
                 if ref.name != nil {
                     Text(ref.id.prefix(8) + "…")
                         .font(.caption2)

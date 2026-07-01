@@ -8,9 +8,40 @@
 import Foundation
 #if os(iOS)
 import CodeAgentRuntime   // xcframework 的 module 名；仅 iOS 可用
+import UIKit
 #endif
 
 #if os(iOS)
+private final class RuntimeBackgroundTaskGuard: @unchecked Sendable {
+    private let lock = NSLock()
+    private var identifier: UIBackgroundTaskIdentifier = .invalid
+
+    func begin(name: String) {
+        let work = {
+            self.identifier = UIApplication.shared.beginBackgroundTask(withName: name) {
+                self.end()
+            }
+        }
+        if Thread.isMainThread {
+            work()
+        } else {
+            DispatchQueue.main.sync(execute: work)
+        }
+    }
+
+    func end() {
+        lock.lock()
+        let id = identifier
+        identifier = .invalid
+        lock.unlock()
+
+        guard id != .invalid else { return }
+        DispatchQueue.main.async {
+            UIApplication.shared.endBackgroundTask(id)
+        }
+    }
+}
+
 public final class AgentRuntime: @unchecked Sendable {
     private init() {}
     
@@ -18,15 +49,78 @@ public final class AgentRuntime: @unchecked Sendable {
 
     private var server: MobileServer?      // 前缀 Mobile 来自 Go 包名
 
-    /// 启动进程内 runtime，返回给 AgentKit 连接的回环端口。
+    /// runtime 是否在本进程内存活。用作「同进程 suspend/thaw」与「jetsam 冷启动」的判据（见契约 §3.2）：
+    /// - `server != nil` ⇒ 同进程（可能刚被 OS thaw）→ 复用现有端口，WS 直接重连；
+    /// - `server == nil` ⇒ 冷启动（首次或 jetsam 后重启）→ 需 `launch()`。
+    public var isAlive: Bool { server != nil }
+
+    /// 幂等启动：runtime 已在运行则直接返回现有端口，否则冷启动一个。
+    /// 替代旧的「每次 `start()` 都 `MobileStart` 新建」——那会覆盖 `server` 造成泄漏，且换 ephemeral 端口逼 WS 全量重连。
+    /// scenePhase `.active` 走这里：同进程 thaw 时端口不变、WS 秒级重连，切走不再丢会话。
     @discardableResult
-    public func start() throws -> Int {
+    public func ensureStarted() throws -> Int {
+        if let server { return server.port() }
+        return try launch()
+    }
+
+    /// 兼容旧调用点：语义等同 `ensureStarted()`（幂等）。需要强制重建 server 走 `restart()`；
+    /// 改配置优先走 `reconfigure(secrets:model:)` 热加载，不再经 `restart` 的端口 churn。
+    @discardableResult
+    public func start() throws -> Int { try ensureStarted() }
+
+    /// 后台生命周期钩子：在 iOS background grace window 内请求 Go runtime 做有界 checkpoint。
+    /// Go 侧 `Suspend()` 负责取消在途 turn、标记 paused，并在 watchdog 预算内返回。
+    public func suspendRuntime(timeoutMillis: Int = 2000) {
+        guard let server else { return }
+
+        DispatchQueue.global(qos: .background).async {
+            let backgroundTask = RuntimeBackgroundTaskGuard()
+            backgroundTask.begin(name: "AgentRuntime.Suspend")
+
+            let watchdog = DispatchWorkItem {
+                backgroundTask.end()
+            }
+            DispatchQueue.global(qos: .background).asyncAfter(deadline: .now() + .milliseconds(timeoutMillis), execute: watchdog)
+
+            do {
+                try server.suspend()
+            } catch {
+                print("AgentRuntime suspend failed: \(error)")
+            }
+
+            watchdog.cancel()
+            backgroundTask.end()
+        }
+    }
+
+    /// 续跑一个已 paused 的会话。Go 侧校验后立即返回，实际进度继续走 WS 事件流。
+    public func resumeRuntime(sessionID: String) throws {
+        guard let server else {
+            throw NSError(domain: "CodeAgent", code: -2,
+                          userInfo: [NSLocalizedDescriptionKey: "Runtime is not started"])
+        }
+        try server.resumeSession(sessionID)
+    }
+
+    /// 热切 secrets / model，不换端口、不断开 WS。传空字符串表示保留该项。
+    public func reconfigure(secretsJSON: String = "", modelName: String = "") throws {
+        guard let server else { return }
+        try server.reconfigure(secretsJSON, modelName: modelName)
+    }
+
+    /// 实际冷启动一个 runtime server。启动前先 `stop()` 任何残留实例，杜绝覆盖泄漏。
+    @discardableResult
+    private func launch() throws -> Int {
+        stop()   // 防御：绝不覆盖一个尚未释放的 server
         let fm = FileManager.default
         // workspaceDir: 用户文件/项目所在，可写
         let docs = fm.urls(for: .documentDirectory, in: .userDomainMask)[0].path
         // dataDir: 运行时自有数据(session DB)，放 Application Support（不进 iCloud 同步）
         let support = fm.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
         try? fm.createDirectory(at: support, withIntermediateDirectories: true) // 首次可能不存在
+        // gap B：dataDir 及其内的 session DB(+ WAL -wal/-shm 边车) 必须在锁屏/后台可写，
+        // 否则 iOS 会在锁屏后加密文件、令后台 checkpoint 写失败——把契约 §2.2.1 的 WAL 目标架空。
+        Self.applyDataProtection(to: support)
         // secrets / model 从用户设置读取（Keychain + UserDefaults）——不再硬编码进源码。
         // 无 key 时 secretsJSON() 返回 "{}"，runtime 缺凭证；设置页引导用户填入后 restart()。
         let secrets = AgentSettings.secretsJSON()
@@ -55,12 +149,27 @@ public final class AgentRuntime: @unchecked Sendable {
         return srv.port()
     }
 
-    /// 重启 runtime（先 stop 再 start），让新的 secretsJSON / model 生效。
+    /// 强制重启（先 stop 再 launch），让新的 secretsJSON / model 生效。
     /// 端口会换新（ephemeral）；WS 经 validator 现算端口自动重连（见 AgentWireSocket）。
+    /// 改配置优先走 `reconfigure(secrets:model:)` 热加载以避免端口 churn；此方法保留给真正需重建 server 的场景。
     @discardableResult
     public func restart() throws -> Int {
         stop()
-        return try start()
+        return try launch()
+    }
+
+    /// gap B：把 dataDir 设为 `completeUntilFirstUserAuthentication`——首次解锁后即可读写、锁屏与后台不受限。
+    /// 目录级设置使 Go 在其中新建的 DB 及 `-wal`/`-shm` 边车继承该等级；已存在的 DB 文件再显式补设一遍。
+    private static func applyDataProtection(to dir: URL) {
+        let fm = FileManager.default
+        let attrs: [FileAttributeKey: Any] = [.protectionKey: FileProtectionType.completeUntilFirstUserAuthentication]
+        try? fm.setAttributes(attrs, ofItemAtPath: dir.path)
+        guard let items = try? fm.contentsOfDirectory(at: dir, includingPropertiesForKeys: nil) else { return }
+        for url in items {
+            let name = url.lastPathComponent
+            guard name.contains(".sqlite") || name.contains(".db") else { continue } // 含 .sqlite-wal/.sqlite-shm/.db-wal 等边车
+            try? fm.setAttributes(attrs, ofItemAtPath: url.path)
+        }
     }
 
     /// 读取随 bundle 打包的裁剪版 config.yaml 内容；缺失则返回 ""（回退 runtime 内置默认）。
@@ -111,6 +220,8 @@ public final class AgentRuntime: @unchecked Sendable {
 
     public func endpoint() -> String { server?.endpoint() ?? "" }  // ws://127.0.0.1:<port>
     public func port() -> Int { server?.port() ?? -1 }
-    public func stop()              { try? server?.stop(); server = nil }
+    public func stop()              {
+        try? server?.stop(); server = nil
+    }
 }
 #endif

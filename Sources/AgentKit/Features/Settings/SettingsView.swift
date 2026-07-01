@@ -3,7 +3,7 @@
 //  AgentKit
 //
 //  设置页：填入 DeepSeek API key（存 Keychain）、选择模型。
-//  保存后在 iOS 上重启内嵌 runtime，使新的 secretsJSON / model 生效。
+//  保存后在 iOS 上热重载内嵌 runtime 配置，不换端口、不打断 WS。
 //
 
 import SwiftUI
@@ -74,9 +74,11 @@ public struct SettingsView: View {
     private func saveAndDismiss() {
         settings.save()
         #if os(iOS)
-        // 新 secrets / 模型在 MobileStart 时读取 → 重启 runtime 使其生效。
-        // WS 会经 validator 现算端口自动重连到新端口（见 AgentWireSocket）。
-        try? AgentRuntime.shared.restart()
+        // v1.2: 热切配置，不换端口。runtime 尚未启动时，下次 launch 会读取已保存设置。
+        try? AgentRuntime.shared.reconfigure(
+            secretsJSON: AgentSettings.secretsJSON(),
+            modelName: AgentSettings.model
+        )
         #endif
         dismiss()
     }
