@@ -71,6 +71,11 @@ enum ToolTranscriptOutputKind: Hashable {
 enum ToolTranscriptPresenter {
 
     static func presentation(for tool: ToolNodePayload) -> ToolTranscriptPresentation {
+        // P8.7 — job_wait 是"阻塞等待后台任务"的专用工具，
+        // 长时间 running 是常态，给专属文案避免被读成卡死。
+        if tool.toolName == "job_wait" {
+            return jobWaitPresentation(for: tool)
+        }
         let family = family(for: tool)
         let target = targetValue(for: tool)
         let displayTarget = target.map(shortDisplayName)
@@ -95,6 +100,26 @@ enum ToolTranscriptPresenter {
             summary: groupSummary(for: tools),
             statusTone: groupStatusTone(for: tools),
             tools: tools
+        )
+    }
+
+    private static func jobWaitPresentation(for tool: ToolNodePayload) -> ToolTranscriptPresentation {
+        let jobID: String? = {
+            if case .object(let dict)? = tool.args {
+                return dict["job_id"]?.stringValue.nilIfEmpty
+            }
+            return nil
+        }()
+        return ToolTranscriptPresentation(
+            callID: tool.callID,
+            family: .other,
+            statusTone: statusTone(for: tool),
+            statusText: tool.status == .running ? "waiting" : statusText(for: tool),
+            title: "Waiting for background job",
+            detail: jobID,
+            elapsed: tool.elapsedMs.map(formatElapsed),
+            changeSummary: nil,
+            outputKind: .text
         )
     }
 
