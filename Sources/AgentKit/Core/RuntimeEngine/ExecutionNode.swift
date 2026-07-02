@@ -176,4 +176,6 @@ public enum ChildStreamNodeStatus: String, Sendable, Hashable {
     case running
     case completed
     case failed
+    /// job 被主动取消（P8.7 §8.5 `text=="canceled"`）— 样式上区别于失败。
+    case canceled
 }

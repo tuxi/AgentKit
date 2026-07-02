@@ -247,6 +247,7 @@ public struct TimelineProjection: Sendable {
 
         case .childStream(let payload):
             let status: ChildStreamNodeStatus = {
+                if payload.canceled { return .canceled }
                 switch graphNode.status {
                 case .running: return .running
                 case .failed: return .failed

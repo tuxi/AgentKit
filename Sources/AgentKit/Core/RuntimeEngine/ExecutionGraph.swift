@@ -235,20 +235,24 @@ public struct ChildStreamPayload: Sendable {
     public let childID: String
     /// task 的委派 prompt / job 的 command。
     public let title: String
-    /// 结束时写入：task 的结论 / job 的收尾说明（失败时为错误信息）。
+    /// 结束时写入：task 的结论 / job 失败时的展示文案（`err`，如 "exit code 2"）。
     public var result: String?
-    /// job 专用：进程退出码。
+    /// job 专用（P8.7 §8.5）：仅失败时出现；>0 = 非零退出，-1 = 启动失败/被信号杀死。
     public var exitCode: Int?
+    /// job 专用：被主动取消（`text=="canceled"`），样式上区别于失败。
+    public var canceled: Bool
     /// 输出累积（`job_output` 分块；只在子流自己的 graph 里增长）。
     public var output: String
 
     public init(kind: ChildStreamKind, childID: String, title: String,
-                result: String? = nil, exitCode: Int? = nil, output: String = "") {
+                result: String? = nil, exitCode: Int? = nil,
+                canceled: Bool = false, output: String = "") {
         self.kind = kind
         self.childID = childID
         self.title = title
         self.result = result
         self.exitCode = exitCode
+        self.canceled = canceled
         self.output = output
     }
 }

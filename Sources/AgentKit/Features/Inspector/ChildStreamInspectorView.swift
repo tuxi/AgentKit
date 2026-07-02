@@ -220,12 +220,18 @@ struct ChildStreamContentView: View {
             Label(failedLabel, systemImage: "xmark.circle.fill")
                 .font(.caption)
                 .foregroundStyle(.red)
+        case .canceled:
+            Label("已取消", systemImage: "minus.circle.fill")
+                .font(.caption)
+                .foregroundStyle(.secondary)
         }
     }
 
     private var failedLabel: String {
-        if let code = viewModel.jobPayload?.exitCode, code != 0 {
-            return "失败 (exit \(code))"
+        // §8.5：-1 = 启动失败/被信号杀死；>0 = 命令非零退出。
+        if let code = viewModel.jobPayload?.exitCode {
+            if code == -1 { return "失败（被终止）" }
+            if code > 0 { return "失败 (exit \(code))" }
         }
         return "失败"
     }
@@ -240,6 +246,7 @@ struct ChildStreamContentView: View {
         case .running: return .orange
         case .completed: return .green
         case .failed: return .red
+        case .canceled: return .gray
         }
     }
 

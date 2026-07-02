@@ -130,7 +130,8 @@ public struct ExecutionReducer: Sendable {
 
         case .taskFinished(let turnID, let sessionId, _, let text):
             return handleChildFinished(childID: sessionId, result: text, exitCode: nil,
-                                       err: nil, turnID: turnID ?? internalState.currentTurnID ?? "",
+                                       failed: false, canceled: false,
+                                       turnID: turnID ?? internalState.currentTurnID ?? "",
                                        ts: ts, graph: &graph)
 
         case .jobStarted(let turnID, let jobID, let command):
@@ -142,8 +143,17 @@ public struct ExecutionReducer: Sendable {
             return handleChildOutput(childID: jobID, chunk: chunk, ts: ts, graph: &graph)
 
         case .jobFinished(let turnID, let jobID, let exitCode, let err, let text):
-            return handleChildFinished(childID: jobID, result: text, exitCode: exitCode,
-                                       err: err, turnID: turnID ?? internalState.currentTurnID ?? "",
+            // P8.7 §8.5（golden 已冻结）：text ∈ exited | failed | canceled；
+            // exit_code 仅失败时出现（>0 = 非零退出，-1 = 启动失败/被信号杀死）；
+            // err 冗余退出码（如 "exit code 2"），直接用作展示文案。
+            let canceled = text == "canceled"
+            let failed = !canceled
+                && (text == "failed" || (exitCode ?? 0) != 0 || err?.isEmpty == false)
+            return handleChildFinished(childID: jobID,
+                                       result: failed ? err : nil,
+                                       exitCode: exitCode,
+                                       failed: failed, canceled: canceled,
+                                       turnID: turnID ?? internalState.currentTurnID ?? "",
                                        ts: ts, graph: &graph)
 
         // ── Plan Approval (handled at RuntimeEngine level, not in graph) ──
@@ -640,7 +650,8 @@ public struct ExecutionReducer: Sendable {
     }
 
     private mutating func handleChildFinished(childID: String, result: String?, exitCode: Int?,
-                                               err: String?, turnID: String, ts: TimeInterval,
+                                               failed: Bool, canceled: Bool,
+                                               turnID: String, ts: TimeInterval,
                                                graph: inout ExecutionGraph) -> [NodeID] {
         let nodeID = "sub_\(childID)"
         guard var node = graph.nodes[nodeID],
@@ -648,9 +659,9 @@ public struct ExecutionReducer: Sendable {
             // finished without started（乱序/部分回放）— 不崩，静默忽略。
             return []
         }
-        let failed = (err?.isEmpty == false) || (exitCode ?? 0) != 0
-        payload.result = (err?.isEmpty == false) ? err : result
+        payload.result = result
         payload.exitCode = exitCode
+        payload.canceled = canceled
         node.payload = .childStream(payload)
         node.status = failed ? .failed : .completed
         node.timestamp = ts

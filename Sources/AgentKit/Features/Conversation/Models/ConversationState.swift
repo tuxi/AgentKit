@@ -390,7 +390,10 @@ extension ConversationState {
             let tid = turnID ?? currentTurnID
             guard let tid, var turn = turns[tid] else { return }
             if let idx = turn.subagentRefs.firstIndex(where: { $0.sessionID == jobID }) {
-                turn.subagentRefs[idx].result = (err?.isEmpty == false) ? err : text
+                // §8.5：text 是状态枚举（exited/failed/canceled），不是人读摘要；
+                // 展示文案用 err（失败时冗余退出码），成功时无摘要可存。
+                turn.subagentRefs[idx].result = (err?.isEmpty == false) ? err
+                    : (text == "exited" ? nil : text)
                 turns[tid] = turn
             }
 

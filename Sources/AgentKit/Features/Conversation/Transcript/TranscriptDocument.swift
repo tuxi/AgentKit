@@ -391,7 +391,7 @@ private struct TranscriptAttributedBuilder {
             switch payload.status {
             case .running: return .running
             case .failed: return .failed
-            case .completed: return .completed
+            case .completed, .canceled: return .completed
             }
         }()
 
@@ -401,8 +401,11 @@ private struct TranscriptAttributedBuilder {
             switch payload.status {
             case .running: return "running"
             case .failed:
-                if let code = payload.exitCode, code != 0 { return "exit \(code)" }
+                // §8.5：-1 = 启动失败/被信号杀死；>0 = 命令非零退出。
+                if let code = payload.exitCode, code == -1 { return "killed" }
+                if let code = payload.exitCode, code > 0 { return "exit \(code)" }
                 return "failed"
+            case .canceled: return "canceled"
             case .completed: return "done"
             }
         }()
