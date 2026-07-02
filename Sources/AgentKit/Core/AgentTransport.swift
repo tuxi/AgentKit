@@ -55,8 +55,11 @@ public protocol AgentTransport: Sendable {
     ///   `sessionID` 必须是 `createConversation()` 返回的 server-assigned id。
     ///
     /// - Parameter sessionID: server-assigned session identifier。
+    /// - Parameter since: 续传游标 = 调用方已回放事件里最大的 `seq`
+    ///   （`getEventBatch` 返回的 `nextSince`；0 = 无历史）。实现方据此对直播流
+    ///   按 seq 去重，并在（重）连后先补 `since` 之后的缺口再放行直播帧（v1.2 §4）。
     /// - Returns: `AsyncStream<AgentEvent>` — 持续产出事件直到连接断开。
-    func attach(sessionID: String) async throws -> AsyncStream<AgentEvent>
+    func attach(sessionID: String, since: Int) async throws -> AsyncStream<AgentEvent>
 
     /// 释放传输层绑定。session 仍在 server 端存活。
     func disconnect() async
@@ -132,6 +135,11 @@ public protocol AgentTransport: Sendable {
 // MARK: - Default impls
 
 extension AgentTransport {
+    /// 便捷入口：不带续传游标的 attach（等价 `since: 0`，即无已回放历史）。
+    public func attach(sessionID: String) async throws -> AsyncStream<AgentEvent> {
+        try await attach(sessionID: sessionID, since: 0)
+    }
+
     /// 默认不支持 clone（mock / 旧 backend）。CodeAgentTransport 覆盖。
     public func cloneRepo(url: String, ref: String?) async throws -> ClonedRepo {
         throw RuntimeHTTPError.unsupported
