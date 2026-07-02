@@ -156,19 +156,35 @@ public struct ChildStreamNodePayload: Sendable, Hashable {
     /// 结束后的结果摘要（task 结论 / job 收尾说明或错误）。
     public let result: String?
     public let exitCode: Int?
+    /// job 任务总耗时（`job_finished.elapsed_ms`）。
+    public let elapsedMs: Int?
     /// 累积输出（job 子流内部使用；父流入口卡不展示）。
     public let output: String
 
     public init(kind: ChildStreamKind, childID: String, title: String,
                 status: ChildStreamNodeStatus, result: String? = nil,
-                exitCode: Int? = nil, output: String = "") {
+                exitCode: Int? = nil, elapsedMs: Int? = nil, output: String = "") {
         self.kind = kind
         self.childID = childID
         self.title = title
         self.status = status
         self.result = result
         self.exitCode = exitCode
+        self.elapsedMs = elapsedMs
         self.output = output
+    }
+
+    /// 人读耗时（对齐 `TurnStats.formattedElapsed` 的风格，分钟以上加 m 段）。
+    public var formattedElapsed: String? {
+        guard let ms = elapsedMs else { return nil }
+        if ms >= 60_000 {
+            let totalSeconds = ms / 1000
+            return "\(totalSeconds / 60)m\(totalSeconds % 60)s"
+        }
+        if ms >= 1000 {
+            return String(format: "%.1fs", Double(ms) / 1000.0)
+        }
+        return "\(ms)ms"
     }
 }
 

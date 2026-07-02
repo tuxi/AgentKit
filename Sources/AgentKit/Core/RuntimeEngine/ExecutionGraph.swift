@@ -241,18 +241,21 @@ public struct ChildStreamPayload: Sendable {
     public var exitCode: Int?
     /// job 专用：被主动取消（`text=="canceled"`），样式上区别于失败。
     public var canceled: Bool
+    /// job 专用：任务总耗时（`job_finished.elapsed_ms`）。
+    public var elapsedMs: Int?
     /// 输出累积（`job_output` 分块；只在子流自己的 graph 里增长）。
     public var output: String
 
     public init(kind: ChildStreamKind, childID: String, title: String,
                 result: String? = nil, exitCode: Int? = nil,
-                canceled: Bool = false, output: String = "") {
+                canceled: Bool = false, elapsedMs: Int? = nil, output: String = "") {
         self.kind = kind
         self.childID = childID
         self.title = title
         self.result = result
         self.exitCode = exitCode
         self.canceled = canceled
+        self.elapsedMs = elapsedMs
         self.output = output
     }
 }

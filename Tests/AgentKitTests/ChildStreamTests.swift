@@ -54,7 +54,7 @@ final class ChildStreamTests: XCTestCase {
         let event = try decodeEvent(
             #"{"kind":"job_finished","at":"2026-07-02T10:05:00.000Z","seq":42,"session_id":"job_1","text":"failed","exit_code":2,"err":"exit code 2"}"#
         )
-        guard case .jobFinished(_, let jobID, let exitCode, let err, let text)? = event else {
+        guard case .jobFinished(_, let jobID, let exitCode, let err, _, let text)? = event else {
             return XCTFail("expected jobFinished")
         }
         XCTAssertEqual(jobID, "job_1")
@@ -68,7 +68,7 @@ final class ChildStreamTests: XCTestCase {
         let event = try decodeEvent(
             #"{"kind":"job_finished","at":"2026-07-02T10:05:00.000Z","seq":43,"session_id":"job_1","text":"exited"}"#
         )
-        guard case .jobFinished(_, _, let exitCode, let err, let text)? = event else {
+        guard case .jobFinished(_, _, let exitCode, let err, _, let text)? = event else {
             return XCTFail("expected jobFinished")
         }
         XCTAssertNil(exitCode)
@@ -82,6 +82,50 @@ final class ChildStreamTests: XCTestCase {
             #"{"kind":"job_teleported","at":"2026-07-02T10:00:00.000Z","session_id":"job_1"}"#
         )
         XCTAssertNil(event)
+    }
+
+    // MARK: - Golden 契约（docs/protocols/fixtures/job-observability/，
+    // 原样复制自 code-agent internal/server/testdata/*.json，后端 CI diff 锁定）
+
+    func testGoldenJobStarted() throws {
+        let event = AgentEvent.from(wire: try goldenFrame("job_started.json"))
+        guard case .jobStarted(_, let jobID, let command)? = event else {
+            return XCTFail("golden job_started must decode")
+        }
+        XCTAssertEqual(jobID, "job_1")
+        XCTAssertEqual(command, "npx skills add okx/onchainos-skills --yes -g")
+    }
+
+    func testGoldenJobOutput() throws {
+        let event = AgentEvent.from(wire: try goldenFrame("job_output.json"))
+        guard case .jobOutput(_, let jobID, let chunk)? = event else {
+            return XCTFail("golden job_output must decode")
+        }
+        XCTAssertEqual(jobID, "job_1")
+        XCTAssertEqual(chunk, "Cloning repository...\n")
+    }
+
+    func testGoldenJobFinished() throws {
+        let event = AgentEvent.from(wire: try goldenFrame("job_finished.json"))
+        guard case .jobFinished(_, let jobID, let exitCode, let err, let elapsedMs, let text)? = event else {
+            return XCTFail("golden job_finished must decode")
+        }
+        XCTAssertEqual(jobID, "job_1")
+        XCTAssertEqual(text, "failed")
+        XCTAssertEqual(exitCode, 2)
+        XCTAssertEqual(err, "exit code 2")
+        XCTAssertEqual(elapsedMs, 93000)
+    }
+
+    private func goldenFrame(_ name: String) throws -> WireFrame {
+        let packageRoot = URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+        let data = try Data(contentsOf: packageRoot
+            .appendingPathComponent("docs/protocols/fixtures/job-observability")
+            .appendingPathComponent(name))
+        return try JSONDecoder().decode(WireFrame.self, from: data)
     }
 
     // MARK: - Reducer: job 生命周期
@@ -104,12 +148,13 @@ final class ChildStreamTests: XCTestCase {
         XCTAssertEqual(outputPayload.output, "added 1 package\ndone\n")
 
         _ = reducer.reduce(.jobFinished(turnID: "t1", jobID: "job_1", exitCode: nil,
-                                        err: nil, text: "exited"), into: &graph)
+                                        err: nil, elapsedMs: 93000, text: "exited"), into: &graph)
         guard let (finished, finishedPayload) = childNode(graph, id: "job_1") else { return XCTFail() }
         XCTAssertEqual(finished.status, .completed)
         // §8.5：成功时 text 是状态枚举 "exited"，不是人读摘要 — result 应为空。
         XCTAssertNil(finishedPayload.result)
         XCTAssertFalse(finishedPayload.canceled)
+        XCTAssertEqual(finishedPayload.elapsedMs, 93000)
         // started/output/finished 归并进同一个节点，不产生重复卡片。
         XCTAssertEqual(graph.nodes.values.filter { $0.kind == .childStream }.count, 1)
     }
@@ -120,7 +165,7 @@ final class ChildStreamTests: XCTestCase {
         var graph = ExecutionGraph()
         _ = reducer.reduce(.jobStarted(turnID: nil, jobID: "j", command: "make"), into: &graph)
         _ = reducer.reduce(.jobFinished(turnID: nil, jobID: "j", exitCode: 2,
-                                        err: "exit code 2", text: "failed"), into: &graph)
+                                        err: "exit code 2", elapsedMs: nil, text: "failed"), into: &graph)
         guard let (node, payload) = childNode(graph, id: "j") else { return XCTFail() }
         XCTAssertEqual(node.status, .failed)
         XCTAssertEqual(payload.result, "exit code 2")
@@ -131,7 +176,7 @@ final class ChildStreamTests: XCTestCase {
         var graph2 = ExecutionGraph()
         _ = reducer2.reduce(.jobStarted(turnID: nil, jobID: "j", command: "make"), into: &graph2)
         _ = reducer2.reduce(.jobFinished(turnID: nil, jobID: "j", exitCode: -1,
-                                         err: "signal: killed", text: "failed"), into: &graph2)
+                                         err: "signal: killed", elapsedMs: nil, text: "failed"), into: &graph2)
         guard let (killed, killedPayload) = childNode(graph2, id: "j") else { return XCTFail() }
         XCTAssertEqual(killed.status, .failed)
         XCTAssertEqual(killedPayload.exitCode, -1)
@@ -145,7 +190,7 @@ final class ChildStreamTests: XCTestCase {
         _ = reducer.reduce(.turnStarted(turnID: "t1", text: "install"), into: &graph)
         _ = reducer.reduce(.jobStarted(turnID: "t1", jobID: "j", command: "sleep 100"), into: &graph)
         _ = reducer.reduce(.jobFinished(turnID: "t1", jobID: "j", exitCode: nil,
-                                        err: nil, text: "canceled"), into: &graph)
+                                        err: nil, elapsedMs: nil, text: "canceled"), into: &graph)
         guard let (node, payload) = childNode(graph, id: "j") else { return XCTFail() }
         XCTAssertNotEqual(node.status, .failed)
         XCTAssertTrue(payload.canceled)
@@ -165,7 +210,7 @@ final class ChildStreamTests: XCTestCase {
         var graph = ExecutionGraph()
         XCTAssertEqual(reducer.reduce(.jobOutput(turnID: nil, jobID: "ghost", chunk: "x"), into: &graph), [])
         XCTAssertEqual(reducer.reduce(.jobFinished(turnID: nil, jobID: "ghost", exitCode: 0,
-                                                   err: nil, text: ""), into: &graph), [])
+                                                   err: nil, elapsedMs: nil, text: ""), into: &graph), [])
         XCTAssertTrue(graph.nodes.isEmpty)
     }
 
@@ -203,7 +248,7 @@ final class ChildStreamTests: XCTestCase {
         let events: [AgentEvent] = [
             .turnStarted(turnID: "t1", text: "安装 Onchain OS"),
             .jobStarted(turnID: "t1", jobID: "job_1", command: "npx skills add"),
-            .jobFinished(turnID: "t1", jobID: "job_1", exitCode: nil, err: nil, text: "exited"),
+            .jobFinished(turnID: "t1", jobID: "job_1", exitCode: nil, err: nil, elapsedMs: nil, text: "exited"),
             .turnFinished(turnID: "t1", text: "装好了", textAnnotations: []),
         ]
         for e in events { _ = reducer.reduce(e, into: &graph) }
@@ -226,7 +271,7 @@ final class ChildStreamTests: XCTestCase {
             [.jobStarted(turnID: nil, jobID: "j", command: "make")],
             [.jobOutput(turnID: nil, jobID: "j", chunk: "a"),
              .jobOutput(turnID: nil, jobID: "j", chunk: "b")],
-            [.jobFinished(turnID: nil, jobID: "j", exitCode: nil, err: nil, text: "exited")],
+            [.jobFinished(turnID: nil, jobID: "j", exitCode: nil, err: nil, elapsedMs: nil, text: "exited")],
         ])
 
         let first = try await transport.fetch(childID: "j", since: 0)

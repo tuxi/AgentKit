@@ -196,7 +196,14 @@ struct ChildStreamContentView: View {
 
             Spacer()
 
-            statusBadge
+            VStack(alignment: .trailing, spacing: 2) {
+                statusBadge
+                if let elapsed = viewModel.jobPayload?.formattedElapsed {
+                    Text(elapsed)
+                        .font(.caption2)
+                        .foregroundStyle(.tertiary)
+                }
+            }
         }
         .padding(12)
     }
@@ -342,4 +349,86 @@ struct ChildStreamContentView: View {
             }
         }
     }
+}
+
+// MARK: - Previews（fixture 驱动，M1 可视化验收 —— 不依赖后端）
+
+/// 构造一个用 fixture 回放驱动的查看器 VM；批次按轮询节奏逐批吐出，预览会动。
+@MainActor
+private func previewViewModel(
+    kind: ChildStreamKind, title: String,
+    batches: [[AgentEvent]]
+) -> ChildStreamViewModel {
+    let vm = ChildStreamViewModel(
+        selection: ChildStreamSelection(childID: "job_preview", kind: kind, title: title),
+        transport: FixtureChildStreamTransport(batches: batches),
+        pollIntervalNs: 600_000_000
+    )
+    vm.start()
+    return vm
+}
+
+#Preview("Job · 成功（流式输出）") {
+    ChildStreamContentView(viewModel: previewViewModel(
+        kind: .job, title: "npx skills add okx/onchainos-skills --yes -g",
+        batches: [
+            [.jobStarted(turnID: nil, jobID: "job_preview",
+                         command: "npx skills add okx/onchainos-skills --yes -g")],
+            [.jobOutput(turnID: nil, jobID: "job_preview", chunk: "Cloning repository...\n")],
+            [.jobOutput(turnID: nil, jobID: "job_preview", chunk: "Resolving deltas: 100%\n"),
+             .jobOutput(turnID: nil, jobID: "job_preview", chunk: "Installed 3 skills.\n")],
+            [.jobFinished(turnID: nil, jobID: "job_preview", exitCode: nil,
+                          err: nil, elapsedMs: 93000, text: "exited")],
+        ]
+    ))
+    .frame(width: 360, height: 420)
+    .environment(WorkspaceStore())
+}
+
+#Preview("Job · 失败 exit 2") {
+    ChildStreamContentView(viewModel: previewViewModel(
+        kind: .job, title: "make release",
+        batches: [
+            [.jobStarted(turnID: nil, jobID: "job_preview", command: "make release"),
+             .jobOutput(turnID: nil, jobID: "job_preview", chunk: "ld: symbol not found\n"),
+             .jobFinished(turnID: nil, jobID: "job_preview", exitCode: 2,
+                          err: "exit code 2", elapsedMs: 4200, text: "failed")],
+        ]
+    ))
+    .frame(width: 360, height: 420)
+    .environment(WorkspaceStore())
+}
+
+#Preview("Job · 已取消") {
+    ChildStreamContentView(viewModel: previewViewModel(
+        kind: .job, title: "sleep 600",
+        batches: [
+            [.jobStarted(turnID: nil, jobID: "job_preview", command: "sleep 600"),
+             .jobFinished(turnID: nil, jobID: "job_preview", exitCode: nil,
+                          err: nil, elapsedMs: 12000, text: "canceled")],
+        ]
+    ))
+    .frame(width: 360, height: 420)
+    .environment(WorkspaceStore())
+}
+
+#Preview("Task · 子agent transcript") {
+    ChildStreamContentView(viewModel: previewViewModel(
+        kind: .task, title: "explore the repo and summarize the event pipeline",
+        batches: [
+            [.turnStarted(turnID: "t1", text: "explore the repo and summarize the event pipeline"),
+             .toolStarted(turnID: "t1", callID: "c1",
+                          tool: ToolCall(callID: "c1", toolName: "grep",
+                                         toolArgs: .object(["pattern": .string("EventKind")])))],
+            [.toolFinished(turnID: "t1", callID: "c1",
+                           result: ToolResult(callID: "c1", toolName: "grep",
+                                              observation: "12 matches", error: nil))],
+            [.turnFinished(turnID: "t1", text: "事件管线：WireFrame → AgentEvent → Reducer → Projection。",
+                           textAnnotations: []),
+             .taskFinished(turnID: "t1", sessionId: "job_preview", parentSessionId: "root",
+                           text: "已完成探索")],
+        ]
+    ))
+    .frame(width: 360, height: 480)
+    .environment(WorkspaceStore())
 }

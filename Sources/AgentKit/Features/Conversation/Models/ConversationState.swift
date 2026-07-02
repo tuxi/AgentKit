@@ -386,7 +386,7 @@ extension ConversationState {
             turn.subagentRefs.append(SubagentItem(sessionID: jobID, prompt: command))
             turns[tid] = turn
 
-        case .jobFinished(let turnID, let jobID, _, let err, let text):
+        case .jobFinished(let turnID, let jobID, _, let err, _, let text):
             let tid = turnID ?? currentTurnID
             guard let tid, var turn = turns[tid] else { return }
             if let idx = turn.subagentRefs.firstIndex(where: { $0.sessionID == jobID }) {

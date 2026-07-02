@@ -58,8 +58,10 @@ public enum AgentEvent: Sendable {
     case jobStarted(turnID: String?, jobID: String, command: String)
     /// `job_output`：job 输出分块。只出现在 job 自己的子流里，不进父会话直播流。
     case jobOutput(turnID: String?, jobID: String, chunk: String)
-    /// `job_finished`：job 结束。`err` 非空或 `exitCode` 非零 = 失败。
-    case jobFinished(turnID: String?, jobID: String, exitCode: Int?, err: String?, text: String)
+    /// `job_finished`：job 结束（§8.5 冻结契约）。`text` ∈ exited/failed/canceled；
+    /// `exitCode` 仅失败时出现；`elapsedMs` 为任务总耗时。
+    case jobFinished(turnID: String?, jobID: String, exitCode: Int?, err: String?,
+                     elapsedMs: Int?, text: String)
 
     // ── 上下文 ──
     case reflected(turnID: String?, text: String)
@@ -218,6 +220,7 @@ extension AgentEvent {
                 jobID: wire.sessionId ?? "",
                 exitCode: wire.exitCode,
                 err: wire.err.normalized,
+                elapsedMs: wire.elapsedMs,
                 text: wire.text ?? ""
             )
 

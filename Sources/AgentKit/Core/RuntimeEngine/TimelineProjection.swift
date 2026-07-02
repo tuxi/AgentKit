@@ -257,7 +257,8 @@ public struct TimelineProjection: Sendable {
             kind = .childStream(ChildStreamNodePayload(
                 kind: payload.kind, childID: payload.childID, title: payload.title,
                 status: status, result: payload.result,
-                exitCode: payload.exitCode, output: payload.output
+                exitCode: payload.exitCode, elapsedMs: payload.elapsedMs,
+                output: payload.output
             ))
 
         case .approval(let payload):

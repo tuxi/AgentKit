@@ -425,6 +425,9 @@ private struct TranscriptAttributedBuilder {
         if let statusText {
             appendLinked("  \(statusText)", id: id, attributes: toolStatusTextAttributes(for: tone))
         }
+        if let elapsed = payload.formattedElapsed {
+            appendLinked("  \(elapsed)", id: id, attributes: toolDetailAttributes)
+        }
         appendLinked(" ›", id: id, attributes: toolChevronAttributes)
         copyParts.append("\(label): \(summary)")
 
