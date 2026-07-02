@@ -273,6 +273,175 @@ final class TranscriptDocumentTests: XCTestCase {
         })
     }
 
+    func testToolFinishedDecodesStructuredOutputAndAssetsFromFixtures() throws {
+        let fixtures: [(name: String, tool: String, outputKind: String, assetKind: String)] = [
+            ("tool_finished_grep_assets.json", "grep", "search_results", "file_location"),
+            ("tool_finished_read_file_assets.json", "read_file", "file", "file"),
+            ("tool_finished_project_graph_assets.json", "project_graph", "symbols", "symbol")
+        ]
+
+        for fixture in fixtures {
+            let wire = try JSONDecoder().decode(WireFrame.self, from: fixtureData(fixture.name))
+            guard case .toolFinished(let turnID, let callID, let result) = AgentEvent.from(wire: wire) else {
+                return XCTFail("Expected tool_finished event for \(fixture.name)")
+            }
+
+            XCTAssertEqual(result.toolName, fixture.tool)
+            XCTAssertEqual(result.output?["kind"].stringValue, fixture.outputKind)
+            XCTAssertEqual(result.assets.first?.kind, fixture.assetKind)
+            XCTAssertEqual(result.assets.first?.sourceTurnID, turnID)
+            XCTAssertEqual(result.assets.first?.sourceCallID, callID)
+            XCTAssertTrue(result.assets.first?.id.hasPrefix("asset_") == true)
+            XCTAssertNotNil(result.assets.first?.workspaceRelativePath)
+            XCTAssertNotNil(result.assets.first?.preview)
+        }
+    }
+
+    func testTurnFinishedDecodesTextAnnotations() throws {
+        let data = """
+        {
+          "event_id": "evt_fixed",
+          "kind": "turn_finished",
+          "at": "2026-06-24T10:00:00.123Z",
+          "session_id": "sess_root",
+          "turn_id": "turn_7",
+          "text_annotations": [
+            {
+              "asset_id": "asset_turn_7_call_grep_001_7156f5c8",
+              "kind": "file_location",
+              "text": "App.swift:5",
+              "start_byte": 6,
+              "end_byte": 17,
+              "start_utf16": 6,
+              "end_utf16": 17,
+              "source_turn_id": "turn_7",
+              "source_call_id": "call_grep"
+            }
+          ],
+          "text": "Open `App.swift:5` for the important line."
+        }
+        """.data(using: .utf8)!
+
+        let wire = try JSONDecoder().decode(WireFrame.self, from: data)
+        guard case .turnFinished(let turnID, let text, let annotations) = AgentEvent.from(wire: wire) else {
+            return XCTFail("Expected turn_finished event")
+        }
+
+        XCTAssertEqual(turnID, "turn_7")
+        XCTAssertEqual(text, "Open `App.swift:5` for the important line.")
+        XCTAssertEqual(annotations.first?.assetID, "asset_turn_7_call_grep_001_7156f5c8")
+        XCTAssertEqual(annotations.first?.startUTF16, 6)
+        XCTAssertEqual(annotations.first?.sourceCallID, "call_grep")
+    }
+
+    func testStructuredAssetTakesPriorityOverRegexPathFallback() {
+        let asset = AgentAssetRef(
+            id: "asset_turn_c1_001",
+            kind: "file_location",
+            uri: "workspace://agentkit-local/Sources/App.swift#L12",
+            displayName: "App.swift:12",
+            workspaceID: "agentkit-local",
+            workspaceRelativePath: "Sources/App.swift",
+            range: AgentAssetRange(startLine: 12),
+            preview: "let value = 42",
+            mimeType: "text/x-swift",
+            sourceTurnID: "turn",
+            sourceCallID: "c1"
+        )
+        let tool = ToolNodePayload(
+            callID: "c1",
+            toolName: "grep",
+            args: .object(["query": .string("value")]),
+            status: .completed,
+            output: "Sources/App.swift:12: let value = 42",
+            assets: [asset]
+        )
+        let turn = ConversationTurn(
+            id: "turn",
+            userPrompt: nil,
+            blocks: [
+                .toolGroup(ToolGroup(id: "c1", tools: [tool])),
+                .text(id: "t1", MessageNodePayload(
+                    role: .assistant,
+                    text: "Open Sources/App.swift for context."
+                ))
+            ],
+            footer: nil,
+            isLive: false
+        )
+
+        let transcript = TurnTranscriptBuilder.build(
+            turn: turn,
+            state: TranscriptDocumentState()
+        )
+
+        XCTAssertTrue(transcript.actions.values.contains {
+            guard case .openAsset(let reference) = $0 else { return false }
+            return reference.kind == .structured
+                && reference.structuredAsset?.id == "asset_turn_c1_001"
+        })
+    }
+
+    func testTextAnnotationLinksInlineCodeToStructuredAsset() {
+        let annotation = AgentTextAnnotation(
+            assetID: "asset_turn_c1_001",
+            kind: "file_location",
+            text: "App.swift:12",
+            startUTF16: 6,
+            endUTF16: 18,
+            sourceTurnID: "turn",
+            sourceCallID: "c1"
+        )
+        let asset = AgentAssetRef(
+            id: "asset_turn_c1_001",
+            kind: "file_location",
+            uri: "workspace://agentkit-local/Sources/App.swift#L12",
+            displayName: "App.swift:12",
+            workspaceID: "agentkit-local",
+            workspaceRelativePath: "Sources/App.swift",
+            range: AgentAssetRange(startLine: 12),
+            preview: "let value = 42",
+            mimeType: "text/x-swift",
+            sourceTurnID: "turn",
+            sourceCallID: "c1"
+        )
+        let tool = ToolNodePayload(
+            callID: "c1",
+            toolName: "grep",
+            args: .object(["query": .string("value")]),
+            status: .completed,
+            output: "Sources/App.swift:12: let value = 42",
+            assets: [asset]
+        )
+        let turn = ConversationTurn(
+            id: "turn",
+            userPrompt: nil,
+            blocks: [
+                .toolGroup(ToolGroup(id: "c1", tools: [tool])),
+                .text(id: "t1", MessageNodePayload(
+                    role: .assistant,
+                    text: "Open `App.swift:12` for the important line.",
+                    textAnnotations: [annotation]
+                ))
+            ],
+            footer: nil,
+            isLive: false
+        )
+
+        let transcript = TurnTranscriptBuilder.build(
+            turn: turn,
+            state: TranscriptDocumentState()
+        )
+
+        XCTAssertTrue(transcript.attributedString.string.contains("App.swift:12"))
+        XCTAssertTrue(transcript.actions.values.contains {
+            guard case .openAsset(let reference) = $0 else { return false }
+            return reference.kind == .structured
+                && reference.display == "App.swift:12"
+                && reference.structuredAsset?.id == annotation.assetID
+        })
+    }
+
     func testBodyPathResolvesKnownArtifact() {
         let artifact = makeArtifact()
         let turn = ConversationTurn(
@@ -485,5 +654,18 @@ final class TranscriptDocumentTests: XCTestCase {
         XCTAssertNotEqual(range.location, NSNotFound, "Missing substring: \(needle)")
         guard range.location != NSNotFound else { return [:] }
         return attributed.attributes(at: range.location, effectiveRange: nil)
+    }
+
+    private func fixtureData(_ name: String) throws -> Data {
+        let testFile = URL(fileURLWithPath: #filePath)
+        let packageRoot = testFile
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+        return try Data(
+            contentsOf: packageRoot
+                .appendingPathComponent("docs/protocols/fixtures/tool-assets")
+                .appendingPathComponent(name)
+        )
     }
 }

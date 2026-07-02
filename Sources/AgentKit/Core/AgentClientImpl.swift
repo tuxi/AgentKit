@@ -120,6 +120,14 @@ public final class CodeAgentTransport: AgentTransport, @unchecked Sendable {
         return wireFrames.compactMap { AgentEvent.from(wire: $0) }
     }
 
+    public func getAssetPreview(conversationID: String, assetID: String) async throws -> AgentAssetPreviewResponse {
+        try await http.getAssetPreview(conversationID: conversationID, assetID: assetID)
+    }
+
+    public func getAssetContent(conversationID: String, assetID: String) async throws -> AgentAssetContentResponse {
+        try await http.getAssetContent(conversationID: conversationID, assetID: assetID)
+    }
+
     // MARK: - AgentTransport: Tool registration
 
     public func registerTools(_ tools: [ClientToolInfo]) async {
@@ -236,5 +244,13 @@ public final class DefaultAgentClient: RuntimeClient, @unchecked Sendable {
 
     public func getEvents(conversationID: String) async throws -> [AgentEvent] {
         try await transport.getEvents(conversationID: conversationID)
+    }
+
+    public func getAssetPreview(conversationID: String, assetID: String) async throws -> AgentAssetPreviewResponse {
+        try await transport.getAssetPreview(conversationID: conversationID, assetID: assetID)
+    }
+
+    public func getAssetContent(conversationID: String, assetID: String) async throws -> AgentAssetContentResponse {
+        try await transport.getAssetContent(conversationID: conversationID, assetID: assetID)
     }
 }

@@ -158,10 +158,17 @@ public struct TimelineProjection: Sendable {
                 if !cur.isEmpty, let last = result.last, case .text(let lid, let lp) = last {
                     let prev = lp.text.trimmingCharacters(in: .whitespacesAndNewlines)
                     if !prev.isEmpty, prev.hasPrefix(cur) || cur.hasPrefix(prev) {
-                        let longer = cur.count >= prev.count ? p.text : lp.text
+                        let useCurrent = cur.count >= prev.count
+                        let longer = useCurrent ? p.text : lp.text
+                        let annotations = useCurrent ? p.textAnnotations : lp.textAnnotations
                         let streaming = p.isStreaming || lp.isStreaming
                         result[result.count - 1] = .text(id: lid,
-                            MessageNodePayload(role: .assistant, text: longer, isStreaming: streaming))
+                            MessageNodePayload(
+                                role: .assistant,
+                                text: longer,
+                                isStreaming: streaming,
+                                textAnnotations: annotations
+                            ))
                         continue
                     }
                 }
@@ -183,9 +190,14 @@ public struct TimelineProjection: Sendable {
             let isStreaming = graphNode.status == .running
             kind = .thinking(ThinkingNodePayload(text: text, isStreaming: isStreaming))
 
-        case .assistantMessage(let text):
+        case .assistantMessage(let text, let textAnnotations):
             let isStreaming = graphNode.status == .running
-            kind = .message(MessageNodePayload(role: .assistant, text: text, isStreaming: isStreaming))
+            kind = .message(MessageNodePayload(
+                role: .assistant,
+                text: text,
+                isStreaming: isStreaming,
+                textAnnotations: textAnnotations
+            ))
 
         case .toolCall(let payload):
             let status: ToolNodeStatus = {
@@ -202,7 +214,10 @@ public struct TimelineProjection: Sendable {
             kind = .tool(ToolNodePayload(
                 callID: payload.callID, toolName: payload.toolName,
                 args: payload.args, status: status,
-                output: payload.output, exitCode: payload.exitCode,
+                output: payload.output,
+                structuredOutput: payload.structuredOutput,
+                assets: payload.assets,
+                exitCode: payload.exitCode,
                 elapsedMs: payload.elapsedMs,
                 isAutoApproved: payload.isAutoApproved, artifact: artifact
             ))

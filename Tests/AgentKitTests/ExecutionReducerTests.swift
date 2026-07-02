@@ -14,7 +14,7 @@ final class ExecutionReducerTests: XCTestCase {
 
     private func assistantTexts(_ graph: ExecutionGraph) -> [String] {
         graph.linearWalk().compactMap { node in
-            if case .assistantMessage(let t) = node.payload { return t }
+            if case .assistantMessage(let t, _) = node.payload { return t }
             return nil
         }
     }
@@ -41,7 +41,7 @@ final class ExecutionReducerTests: XCTestCase {
             .modelFinished(turnID: turn, promptTokens: 100, elapsedMs: 10, err: nil),
             .modelStarted(turnID: turn, invocationID: "inv2"),
             .tokenDelta(turnID: turn, text: "B"),
-            .turnFinished(turnID: turn, text: "B"),
+            .turnFinished(turnID: turn, text: "B", textAnnotations: []),
         ]
         for e in events { _ = reducer.reduce(e, into: &graph) }
 
@@ -50,8 +50,8 @@ final class ExecutionReducerTests: XCTestCase {
 
         // A before the tool, B after it.
         let nodes = graph.linearWalk()
-        let idxA = firstIndex(nodes) { if case .assistantMessage(let t) = $0.payload { return t == "A" }; return false }
-        let idxB = firstIndex(nodes) { if case .assistantMessage(let t) = $0.payload { return t == "B" }; return false }
+        let idxA = firstIndex(nodes) { if case .assistantMessage(let t, _) = $0.payload { return t == "A" }; return false }
+        let idxB = firstIndex(nodes) { if case .assistantMessage(let t, _) = $0.payload { return t == "B" }; return false }
         let idxTool = firstIndex(nodes) { if case .toolCall = $0.payload { return true }; return false }
         XCTAssertNotNil(idxA); XCTAssertNotNil(idxB); XCTAssertNotNil(idxTool)
         XCTAssertLessThan(idxA!, idxTool!, "first segment must precede the tool")
@@ -72,7 +72,7 @@ final class ExecutionReducerTests: XCTestCase {
             .toolFinished(turnID: turn, callID: "c1",
                           result: ToolResult(callID: "c1", toolName: "grep",
                                              observation: "ok", error: nil)),
-            .turnFinished(turnID: turn, text: "full answer"),
+            .turnFinished(turnID: turn, text: "full answer", textAnnotations: []),
         ]
         for e in events { _ = reducer.reduce(e, into: &graph) }
 
@@ -96,7 +96,7 @@ final class ExecutionReducerTests: XCTestCase {
                           result: ToolResult(callID: "c1", toolName: "grep",
                                              observation: "ok", error: nil)),
             .modelFinished(turnID: turn, promptTokens: 1, elapsedMs: 1, err: nil),
-            .turnFinished(turnID: turn, text: "Here is the answer"),
+            .turnFinished(turnID: turn, text: "Here is the answer", textAnnotations: []),
         ]
         for e in events { _ = reducer.reduce(e, into: &graph) }
 
@@ -115,10 +115,44 @@ final class ExecutionReducerTests: XCTestCase {
             .modelStarted(turnID: turn, invocationID: "inv1"),
             .tokenDelta(turnID: turn, text: "Hello"),
             .tokenDelta(turnID: turn, text: " world"),
-            .turnFinished(turnID: turn, text: "Hello world"),
+            .turnFinished(turnID: turn, text: "Hello world", textAnnotations: []),
         ]
         for e in events { _ = reducer.reduce(e, into: &graph) }
 
         XCTAssertEqual(assistantTexts(graph), ["Hello world"])
+    }
+
+    func testTurnFinishedAnnotationsAttachToStreamedFinalAnswer() {
+        var reducer = ExecutionReducer()
+        var graph = ExecutionGraph()
+        let turn = "t1"
+        let annotation = AgentTextAnnotation(
+            assetID: "asset_turn_7_call_grep_001",
+            kind: "file_location",
+            text: "App.swift:5",
+            startUTF16: 6,
+            endUTF16: 17,
+            sourceTurnID: turn,
+            sourceCallID: "c1"
+        )
+
+        let events: [AgentEvent] = [
+            .turnStarted(turnID: turn, text: "hi"),
+            .modelStarted(turnID: turn, invocationID: "inv1"),
+            .tokenDelta(turnID: turn, text: "Open `App.swift:5`."),
+            .turnFinished(
+                turnID: turn,
+                text: "Open `App.swift:5`.",
+                textAnnotations: [annotation]
+            ),
+        ]
+        for e in events { _ = reducer.reduce(e, into: &graph) }
+
+        let turns = TimelineProjection().projectTurns(graph)
+        guard case .text(_, let payload)? = turns.first?.blocks.first else {
+            return XCTFail("expected assistant text block")
+        }
+        XCTAssertEqual(payload.text, "Open `App.swift:5`.")
+        XCTAssertEqual(payload.textAnnotations.first?.assetID, annotation.assetID)
     }
 }

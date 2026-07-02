@@ -167,7 +167,7 @@ public enum NodePayload: Sendable {
     case toolCall(ToolExecPayload)
     case observation(text: String)
     case reflection(text: String)
-    case assistantMessage(text: String)
+    case assistantMessage(text: String, textAnnotations: [AgentTextAnnotation])
     case system(SystemPayload)
     case subagent(SubagentExecPayload)
     case approval(ApprovalExecPayload)
@@ -180,17 +180,22 @@ public struct ToolExecPayload: Sendable {
     public let toolName: String
     public let args: JSONValue?
     public var output: String
+    public var structuredOutput: JSONValue?
+    public var assets: [AgentAssetRef]
     public var exitCode: Int?
     public var elapsedMs: Int?
     public var isAutoApproved: Bool
 
     public init(callID: String, toolName: String, args: JSONValue?,
-                output: String = "", exitCode: Int? = nil,
+                output: String = "", structuredOutput: JSONValue? = nil,
+                assets: [AgentAssetRef] = [], exitCode: Int? = nil,
                 elapsedMs: Int? = nil, isAutoApproved: Bool = false) {
         self.callID = callID
         self.toolName = toolName
         self.args = args
         self.output = output
+        self.structuredOutput = structuredOutput
+        self.assets = assets
         self.exitCode = exitCode
         self.elapsedMs = elapsedMs
         self.isAutoApproved = isAutoApproved

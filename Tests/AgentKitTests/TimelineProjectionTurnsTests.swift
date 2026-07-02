@@ -51,7 +51,7 @@ final class TimelineProjectionTurnsTests: XCTestCase {
             .modelStarted(turnID: turn, invocationID: "inv2"),
             .tokenDelta(turnID: turn, text: "Done"),
             .modelFinished(turnID: turn, promptTokens: 1500, elapsedMs: 20, err: nil),
-            .turnFinished(turnID: turn, text: "Done"),
+            .turnFinished(turnID: turn, text: "Done", textAnnotations: []),
         ])
 
         let turns = TimelineProjection().projectTurns(graph, isLive: true)
@@ -162,12 +162,12 @@ final class TimelineProjectionTurnsTests: XCTestCase {
         var graph = ExecutionGraph()
         let events: [AgentEvent] = [
             .turnStarted(turnID: "turn_1", text: "first"),
-            .turnFinished(turnID: "turn_1", text: "reply 1"),
+            .turnFinished(turnID: "turn_1", text: "reply 1", textAnnotations: []),
             .turnStarted(turnID: "turn_2", text: "second"),
-            .turnFinished(turnID: "turn_2", text: "reply 2"),
+            .turnFinished(turnID: "turn_2", text: "reply 2", textAnnotations: []),
             // server restart → turn_id reset, reuses "turn_1"
             .turnStarted(turnID: "turn_1", text: "third"),
-            .turnFinished(turnID: "turn_1", text: "reply 3"),
+            .turnFinished(turnID: "turn_1", text: "reply 3", textAnnotations: []),
         ]
         for e in events { _ = reducer.reduce(e, into: &graph) }
 
@@ -198,7 +198,7 @@ final class TimelineProjectionTurnsTests: XCTestCase {
             .toolStarted(turnID: turn, callID: "c1", tool: tool("c1", "grep")),
             .toolFinished(turnID: turn, callID: "c1", result: result("c1", "grep")),
             .modelFinished(turnID: turn, promptTokens: 10, elapsedMs: 1, err: nil),
-            .turnFinished(turnID: turn, text: "Answer"),
+            .turnFinished(turnID: turn, text: "Answer", textAnnotations: []),
         ])
         let lt = TimelineProjection().projectTurns(live, isLive: true)[0]
         let ht = TimelineProjection().projectTurns(history, isLive: false)[0]

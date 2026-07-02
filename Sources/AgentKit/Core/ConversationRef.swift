@@ -24,6 +24,7 @@ import Foundation
 public struct ConversationRef: Identifiable, Hashable, Sendable, Codable {
     public let id: String
     public let workspacePath: String
+    public let workspace: WorkspaceAnchor?
     public var name: String?
     /// v1.2 lifecycle status from backend metadata: running / paused / resuming / done / failed.
     public let turnStatus: String?
@@ -45,14 +46,23 @@ public struct ConversationRef: Identifiable, Hashable, Sendable, Codable {
     enum CodingKeys: String, CodingKey {
         case id
         case workspacePath = "workspace_path"
+        case workspace
         case name
         case turnStatus = "turn_status"
         case pausedAt = "paused_at"
     }
 
-    public init(id: String, workspacePath: String, name: String? = nil, turnStatus: String? = nil, pausedAt: Int64? = nil) {
+    public init(
+        id: String,
+        workspacePath: String,
+        workspace: WorkspaceAnchor? = nil,
+        name: String? = nil,
+        turnStatus: String? = nil,
+        pausedAt: Int64? = nil
+    ) {
         self.id = id
         self.workspacePath = workspacePath
+        self.workspace = workspace
         self.name = name
         self.turnStatus = turnStatus
         self.pausedAt = pausedAt

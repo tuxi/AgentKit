@@ -19,6 +19,7 @@ public struct ConversationDetail: Sendable, Codable, Hashable {
     /// P5.0 — 会话绑定的工作区路径（best-effort：服务端未返回时为 nil）。
     /// 用于历史会话在 UI 上回显其工作区绑定。
     public let workspacePath: String?
+    public let workspace: WorkspaceAnchor?
 
     /// 会话名称（用户自定义）。
     public let name: String?
@@ -36,6 +37,7 @@ public struct ConversationDetail: Sendable, Codable, Hashable {
         case createdAt = "created_at"
         case updatedAt = "updated_at"
         case workspacePath = "workspace_path"
+        case workspace
         case name
         case turnStatus = "turn_status"
         case pausedAt = "paused_at"
@@ -49,6 +51,7 @@ public struct ConversationDetail: Sendable, Codable, Hashable {
         createdAt = try c.decode(String.self, forKey: .createdAt)
         updatedAt = try c.decode(String.self, forKey: .updatedAt)
         workspacePath = try c.decodeIfPresent(String.self, forKey: .workspacePath)
+        workspace = try c.decodeIfPresent(WorkspaceAnchor.self, forKey: .workspace)
         name = try c.decodeIfPresent(String.self, forKey: .name)
         turnStatus = try c.decodeIfPresent(String.self, forKey: .turnStatus)
         pausedAt = try c.decodeIfPresent(Int64.self, forKey: .pausedAt)

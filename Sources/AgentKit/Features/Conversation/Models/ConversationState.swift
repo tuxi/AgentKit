@@ -243,7 +243,7 @@ extension ConversationState {
             currentTurnID = turnID
             streamingText = ""
 
-        case .turnFinished(let turnID, let text):
+        case .turnFinished(let turnID, let text, _):
             guard var turn = turns[turnID] else { return }
             if !text.isEmpty {
                 turn.assistantMessage = text

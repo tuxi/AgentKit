@@ -183,6 +183,20 @@ public struct ConversationDetailView: View {
         }
         ToolbarItem {
             Button {
+                guard let vm = store.activeConversationViewModel else { return }
+                store.showInspector(.assets(AssetPanelPayload(
+                    title: "Conversation Assets",
+                    assets: vm.assetRefs,
+                    conversationID: vm.conversation?.id,
+                    workspace: vm.workspaceAnchor
+                )))
+            } label: {
+                Label("资产", systemImage: "tray.full")
+            }
+            .disabled(store.activeConversationViewModel?.assetRefs.isEmpty ?? true)
+        }
+        ToolbarItem {
+            Button {
                 store.isInspectorPresented.toggle()
             } label: {
                 Label("详情", systemImage: "sidebar.right")

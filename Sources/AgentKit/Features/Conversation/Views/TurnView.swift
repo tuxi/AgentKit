@@ -50,9 +50,28 @@ struct TurnView: View {
         // on session liveness (turn.isLive stays true for the whole live
         // session, which hid the button until you reloaded into history).
         let canCopy = !copyText.isEmpty && !isAnswerStreaming
-        if canCopy {
+        let assets = turnAssets
+        if canCopy || !assets.isEmpty {
             HStack(spacing: 12) {
-                TurnCopyButton(text: copyText)
+                if canCopy {
+                    TurnCopyButton(text: copyText)
+                }
+                if !assets.isEmpty {
+                    Button {
+                        store.showInspector(.assets(AssetPanelPayload(
+                            title: "Turn Assets",
+                            assets: assets,
+                            conversationID: store.activeConversationViewModel?.conversation?.id,
+                            workspace: store.activeConversationViewModel?.workspaceAnchor
+                        )))
+                    } label: {
+                        Label("\(assets.count)", systemImage: "tray.full")
+                            .font(.caption2)
+                            .foregroundStyle(Color.secondary)
+                    }
+                    .buttonStyle(.plain)
+                    .help("查看本轮资产")
+                }
                 Spacer()
             }
             .padding(.top, 2)
@@ -76,6 +95,21 @@ struct TurnView: View {
             if case .text(_, let p) = block { return p.isStreaming }
         }
         return false
+    }
+
+    private var turnAssets: [AgentAssetRef] {
+        var seen = Set<String>()
+        var result: [AgentAssetRef] = []
+        for block in turn.blocks {
+            guard case .toolGroup(let group) = block else { continue }
+            for tool in group.tools {
+                for asset in tool.assets where !seen.contains(asset.id) {
+                    seen.insert(asset.id)
+                    result.append(asset)
+                }
+            }
+        }
+        return result
     }
 
     private func handleTranscriptAction(_ action: TranscriptAction) {
@@ -105,6 +139,13 @@ struct TurnView: View {
 
     private func openAsset(_ reference: AssetReference) {
         switch reference.kind {
+        case .structured:
+            guard let asset = reference.structuredAsset else {
+                Clipboard.copy(reference.target)
+                return
+            }
+            openStructuredAsset(asset)
+
         case .url:
             guard let url = URL(string: reference.target) else { return }
             openURL(url)
@@ -125,6 +166,31 @@ struct TurnView: View {
             } else {
                 Clipboard.copy(reference.target)
             }
+        }
+    }
+
+    private func openStructuredAsset(_ asset: AgentAssetRef) {
+        switch asset.kind {
+        case "file", "file_location", "symbol", "search_result":
+            store.showInspector(.asset(AssetPreviewPayload(
+                asset: asset,
+                conversationID: store.activeConversationViewModel?.conversation?.id,
+                workspace: store.activeConversationViewModel?.workspaceAnchor
+            )))
+
+        case "url":
+            if let uri = asset.uri, let url = URL(string: uri) {
+                openURL(url)
+            } else {
+                Clipboard.copy(asset.displayName ?? asset.id)
+            }
+
+        default:
+            store.showInspector(.asset(AssetPreviewPayload(
+                asset: asset,
+                conversationID: store.activeConversationViewModel?.conversation?.id,
+                workspace: store.activeConversationViewModel?.workspaceAnchor
+            )))
         }
     }
 

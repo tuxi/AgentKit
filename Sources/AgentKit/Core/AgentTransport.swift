@@ -102,6 +102,14 @@ public protocol AgentTransport: Sendable {
     /// 历史事件 — 用于 Timeline 回放。
     func getEvents(conversationID: String) async throws -> [AgentEvent]
 
+    // MARK: - Assets
+
+    /// Structured asset preview derived from persisted conversation events.
+    func getAssetPreview(conversationID: String, assetID: String) async throws -> AgentAssetPreviewResponse
+
+    /// Full text content for workspace-scoped text assets.
+    func getAssetContent(conversationID: String, assetID: String) async throws -> AgentAssetContentResponse
+
     // MARK: - Tool registration
 
     /// 向服务端注册客户端可执行工具。
@@ -122,6 +130,14 @@ public protocol AgentTransport: Sendable {
 extension AgentTransport {
     /// 默认不支持 clone（mock / 旧 backend）。CodeAgentTransport 覆盖。
     public func cloneRepo(url: String, ref: String?) async throws -> ClonedRepo {
+        throw RuntimeHTTPError.unsupported
+    }
+
+    public func getAssetPreview(conversationID: String, assetID: String) async throws -> AgentAssetPreviewResponse {
+        throw RuntimeHTTPError.unsupported
+    }
+
+    public func getAssetContent(conversationID: String, assetID: String) async throws -> AgentAssetContentResponse {
         throw RuntimeHTTPError.unsupported
     }
 }

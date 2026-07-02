@@ -48,11 +48,18 @@ public struct MessageNodePayload: Sendable {
     public let role: MessageRole
     public let text: String
     public let isStreaming: Bool
+    public let textAnnotations: [AgentTextAnnotation]
 
-    public init(role: MessageRole, text: String, isStreaming: Bool = false) {
+    public init(
+        role: MessageRole,
+        text: String,
+        isStreaming: Bool = false,
+        textAnnotations: [AgentTextAnnotation] = []
+    ) {
         self.role = role
         self.text = text
         self.isStreaming = isStreaming
+        self.textAnnotations = textAnnotations
     }
 }
 
@@ -72,6 +79,8 @@ public struct ToolNodePayload: Sendable {
     public let args: JSONValue?
     public let status: ToolNodeStatus
     public let output: String
+    public let structuredOutput: JSONValue?
+    public let assets: [AgentAssetRef]
     public let exitCode: Int?
     public let elapsedMs: Int?
     public let isAutoApproved: Bool
@@ -80,6 +89,8 @@ public struct ToolNodePayload: Sendable {
 
     public init(callID: String, toolName: String, args: JSONValue?,
                 status: ToolNodeStatus, output: String = "",
+                structuredOutput: JSONValue? = nil,
+                assets: [AgentAssetRef] = [],
                 exitCode: Int? = nil, elapsedMs: Int? = nil,
                 isAutoApproved: Bool = false,
                 artifact: ArtifactNode? = nil) {
@@ -88,6 +99,8 @@ public struct ToolNodePayload: Sendable {
         self.args = args
         self.status = status
         self.output = output
+        self.structuredOutput = structuredOutput
+        self.assets = assets
         self.exitCode = exitCode
         self.elapsedMs = elapsedMs
         self.isAutoApproved = isAutoApproved

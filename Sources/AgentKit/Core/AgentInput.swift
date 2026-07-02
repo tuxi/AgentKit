@@ -104,12 +104,24 @@ public struct ToolResultContent: Sendable {
     public let toolUseID: String
     /// 工具输出文本。
     public let content: String
+    /// Tool-specific structured side-channel from agent-wire v1.3.
+    public let output: JSONValue?
+    /// Normalized clickable asset references from agent-wire v1.3.
+    public let assets: [AgentAssetRef]
     /// `true` = 工具执行失败，agent 应据此决定重试策略。
     public let isError: Bool
 
-    public init(toolUseID: String, content: String, isError: Bool = false) {
+    public init(
+        toolUseID: String,
+        content: String,
+        isError: Bool = false,
+        output: JSONValue? = nil,
+        assets: [AgentAssetRef] = []
+    ) {
         self.toolUseID = toolUseID
         self.content = content
+        self.output = output
+        self.assets = assets
         self.isError = isError
     }
 }

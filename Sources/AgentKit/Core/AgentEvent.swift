@@ -19,7 +19,7 @@ public enum AgentEvent: Sendable {
     /// `turn_started`：新 turn 开始。`turnID` 是 grouping key。
     case turnStarted(turnID: String, text: String)
     /// `turn_finished`：当前 turn 结束。
-    case turnFinished(turnID: String, text: String)
+    case turnFinished(turnID: String, text: String, textAnnotations: [AgentTextAnnotation])
     /// `turn_paused`：当前 turn 已 checkpoint 并暂停，等待 ResumeSession。
     case turnPaused(turnID: String?, text: String?, err: String?)
     /// `turn_resumed`：服务端已接受 ResumeSession 并开始续跑。
@@ -80,7 +80,11 @@ extension AgentEvent {
             return .turnStarted(turnID: turnID ?? "", text: wire.text ?? "")
 
         case "turn_finished":
-            return .turnFinished(turnID: turnID ?? "", text: wire.text ?? "")
+            return .turnFinished(
+                turnID: turnID ?? "",
+                text: wire.text ?? "",
+                textAnnotations: wire.textAnnotations ?? []
+            )
 
         case "turn_paused", "turn.paused":
             return .turnPaused(turnID: turnID, text: wire.text, err: wire.err)
@@ -130,7 +134,9 @@ extension AgentEvent {
                 toolName: wire.toolName ?? "unknown",
                 observation: wire.observation.normalized,
                 error: wire.err.normalized,
-                elapsedMs: wire.elapsedMs
+                elapsedMs: wire.elapsedMs,
+                output: wire.output,
+                assets: wire.assets ?? []
             )
             return .toolFinished(turnID: turnID, callID: callID ?? "", result: result)
 

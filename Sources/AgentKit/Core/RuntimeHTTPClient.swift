@@ -122,8 +122,32 @@ struct RuntimeHTTPClient: Sendable {
 
         let (data, response) = try await session.data(for: request)
         try validateHTTP(response, data: data)
-//        DLLog(String(data: data, encoding: .utf8)!)
+        DLLog(String(data: data, encoding: .utf8)!)
         return try decoder.decode([WireFrame].self, from: data)
+    }
+
+    /// `GET /v1/conversations/{id}/assets/{asset_id}/preview`.
+    func getAssetPreview(conversationID: String, assetID: String) async throws -> AgentAssetPreviewResponse {
+        let url = try assetURL(conversationID: conversationID, assetID: assetID)
+            .appendingPathComponent("preview")
+        var request = URLRequest(url: url)
+        request.httpMethod = "GET"
+
+        let (data, response) = try await session.data(for: request)
+        try validateHTTP(response, data: data)
+        return try decoder.decode(AgentAssetPreviewResponse.self, from: data)
+    }
+
+    /// `GET /v1/conversations/{id}/assets/{asset_id}/content`.
+    func getAssetContent(conversationID: String, assetID: String) async throws -> AgentAssetContentResponse {
+        let url = try assetURL(conversationID: conversationID, assetID: assetID)
+            .appendingPathComponent("content")
+        var request = URLRequest(url: url)
+        request.httpMethod = "GET"
+
+        let (data, response) = try await session.data(for: request)
+        try validateHTTP(response, data: data)
+        return try decoder.decode(AgentAssetContentResponse.self, from: data)
     }
 
     /// `POST /v1/repos/clone` — go-git 把公开仓库 clone 进 workspaceRoot/<name> 下。
@@ -169,6 +193,14 @@ struct RuntimeHTTPClient: Sendable {
     }
 
     // MARK: - Helpers
+
+    private func assetURL(conversationID: String, assetID: String) throws -> URL {
+        try resolveBaseURL()
+            .appendingPathComponent("v1/conversations")
+            .appendingPathComponent(conversationID)
+            .appendingPathComponent("assets")
+            .appendingPathComponent(assetID)
+    }
 
     private func validateHTTP(_ response: URLResponse, data: Data) throws {
         guard let httpResponse = response as? HTTPURLResponse else {

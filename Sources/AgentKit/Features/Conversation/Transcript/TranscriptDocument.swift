@@ -71,7 +71,7 @@ enum TurnTranscriptBuilder {
         for (index, block) in turn.blocks.enumerated() {
             switch block {
             case .text(_, let payload):
-                builder.appendMarkdown(payload.text)
+                builder.appendMarkdown(payload.text, textAnnotations: payload.textAnnotations)
 
             case .toolGroup(let group):
                 appendToolGroup(group, state: state, to: &builder)
@@ -270,6 +270,7 @@ private struct TranscriptAttributedBuilder {
     private(set) var actions: [String: TranscriptAction] = [:]
     private var copyParts: [String] = []
     private var nextActionIndex = 0
+    private var activeTextAnnotations: [AgentTextAnnotation] = []
 
     init(assetIndex: AssetIndex, animationFrame: Int) {
         self.assetIndex = assetIndex
@@ -286,7 +287,11 @@ private struct TranscriptAttributedBuilder {
         copyParts.append(text)
     }
 
-    mutating func appendMarkdown(_ text: String) {
+    mutating func appendMarkdown(_ text: String, textAnnotations: [AgentTextAnnotation] = []) {
+        let previousAnnotations = activeTextAnnotations
+        activeTextAnnotations = textAnnotations
+        defer { activeTextAnnotations = previousAnnotations }
+
         let blocks = MarkdownASTConverter.parse(text)
         guard !blocks.isEmpty else {
             appendBody(text)
@@ -606,7 +611,7 @@ private struct TranscriptAttributedBuilder {
         _ text: String,
         attributes baseAttributes: [NSAttributedString.Key: Any]
     ) {
-        let matches = AssetReferenceDetector.matches(in: text, assetIndex: assetIndex)
+        let matches = referenceMatches(in: text)
         guard !matches.isEmpty else {
             append(text, attributes: baseAttributes)
             return
@@ -649,7 +654,7 @@ private struct TranscriptAttributedBuilder {
         let base = NSMutableAttributedString(string: text, attributes: attributes)
         applyCodeHighlight(to: base, language: language ?? "")
 
-        let matches = AssetReferenceDetector.matches(in: text, assetIndex: assetIndex)
+        let matches = referenceMatches(in: text)
         for match in matches {
             let id = register(.openAsset(match.reference))
             let url = URL(string: "agentkit-transcript://\(id)")!
@@ -661,6 +666,26 @@ private struct TranscriptAttributedBuilder {
         }
 
         attributed.append(base)
+    }
+
+    private func referenceMatches(in text: String) -> [(range: NSRange, reference: AssetReference)] {
+        let annotationMatches = TextAnnotationReferenceDetector.matches(
+            in: text,
+            annotations: activeTextAnnotations,
+            assetIndex: assetIndex
+        )
+        let fallbackMatches = AssetReferenceDetector.matches(in: text, assetIndex: assetIndex)
+            .filter { candidate in
+                !annotationMatches.contains {
+                    NSIntersectionRange($0.range, candidate.range).length > 0
+                }
+            }
+        return (annotationMatches + fallbackMatches).sorted(by: { (
+            lhs: (range: NSRange, reference: AssetReference),
+            rhs: (range: NSRange, reference: AssetReference)
+        ) in
+            lhs.range.location < rhs.range.location
+        })
     }
 
     private func applyCodeHighlight(to text: NSMutableAttributedString, language: String) {

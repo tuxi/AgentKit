@@ -42,15 +42,29 @@ public struct ToolResult: Sendable, Hashable {
     public let toolName: String
     /// 工具输出文本。
     public let observation: String?
+    /// Tool-specific structured side-channel from agent-wire v1.3.
+    public let output: JSONValue?
+    /// Normalized clickable asset references from agent-wire v1.3.
+    public let assets: [AgentAssetRef]
     /// 错误信息（工具执行失败时非空）。
     public let error: String?
     /// 工具执行耗时（毫秒），服务端 P2 新增。
     public let elapsedMs: Int?
 
-    public init(callID: String, toolName: String, observation: String?, error: String?, elapsedMs: Int? = nil) {
+    public init(
+        callID: String,
+        toolName: String,
+        observation: String?,
+        error: String?,
+        elapsedMs: Int? = nil,
+        output: JSONValue? = nil,
+        assets: [AgentAssetRef] = []
+    ) {
         self.callID = callID
         self.toolName = toolName
         self.observation = observation
+        self.output = output
+        self.assets = assets
         self.error = error
         self.elapsedMs = elapsedMs
     }

@@ -33,6 +33,14 @@ public struct InspectorView: View {
 
                 TerminalInspectorView(payload: payload)
 
+            case .asset(let payload):
+
+                AssetPreviewInspectorView(payload: payload)
+
+            case .assets(let payload):
+
+                AssetListInspectorView(payload: payload)
+
             case .todo(let todo):
 
                 TodoInspectorView(

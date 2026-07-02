@@ -75,6 +75,14 @@ public protocol RuntimeClient: Sendable {
     /// 推荐恢复流程：先调此方法渲染历史，再调 `connect()` 收增量。
     func getEvents(conversationID: String) async throws -> [AgentEvent]
 
+    // MARK: - Assets
+
+    /// Structured asset preview derived from persisted conversation events.
+    func getAssetPreview(conversationID: String, assetID: String) async throws -> AgentAssetPreviewResponse
+
+    /// Full text content for workspace-scoped text assets.
+    func getAssetContent(conversationID: String, assetID: String) async throws -> AgentAssetContentResponse
+
     // MARK: - Repos
 
     /// clone 一个公开 GitHub 仓库到 backend 的 workspace 根下，返回其工作区路径。
@@ -94,6 +102,14 @@ extension RuntimeClient {
 
     /// 默认不支持 clone（mock backend）。`DefaultAgentClient` 覆盖。
     public func cloneRepo(url: String, ref: String?) async throws -> ClonedRepo {
+        throw RuntimeHTTPError.unsupported
+    }
+
+    public func getAssetPreview(conversationID: String, assetID: String) async throws -> AgentAssetPreviewResponse {
+        throw RuntimeHTTPError.unsupported
+    }
+
+    public func getAssetContent(conversationID: String, assetID: String) async throws -> AgentAssetContentResponse {
         throw RuntimeHTTPError.unsupported
     }
 }

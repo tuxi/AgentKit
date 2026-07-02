@@ -32,8 +32,14 @@ public struct ExecutionReducer: Sendable {
         case .turnStarted(let turnID, let text):
             return handleTurnStarted(turnID: turnID, text: text, ts: ts, graph: &graph)
 
-        case .turnFinished(let turnID, let text):
-            return handleTurnFinished(turnID: turnID, text: text, ts: ts, graph: &graph)
+        case .turnFinished(let turnID, let text, let textAnnotations):
+            return handleTurnFinished(
+                turnID: turnID,
+                text: text,
+                textAnnotations: textAnnotations,
+                ts: ts,
+                graph: &graph
+            )
 
         case .turnPaused, .turnResumed, .turnFailed:
             return []
@@ -68,6 +74,8 @@ public struct ExecutionReducer: Sendable {
             return handleToolFinished(turnID: turnID ?? internalState.currentTurnID ?? "",
                                       callID: callID, observation: result.observation,
                                       error: result.error, elapsedMs: result.elapsedMs,
+                                      structuredOutput: result.output,
+                                      assets: result.assets,
                                       ts: ts, graph: &graph)
 
         // ── Observation (previously ignored!) ──
@@ -164,13 +172,21 @@ public struct ExecutionReducer: Sendable {
         return [nodeID]
     }
 
-    private mutating func handleTurnFinished(turnID: String, text: String, ts: TimeInterval,
-                                              graph: inout ExecutionGraph) -> [NodeID] {
+    private mutating func handleTurnFinished(
+        turnID: String,
+        text: String,
+        textAnnotations: [AgentTextAnnotation],
+        ts: TimeInterval,
+        graph: inout ExecutionGraph
+    ) -> [NodeID] {
         // 1. Finalize any in-progress streaming assistant segment.
         if !internalState.streamingAssistant.isEmpty {
             if let prevID = internalState.lastNodeOfKind[.assistantMessage],
                var prevNode = graph.nodes[prevID] {
-                prevNode.payload = .assistantMessage(text: internalState.streamingAssistant)
+                prevNode.payload = .assistantMessage(
+                    text: internalState.streamingAssistant,
+                    textAnnotations: []
+                )
                 prevNode.status = .completed
                 graph.upsertNode(prevNode)
             }
@@ -187,11 +203,12 @@ public struct ExecutionReducer: Sendable {
             // Compare against the actual last assistant node in the graph (the
             // tracked pointer is cleared at each segment boundary, so it can't
             // be used here).
-            let lastText = graph.linearWalk().last { node in
+            let lastAssistantNode = graph.linearWalk().last { node in
                 if case .assistantMessage = node.payload { return true }
                 return false
-            }.flatMap { node -> String? in
-                if case .assistantMessage(let t) = node.payload { return t }
+            }
+            let lastText = lastAssistantNode.flatMap { node -> String? in
+                if case .assistantMessage(let t, _) = node.payload { return t }
                 return nil
             }
             if lastText != text {
@@ -199,11 +216,17 @@ public struct ExecutionReducer: Sendable {
                 internalState.nextAssistantSeq += 1
                 let node = GraphNode(
                     id: nodeID, kind: .assistantMessage,
-                    payload: .assistantMessage(text: text),
+                    payload: .assistantMessage(text: text, textAnnotations: textAnnotations),
                     status: .completed, timestamp: ts, turnID: turnID
                 )
                 appendNode(node, to: &graph)
                 internalState.lastNodeOfKind[.assistantMessage] = nodeID
+            } else if !textAnnotations.isEmpty,
+                      let lastAssistantNode,
+                      var node = graph.nodes[lastAssistantNode.id] {
+                node.payload = .assistantMessage(text: text, textAnnotations: textAnnotations)
+                node.status = .completed
+                graph.upsertNode(node)
             }
         }
 
@@ -229,7 +252,10 @@ public struct ExecutionReducer: Sendable {
 
         if let prevID = internalState.lastNodeOfKind[.assistantMessage],
            var prevNode = graph.nodes[prevID] {
-            prevNode.payload = .assistantMessage(text: internalState.streamingAssistant)
+            prevNode.payload = .assistantMessage(
+                text: internalState.streamingAssistant,
+                textAnnotations: []
+            )
             prevNode.timestamp = ts
             graph.upsertNode(prevNode)
             return [prevID]
@@ -241,7 +267,10 @@ public struct ExecutionReducer: Sendable {
             let nodeID = "\(turnID)_assistant_\(internalState.nextAssistantSeq)"
             let node = GraphNode(
                 id: nodeID, kind: .assistantMessage,
-                payload: .assistantMessage(text: internalState.streamingAssistant),
+                payload: .assistantMessage(
+                    text: internalState.streamingAssistant,
+                    textAnnotations: []
+                ),
                 status: .running, timestamp: ts, turnID: turnID
             )
             internalState.lastNodeOfKind[.assistantMessage] = nodeID
@@ -259,7 +288,10 @@ public struct ExecutionReducer: Sendable {
         if let prevID = internalState.lastNodeOfKind[.assistantMessage],
            var prevNode = graph.nodes[prevID] {
             prevNode.status = .completed
-            prevNode.payload = .assistantMessage(text: internalState.streamingAssistant)
+            prevNode.payload = .assistantMessage(
+                text: internalState.streamingAssistant,
+                textAnnotations: []
+            )
             graph.upsertNode(prevNode)
         }
         internalState.streamingAssistant = ""
@@ -346,6 +378,8 @@ public struct ExecutionReducer: Sendable {
     private mutating func handleToolFinished(turnID: String, callID: String,
                                               observation: String?, error: String?,
                                               elapsedMs: Int?,
+                                              structuredOutput: JSONValue?,
+                                              assets: [AgentAssetRef],
                                               ts: TimeInterval,
                                               graph: inout ExecutionGraph) -> [NodeID] {
         internalState.activeToolCallIDs.remove(callID)
@@ -368,6 +402,9 @@ public struct ExecutionReducer: Sendable {
             }
             toolNode.status = .completed
         }
+        payload.structuredOutput = structuredOutput
+        payload.assets = assets
+        payload.elapsedMs = elapsedMs
         toolNode.payload = .toolCall(payload)
         toolNode.timestamp = ts
         graph.upsertNode(toolNode)

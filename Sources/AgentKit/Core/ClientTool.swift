@@ -51,6 +51,39 @@ extension ClientTool {
     public var inputSchema: JSONValue? { nil }
 }
 
+/// Structured result returned by client-side tools that can expose clickable
+/// assets in addition to the transcript text.
+public struct ClientToolExecutionResult: Sendable, Hashable {
+    public let content: String
+    public let output: JSONValue?
+    public let assets: [AgentAssetRef]
+    public let isError: Bool
+
+    public init(
+        content: String,
+        output: JSONValue? = nil,
+        assets: [AgentAssetRef] = [],
+        isError: Bool = false
+    ) {
+        self.content = content
+        self.output = output
+        self.assets = assets
+        self.isError = isError
+    }
+}
+
+/// Optional v1.3 extension for client tools that can return structured output
+/// and asset refs. Existing tools can keep implementing `ClientTool.execute`.
+public protocol StructuredClientTool: ClientTool {
+    func executeResult(args: JSONValue?) async throws -> ClientToolExecutionResult
+}
+
+extension StructuredClientTool {
+    public func execute(args: JSONValue?) async throws -> String {
+        try await executeResult(args: args).content
+    }
+}
+
 // MARK: - ToolRegistry
 
 /// 客户端工具注册表 — 线程安全的工具查找。

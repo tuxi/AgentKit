@@ -32,6 +32,9 @@ struct WireFrame: Decodable {
     let toolName: String?
     let toolArgs: JSONValue?
     let observation: String?
+    let output: JSONValue?
+    let assets: [AgentAssetRef]?
+    let textAnnotations: [AgentTextAnnotation]?
     let failure: String?
     let planId: String?
     let title: String?
@@ -56,7 +59,8 @@ struct WireFrame: Decodable {
 
     enum CodingKeys: String, CodingKey {
         case type, kind, at, step, id, server
-        case text, observation, failure, err, ratio, todos, chunk
+        case text, observation, output, assets, failure, err, ratio, todos, chunk
+        case textAnnotations = "text_annotations"
         case eventId = "event_id"
         case sessionId = "session_id"
         case parentSessionId = "parent_session_id"
@@ -128,7 +132,13 @@ struct OutgoingAgentInput: Encodable {
             )
         case .toolResult:
             let tr = input.toolResult.map {
-                OutgoingToolResult(toolUseID: $0.toolUseID, content: $0.content, isError: $0.isError)
+                OutgoingToolResult(
+                    toolUseID: $0.toolUseID,
+                    content: $0.content,
+                    output: $0.output,
+                    assets: $0.assets,
+                    isError: $0.isError
+                )
             }
             return OutgoingAgentInput(
                 kind: "tool_result", text: nil, toolResult: tr,
@@ -168,10 +178,12 @@ struct OutgoingAgentInput: Encodable {
 struct OutgoingToolResult: Encodable {
     let toolUseID: String
     let content: String
+    let output: JSONValue?
+    let assets: [AgentAssetRef]
     let isError: Bool
 
     enum CodingKeys: String, CodingKey {
-        case content
+        case content, output, assets
         case toolUseID = "tool_use_id"
         case isError = "is_error"
     }

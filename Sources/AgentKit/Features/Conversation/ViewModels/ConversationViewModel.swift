@@ -68,11 +68,33 @@ public final class ConversationViewModel {
 
     /// 本会话用于展示的工作区标签。
     public var workspaceDisplayName: String? {
+        if let anchor = workspaceAnchor {
+            return anchor.displayName
+        }
         if let workspace { return workspace.name }
         if let path = detail?.workspacePath, !path.isEmpty {
             return URL(fileURLWithPath: path).lastPathComponent
         }
         return nil
+    }
+
+    /// Structured workspace anchor from the runtime contract.
+    public var workspaceAnchor: WorkspaceAnchor? {
+        detail?.workspace ?? conversation?.workspace
+    }
+
+    /// Structured assets discovered from the current runtime snapshot.
+    public var assetRefs: [AgentAssetRef] {
+        var seen = Set<String>()
+        var result: [AgentAssetRef] = []
+        for node in snapshot.timeline {
+            guard case .tool(let tool) = node.kind else { continue }
+            for asset in tool.assets where !seen.contains(asset.id) {
+                seen.insert(asset.id)
+                result.append(asset)
+            }
+        }
+        return result
     }
 
     // MARK: - Public API
@@ -264,21 +286,29 @@ public final class ConversationViewModel {
         }
 
         // 执行
-        let result: String
-        let isError: Bool
+        let result: ClientToolExecutionResult
         do {
-            result = try await clientTool.execute(args: tool.toolArgs)
-            isError = false
+            if let structuredTool = clientTool as? any StructuredClientTool {
+                result = try await structuredTool.executeResult(args: tool.toolArgs)
+            } else {
+                result = ClientToolExecutionResult(
+                    content: try await clientTool.execute(args: tool.toolArgs)
+                )
+            }
         } catch {
-            result = error.localizedDescription
-            isError = true
+            result = ClientToolExecutionResult(
+                content: error.localizedDescription,
+                isError: true
+            )
         }
 
         // 回传
         await client.send(input: .toolResult(ToolResultContent(
             toolUseID: callID,
-            content: result,
-            isError: isError
+            content: result.content,
+            isError: result.isError,
+            output: result.output,
+            assets: result.assets
         )))
     }
 
