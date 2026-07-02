@@ -120,6 +120,16 @@ public final class CodeAgentTransport: AgentTransport, @unchecked Sendable {
         return wireFrames.compactMap { AgentEvent.from(wire: $0) }
     }
 
+    public func getEventBatch(conversationID: String, since: Int) async throws -> AgentEventBatch {
+        let wireFrames = try await http.getEvents(conversationID: conversationID, since: since)
+        // nextSince 按服务端原始事件计数推进 —— 未知 kind 被 compactMap 丢弃后
+        // 不能影响游标，否则会重复拉取同一批事件。
+        return AgentEventBatch(
+            events: wireFrames.compactMap { AgentEvent.from(wire: $0) },
+            nextSince: since + wireFrames.count
+        )
+    }
+
     public func getAssetPreview(conversationID: String, assetID: String) async throws -> AgentAssetPreviewResponse {
         try await http.getAssetPreview(conversationID: conversationID, assetID: assetID)
     }
@@ -244,6 +254,10 @@ public final class DefaultAgentClient: RuntimeClient, @unchecked Sendable {
 
     public func getEvents(conversationID: String) async throws -> [AgentEvent] {
         try await transport.getEvents(conversationID: conversationID)
+    }
+
+    public func getEventBatch(conversationID: String, since: Int) async throws -> AgentEventBatch {
+        try await transport.getEventBatch(conversationID: conversationID, since: since)
     }
 
     public func getAssetPreview(conversationID: String, assetID: String) async throws -> AgentAssetPreviewResponse {

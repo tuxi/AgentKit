@@ -75,6 +75,11 @@ public protocol RuntimeClient: Sendable {
     /// 推荐恢复流程：先调此方法渲染历史，再调 `connect()` 收增量。
     func getEvents(conversationID: String) async throws -> [AgentEvent]
 
+    /// 事件增量读取（P8.7 子流轮询）。`since` = 已消费的事件计数游标（0 = 从头），
+    /// 下一次调用传返回值里的 `nextSince`。子流（job/subagent）id 可直接作为
+    /// `conversationID` —— 该端点按 id 直读事件日志，不要求是根会话。
+    func getEventBatch(conversationID: String, since: Int) async throws -> AgentEventBatch
+
     // MARK: - Assets
 
     /// Structured asset preview derived from persisted conversation events.
@@ -111,5 +116,12 @@ extension RuntimeClient {
 
     public func getAssetContent(conversationID: String, assetID: String) async throws -> AgentAssetContentResponse {
         throw RuntimeHTTPError.unsupported
+    }
+
+    /// 默认实现：全量拉取后切尾（mock backend）。`DefaultAgentClient` 覆盖为 transport 直达。
+    public func getEventBatch(conversationID: String, since: Int) async throws -> AgentEventBatch {
+        let events = try await getEvents(conversationID: conversationID)
+        let tail = since < events.count ? Array(events[since...]) : []
+        return AgentEventBatch(events: tail, nextSince: max(since, events.count))
     }
 }

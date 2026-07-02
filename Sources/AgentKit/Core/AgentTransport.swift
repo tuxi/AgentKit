@@ -102,6 +102,10 @@ public protocol AgentTransport: Sendable {
     /// 历史事件 — 用于 Timeline 回放。
     func getEvents(conversationID: String) async throws -> [AgentEvent]
 
+    /// 事件增量读取（P8.7 子流轮询）。`since` = 已消费的服务端事件计数（0 = 从头）。
+    /// 返回本批事件与下一次调用应传的 `nextSince` 游标。
+    func getEventBatch(conversationID: String, since: Int) async throws -> AgentEventBatch
+
     // MARK: - Assets
 
     /// Structured asset preview derived from persisted conversation events.
@@ -139,5 +143,13 @@ extension AgentTransport {
 
     public func getAssetContent(conversationID: String, assetID: String) async throws -> AgentAssetContentResponse {
         throw RuntimeHTTPError.unsupported
+    }
+
+    /// 默认实现：全量拉取后按已转换事件数切尾（mock / 不支持 `since` 的 backend）。
+    /// 游标是"已转换事件计数"而非服务端原始计数 —— CodeAgentTransport 覆盖为原始计数。
+    public func getEventBatch(conversationID: String, since: Int) async throws -> AgentEventBatch {
+        let events = try await getEvents(conversationID: conversationID)
+        let tail = since < events.count ? Array(events[since...]) : []
+        return AgentEventBatch(events: tail, nextSince: max(since, events.count))
     }
 }

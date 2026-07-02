@@ -110,13 +110,19 @@ struct RuntimeHTTPClient: Sendable {
         return try decoder.decode([Message].self, from: data)
     }
 
-    /// `GET /v1/conversations/{id}/events` — 历史事件（WireEvent 格式，用于 Timeline 回放）。
+    /// `GET /v1/conversations/{id}/events[?since=N]` — 历史事件（WireEvent 格式，用于 Timeline 回放）。
     /// 返回原始 `[WireFrame]`，由调用方转为 `[AgentEvent]`。
-    func getEvents(conversationID: String) async throws -> [WireFrame] {
-        let url = try resolveBaseURL()
+    /// `since` > 0 时增量读取（P8.7 子流轮询）；`since` 的游标语义 = 已消费的服务端事件计数，
+    /// 依赖服务端 seq 连续无空洞 —— 待后端确认（docs/p8.7-client-plan.md §4 问题 1）。
+    func getEvents(conversationID: String, since: Int = 0) async throws -> [WireFrame] {
+        var url = try resolveBaseURL()
             .appendingPathComponent("v1/conversations")
             .appendingPathComponent(conversationID)
             .appendingPathComponent("events")
+        if since > 0, var components = URLComponents(url: url, resolvingAgainstBaseURL: false) {
+            components.queryItems = [URLQueryItem(name: "since", value: String(since))]
+            url = components.url ?? url
+        }
         var request = URLRequest(url: url)
         request.httpMethod = "GET"
 
