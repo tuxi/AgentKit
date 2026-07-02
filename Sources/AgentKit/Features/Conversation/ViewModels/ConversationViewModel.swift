@@ -124,8 +124,9 @@ public final class ConversationViewModel {
             }
         }
 
-        // Phase 1: 拉取历史数据 → import into engine
-        await fetchHistory(conversationID: conversation.id, engine: eng)
+        // Phase 1: 拉取历史数据 → import into engine。
+        // 返回值 = 历史批最大 seq（v1.2 §4 续传游标）。
+        let sinceCursor = await fetchHistory(conversationID: conversation.id, engine: eng)
 
         // Phase 2: 连接实时流 → feed to engine
         do {
@@ -135,7 +136,10 @@ public final class ConversationViewModel {
                 await client.registerTools(toolInfos)
             }
 
-            let eventStream = try await client.connect(conversationID: conversation.id)
+            // 把历史游标 seed 给传输层：直播流对 seq <= cursor 的帧去重（§2 恢复流程），
+            // 且每次（重）连后传输层先 GET /events?since=<已收最大 seq> 补缺口再放行直播帧
+            // ——断线重连对本 stream 透明，不再整页重放历史。
+            let eventStream = try await client.connect(conversationID: conversation.id, since: sinceCursor)
             isConnected = true
             await eng.markLive()
 
@@ -204,10 +208,13 @@ public final class ConversationViewModel {
 
     // MARK: - History
 
-    private func fetchHistory(conversationID: String, engine: RuntimeEngine) async {
+    /// - Returns: v1.2 §4 续传游标 = 历史批最大 `seq`（`AgentEventBatch.nextSince`），
+    ///   传给 `connect(conversationID:since:)` 衔接直播流。历史拉取失败时返回 0（从头）。
+    private func fetchHistory(conversationID: String, engine: RuntimeEngine) async -> Int {
         async let detailTask = try? client.getConversationDetail(id: conversationID)
         async let messagesTask = try? client.getMessages(conversationID: conversationID)
-        async let eventsTask = try? client.getEvents(conversationID: conversationID)
+        // 用 getEventBatch 而非 getEvents：除事件外还带 nextSince（= 最大 seq）游标。
+        async let eventsTask = try? client.getEventBatch(conversationID: conversationID, since: 0)
 
         let (detailResult, messagesResult, eventsResult) = await (detailTask, messagesTask, eventsTask)
 
@@ -218,16 +225,20 @@ public final class ConversationViewModel {
         }
         self.messages = messagesResult ?? []
 
-        if let events = eventsResult {
+        var sinceCursor = 0
+        if let batch = eventsResult {
+            sinceCursor = batch.nextSince
+
             // v2: import into engine (replays through reducer → projects timeline)
-            await engine.importHistory(events)
+            await engine.importHistory(batch.events)
 
             // Also replay into legacy state for backward compat
-            for event in events {
+            for event in batch.events {
                 state.reduce(event)
             }
         }
         state.historyReplayed = true
+        return sinceCursor
     }
 
     // MARK: - Event handling

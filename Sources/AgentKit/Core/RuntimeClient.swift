@@ -34,8 +34,12 @@ public protocol RuntimeClient: Sendable {
     /// ⚠️ `connect` = attach to server-owned session, NOT create session.
     ///
     /// - Parameter conversationID: server-assigned session id。
+    /// - Parameter since: 续传游标 = 已回放历史里最大的 `seq`（v1.2 §4；
+    ///   即 `getEventBatch(since: 0)` 返回的 `nextSince`，0 = 无历史）。
+    ///   实现方对直播流按 seq 去重，并在每次（重）连后先补 `since` 之后的缺口
+    ///   再放行直播帧 —— 断线重连对上层流透明，不再需要整页重放历史。
     /// - Returns: `AsyncStream<AgentEvent>` — 持续产出事件直到连接断开。
-    func connect(conversationID: String) async throws -> AsyncStream<AgentEvent>
+    func connect(conversationID: String, since: Int) async throws -> AsyncStream<AgentEvent>
 
     /// 发送结构化输入到 backend runtime。
     ///
@@ -99,6 +103,11 @@ public protocol RuntimeClient: Sendable {
 // MARK: - Backward compatibility
 
 extension RuntimeClient {
+    /// 便捷入口：不带续传游标的 connect（等价 `since: 0`，即无已回放历史）。
+    public func connect(conversationID: String) async throws -> AsyncStream<AgentEvent> {
+        try await connect(conversationID: conversationID, since: 0)
+    }
+
     /// 向后兼容：纯文本消息发送。
     /// - Deprecated: 使用 `send(input: .text(...))` 替代。
     @available(*, deprecated, message: "Use send(input: .text(...))")

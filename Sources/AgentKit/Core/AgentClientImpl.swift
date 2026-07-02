@@ -51,10 +51,17 @@ public final class CodeAgentTransport: AgentTransport, @unchecked Sendable {
         try await http.renameConversation(id: id, name: name)
     }
 
-    public func attach(sessionID: String) async throws -> AsyncStream<AgentEvent> {
+    public func attach(sessionID: String, since: Int) async throws -> AsyncStream<AgentEvent> {
         await disconnect()
 
-        let newSocket = AgentWireSocket(environment: environment, conversationID: sessionID)
+        let newSocket = AgentWireSocket(environment: environment, conversationID: sessionID, since: since)
+
+        // v1.2 §4 增量续传：每次握手（含 WebSocketClient 自动重连）后，socket 用
+        // `GET /events?since=<已收最大 seq>` 补缺口再放行直播帧。取数走 HTTP 面。
+        let http = self.http
+        newSocket.gapFetch = { since in
+            try await http.getEvents(conversationID: sessionID, since: since)
+        }
 
         // 握手完成后自动发送待注册的客户端工具
         let tools = pendingTools
@@ -214,8 +221,8 @@ public final class DefaultAgentClient: RuntimeClient, @unchecked Sendable {
         try await transport.renameConversation(id: id, name: name)
     }
 
-    public func connect(conversationID: String) async throws -> AsyncStream<AgentEvent> {
-        try await transport.attach(sessionID: conversationID)
+    public func connect(conversationID: String, since: Int) async throws -> AsyncStream<AgentEvent> {
+        try await transport.attach(sessionID: conversationID, since: since)
     }
 
     public func send(input: AgentInput) async {

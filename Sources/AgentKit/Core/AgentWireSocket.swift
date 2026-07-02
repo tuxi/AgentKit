@@ -33,6 +33,25 @@ public final class AgentWireSocket: @unchecked Sendable {
     /// 握手状态：hello 帧到达前，所有消息都缓存或忽略。
     private var handshakeComplete = false
 
+    // ── v1.2 §4 增量续传（docs/client_integration_v1.md §2 / §5.8-8）──
+
+    /// 已收到帧里最大的持久化 `seq` —— 续传游标。
+    /// 初值由调用方 seed（= 历史回放批的最大 seq），此后由每个带 seq 的帧推进。
+    /// seq 单调递增但有空洞，去重只做 `seq <= maxSeq` 丢弃，绝不按条数推算。
+    /// 读写都在主线程（WebSocketClient 回调统一主线程；backfill Task 显式 @MainActor）。
+    private var maxSeq: Int
+
+    /// 补缺口取数：`GET /v1/conversations/{id}/events?since=<seq>` → 原始帧。
+    /// 由 transport 注入（socket 不持有 HTTP client）。nil = 不补缺口（纯直播）。
+    var gapFetch: (@Sendable (_ since: Int) async throws -> [WireFrame])?
+
+    /// backfill 进行中：直播事件帧先入缓冲，补完缺口后按到达顺序冲刷（同一去重口径）。
+    private var isBackfilling = false
+    private var backfillBuffer: [WireFrame] = []
+
+    /// 每次握手 / 断开递增；过期的 backfill 任务直接放弃，不写回状态。
+    private var backfillGeneration = 0
+
     /// hello 帧中声明的 server capabilities。
     private(set) var serverCapabilities: [String] = []
 
@@ -45,9 +64,12 @@ public final class AgentWireSocket: @unchecked Sendable {
 
     // MARK: - Init
 
-    public init(environment: RuntimeEnvironment, conversationID: String) {
+    /// - Parameter since: 续传游标初值 = 调用方已回放事件里最大的 `seq`（0 = 无历史）。
+    ///   直播流里 `seq <= since` 的帧会被当作与历史批重叠的重复帧丢弃（§2 恢复流程）。
+    public init(environment: RuntimeEnvironment, conversationID: String, since: Int = 0) {
         self.environment = environment
         self.conversationID = conversationID
+        self.maxSeq = since
         self.wsClient = WebSocketClient(identifier: "agent-wire.\(conversationID)")
     }
 
@@ -108,6 +130,9 @@ public final class AgentWireSocket: @unchecked Sendable {
             self.wsClient.onDisconnected = { [weak self] _ in
                 guard let self else { return }
                 self.handshakeComplete = false
+                // 丢弃进行中的 backfill：缓冲帧都已持久化在服务端，游标未被它们推进，
+                // 重连后的下一次 backfill 会从同一 maxSeq 重新补齐，不丢事件。
+                self.abandonBackfill()
                 guard self.isExplicitDisconnect else { return }
                 self.continuation?.finish()
                 self.continuation = nil
@@ -161,12 +186,14 @@ public final class AgentWireSocket: @unchecked Sendable {
         continuation?.finish()
         continuation = nil
         handshakeComplete = false
+        abandonBackfill()
         wsClient.disconnect()
     }
 
     // MARK: - Frame handling
 
-    private func handleFrame(data: Data) {
+    /// internal（而非 private）：单测直接喂帧驱动握手 / 去重 / backfill 路径。
+    func handleFrame(data: Data) {
         guard let frame = try? decoder.decode(WireFrame.self, from: data) else {
             return
         }
@@ -198,6 +225,9 @@ public final class AgentWireSocket: @unchecked Sendable {
             serverIdentifier = frame.server
             // 通知 transport 层握手完成（用于发送 register_tools 等）
             onHandshake?()
+            // §5.8-8：每次握手（首连 + 自动重连）都先补缺口再放行直播帧。
+            // 首连覆盖「历史 GET 与 WS attach 之间」的窗口；重连覆盖断线期间的缺口。
+            startBackfill()
             // hello 帧是内部握手，不暴露给 UI
 
         case "approval_request":
@@ -219,10 +249,61 @@ public final class AgentWireSocket: @unchecked Sendable {
     private func handleEventFrame(frame: WireFrame) {
         guard handshakeComplete else { return }
 
+        // backfill 期间直播帧先入缓冲，保证「缺口事件 → 直播事件」的时序。
+        if isBackfilling {
+            backfillBuffer.append(frame)
+            return
+        }
+        yieldEventFrame(frame)
+    }
+
+    /// 去重 → 推进游标 → 转换并产出。直播帧与 backfill 帧走同一口径。
+    private func yieldEventFrame(_ frame: WireFrame) {
+        if let seq = frame.seq {
+            // 与历史批 / 补缺批重叠的重复帧：丢弃（v1.2 §4，token_delta 无 seq 直通）。
+            guard seq > maxSeq else { return }
+            // 游标来自原始帧：未知 kind 被下面 from(wire:) 丢弃也照样推进。
+            maxSeq = seq
+        }
         if let event = AgentEvent.from(wire: frame) {
             continuation?.yield(event)
         }
         // 未知 kind → AgentEvent.from 返回 nil → 忽略（前向兼容）
+    }
+
+    // MARK: - Reconnect gap backfill
+
+    /// 握手完成后补缺口：`GET /events?since=<maxSeq>` 先行，期间直播帧缓冲，补完按序冲刷。
+    private func startBackfill() {
+        guard let gapFetch else { return }
+        backfillGeneration += 1
+        let generation = backfillGeneration
+        isBackfilling = true
+        backfillBuffer.removeAll()
+        let since = maxSeq
+
+        Task { @MainActor [weak self] in
+            // 取数失败按空批处理：直播可用性优先，先放行缓冲帧。此时缺口事件会缺席
+            // 到下一次重连 / 整页历史回放（缓冲帧会推进 maxSeq，本次缺口不再自动补）。
+            let frames = (try? await gapFetch(since)) ?? []
+            guard let self, generation == self.backfillGeneration else { return }
+            for frame in frames {
+                self.yieldEventFrame(frame)
+            }
+            let buffered = self.backfillBuffer
+            self.backfillBuffer = []
+            self.isBackfilling = false
+            for frame in buffered {
+                self.yieldEventFrame(frame)
+            }
+        }
+    }
+
+    /// 断开（主动或意外）时废弃进行中的 backfill 与缓冲。
+    private func abandonBackfill() {
+        backfillGeneration += 1
+        isBackfilling = false
+        backfillBuffer.removeAll()
     }
 
     // MARK: - Outgoing
