@@ -9,6 +9,7 @@ import Foundation
 
 public enum InspectorSelection: Hashable {
     case file(FilePayload)
+    case directory(DirectoryPayload)
     case diff(DiffPayload)
     case terminal(TerminalPayload)
     case asset(AssetPreviewPayload)

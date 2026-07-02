@@ -162,6 +162,12 @@ struct AssetPreviewInspectorView: View {
                 Spacer()
             }
             .padding()
+        } else if displayAsset.kind == "directory" {
+            DirectoryAssetPreview(
+                asset: displayAsset,
+                content: displayContent
+            )
+            .padding()
         } else {
             FileArtifactBody(
                 filePath: displayAsset.assetPath ?? displayAsset.id,
@@ -336,6 +342,49 @@ private struct AssetRow: View {
     }
 }
 
+private struct DirectoryAssetPreview: View {
+    let asset: AgentAssetRef
+    let content: String
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            HStack(alignment: .top, spacing: 10) {
+                Image(systemName: "folder")
+                    .foregroundStyle(.blue)
+                    .frame(width: 22)
+                VStack(alignment: .leading, spacing: 3) {
+                    Text(asset.assetTitle)
+                        .font(.headline)
+                    Text(asset.assetSubtitle)
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .textSelection(.enabled)
+                }
+                Spacer()
+            }
+
+            if !trimmedContent.isEmpty, trimmedContent != asset.assetSubtitle {
+                Text(trimmedContent)
+                    .font(.caption.monospaced())
+                    .foregroundStyle(.secondary)
+                    .textSelection(.enabled)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding(10)
+                    .background(.black.opacity(0.05))
+                    .clipShape(RoundedRectangle(cornerRadius: 6))
+            } else {
+                ContentUnavailableView("Directory", systemImage: "folder")
+            }
+
+            Spacer()
+        }
+    }
+
+    private var trimmedContent: String {
+        content.trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+}
+
 extension AgentAssetRef {
     var assetTitle: String {
         if let displayName, !displayName.isEmpty { return displayName }
@@ -370,6 +419,16 @@ extension AgentAssetRef {
     }
 
     var previewContent: String {
+        if kind == "directory" {
+            if let preview, !preview.isEmpty {
+                return preview
+            }
+            if let metadata, !metadata.isEmpty,
+               let text = JSONValue.object(metadata).prettyJSONString {
+                return text
+            }
+            return assetSubtitle
+        }
         if let absolutePath,
            let content = try? String(contentsOfFile: absolutePath, encoding: .utf8) {
             return content
@@ -463,6 +522,8 @@ extension AgentAssetRef {
     var assetAccentColor: Color {
         switch kind {
         case "file", "file_location", "search_result", "symbol":
+            return .blue
+        case "directory":
             return .blue
         case "url":
             return .purple

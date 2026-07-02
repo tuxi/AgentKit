@@ -15,6 +15,7 @@ import Foundation
 public enum ArtifactContent: Sendable, Hashable {
     case diff(DiffPayload)
     case file(FilePayload)
+    case directory(DirectoryPayload)
     case terminal(TerminalPayload)
 }
 
@@ -57,6 +58,27 @@ public struct FilePayload: Sendable, Hashable {
         self.content = content
         self.language = language
         self.isNew = isNew
+    }
+}
+
+// MARK: - DirectoryPayload
+
+/// 目录/list 类工具的结构化产出。
+public struct DirectoryPayload: Sendable, Hashable {
+    /// 目录路径。
+    public let path: String
+    /// 列表输出文本。
+    public let listing: String
+
+    public init(path: String, listing: String) {
+        self.path = path
+        self.listing = listing
+    }
+
+    public var entryCount: Int {
+        listing.components(separatedBy: "\n")
+            .filter { !$0.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }
+            .count
     }
 }
 

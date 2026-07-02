@@ -161,6 +161,8 @@ enum ToolTranscriptPresenter {
                     if let language = payload.language, !language.isEmpty {
                         return .code(language: language)
                     }
+                case .directory:
+                    return .text
                 case .diff:
                     return .diff
                 case .terminal:

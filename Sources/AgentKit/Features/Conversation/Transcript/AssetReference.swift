@@ -122,17 +122,27 @@ struct AssetIndex: Sendable {
 
     func reference(forPath raw: String, sourceCallID: String? = nil) -> AssetReference {
         let normalized = Self.normalizedPath(raw)
+        let artifact = artifact(path: raw)
+        if let artifact {
+            return AssetReference(
+                display: raw,
+                kind: .artifact,
+                target: normalized,
+                turnID: turnID,
+                sourceCallID: sourceCallID,
+                resolvedArtifactCallID: artifact.callID
+            )
+        }
         if let structured = structuredAsset(path: normalized) {
             return reference(forStructuredAsset: structured, display: raw)
         }
-        let artifact = artifact(path: raw)
         return AssetReference(
             display: raw,
-            kind: artifact == nil ? .filePath : .artifact,
+            kind: .filePath,
             target: normalized,
             turnID: turnID,
             sourceCallID: sourceCallID,
-            resolvedArtifactCallID: artifact?.callID
+            resolvedArtifactCallID: nil
         )
     }
 
@@ -172,15 +182,18 @@ struct AssetIndex: Sendable {
     }
 
     private static func normalizedPath(_ path: String) -> String {
-        path
+        let trimmed = path
             .trimmingCharacters(in: CharacterSet(charactersIn: "`'\".,;:)]}"))
             .replacingOccurrences(of: "\\/", with: "/")
+        guard trimmed != "/" else { return trimmed }
+        return trimmed.hasSuffix("/") ? String(trimmed.dropLast()) : trimmed
     }
 }
 
 enum AssetReferenceDetector {
     private static let urlPattern = #"https?://[^\s<>)\]]+"#
     private static let pathPattern = #"(?<![\w:/.-])(?:\.{1,2}/|/|[A-Za-z0-9_+.-]+/)[A-Za-z0-9_+@./:-]*\.[A-Za-z0-9_+-]+"#
+    private static let directoryPattern = #"(?<![\w:/.-])(?:\.{1,2}/|/|\.?[A-Za-z0-9_+.-]+/)(?:[A-Za-z0-9_+@.-]+/)*"#
 
     static func matches(in text: String, assetIndex: AssetIndex) -> [(range: NSRange, reference: AssetReference)] {
         let nsText = text as NSString
@@ -198,6 +211,16 @@ enum AssetReferenceDetector {
             }
             let raw = nsText.substring(with: match.range)
             results.append((match.range, assetIndex.reference(forPath: raw)))
+        }
+
+        for match in regex(directoryPattern).matches(in: text, range: fullRange) {
+            guard !results.contains(where: { NSIntersectionRange($0.0, match.range).length > 0 }) else {
+                continue
+            }
+            let raw = nsText.substring(with: match.range)
+            let reference = assetIndex.reference(forPath: raw)
+            guard reference.kind != .filePath else { continue }
+            results.append((match.range, reference))
         }
 
         return results.sorted(by: { (

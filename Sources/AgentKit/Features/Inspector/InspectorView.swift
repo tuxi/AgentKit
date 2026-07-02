@@ -25,6 +25,11 @@ public struct InspectorView: View {
 
                 FileInspectorView(payload: payload)
 
+            case .directory(let payload):
+
+                DirectoryArtifactView(payload: payload)
+                    .padding()
+
             case .diff(let payload):
 
                 DiffInspectorView(payload: payload)

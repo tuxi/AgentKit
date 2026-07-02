@@ -146,3 +146,72 @@ struct FileArtifactView: View {
         content.components(separatedBy: "\n").count
     }
 }
+
+// MARK: - DirectoryArtifactView
+
+struct DirectoryArtifactView: View {
+    let payload: DirectoryPayload
+
+    @State private var isExpanded = true
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Button {
+                withAnimation { isExpanded.toggle() }
+            } label: {
+                HStack(spacing: 7) {
+                    Image(systemName: "folder")
+                        .font(.caption)
+                        .foregroundStyle(.blue)
+                    VStack(alignment: .leading, spacing: 1) {
+                        Text(directoryName)
+                            .font(.caption.monospaced().weight(.medium))
+                            .lineLimit(1)
+                        Text(payload.path)
+                            .font(.caption2)
+                            .foregroundStyle(.secondary)
+                            .lineLimit(1)
+                    }
+                    Spacer()
+                    Text("\(entryCount) items")
+                        .font(.caption2.monospacedDigit())
+                        .foregroundStyle(.tertiary)
+                    Image(systemName: isExpanded ? "chevron.up" : "chevron.down")
+                        .font(.caption2)
+                        .foregroundStyle(.tertiary)
+                }
+            }
+            .buttonStyle(.plain)
+
+            if isExpanded, !trimmedListing.isEmpty {
+                Text(trimmedListing)
+                    .font(.caption2.monospaced())
+                    .foregroundStyle(.secondary)
+                    .textSelection(.enabled)
+                    .lineLimit(80)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding(8)
+                    .background(.black.opacity(0.05))
+                    .clipShape(RoundedRectangle(cornerRadius: 6))
+            }
+        }
+        .padding(8)
+        .background(.quaternary.opacity(0.5))
+        .clipShape(RoundedRectangle(cornerRadius: 8))
+    }
+
+    private var directoryName: String {
+        let name = (payload.path as NSString).lastPathComponent
+        return name.isEmpty ? payload.path : name + "/"
+    }
+
+    private var trimmedListing: String {
+        payload.listing.trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    private var entryCount: Int {
+        trimmedListing.components(separatedBy: "\n")
+            .filter { !$0.trimmingCharacters(in: .whitespaces).isEmpty }
+            .count
+    }
+}

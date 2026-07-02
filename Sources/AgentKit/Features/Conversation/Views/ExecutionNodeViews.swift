@@ -195,6 +195,13 @@ struct ArtifactCard: View {
                         .lineLimit(15)
                         .textSelection(.enabled)
 
+                case .directory(let p):
+                    Text(p.listing)
+                        .font(.caption2.monospaced())
+                        .foregroundStyle(.secondary)
+                        .lineLimit(15)
+                        .textSelection(.enabled)
+
                 case .diff(let p):
                     VStack(alignment: .leading, spacing: 2) {
                         if p.addedLines > 0 {
@@ -243,6 +250,7 @@ struct ArtifactCard: View {
     private func openInInspector() {
         switch artifact.content {
         case .file(let payload): store.showInspector(.file(payload))
+        case .directory(let payload): store.showInspector(.directory(payload))
         case .diff(let payload): store.showInspector(.diff(payload))
         case .terminal(let payload): store.showInspector(.terminal(payload))
         }

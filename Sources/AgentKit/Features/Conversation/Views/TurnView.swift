@@ -251,6 +251,8 @@ struct TurnView: View {
         switch artifact.content {
         case .file(let payload):
             store.showInspector(.file(payload))
+        case .directory(let payload):
+            store.showInspector(.directory(payload))
         case .diff(let payload):
             store.showInspector(.diff(payload))
         case .terminal(let payload):

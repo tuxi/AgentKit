@@ -103,10 +103,8 @@ public struct ToolSemanticCompiler {
             return .file(FilePayload(filePath: path, content: content, language: language, isNew: isNew))
         case .files:
             let path = extractFilePath(from: tool) ?? "unknown"
-            let content = tool.result?.observation ?? ""
-            let language = extractLanguage(from: tool, filePath: path)
-            let isNew = (kind == .fileCreated)
-            return .file(FilePayload(filePath: path, content: content, language: language, isNew: isNew))
+            let listing = normalizeDirectoryListing(tool.result?.observation ?? "")
+            return .directory(DirectoryPayload(path: path, listing: listing))
         case .terminal:
             let command = extractCommand(from: tool) ?? "unknown"
             let output = tool.result?.observation ?? ""
@@ -171,6 +169,21 @@ public struct ToolSemanticCompiler {
             return parseExitCodeFromObservation(obs)
         }
         return nil
+    }
+
+    private static func normalizeDirectoryListing(_ observation: String) -> String {
+        var lines = observation.components(separatedBy: "\n")
+        if let first = lines.first?.trimmingCharacters(in: .whitespacesAndNewlines),
+           first.hasPrefix("[observation]") {
+            lines.removeFirst()
+            if lines.first?.trimmingCharacters(in: .whitespacesAndNewlines) == "---" {
+                lines.removeFirst()
+            }
+        }
+
+        let listing = lines.joined(separator: "\n")
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        return listing == "(empty)" ? "" : listing
     }
 
     // MARK: - Observation fallback parsers

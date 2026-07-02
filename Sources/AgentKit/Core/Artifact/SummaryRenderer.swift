@@ -25,10 +25,8 @@ public struct SummaryRenderer {
         let fileName = node.path.map { ($0 as NSString).lastPathComponent } ?? "file"
 
         switch (node.kind, node.content) {
-        case (.listFiles, .file(let p)):
-            let count = p.content.components(separatedBy: "\n")
-                .filter { !$0.trimmingCharacters(in: .whitespaces).isEmpty }
-                .count
+        case (.listFiles, .directory(let p)):
+            let count = p.entryCount
             let dirName = node.path.map { ($0 as NSString).lastPathComponent } ?? "."
             return "Listed \(count) files in \(dirName)/"
 

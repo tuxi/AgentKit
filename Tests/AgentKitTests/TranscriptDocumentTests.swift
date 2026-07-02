@@ -8,6 +8,57 @@ import XCTest
 
 final class TranscriptDocumentTests: XCTestCase {
 
+    func testListFilesCompilesToDirectoryArtifact() {
+        var tool = ToolCallItem(
+            callID: "call_list",
+            toolName: "list_files",
+            toolArgs: .object(["path": .string("Sources/AgentKit")])
+        )
+        tool.status = .completed
+        tool.result = ToolResult(
+            callID: "call_list",
+            toolName: "list_files",
+            observation: "Core\nFeatures\nResources",
+            error: nil
+        )
+
+        let artifact = ToolSemanticCompiler.compile(tool, turnID: "turn")
+
+        XCTAssertEqual(artifact?.renderKind, .files)
+        guard case .directory(let payload) = artifact?.content else {
+            XCTFail("Expected list_files to render as a directory artifact")
+            return
+        }
+        XCTAssertEqual(payload.path, "Sources/AgentKit")
+        XCTAssertEqual(payload.listing, "Core\nFeatures\nResources")
+    }
+
+    func testListFilesEmptyObservationCompilesToEmptyDirectoryListing() {
+        var tool = ToolCallItem(
+            callID: "call_list",
+            toolName: "list_files",
+            toolArgs: .object(["path": .string(".git")])
+        )
+        tool.status = .completed
+        tool.result = ToolResult(
+            callID: "call_list",
+            toolName: "list_files",
+            observation: "[observation] ok\n---\n(empty)",
+            error: nil
+        )
+
+        let artifact = ToolSemanticCompiler.compile(tool, turnID: "turn")
+
+        guard case .directory(let payload) = artifact?.content else {
+            XCTFail("Expected list_files to render as a directory artifact")
+            return
+        }
+        XCTAssertEqual(payload.path, ".git")
+        XCTAssertEqual(payload.listing, "")
+        XCTAssertEqual(payload.entryCount, 0)
+        XCTAssertEqual(artifact.map(SummaryRenderer.summary), "Listed 0 files in .git/")
+    }
+
     func testToolPresenterMakesReadableTitles() {
         let read = ToolNodePayload(
             callID: "c1",
@@ -781,6 +832,58 @@ final class TranscriptDocumentTests: XCTestCase {
             return reference.kind == .artifact
                 && reference.target == "Sources/App.swift"
                 && reference.resolvedArtifactCallID == "c1"
+        })
+    }
+
+    func testDirectoryPathPrefersTurnArtifactOverStructuredAsset() {
+        let artifact = ArtifactNode(
+            callID: "call_list",
+            turnID: "turn",
+            kind: .listFiles,
+            renderKind: .files,
+            path: ".git",
+            content: .directory(DirectoryPayload(path: ".git", listing: ""))
+        )
+        let runtimeDirectory = AgentAssetRef(
+            id: "asset_directory_git",
+            kind: "directory",
+            displayName: ".git/",
+            workspaceRelativePath: ".git",
+            preview: ".git/objects/info/\n.git/objects/pack/"
+        )
+        let tool = ToolNodePayload(
+            callID: "call_list",
+            toolName: "list_files",
+            args: .object(["path": .string(".git")]),
+            status: .completed,
+            output: "[observation] ok\n---\n(empty)",
+            assets: [runtimeDirectory],
+            artifact: artifact
+        )
+        let turn = ConversationTurn(
+            id: "turn",
+            userPrompt: nil,
+            blocks: [
+                .toolGroup(ToolGroup(id: "call_list", tools: [tool])),
+                .text(id: "t1", MessageNodePayload(
+                    role: .assistant,
+                    text: "Open `.git/`."
+                ))
+            ],
+            footer: nil,
+            isLive: false
+        )
+
+        let transcript = TurnTranscriptBuilder.build(
+            turn: turn,
+            state: TranscriptDocumentState()
+        )
+
+        XCTAssertTrue(transcript.actions.values.contains {
+            guard case .openAsset(let reference) = $0 else { return false }
+            return reference.display == ".git/"
+                && reference.kind == .artifact
+                && reference.resolvedArtifactCallID == "call_list"
         })
     }
 

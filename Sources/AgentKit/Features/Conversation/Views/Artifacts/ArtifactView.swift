@@ -28,6 +28,9 @@ struct ArtifactView: View {
                 language: payload.language
             )
 
+        case .directory(let payload):
+            DirectoryArtifactView(payload: payload)
+
         case .terminal(let payload):
             TerminalArtifactView(
                 command: payload.command,
