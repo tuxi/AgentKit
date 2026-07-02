@@ -39,6 +39,17 @@ public struct AgentAssetPreviewResponse: Sendable, Hashable, Decodable {
         case mimeType = "mime_type"
         case sizeBytes = "size_bytes"
     }
+
+    public init(from decoder: any Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        self.asset = try container.decode(AgentAssetRef.self, forKey: .asset)
+        self.kind = try container.decodeIfPresent(String.self, forKey: .kind)
+        self.content = try container.decodeIfPresent(String.self, forKey: .content)
+        self.mimeType = try container.decodeIfPresent(String.self, forKey: .mimeType)
+        self.sizeBytes = try container.decodeIfPresent(Int64.self, forKey: .sizeBytes)
+        self.truncated = try container.decodeIfPresent(Bool.self, forKey: .truncated) ?? false
+        self.source = try container.decodeIfPresent(String.self, forKey: .source)
+    }
 }
 
 public struct AgentAssetContentResponse: Sendable, Hashable, Decodable {
@@ -66,5 +77,14 @@ public struct AgentAssetContentResponse: Sendable, Hashable, Decodable {
         case asset, content, truncated
         case mimeType = "mime_type"
         case sizeBytes = "size_bytes"
+    }
+
+    public init(from decoder: any Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        self.asset = try container.decode(AgentAssetRef.self, forKey: .asset)
+        self.content = try container.decode(String.self, forKey: .content)
+        self.truncated = try container.decodeIfPresent(Bool.self, forKey: .truncated) ?? false
+        self.mimeType = try container.decodeIfPresent(String.self, forKey: .mimeType)
+        self.sizeBytes = try container.decodeIfPresent(Int64.self, forKey: .sizeBytes)
     }
 }

@@ -202,11 +202,16 @@ struct AssetPreviewInspectorView: View {
     }
 
     private var displayAsset: AgentAssetRef {
-        loadedAsset ?? payload.asset
+        guard let loadedAsset else { return payload.asset }
+        return loadedAsset.mergedForDisplay(fallback: payload.asset)
     }
 
     private var displayContent: String {
         if let loadedContent, !loadedContent.isEmpty {
+            if let localContent = displayAsset.localTextContent,
+               shouldPreferLocalContent(localContent, over: loadedContent) {
+                return localContent
+            }
             return loadedContent
         }
         return displayAsset.previewContent
@@ -238,11 +243,16 @@ struct AssetPreviewInspectorView: View {
     }
 
     private var shouldUseClientPreviewWindow: Bool {
-        loadedContent == nil && displayContent.utf8.count > AssetPreviewLimits.clientPreviewBytes
+        !isDisplayingLoadedContent && displayContent.utf8.count > AssetPreviewLimits.clientPreviewBytes
     }
 
     private var clientPreviewWindow: AssetTextWindow {
         AssetTextWindow(content: displayContent, maxBytes: AssetPreviewLimits.clientPreviewBytes)
+    }
+
+    private var isDisplayingLoadedContent: Bool {
+        guard let loadedContent, !loadedContent.isEmpty else { return false }
+        return displayContent == loadedContent
     }
 
     private var readNotice: some View {
@@ -357,8 +367,9 @@ struct AssetPreviewInspectorView: View {
     }
 
     private func shouldLoadFullContent(asset: AgentAssetRef, mimeType: String?) -> Bool {
-        guard asset.assetPath != nil else { return false }
-        switch asset.kind {
+        let candidate = asset.mergedForDisplay(fallback: payload.asset)
+        guard candidate.assetPath != nil else { return false }
+        switch candidate.kind {
         case "file", "file_location", "symbol", "search_result", "markdown", "diff":
             return true
         case "directory", "url", "image", "audio":
@@ -369,6 +380,17 @@ struct AssetPreviewInspectorView: View {
             }
             return false
         }
+    }
+
+    private func shouldPreferLocalContent(_ localContent: String, over loadedContent: String) -> Bool {
+        let localTrimmed = localContent.trimmingCharacters(in: .whitespacesAndNewlines)
+        let loadedTrimmed = loadedContent.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !localTrimmed.isEmpty, localTrimmed != loadedTrimmed else { return false }
+
+        // Runtime preview responses can legitimately be tiny summaries, e.g. a
+        // read_file asset whose event preview is only the first line. When a
+        // local workspace file is available, use the richer on-disk text.
+        return localContent.utf8.count > loadedContent.utf8.count
     }
 
     private func byteCount(_ value: Int64) -> String {
@@ -383,6 +405,32 @@ struct AssetPreviewInspectorView: View {
             .padding(.vertical, 2)
             .background(.quaternary)
             .clipShape(Capsule())
+    }
+}
+
+private extension AgentAssetRef {
+    func mergedForDisplay(fallback: AgentAssetRef) -> AgentAssetRef {
+        guard id == fallback.id else { return self }
+        return AgentAssetRef(
+            id: id,
+            kind: kind,
+            uri: nonEmpty(uri) ?? fallback.uri,
+            displayName: nonEmpty(displayName) ?? fallback.displayName,
+            workspaceID: nonEmpty(workspaceID) ?? fallback.workspaceID,
+            workspaceRelativePath: nonEmpty(workspaceRelativePath) ?? fallback.workspaceRelativePath,
+            absolutePath: nonEmpty(absolutePath) ?? fallback.absolutePath,
+            range: range ?? fallback.range,
+            preview: nonEmpty(preview) ?? fallback.preview,
+            mimeType: nonEmpty(mimeType) ?? fallback.mimeType,
+            sourceTurnID: nonEmpty(sourceTurnID) ?? fallback.sourceTurnID,
+            sourceCallID: nonEmpty(sourceCallID) ?? fallback.sourceCallID,
+            metadata: metadata ?? fallback.metadata
+        )
+    }
+
+    private func nonEmpty(_ value: String?) -> String? {
+        guard let value, !value.isEmpty else { return nil }
+        return value
     }
 }
 
@@ -552,8 +600,7 @@ extension AgentAssetRef {
             }
             return assetSubtitle
         }
-        if let absolutePath,
-           let content = try? String(contentsOfFile: absolutePath, encoding: .utf8) {
+        if let content = localTextContent {
             return content
         }
         if let preview, !preview.isEmpty {
@@ -564,6 +611,13 @@ extension AgentAssetRef {
             return text
         }
         return assetSubtitle
+    }
+
+    var localTextContent: String? {
+        guard kind != "directory",
+              let absolutePath,
+              !absolutePath.isEmpty else { return nil }
+        return try? String(contentsOfFile: absolutePath, encoding: .utf8)
     }
 
     var fallbackPreviewSource: String? {

@@ -43,6 +43,27 @@ final class AssetAPIResponseTests: XCTestCase {
         XCTAssertEqual(response.asset.range?.startLine, 12)
     }
 
+    func testAssetPreviewResponseDefaultsMissingTruncatedToFalse() throws {
+        let json = """
+        {
+          "kind": "asset_preview",
+          "source": "file_window",
+          "content": "1\\t//",
+          "asset": {
+            "id": "asset_turn_1_call_1_001",
+            "kind": "file",
+            "display_name": "App.swift",
+            "workspace_relative_path": "Sources/App.swift"
+          }
+        }
+        """
+
+        let response = try JSONDecoder().decode(AgentAssetPreviewResponse.self, from: Data(json.utf8))
+
+        XCTAssertFalse(response.truncated)
+        XCTAssertEqual(response.content, "1\t//")
+    }
+
     func testAssetContentResponseDecodes() throws {
         let json = """
         {
@@ -68,5 +89,24 @@ final class AssetAPIResponseTests: XCTestCase {
         XCTAssertEqual(response.sizeBytes, 1_200_000)
         XCTAssertTrue(response.truncated)
         XCTAssertEqual(response.asset.workspaceRelativePath, "Sources/App.swift")
+    }
+
+    func testAssetContentResponseDefaultsMissingTruncatedToFalse() throws {
+        let json = """
+        {
+          "content": "import SwiftUI",
+          "asset": {
+            "id": "asset_turn_1_call_1_001",
+            "kind": "file",
+            "display_name": "App.swift",
+            "workspace_relative_path": "Sources/App.swift"
+          }
+        }
+        """
+
+        let response = try JSONDecoder().decode(AgentAssetContentResponse.self, from: Data(json.utf8))
+
+        XCTAssertFalse(response.truncated)
+        XCTAssertEqual(response.content, "import SwiftUI")
     }
 }
