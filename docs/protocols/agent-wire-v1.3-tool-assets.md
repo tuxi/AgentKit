@@ -238,10 +238,14 @@ The annotation still points at the concrete line asset via `asset_id`; no new
 protocol shape is needed.
 
 Markdown table line-number cells are treated as line mentions when the table
-header contains a line column, such as `行号` or `line`. If the same row contains
-a file/path column, the runtime resolves the line number against that file; a
-cell such as `同上` may inherit the previous row's file. Numeric cells in tables
-without a line-number header are not annotated.
+header contains a line column, such as `行`, `行号`, or `line`. If the same row
+contains a file/path column, the runtime resolves the line number against that
+file; a cell such as `同上` may inherit the previous row's file. A line cell may
+contain multiple comma-separated line numbers, such as `16, 70, 119`, and each
+number may become its own annotation. Shortened display paths with `...` may be
+resolved by basename only when that basename is unique among the turn's
+structured assets. Numeric cells in tables without a line-number header are not
+annotated.
 
 ## 6. Out of Scope For Phase 1
 

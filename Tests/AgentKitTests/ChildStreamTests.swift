@@ -84,8 +84,9 @@ final class ChildStreamTests: XCTestCase {
         XCTAssertNil(event)
     }
 
-    // MARK: - Golden 契约（docs/protocols/fixtures/job-observability/，
-    // 原样复制自 code-agent internal/server/testdata/*.json，后端 CI diff 锁定）
+    // MARK: - Golden 契约（Tests/AgentKitTests/Fixtures/job-observability/，
+    // 原样复制自 code-agent internal/server/testdata/*.json，后端 CI diff 锁定。
+    // 注意：不能放 docs/protocols/fixtures/ —— 那里会被后端文档镜像同步冲掉。）
 
     func testGoldenJobStarted() throws {
         let event = AgentEvent.from(wire: try goldenFrame("job_started.json"))
@@ -118,12 +119,9 @@ final class ChildStreamTests: XCTestCase {
     }
 
     private func goldenFrame(_ name: String) throws -> WireFrame {
-        let packageRoot = URL(fileURLWithPath: #filePath)
+        let data = try Data(contentsOf: URL(fileURLWithPath: #filePath)
             .deletingLastPathComponent()
-            .deletingLastPathComponent()
-            .deletingLastPathComponent()
-        let data = try Data(contentsOf: packageRoot
-            .appendingPathComponent("docs/protocols/fixtures/job-observability")
+            .appendingPathComponent("Fixtures/job-observability")
             .appendingPathComponent(name))
         return try JSONDecoder().decode(WireFrame.self, from: data)
     }
