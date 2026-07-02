@@ -103,7 +103,7 @@ final class TranscriptDocumentTests: XCTestCase {
         XCTAssertTrue(rendered.contains("path"))
         XCTAssertTrue(rendered.contains("Sources\\/App.swift"))
         XCTAssertTrue(rendered.contains("Output"))
-        XCTAssertTrue(rendered.contains("line 1\n  line 2"))
+        XCTAssertTrue(rendered.contains("line 1\nline 2"))
         XCTAssertTrue(rendered.contains("Artifact"))
         XCTAssertTrue(transcript.actions.values.contains(.toggleTool(callID: "c1")))
         XCTAssertTrue(transcript.actions.values.contains(.openArtifact(callID: "c1")))
@@ -243,7 +243,8 @@ final class TranscriptDocumentTests: XCTestCase {
 
         XCTAssertTrue(rendered.contains("! Error"))
         XCTAssertTrue(rendered.contains("Tool error: fetch: HTTP 404"))
-        XCTAssertNotNil(attributes(in: transcript.attributedString, for: "! Error")[.backgroundColor])
+        let errorBlock = attributes(in: transcript.attributedString, for: "! Error")[.transcriptBlock]
+        XCTAssertEqual((errorBlock as? TranscriptBlockValue)?.kind, .error)
         XCTAssertNotNil(attributes(in: transcript.attributedString, for: "Tool error")[.foregroundColor])
     }
 
@@ -270,9 +271,13 @@ final class TranscriptDocumentTests: XCTestCase {
             state: TranscriptDocumentState()
         )
 
-        XCTAssertTrue(transcript.attributedString.string.contains("TABLE"))
-        XCTAssertNotNil(attributes(in: transcript.attributedString, for: "文件 | 行 | 内容")[.backgroundColor])
-        XCTAssertNotNil(attributes(in: transcript.attributedString, for: "App.swift | 12 | value")[.backgroundColor])
+        // Header, rule, and body rows all carry the same table block tag so
+        // the layout manager draws one full-width background behind them.
+        let headerBlock = attributes(in: transcript.attributedString, for: "文件")[.transcriptBlock]
+        let rowBlock = attributes(in: transcript.attributedString, for: "App.swift")[.transcriptBlock]
+        XCTAssertEqual((headerBlock as? TranscriptBlockValue)?.kind, .table)
+        XCTAssertEqual((rowBlock as? TranscriptBlockValue)?.kind, .table)
+        XCTAssertEqual(headerBlock as? TranscriptBlockValue, rowBlock as? TranscriptBlockValue)
     }
 
     func testStandaloneArtifactProducesPathAction() {
@@ -964,7 +969,7 @@ final class TranscriptDocumentTests: XCTestCase {
         )
 
         let attrs = attributes(in: transcript.attributedString, for: "let value")
-        XCTAssertNotNil(attrs[.backgroundColor])
+        XCTAssertEqual((attrs[.transcriptBlock] as? TranscriptBlockValue)?.kind, .code)
         XCTAssertNotNil(attrs[.font])
     }
 

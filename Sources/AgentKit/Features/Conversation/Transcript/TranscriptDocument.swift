@@ -26,6 +26,7 @@ enum TranscriptAction: Hashable {
     case openURL(String)
     case openPath(String)
     case openChildStream(childID: String)
+    case copyBlock(text: String)
 }
 
 struct TranscriptDocumentState: Hashable {
@@ -192,7 +193,7 @@ enum TurnTranscriptBuilder {
             case .terminal:
                 builder.appendCode(tool.output, language: "shell")
             case .text:
-                builder.appendCode(tool.output)
+                builder.appendCode(tool.output, language: "text")
             }
         }
 
@@ -277,6 +278,9 @@ private struct TranscriptAttributedBuilder {
     private(set) var actions: [String: TranscriptAction] = [:]
     private var copyParts: [String] = []
     private var nextActionIndex = 0
+    private var nextBlockRunID = 0
+    private var listDepth = 0
+    private var quoteDepth = 0
     private var activeTextAnnotations: [AgentTextAnnotation] = []
     private var consumedTextAnnotationKeys = Set<String>()
 
@@ -326,8 +330,13 @@ private struct TranscriptAttributedBuilder {
     }
 
     mutating func appendSystemError(_ text: String) {
-        append("! Error  ", attributes: systemErrorLabelAttributes)
-        append(text, attributes: systemErrorBodyAttributes)
+        let block = makeBlock(.error)
+        var labelAttrs = systemErrorLabelAttributes
+        labelAttrs[.transcriptBlock] = block
+        var bodyAttrs = systemErrorBodyAttributes
+        bodyAttrs[.transcriptBlock] = block
+        append("! Error  ", attributes: labelAttrs)
+        append(text, attributes: bodyAttrs)
         copyParts.append("Error: \(text)")
     }
 
@@ -452,15 +461,21 @@ private struct TranscriptAttributedBuilder {
         return firstLine
     }
 
+    /// Code blocks are tagged with `.transcriptBlock` so the text view can
+    /// draw a full-width rounded background; horizontal padding comes from
+    /// paragraph indents, so the copied text stays clean of manual indents.
     mutating func appendCode(_ text: String, language: String? = nil, recordCopy: Bool = true) {
+        let block = makeBlock(.code)
         if let language, !language.isEmpty {
-            append("  \(language.uppercased())\n", attributes: codeLabelAttributes)
+            var labelAttrs = codeLabelAttributes
+            labelAttrs[.transcriptBlock] = block
+            append(language.uppercased(), attributes: labelAttrs)
+            appendCopyGlyph(for: text, block: block)
+            append("\n", attributes: labelAttrs)
         }
-        let indented = text
-            .components(separatedBy: "\n")
-            .map { "  \($0)" }
-            .joined(separator: "\n")
-        appendHighlightedCode(indented, language: language, attributes: codeAttributes)
+        var attrs = codeAttributes
+        attrs[.transcriptBlock] = block
+        appendHighlightedCode(text, language: language, attributes: attrs)
         if recordCopy {
             copyParts.append(text)
         }
@@ -468,16 +483,42 @@ private struct TranscriptAttributedBuilder {
 
     mutating func appendDiff(_ text: String, recordCopy: Bool = true) {
         let lines = text.components(separatedBy: "\n")
+        var runBlock: TranscriptBlockValue?
         for (index, line) in lines.enumerated() {
-            let display = "  \(line)"
-            appendTextWithAssetLinks(display, attributes: diffAttributes(for: line))
+            let kind = diffBlockKind(for: line)
+            if runBlock?.kind != kind {
+                runBlock = makeBlock(kind)
+            }
+            var attrs = diffAttributes(for: line)
+            attrs[.transcriptBlock] = runBlock
+            appendTextWithAssetLinks(line, attributes: attrs)
             if index < lines.count - 1 {
-                append("\n", attributes: codeAttributes)
+                append("\n", attributes: attrs)
             }
         }
         if recordCopy {
             copyParts.append(text)
         }
+    }
+
+    private mutating func appendCopyGlyph(for text: String, block: TranscriptBlockValue) {
+        let id = register(.copyBlock(text: text))
+        var attrs = toolChevronAttributes
+        attrs[.transcriptBlock] = block
+        appendLinked("  ⧉", id: id, attributes: attrs)
+    }
+
+    private mutating func makeBlock(_ kind: TranscriptBlockKind) -> TranscriptBlockValue {
+        let block = TranscriptBlockValue(kind: kind, runID: nextBlockRunID)
+        nextBlockRunID += 1
+        return block
+    }
+
+    private func diffBlockKind(for line: String) -> TranscriptBlockKind {
+        if line.hasPrefix("+") && !line.hasPrefix("+++") { return .diffAdded }
+        if line.hasPrefix("-") && !line.hasPrefix("---") { return .diffRemoved }
+        if line.hasPrefix("@@") { return .diffHunk }
+        return .diffContext
     }
 
     mutating func appendActionLine(_ text: String, action: TranscriptAction, style: ActionStyle) {
@@ -540,16 +581,10 @@ private struct TranscriptAttributedBuilder {
             appendInlines(inlines, attributes: markdownHeadingAttributes(level: level))
 
         case .codeBlock(let language, let code):
-            appendCode(code, language: language, recordCopy: false)
+            appendCode(code, language: language.isEmpty ? "text" : language, recordCopy: false)
 
         case .blockquote(let blocks):
-            for (index, inner) in blocks.enumerated() {
-                append("> ", attributes: metaAttributes)
-                appendMarkdownBlock(inner)
-                if index < blocks.count - 1 {
-                    append("\n", attributes: bodyAttributes)
-                }
-            }
+            appendBlockquote(blocks)
 
         case .unorderedList(let items):
             appendList(items: items) { _ in "-" }
@@ -558,10 +593,35 @@ private struct TranscriptAttributedBuilder {
             appendList(items: items) { i in "\(Int(startIndex) + i)." }
 
         case .thematicBreak:
-            append("────────", attributes: metaAttributes)
+            append(String(repeating: "─", count: 16), attributes: metaAttributes)
 
         case .table(let head, let body):
             appendTable(head: head, rows: body)
+        }
+    }
+
+    /// Quote body renders in the secondary tone with a leading indent; the
+    /// vertical bar is drawn by the layout manager from the `.quote` block tag.
+    private mutating func appendBlockquote(_ blocks: [MarkdownBlock]) {
+        quoteDepth += 1
+        let start = attributed.length
+        for (index, inner) in blocks.enumerated() {
+            appendMarkdownBlock(inner)
+            if index < blocks.count - 1 {
+                append("\n", attributes: bodyAttributes)
+            }
+        }
+        quoteDepth -= 1
+
+        // Tag everything appended for the bar, without clobbering nested
+        // blocks (code inside a quote keeps its code background).
+        let block = makeBlock(.quote)
+        let range = NSRange(location: start, length: attributed.length - start)
+        guard range.length > 0 else { return }
+        attributed.enumerateAttribute(.transcriptBlock, in: range) { value, subrange, _ in
+            if value == nil {
+                attributed.addAttribute(.transcriptBlock, value: block, range: subrange)
+            }
         }
     }
 
@@ -569,6 +629,9 @@ private struct TranscriptAttributedBuilder {
         items: [MarkdownListItem],
         marker: (Int) -> String
     ) {
+        listDepth += 1
+        defer { listDepth -= 1 }
+
         for (index, item) in items.enumerated() {
             let prefix: String
             if let checkbox = item.checkbox {
@@ -581,7 +644,7 @@ private struct TranscriptAttributedBuilder {
             for (blockIndex, block) in item.blocks.enumerated() {
                 appendMarkdownBlock(block)
                 if blockIndex < item.blocks.count - 1 {
-                    append("\n  ", attributes: bodyAttributes)
+                    append("\n", attributes: bodyAttributes)
                 }
             }
 
@@ -591,18 +654,84 @@ private struct TranscriptAttributedBuilder {
         }
     }
 
+    /// Column-aligned monospaced table: header emphasized, hairline rule,
+    /// then rows. CJK-aware padding keeps columns straight.
     private mutating func appendTable(head: [TableCell], rows: [[TableCell]]) {
-        let allRows = head.isEmpty ? rows : [head] + rows
-        let lines = allRows.map { row in
-            row.map { inlinePlainText($0.content) }.joined(separator: " | ")
+        let headTexts = head.map { inlinePlainText($0.content) }
+        let bodyTexts = rows.map { row in row.map { inlinePlainText($0.content) } }
+        let allRows = (headTexts.isEmpty ? [] : [headTexts]) + bodyTexts
+        guard !allRows.isEmpty else { return }
+
+        let columnCount = allRows.map(\.count).max() ?? 0
+        var widths = [Int](repeating: 0, count: columnCount)
+        for row in allRows {
+            for (column, cell) in row.enumerated() {
+                widths[column] = max(widths[column], displayWidth(cell))
+            }
         }
-        append("  TABLE\n", attributes: tableLabelAttributes)
-        let indented = lines
-            .joined(separator: "\n")
-            .components(separatedBy: "\n")
-            .map { "  \($0)" }
-            .joined(separator: "\n")
-        appendHighlightedCode(indented, language: "table", attributes: tableAttributes)
+
+        func paddedLine(_ row: [String]) -> String {
+            (0..<columnCount).map { column in
+                let cell = column < row.count ? row[column] : ""
+                guard column < columnCount - 1 else { return cell }
+                let padding = max(0, widths[column] - displayWidth(cell))
+                return cell + String(repeating: " ", count: padding)
+            }.joined(separator: "  ")
+        }
+
+        let block = makeBlock(.table)
+        var headerAttrs = tableHeaderAttributes
+        headerAttrs[.transcriptBlock] = block
+        var rowAttrs = tableAttributes
+        rowAttrs[.transcriptBlock] = block
+        var ruleAttrs = tableRuleAttributes
+        ruleAttrs[.transcriptBlock] = block
+
+        if !headTexts.isEmpty {
+            appendHighlightedCode(paddedLine(headTexts), language: "table", attributes: headerAttrs)
+            append("\n", attributes: headerAttrs)
+            let rule = widths
+                .map { String(repeating: "─", count: max(1, $0)) }
+                .joined(separator: "──")
+            append(rule, attributes: ruleAttrs)
+            if !bodyTexts.isEmpty {
+                append("\n", attributes: ruleAttrs)
+            }
+        }
+        for (index, row) in bodyTexts.enumerated() {
+            appendHighlightedCode(paddedLine(row), language: "table", attributes: rowAttrs)
+            if index < bodyTexts.count - 1 {
+                append("\n", attributes: rowAttrs)
+            }
+        }
+    }
+
+    /// Terminal-style display width: CJK and fullwidth characters count as 2.
+    private func displayWidth(_ text: String) -> Int {
+        text.unicodeScalars.reduce(0) { width, scalar in
+            width + (isWideScalar(scalar) ? 2 : 1)
+        }
+    }
+
+    private func isWideScalar(_ scalar: Unicode.Scalar) -> Bool {
+        switch scalar.value {
+        case 0x1100...0x115F,   // Hangul Jamo
+             0x2E80...0x303E,   // CJK radicals, punctuation
+             0x3041...0x33FF,   // Kana, CJK symbols
+             0x3400...0x4DBF,   // CJK ext A
+             0x4E00...0x9FFF,   // CJK unified
+             0xA000...0xA4CF,   // Yi
+             0xAC00...0xD7A3,   // Hangul syllables
+             0xF900...0xFAFF,   // CJK compat
+             0xFE30...0xFE4F,   // CJK compat forms
+             0xFF00...0xFF60,   // Fullwidth forms
+             0xFFE0...0xFFE6,
+             0x20000...0x2FFFD,
+             0x30000...0x3FFFD:
+            return true
+        default:
+            return false
+        }
     }
 
     private mutating func appendInlines(
@@ -678,7 +807,11 @@ private struct TranscriptAttributedBuilder {
 
         let id = register(.openAsset(reference))
         let url = URL(string: "agentkit-transcript://\(id)")!
-        var attrs = actionAttributes(base: baseAttributes, color: reference.kind == .url ? accentColor : pathColor)
+        var attrs = actionAttributes(
+            base: baseAttributes,
+            color: reference.kind == .url ? accentColor : pathColor,
+            underlined: reference.kind == .url
+        )
         attrs[.font] = baseAttributes[.font]
         attrs[.link] = url
         append(display.isEmpty ? destination : display, attributes: attrs)
@@ -707,7 +840,8 @@ private struct TranscriptAttributedBuilder {
             let url = URL(string: "agentkit-transcript://\(id)")!
             var linkAttributes = actionAttributes(
                 base: baseAttributes,
-                color: match.reference.kind == .url ? accentColor : pathColor
+                color: match.reference.kind == .url ? accentColor : pathColor,
+                underlined: match.reference.kind == .url
             )
             linkAttributes[.font] = baseAttributes[.font]
             linkAttributes[.link] = url
@@ -735,11 +869,14 @@ private struct TranscriptAttributedBuilder {
         for match in matches {
             let id = register(.openAsset(match.reference))
             let url = URL(string: "agentkit-transcript://\(id)")!
-            base.addAttributes([
+            var linkAttributes: [NSAttributedString.Key: Any] = [
                 .link: url,
-                .underlineStyle: NSUnderlineStyle.single.rawValue,
                 .foregroundColor: match.reference.kind == .url ? accentColor : pathColor
-            ], range: match.range)
+            ]
+            if match.reference.kind == .url {
+                linkAttributes[.underlineStyle] = NSUnderlineStyle.single.rawValue
+            }
+            base.addAttributes(linkAttributes, range: match.range)
         }
 
         attributed.append(base)
@@ -826,38 +963,38 @@ private struct TranscriptAttributedBuilder {
         return id
     }
 
+    /// Only external URLs keep an underline; local resources (paths,
+    /// artifacts, tool rows) signal interactivity through color alone.
     private func attributes(for style: ActionStyle) -> [NSAttributedString.Key: Any] {
         switch style {
         case .tool:
-            return actionAttributes(color: accentColor)
+            return actionAttributes(base: bodyAttributes, color: accentColor, underlined: false)
         case .artifact:
-            return actionAttributes(color: artifactColor)
+            return actionAttributes(base: bodyAttributes, color: artifactColor, underlined: false)
         case .path:
-            return actionAttributes(color: pathColor)
+            return actionAttributes(base: bodyAttributes, color: pathColor, underlined: false)
         }
-    }
-
-    private func actionAttributes(color: PlatformColor) -> [NSAttributedString.Key: Any] {
-        var attrs = bodyAttributes
-        attrs[.foregroundColor] = color
-        attrs[.underlineStyle] = NSUnderlineStyle.single.rawValue
-        return attrs
     }
 
     private func actionAttributes(
         base: [NSAttributedString.Key: Any],
-        color: PlatformColor
+        color: PlatformColor,
+        underlined: Bool
     ) -> [NSAttributedString.Key: Any] {
         var attrs = base
         attrs[.foregroundColor] = color
-        attrs[.underlineStyle] = NSUnderlineStyle.single.rawValue
+        if underlined {
+            attrs[.underlineStyle] = NSUnderlineStyle.single.rawValue
+        } else {
+            attrs.removeValue(forKey: .underlineStyle)
+        }
         return attrs
     }
 
     private var bodyAttributes: [NSAttributedString.Key: Any] {
         [
             .font: PlatformFont.systemFont(ofSize: bodyFontSize),
-            .foregroundColor: primaryColor,
+            .foregroundColor: quoteDepth > 0 ? TranscriptTheme.quoteText : primaryColor,
             .paragraphStyle: paragraphStyle(spacingAfter: bodySpacingAfter)
         ]
     }
@@ -896,8 +1033,7 @@ private struct TranscriptAttributedBuilder {
         [
             .font: PlatformFont.systemFont(ofSize: toolTitleFontSize, weight: .semibold),
             .foregroundColor: failedColor,
-            .backgroundColor: errorBackgroundColor,
-            .paragraphStyle: paragraphStyle(spacingAfter: 2)
+            .paragraphStyle: paragraphStyle(spacingAfter: 2, blockInset: true)
         ]
     }
 
@@ -905,8 +1041,7 @@ private struct TranscriptAttributedBuilder {
         [
             .font: PlatformFont.systemFont(ofSize: bodyFontSize, weight: .medium),
             .foregroundColor: failedColor,
-            .backgroundColor: errorBackgroundColor,
-            .paragraphStyle: paragraphStyle(spacingAfter: 2)
+            .paragraphStyle: paragraphStyle(spacingAfter: 2, blockInset: true)
         ]
     }
 
@@ -955,7 +1090,7 @@ private struct TranscriptAttributedBuilder {
             .paragraphStyle: paragraphStyle(spacingAfter: 1)
         ]
         if nested {
-            attrs[.backgroundColor] = toolSurfaceColor
+            attrs[.transcriptChip] = TranscriptChipValue(kind: .nestedTool)
         }
         return attrs
     }
@@ -1016,8 +1151,7 @@ private struct TranscriptAttributedBuilder {
         [
             .font: PlatformFont.monospacedSystemFont(ofSize: codeFontSize, weight: .regular),
             .foregroundColor: primaryColor,
-            .backgroundColor: codeBackgroundColor,
-            .paragraphStyle: paragraphStyle(spacingAfter: 2)
+            .paragraphStyle: paragraphStyle(spacingAfter: 2, blockInset: true)
         ]
     }
 
@@ -1025,17 +1159,7 @@ private struct TranscriptAttributedBuilder {
         [
             .font: PlatformFont.monospacedSystemFont(ofSize: codeLabelFontSize, weight: .semibold),
             .foregroundColor: secondaryColor,
-            .backgroundColor: codeBackgroundColor,
-            .paragraphStyle: paragraphStyle(spacingAfter: 0)
-        ]
-    }
-
-    private var tableLabelAttributes: [NSAttributedString.Key: Any] {
-        [
-            .font: PlatformFont.monospacedSystemFont(ofSize: codeLabelFontSize, weight: .semibold),
-            .foregroundColor: secondaryColor,
-            .backgroundColor: tableBackgroundColor,
-            .paragraphStyle: paragraphStyle(spacingAfter: 0)
+            .paragraphStyle: paragraphStyle(spacingAfter: 0, blockInset: true)
         ]
     }
 
@@ -1043,17 +1167,31 @@ private struct TranscriptAttributedBuilder {
         [
             .font: PlatformFont.monospacedSystemFont(ofSize: codeFontSize, weight: .regular),
             .foregroundColor: primaryColor,
-            .backgroundColor: tableBackgroundColor,
-            .paragraphStyle: paragraphStyle(spacingAfter: 2)
+            .paragraphStyle: paragraphStyle(spacingAfter: 2, blockInset: true)
+        ]
+    }
+
+    private var tableHeaderAttributes: [NSAttributedString.Key: Any] {
+        [
+            .font: PlatformFont.monospacedSystemFont(ofSize: codeFontSize, weight: .semibold),
+            .foregroundColor: primaryColor,
+            .paragraphStyle: paragraphStyle(spacingAfter: 1, blockInset: true)
+        ]
+    }
+
+    private var tableRuleAttributes: [NSAttributedString.Key: Any] {
+        [
+            .font: PlatformFont.monospacedSystemFont(ofSize: codeFontSize, weight: .regular),
+            .foregroundColor: tertiaryColor,
+            .paragraphStyle: paragraphStyle(spacingAfter: 1, blockInset: true)
         ]
     }
 
     private var inlineCodeAttributes: [NSAttributedString.Key: Any] {
         [
             .font: PlatformFont.monospacedSystemFont(ofSize: inlineCodeFontSize, weight: .regular),
-            .foregroundColor: primaryColor,
-            .backgroundColor: inlineCodeBackgroundColor,
-            .paragraphStyle: paragraphStyle(spacingAfter: 0)
+            .foregroundColor: TranscriptTheme.inlineCodeText,
+            .transcriptChip: TranscriptChipValue(kind: .inlineCode)
         ]
     }
 
@@ -1061,13 +1199,10 @@ private struct TranscriptAttributedBuilder {
         var attrs = codeAttributes
         if line.hasPrefix("+") && !line.hasPrefix("+++") {
             attrs[.foregroundColor] = diffAddedColor
-            attrs[.backgroundColor] = diffAddedBackgroundColor
         } else if line.hasPrefix("-") && !line.hasPrefix("---") {
             attrs[.foregroundColor] = diffRemovedColor
-            attrs[.backgroundColor] = diffRemovedBackgroundColor
         } else if line.hasPrefix("@@") {
             attrs[.foregroundColor] = diffHunkColor
-            attrs[.backgroundColor] = diffHunkBackgroundColor
         } else if line.hasPrefix("+++") || line.hasPrefix("---") {
             attrs[.foregroundColor] = secondaryColor
         }
@@ -1092,14 +1227,62 @@ private struct TranscriptAttributedBuilder {
         #endif
     }
 
-    private func paragraphStyle(spacingAfter: CGFloat) -> NSParagraphStyle {
+    /// Central paragraph geometry. List depth adds a hanging indent so
+    /// wrapped lines align under the item text; quote depth indents the
+    /// whole run to make room for the drawn bar; `blockInset` pads decorated
+    /// blocks (code/table/error) inside their full-width background.
+    private func paragraphStyle(spacingAfter: CGFloat, blockInset: Bool = false) -> NSParagraphStyle {
         let style = NSMutableParagraphStyle()
         style.lineSpacing = lineSpacing
         style.paragraphSpacing = spacingAfter
+
+        var firstLineIndent: CGFloat = 0
+        var wrapIndent: CGFloat = 0
+        if listDepth > 0 {
+            let base = CGFloat(listDepth - 1) * listHangIndent
+            firstLineIndent += base
+            wrapIndent += base + listHangIndent
+        }
+        if quoteDepth > 0 {
+            firstLineIndent += quoteIndent
+            wrapIndent += quoteIndent
+        }
+        if blockInset {
+            firstLineIndent += blockHorizontalPadding
+            wrapIndent += blockHorizontalPadding
+            style.tailIndent = -blockHorizontalPadding
+        }
+        style.firstLineHeadIndent = firstLineIndent
+        style.headIndent = wrapIndent
+
         #if os(iOS)
         style.lineBreakMode = .byCharWrapping
         #endif
         return style
+    }
+
+    private var listHangIndent: CGFloat {
+        #if os(iOS)
+        return 18
+        #else
+        return 14
+        #endif
+    }
+
+    private var quoteIndent: CGFloat {
+        #if os(iOS)
+        return 12
+        #else
+        return 10
+        #endif
+    }
+
+    private var blockHorizontalPadding: CGFloat {
+        #if os(iOS)
+        return 10
+        #else
+        return 8
+        #endif
     }
 
     private var bodyFontSize: CGFloat {
@@ -1238,125 +1421,16 @@ private struct TranscriptAttributedBuilder {
         #endif
     }
 
-    private var primaryColor: PlatformColor {
-        #if os(macOS)
-        return .labelColor
-        #else
-        return UIColor { traits in
-            traits.userInterfaceStyle == .dark
-                ? UIColor(red: 0.88, green: 0.86, blue: 0.82, alpha: 1)
-                : .label
-        }
-        #endif
-    }
+    // Colors delegate to TranscriptTheme — the single light/dark palette.
 
-    private var secondaryColor: PlatformColor {
-        #if os(macOS)
-        return .secondaryLabelColor
-        #else
-        return UIColor { traits in
-            traits.userInterfaceStyle == .dark
-                ? UIColor(red: 0.67, green: 0.65, blue: 0.60, alpha: 1)
-                : .secondaryLabel
-        }
-        #endif
-    }
-
-    private var tertiaryColor: PlatformColor {
-        #if os(macOS)
-        return .tertiaryLabelColor
-        #else
-        return UIColor { traits in
-            traits.userInterfaceStyle == .dark
-                ? UIColor(red: 0.43, green: 0.42, blue: 0.39, alpha: 1)
-                : .tertiaryLabel
-        }
-        #endif
-    }
-
-    private var accentColor: PlatformColor {
-        #if os(macOS)
-        return .controlAccentColor
-        #else
-        return UIColor { traits in
-            traits.userInterfaceStyle == .dark
-                ? UIColor(red: 0.74, green: 0.72, blue: 0.66, alpha: 1)
-                : .systemBlue
-        }
-        #endif
-    }
-
-    private var artifactColor: PlatformColor {
-        #if os(macOS)
-        return .systemBlue
-        #else
-        return UIColor { traits in
-            traits.userInterfaceStyle == .dark
-                ? UIColor(red: 0.68, green: 0.76, blue: 0.86, alpha: 1)
-                : .systemBlue
-        }
-        #endif
-    }
-
-    private var pathColor: PlatformColor {
-        #if os(macOS)
-        return .systemBlue
-        #else
-        return UIColor { traits in
-            traits.userInterfaceStyle == .dark
-                ? UIColor(red: 0.68, green: 0.76, blue: 0.86, alpha: 1)
-                : .systemBlue
-        }
-        #endif
-    }
-
-    private var runningColor: PlatformColor {
-        #if os(macOS)
-        return .systemOrange
-        #else
-        return UIColor { traits in
-            traits.userInterfaceStyle == .dark
-                ? UIColor(red: 0.87, green: 0.57, blue: 0.32, alpha: 1)
-                : .systemOrange
-        }
-        #endif
-    }
-
-    private var failedColor: PlatformColor {
-        #if os(macOS)
-        return .systemRed
-        #else
-        return UIColor { traits in
-            traits.userInterfaceStyle == .dark
-                ? UIColor(red: 1.00, green: 0.36, blue: 0.37, alpha: 1)
-                : .systemRed
-        }
-        #endif
-    }
-
-    private var toolSurfaceColor: PlatformColor {
-        #if os(macOS)
-        return .separatorColor.withAlphaComponent(0.08)
-        #else
-        return UIColor { traits in
-            traits.userInterfaceStyle == .dark
-                ? UIColor(white: 1, alpha: 0.08)
-                : .tertiarySystemFill
-        }
-        #endif
-    }
-
-    private var errorBackgroundColor: PlatformColor {
-        #if os(macOS)
-        return .systemRed.withAlphaComponent(0.08)
-        #else
-        return UIColor { traits in
-            traits.userInterfaceStyle == .dark
-                ? UIColor(red: 0.25, green: 0.08, blue: 0.08, alpha: 1)
-                : UIColor.systemRed.withAlphaComponent(0.08)
-        }
-        #endif
-    }
+    private var primaryColor: PlatformColor { TranscriptTheme.primaryText }
+    private var secondaryColor: PlatformColor { TranscriptTheme.secondaryText }
+    private var tertiaryColor: PlatformColor { TranscriptTheme.tertiaryText }
+    private var accentColor: PlatformColor { TranscriptTheme.urlLink }
+    private var artifactColor: PlatformColor { TranscriptTheme.artifactLink }
+    private var pathColor: PlatformColor { TranscriptTheme.pathLink }
+    private var runningColor: PlatformColor { TranscriptTheme.running }
+    private var failedColor: PlatformColor { TranscriptTheme.failed }
 
     private func toolIcon(
         for family: ToolTranscriptFamily,
@@ -1418,125 +1492,13 @@ private struct TranscriptAttributedBuilder {
         }
     }
 
-    private var codeBackgroundColor: PlatformColor {
-        #if os(macOS)
-        return .textBackgroundColor.withAlphaComponent(0.65)
-        #else
-        return UIColor { traits in
-            traits.userInterfaceStyle == .dark
-                ? UIColor(red: 0.18, green: 0.18, blue: 0.17, alpha: 1)
-                : .secondarySystemBackground
-        }
-        #endif
-    }
-
-    private var tableBackgroundColor: PlatformColor {
-        #if os(macOS)
-        return codeBackgroundColor
-        #else
-        return UIColor { traits in
-            traits.userInterfaceStyle == .dark
-                ? UIColor(red: 0.22, green: 0.22, blue: 0.20, alpha: 1)
-                : UIColor.secondarySystemBackground
-        }
-        #endif
-    }
-
-    private var inlineCodeBackgroundColor: PlatformColor {
-        #if os(macOS)
-        return .separatorColor.withAlphaComponent(0.18)
-        #else
-        return UIColor { traits in
-            traits.userInterfaceStyle == .dark
-                ? UIColor(white: 1, alpha: 0.10)
-                : .tertiarySystemFill
-        }
-        #endif
-    }
-
-    private var codeKeywordColor: PlatformColor {
-        #if os(macOS)
-        return .systemPink
-        #else
-        return .systemPink
-        #endif
-    }
-
-    private var codeStringColor: PlatformColor {
-        #if os(macOS)
-        return .systemRed
-        #else
-        return .systemRed
-        #endif
-    }
-
-    private var codeCommentColor: PlatformColor {
-        #if os(macOS)
-        return .systemGreen
-        #else
-        return .systemGreen
-        #endif
-    }
-
-    private var codeNumberColor: PlatformColor {
-        #if os(macOS)
-        return .systemOrange
-        #else
-        return .systemOrange
-        #endif
-    }
-
-    private var diffAddedColor: PlatformColor {
-        #if os(macOS)
-        return .systemGreen
-        #else
-        return UIColor { traits in
-            traits.userInterfaceStyle == .dark
-                ? UIColor(red: 0.42, green: 0.82, blue: 0.46, alpha: 1)
-                : .systemGreen
-        }
-        #endif
-    }
-
-    private var diffRemovedColor: PlatformColor {
-        #if os(macOS)
-        return .systemRed
-        #else
-        return failedColor
-        #endif
-    }
-
-    private var diffHunkColor: PlatformColor {
-        #if os(macOS)
-        return .systemBlue
-        #else
-        return .systemBlue
-        #endif
-    }
-
-    private var diffAddedBackgroundColor: PlatformColor {
-        #if os(macOS)
-        return .systemGreen.withAlphaComponent(0.08)
-        #else
-        return .systemGreen.withAlphaComponent(0.08)
-        #endif
-    }
-
-    private var diffRemovedBackgroundColor: PlatformColor {
-        #if os(macOS)
-        return .systemRed.withAlphaComponent(0.08)
-        #else
-        return .systemRed.withAlphaComponent(0.08)
-        #endif
-    }
-
-    private var diffHunkBackgroundColor: PlatformColor {
-        #if os(macOS)
-        return .systemBlue.withAlphaComponent(0.08)
-        #else
-        return .systemBlue.withAlphaComponent(0.08)
-        #endif
-    }
+    private var codeKeywordColor: PlatformColor { TranscriptTheme.codeKeyword }
+    private var codeStringColor: PlatformColor { TranscriptTheme.codeString }
+    private var codeCommentColor: PlatformColor { TranscriptTheme.codeComment }
+    private var codeNumberColor: PlatformColor { TranscriptTheme.codeNumber }
+    private var diffAddedColor: PlatformColor { TranscriptTheme.diffAddedText }
+    private var diffRemovedColor: PlatformColor { TranscriptTheme.diffRemovedText }
+    private var diffHunkColor: PlatformColor { TranscriptTheme.diffHunkText }
 
     private func inlinePlainText(_ inlines: [InlineContent]) -> String {
         inlines.map(inlinePlainText).joined()

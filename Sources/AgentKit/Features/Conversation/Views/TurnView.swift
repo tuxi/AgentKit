@@ -144,6 +144,9 @@ struct TurnView: View {
                 kind: payload.kind,
                 title: payload.title
             )))
+
+        case .copyBlock(let text):
+            Clipboard.copy(text)
         }
     }
 
