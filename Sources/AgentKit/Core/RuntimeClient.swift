@@ -75,9 +75,10 @@ public protocol RuntimeClient: Sendable {
     /// 推荐恢复流程：先调此方法渲染历史，再调 `connect()` 收增量。
     func getEvents(conversationID: String) async throws -> [AgentEvent]
 
-    /// 事件增量读取（P8.7 子流轮询）。`since` = 已消费的事件计数游标（0 = 从头），
-    /// 下一次调用传返回值里的 `nextSince`。子流（job/subagent）id 可直接作为
-    /// `conversationID` —— 该端点按 id 直读事件日志，不要求是根会话。
+    /// 事件增量读取（P8.7 子流轮询）。`since` 是不透明游标（0 = 从头，CodeAgent
+    /// backend 的游标 = 最大 `seq`），下一次调用传返回值里的 `nextSince`。
+    /// 子流（job/subagent）id 可直接作为 `conversationID` —— 该端点按 id
+    /// 直读事件日志，不要求是根会话。
     func getEventBatch(conversationID: String, since: Int) async throws -> AgentEventBatch
 
     // MARK: - Assets

@@ -122,11 +122,13 @@ public final class CodeAgentTransport: AgentTransport, @unchecked Sendable {
 
     public func getEventBatch(conversationID: String, since: Int) async throws -> AgentEventBatch {
         let wireFrames = try await http.getEvents(conversationID: conversationID, since: since)
-        // nextSince 按服务端原始事件计数推进 —— 未知 kind 被 compactMap 丢弃后
-        // 不能影响游标，否则会重复拉取同一批事件。
+        // 游标 = 已收到帧里最大的 seq（v1.2 §4）。seq 会话内单调递增但**有空洞**
+        // （底层是跨会话共享的自增 rowid），绝不能按条数推进。
+        // 未知 kind 被 compactMap 丢弃也不影响游标 —— seq 来自原始帧。
+        let maxSeq = wireFrames.compactMap(\.seq).max() ?? since
         return AgentEventBatch(
             events: wireFrames.compactMap { AgentEvent.from(wire: $0) },
-            nextSince: since + wireFrames.count
+            nextSince: max(since, maxSeq)
         )
     }
 

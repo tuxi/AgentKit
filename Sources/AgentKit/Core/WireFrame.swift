@@ -23,6 +23,9 @@ struct WireFrame: Decodable {
     // ── 事件帧字段（有 `kind`）──
     let kind: String?
     let at: String?
+    /// v1.2 §4：会话内单调递增的持久化序号（**有空洞**，底层是共享自增 rowid）。
+    /// 增量续传游标 = 已收到帧里最大的 seq。`token_delta` 不带 seq（瞬态不持久化）。
+    let seq: Int?
     let eventId: String?
     let sessionId: String?
     let parentSessionId: String?
@@ -56,10 +59,10 @@ struct WireFrame: Decodable {
     let invocationId: String?       // v1.2: 同一个模型调用产生的所有事件共享此 ID
     let turnStatus: String?         // v1.2 lifecycle status
     let pausedAt: Int64?            // v1.2 unix seconds
-    let exitCode: Int?              // P8.7: job_finished 终态（线格式待后端冻结，暂按可选解码）
+    let exitCode: Int?              // P8.7 §8.5（golden 已冻结）：仅失败时出现；>0 = 非零退出，-1 = 启动失败/被信号杀死
 
     enum CodingKeys: String, CodingKey {
-        case type, kind, at, step, id, server
+        case type, kind, at, step, id, server, seq
         case text, observation, output, assets, failure, err, ratio, todos, chunk
         case textAnnotations = "text_annotations"
         case eventId = "event_id"
