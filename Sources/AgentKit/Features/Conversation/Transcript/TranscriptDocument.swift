@@ -278,6 +278,7 @@ private struct TranscriptAttributedBuilder {
     private var copyParts: [String] = []
     private var nextActionIndex = 0
     private var activeTextAnnotations: [AgentTextAnnotation] = []
+    private var consumedTextAnnotationKeys = Set<String>()
 
     init(assetIndex: AssetIndex, animationFrame: Int) {
         self.assetIndex = assetIndex
@@ -296,8 +297,13 @@ private struct TranscriptAttributedBuilder {
 
     mutating func appendMarkdown(_ text: String, textAnnotations: [AgentTextAnnotation] = []) {
         let previousAnnotations = activeTextAnnotations
-        activeTextAnnotations = textAnnotations
-        defer { activeTextAnnotations = previousAnnotations }
+        let previousConsumedKeys = consumedTextAnnotationKeys
+        activeTextAnnotations = textAnnotations.resolvingNearbyLineNumberAssets(assetIndex: assetIndex)
+        consumedTextAnnotationKeys = []
+        defer {
+            activeTextAnnotations = previousAnnotations
+            consumedTextAnnotationKeys = previousConsumedKeys
+        }
 
         let blocks = MarkdownASTConverter.parse(text)
         guard !blocks.isEmpty else {
@@ -736,10 +742,11 @@ private struct TranscriptAttributedBuilder {
         attributed.append(base)
     }
 
-    private func referenceMatches(in text: String) -> [(range: NSRange, reference: AssetReference)] {
+    private mutating func referenceMatches(in text: String) -> [(range: NSRange, reference: AssetReference)] {
         let annotationMatches = TextAnnotationReferenceDetector.matches(
             in: text,
             annotations: activeTextAnnotations,
+            consumedKeys: &consumedTextAnnotationKeys,
             assetIndex: assetIndex
         )
         let fallbackMatches = AssetReferenceDetector.matches(in: text, assetIndex: assetIndex)
@@ -1290,12 +1297,12 @@ private struct TranscriptAttributedBuilder {
 
     private var pathColor: PlatformColor {
         #if os(macOS)
-        return .systemPurple
+        return .systemBlue
         #else
         return UIColor { traits in
             traits.userInterfaceStyle == .dark
-                ? UIColor(red: 0.82, green: 0.75, blue: 0.90, alpha: 1)
-                : .systemPurple
+                ? UIColor(red: 0.68, green: 0.76, blue: 0.86, alpha: 1)
+                : .systemBlue
         }
         #endif
     }

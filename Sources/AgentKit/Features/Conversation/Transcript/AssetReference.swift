@@ -156,6 +156,17 @@ struct AssetIndex: Sendable {
         return reference(forStructuredAsset: asset, display: annotation.text)
     }
 
+    func structuredAsset(id: String) -> AgentAssetRef? {
+        structuredAssetsByID[id]
+    }
+
+    func assetsShareFile(_ lhs: AgentAssetRef, _ rhs: AgentAssetRef) -> Bool {
+        let lhsPath = lhs.workspaceRelativePath ?? lhs.absolutePath ?? lhs.uri ?? lhs.displayName
+        let rhsPath = rhs.workspaceRelativePath ?? rhs.absolutePath ?? rhs.uri ?? rhs.displayName
+        guard let lhsPath, let rhsPath else { return false }
+        return Self.normalizedPath(lhsPath) == Self.normalizedPath(rhsPath)
+    }
+
     private func structuredAsset(path: String) -> AgentAssetRef? {
         structuredAssetsByPath[path] ?? structuredAssetsByPath[Self.normalizedPath(path)]
     }
@@ -207,15 +218,18 @@ enum TextAnnotationReferenceDetector {
     static func matches(
         in text: String,
         annotations: [AgentTextAnnotation],
+        consumedKeys: inout Set<String>,
         assetIndex: AssetIndex
     ) -> [(range: NSRange, reference: AssetReference)] {
         guard !annotations.isEmpty else { return [] }
         let nsText = text as NSString
         let fullRange = NSRange(location: 0, length: nsText.length)
         var results: [(NSRange, AssetReference)] = []
-        var seen = Set<String>()
 
         for annotation in annotations {
+            let annotationKey = annotation.renderedMatchKey
+            guard !consumedKeys.contains(annotationKey) else { continue }
+
             let display = annotation.text
             guard !display.isEmpty,
                   let reference = assetIndex.reference(forAnnotation: annotation) else {
@@ -227,11 +241,10 @@ enum TextAnnotationReferenceDetector {
                 let found = nsText.range(of: display, options: [], range: searchRange)
                 guard found.location != NSNotFound else { break }
 
-                let key = "\(annotation.assetID):\(found.location):\(found.length)"
-                if !seen.contains(key),
-                   !results.contains(where: { NSIntersectionRange($0.0, found).length > 0 }) {
+                if !results.contains(where: { NSIntersectionRange($0.0, found).length > 0 }) {
                     results.append((found, reference))
-                    seen.insert(key)
+                    consumedKeys.insert(annotationKey)
+                    break
                 }
 
                 let nextLocation = found.location + max(found.length, 1)
@@ -246,5 +259,82 @@ enum TextAnnotationReferenceDetector {
         ) in
             lhs.range.location < rhs.range.location
         })
+    }
+}
+
+extension AgentTextAnnotation {
+    var renderedMatchKey: String {
+        [
+            assetID,
+            text,
+            startUTF16.map(String.init) ?? "",
+            endUTF16.map(String.init) ?? "",
+            sourceTurnID ?? "",
+            sourceCallID ?? ""
+        ].joined(separator: "|")
+    }
+
+    var looksLikePathText: Bool {
+        text.contains("/") || text.contains("\\")
+    }
+
+    var lineNumberValue: Int? {
+        let digits = text.filter(\.isNumber)
+        guard !digits.isEmpty else { return nil }
+        return Int(digits)
+    }
+
+    func replacingAssetID(_ assetID: String) -> AgentTextAnnotation {
+        AgentTextAnnotation(
+            assetID: assetID,
+            kind: kind,
+            text: text,
+            startByte: startByte,
+            endByte: endByte,
+            startUTF16: startUTF16,
+            endUTF16: endUTF16,
+            sourceTurnID: sourceTurnID,
+            sourceCallID: sourceCallID
+        )
+    }
+}
+
+extension Array where Element == AgentTextAnnotation {
+    var sortedForRenderedMatching: [AgentTextAnnotation] {
+        enumerated()
+            .sorted { lhs, rhs in
+                let lStart = lhs.element.startUTF16 ?? Int.max
+                let rStart = rhs.element.startUTF16 ?? Int.max
+                if lStart != rStart { return lStart < rStart }
+                return lhs.offset < rhs.offset
+            }
+            .map(\.element)
+    }
+
+    func resolvingNearbyLineNumberAssets(assetIndex: AssetIndex) -> [AgentTextAnnotation] {
+        let sorted = sortedForRenderedMatching
+        return sorted.enumerated().map { index, annotation in
+            guard annotation.looksLikePathText,
+                  let annotationEnd = annotation.endUTF16,
+                  let currentAsset = assetIndex.structuredAsset(id: annotation.assetID) else {
+                return annotation
+            }
+
+            let nearbyLine = sorted.dropFirst(index + 1).first { candidate in
+                guard let candidateStart = candidate.startUTF16,
+                      candidateStart >= annotationEnd,
+                      candidateStart - annotationEnd <= 8,
+                      let line = candidate.lineNumberValue,
+                      let candidateAsset = assetIndex.structuredAsset(id: candidate.assetID),
+                      assetIndex.assetsShareFile(currentAsset, candidateAsset),
+                      candidateAsset.range?.startLine == line else {
+                    return false
+                }
+                return true
+            }
+
+            guard let nearbyLine else { return annotation }
+            return annotation.replacingAssetID(nearbyLine.assetID)
+        }
     }
 }

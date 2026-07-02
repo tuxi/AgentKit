@@ -104,18 +104,14 @@ struct TurnView: View {
     }
 
     private var turnAssets: [AgentAssetRef] {
-        var seen = Set<String>()
-        var result: [AgentAssetRef] = []
+        var assets: [AgentAssetRef] = []
         for block in turn.blocks {
             guard case .toolGroup(let group) = block else { continue }
             for tool in group.tools {
-                for asset in tool.assets where !seen.contains(asset.id) {
-                    seen.insert(asset.id)
-                    result.append(asset)
-                }
+                assets.append(contentsOf: tool.assets)
             }
         }
-        return result
+        return AgentAssetDisplayIndex.unique(assets)
     }
 
     private func handleTranscriptAction(_ action: TranscriptAction) {

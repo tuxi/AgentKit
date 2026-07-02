@@ -134,7 +134,7 @@ struct AssetPreviewInspectorView: View {
                 }
             }
 
-            if let errorMessage {
+            if let errorMessage, !hasDisplayableContent {
                 Text(errorMessage)
                     .font(.caption)
                     .foregroundStyle(.orange)
@@ -167,7 +167,9 @@ struct AssetPreviewInspectorView: View {
                 filePath: displayAsset.assetPath ?? displayAsset.id,
                 content: displayContent,
                 language: loadedLanguageHint,
-                maxHeight: nil
+                maxHeight: nil,
+                focusLine: displayAsset.range?.startLine,
+                focusID: displayAsset.id
             )
             .padding()
         }
@@ -184,6 +186,11 @@ struct AssetPreviewInspectorView: View {
         return displayAsset.previewContent
     }
 
+    private var hasDisplayableContent: Bool {
+        let trimmed = displayContent.trimmingCharacters(in: .whitespacesAndNewlines)
+        return !trimmed.isEmpty && trimmed != displayAsset.assetSubtitle
+    }
+
     private var loadedLanguageHint: String? {
         if let loadedMIMEType {
             return AgentAssetRef.languageHint(mimeType: loadedMIMEType, path: displayAsset.assetPath ?? displayAsset.uri)
@@ -197,6 +204,7 @@ struct AssetPreviewInspectorView: View {
 
     private func loadRuntimePreview() async {
         guard let conversationID = payload.conversationID else { return }
+        resetLoadedStateForNewAsset()
         isLoading = true
         errorMessage = nil
         defer { isLoading = false }
@@ -232,8 +240,22 @@ struct AssetPreviewInspectorView: View {
                 // non-text assets, or server-side caps.
             }
         } catch {
-            errorMessage = error.localizedDescription
+            if hasDisplayableContent {
+                source = source ?? displayAsset.fallbackPreviewSource
+                errorMessage = nil
+            } else {
+                errorMessage = error.localizedDescription
+            }
         }
+    }
+
+    private func resetLoadedStateForNewAsset() {
+        loadedAsset = nil
+        loadedContent = nil
+        loadedMIMEType = nil
+        loadedSizeBytes = nil
+        isTruncated = false
+        source = payload.asset.fallbackPreviewSource
     }
 
     private func shouldLoadFullContent(asset: AgentAssetRef, mimeType: String?) -> Bool {
@@ -360,6 +382,20 @@ extension AgentAssetRef {
             return text
         }
         return assetSubtitle
+    }
+
+    var fallbackPreviewSource: String? {
+        if let absolutePath,
+           FileManager.default.fileExists(atPath: absolutePath) {
+            return "local"
+        }
+        if preview?.isEmpty == false {
+            return "event"
+        }
+        if metadata?.isEmpty == false {
+            return "metadata"
+        }
+        return nil
     }
 
     var languageHint: String? {

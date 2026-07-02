@@ -85,16 +85,12 @@ public final class ConversationViewModel {
 
     /// Structured assets discovered from the current runtime snapshot.
     public var assetRefs: [AgentAssetRef] {
-        var seen = Set<String>()
-        var result: [AgentAssetRef] = []
+        var assets: [AgentAssetRef] = []
         for node in snapshot.timeline {
             guard case .tool(let tool) = node.kind else { continue }
-            for asset in tool.assets where !seen.contains(asset.id) {
-                seen.insert(asset.id)
-                result.append(asset)
-            }
+            assets.append(contentsOf: tool.assets)
         }
-        return result
+        return AgentAssetDisplayIndex.unique(assets)
     }
 
     // MARK: - Public API

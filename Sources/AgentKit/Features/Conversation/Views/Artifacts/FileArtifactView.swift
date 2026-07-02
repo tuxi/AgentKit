@@ -16,25 +16,40 @@ struct FileArtifactBody: View {
     let content: String
     let language: String?
     var maxHeight: CGFloat? = 400
+    var focusLine: Int?
+    var focusID: String?
 
     var body: some View {
-        let scroll = ScrollView([.horizontal, .vertical]) {
-            VStack(alignment: .leading, spacing: 0) {
-                ForEach(Array(numberedLines.enumerated()), id: \.offset) { index, line in
-                    HStack(spacing: 8) {
-                        Text("\(index + 1)")
-                            .font(.caption2.monospaced())
-                            .foregroundStyle(.tertiary)
-                            .frame(width: 32, alignment: .trailing)
-                        Text(line)
-                            .font(.caption2.monospaced())
-                            .foregroundStyle(.primary)
-                            .textSelection(.enabled)
-                        Spacer()
+        let scroll = ScrollViewReader { proxy in
+            ScrollView([.horizontal, .vertical]) {
+                VStack(alignment: .leading, spacing: 0) {
+                    ForEach(Array(numberedLines.enumerated()), id: \.offset) { index, line in
+                        let lineNumber = index + 1
+                        HStack(spacing: 8) {
+                            Text("\(lineNumber)")
+                                .font(.caption2.monospaced())
+                                .foregroundStyle(lineNumber == focusLine ? .primary : .tertiary)
+                                .frame(width: 32, alignment: .trailing)
+                            Text(line)
+                                .font(.caption2.monospaced())
+                                .foregroundStyle(.primary)
+                                .textSelection(.enabled)
+                            Spacer()
+                        }
+                        .padding(.vertical, 1)
+                        .background(lineNumber == focusLine ? Color.accentColor.opacity(0.14) : Color.clear)
+                        .clipShape(RoundedRectangle(cornerRadius: 3))
+                        .id(lineNumber)
                     }
                 }
+                .padding(8)
             }
-            .padding(8)
+            .onAppear {
+                scrollToFocusLine(proxy)
+            }
+            .onChange(of: focusToken) { _, _ in
+                scrollToFocusLine(proxy)
+            }
         }
         .background(.black.opacity(0.06))
         .clipShape(RoundedRectangle(cornerRadius: 6))
@@ -48,6 +63,19 @@ struct FileArtifactBody: View {
 
     private var numberedLines: [String] {
         content.components(separatedBy: "\n")
+    }
+
+    private var focusToken: String {
+        "\(focusID ?? filePath):\(focusLine ?? 0):\(numberedLines.count)"
+    }
+
+    private func scrollToFocusLine(_ proxy: ScrollViewProxy) {
+        guard let focusLine, focusLine > 0 else { return }
+        DispatchQueue.main.async {
+            withAnimation(.easeOut(duration: 0.18)) {
+                proxy.scrollTo(focusLine, anchor: .center)
+            }
+        }
     }
 }
 

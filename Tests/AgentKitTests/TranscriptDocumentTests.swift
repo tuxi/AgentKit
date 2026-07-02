@@ -382,6 +382,35 @@ final class TranscriptDocumentTests: XCTestCase {
         })
     }
 
+    func testAssetDisplayIndexDeduplicatesSameFileLineAcrossTools() {
+        let projectGraphAsset = AgentAssetRef(
+            id: "asset_project_graph",
+            kind: "file_location",
+            displayName: "Contents.swift:109",
+            workspaceID: "learningios-local",
+            workspaceRelativePath: "CodePractice.playground/Pages/01-SwiftDeepDive.xcplaygroundpage/Contents.swift",
+            range: AgentAssetRange(startLine: 109, startColumn: 1),
+            preview: "@HTMLBuilder content: () -> String) -> String {",
+            sourceCallID: "call_project_graph"
+        )
+        let grepAsset = AgentAssetRef(
+            id: "asset_grep",
+            kind: "file_location",
+            displayName: "Contents.swift:109",
+            workspaceID: "learningios-local",
+            workspaceRelativePath: "CodePractice.playground/Pages/01-SwiftDeepDive.xcplaygroundpage/Contents.swift",
+            range: AgentAssetRange(startLine: 109, startColumn: 12),
+            preview: "@HTMLBuilder content: () -> String) -> String {",
+            sourceCallID: "call_grep"
+        )
+
+        let unique = AgentAssetDisplayIndex.unique([projectGraphAsset, grepAsset])
+
+        XCTAssertEqual(unique.count, 1)
+        XCTAssertEqual(unique.first?.id, "asset_grep")
+        XCTAssertEqual(unique.first?.range?.startColumn, 12)
+    }
+
     func testTextAnnotationLinksInlineCodeToStructuredAsset() {
         let annotation = AgentTextAnnotation(
             assetID: "asset_turn_c1_001",
@@ -440,6 +469,290 @@ final class TranscriptDocumentTests: XCTestCase {
                 && reference.display == "App.swift:12"
                 && reference.structuredAsset?.id == annotation.assetID
         })
+    }
+
+    func testTextAnnotationsLinkBareLineNumbersInsideMarkdownTable() {
+        let asset99 = AgentAssetRef(
+            id: "asset_line_99",
+            kind: "file_location",
+            displayName: "Contents.swift:99",
+            workspaceID: "learningios-local",
+            workspaceRelativePath: "CodePractice.playground/Pages/01-SwiftDeepDive.xcplaygroundpage/Contents.swift",
+            range: AgentAssetRange(startLine: 99, startColumn: 1),
+            preview: "struct HTMLBuilder {",
+            mimeType: "text/x-swift",
+            sourceTurnID: "turn",
+            sourceCallID: "c1"
+        )
+        let asset109 = AgentAssetRef(
+            id: "asset_line_109",
+            kind: "file_location",
+            displayName: "Contents.swift:109",
+            workspaceID: "learningios-local",
+            workspaceRelativePath: "CodePractice.playground/Pages/01-SwiftDeepDive.xcplaygroundpage/Contents.swift",
+            range: AgentAssetRange(startLine: 109, startColumn: 1),
+            preview: "@HTMLBuilder content: () -> String) -> String {",
+            mimeType: "text/x-swift",
+            sourceTurnID: "turn",
+            sourceCallID: "c1"
+        )
+        let tool = ToolNodePayload(
+            callID: "c1",
+            toolName: "project_graph",
+            args: .object(["symbol": .string("HTMLBuilder")]),
+            status: .completed,
+            output: "references",
+            assets: [asset99, asset109]
+        )
+        let annotations = [
+            AgentTextAnnotation(
+                assetID: asset99.id,
+                kind: "file_location",
+                text: "99",
+                sourceTurnID: "turn",
+                sourceCallID: "c1"
+            ),
+            AgentTextAnnotation(
+                assetID: asset109.id,
+                kind: "file_location",
+                text: "109",
+                sourceTurnID: "turn",
+                sourceCallID: "c1"
+            )
+        ]
+        let turn = ConversationTurn(
+            id: "turn",
+            userPrompt: nil,
+            blocks: [
+                .toolGroup(ToolGroup(id: "c1", tools: [tool])),
+                .text(id: "t1", MessageNodePayload(
+                    role: .assistant,
+                    text: """
+                    | 行号 | 文件 | 内容 |
+                    |------|------|------|
+                    | 99 | `CodePractice.playground/Pages/01-SwiftDeepDive.xcplaygroundpage/Contents.swift` | `struct HTMLBuilder {` |
+                    | 109 | 同上 | `@HTMLBuilder content: () -> String) -> String {` |
+                    """,
+                    textAnnotations: annotations
+                ))
+            ],
+            footer: nil,
+            isLive: false
+        )
+
+        let transcript = TurnTranscriptBuilder.build(
+            turn: turn,
+            state: TranscriptDocumentState()
+        )
+
+        XCTAssertTrue(transcript.actions.values.contains {
+            guard case .openAsset(let reference) = $0 else { return false }
+            return reference.display == "99"
+                && reference.structuredAsset?.id == asset99.id
+        })
+        XCTAssertTrue(transcript.actions.values.contains {
+            guard case .openAsset(let reference) = $0 else { return false }
+            return reference.display == "109"
+                && reference.structuredAsset?.id == asset109.id
+        })
+    }
+
+    func testDuplicateAnnotationTextIsConsumedInRenderedOrder() {
+        let path = "CodePractice.playground/Pages/01-SwiftDeepDive.xcplaygroundpage/Contents.swift"
+        let asset99 = AgentAssetRef(
+            id: "asset_line_99",
+            kind: "file_location",
+            displayName: "Contents.swift:99",
+            workspaceID: "learningios-local",
+            workspaceRelativePath: path,
+            range: AgentAssetRange(startLine: 99, startColumn: 8),
+            preview: "struct HTMLBuilder {",
+            mimeType: "text/x-swift",
+            sourceTurnID: "turn",
+            sourceCallID: "c1"
+        )
+        let asset109 = AgentAssetRef(
+            id: "asset_line_109",
+            kind: "file_location",
+            displayName: "Contents.swift:109",
+            workspaceID: "learningios-local",
+            workspaceRelativePath: path,
+            range: AgentAssetRange(startLine: 109, startColumn: 12),
+            preview: "@HTMLBuilder content: () -> String) -> String {",
+            mimeType: "text/x-swift",
+            sourceTurnID: "turn",
+            sourceCallID: "c1"
+        )
+        let tool = ToolNodePayload(
+            callID: "c1",
+            toolName: "grep",
+            args: .object(["query": .string("HTMLBuilder")]),
+            status: .completed,
+            output: "references",
+            assets: [asset99, asset109]
+        )
+        let annotations = [
+            AgentTextAnnotation(
+                assetID: asset99.id,
+                kind: "file_location",
+                text: path,
+                startUTF16: 70,
+                endUTF16: 148,
+                sourceTurnID: "turn",
+                sourceCallID: "c1"
+            ),
+            AgentTextAnnotation(
+                assetID: asset109.id,
+                kind: "file_location",
+                text: path,
+                startUTF16: 190,
+                endUTF16: 268,
+                sourceTurnID: "turn",
+                sourceCallID: "c1"
+            )
+        ]
+        let turn = ConversationTurn(
+            id: "turn",
+            userPrompt: nil,
+            blocks: [
+                .toolGroup(ToolGroup(id: "c1", tools: [tool])),
+                .text(id: "t1", MessageNodePayload(
+                    role: .assistant,
+                    text: """
+                    | # | 文件 | 行号 |
+                    |---|------|------|
+                    | 1 | `\(path)` | 99 |
+                    | 2 | `\(path)` | 109 |
+                    """,
+                    textAnnotations: annotations
+                ))
+            ],
+            footer: nil,
+            isLive: false
+        )
+
+        let transcript = TurnTranscriptBuilder.build(
+            turn: turn,
+            state: TranscriptDocumentState()
+        )
+        let structuredIDs = transcript.actions.values.compactMap { action -> String? in
+            guard case .openAsset(let reference) = action,
+                  reference.display == path else {
+                return nil
+            }
+            return reference.structuredAsset?.id
+        }
+
+        XCTAssertTrue(structuredIDs.contains(asset99.id))
+        XCTAssertTrue(structuredIDs.contains(asset109.id))
+    }
+
+    func testTablePathAnnotationUsesNearbyLineNumberAsset() {
+        let path = "CodePractice.playground/Pages/01-SwiftDeepDive.xcplaygroundpage/Contents.swift"
+        let asset99 = AgentAssetRef(
+            id: "asset_line_99",
+            kind: "file_location",
+            displayName: "Contents.swift:99",
+            workspaceID: "learningios-local",
+            workspaceRelativePath: path,
+            range: AgentAssetRange(startLine: 99, startColumn: 8),
+            preview: "struct HTMLBuilder {",
+            mimeType: "text/x-swift",
+            sourceTurnID: "turn",
+            sourceCallID: "c1"
+        )
+        let asset109 = AgentAssetRef(
+            id: "asset_line_109",
+            kind: "file_location",
+            displayName: "Contents.swift:109",
+            workspaceID: "learningios-local",
+            workspaceRelativePath: path,
+            range: AgentAssetRange(startLine: 109, startColumn: 12),
+            preview: "@HTMLBuilder content: () -> String) -> String {",
+            mimeType: "text/x-swift",
+            sourceTurnID: "turn",
+            sourceCallID: "c1"
+        )
+        let tool = ToolNodePayload(
+            callID: "c1",
+            toolName: "grep",
+            args: .object(["query": .string("HTMLBuilder")]),
+            status: .completed,
+            output: "references",
+            assets: [asset99, asset109]
+        )
+        let annotations = [
+            AgentTextAnnotation(
+                assetID: asset99.id,
+                kind: "file_location",
+                text: path,
+                startUTF16: 95,
+                endUTF16: 173,
+                sourceTurnID: "turn",
+                sourceCallID: "c1"
+            ),
+            AgentTextAnnotation(
+                assetID: asset99.id,
+                kind: "file_location",
+                text: "99",
+                startUTF16: 177,
+                endUTF16: 179,
+                sourceTurnID: "turn",
+                sourceCallID: "c1"
+            ),
+            AgentTextAnnotation(
+                assetID: asset99.id,
+                kind: "file_location",
+                text: path,
+                startUTF16: 222,
+                endUTF16: 300,
+                sourceTurnID: "turn",
+                sourceCallID: "c1"
+            ),
+            AgentTextAnnotation(
+                assetID: asset109.id,
+                kind: "file_location",
+                text: "109",
+                startUTF16: 304,
+                endUTF16: 307,
+                sourceTurnID: "turn",
+                sourceCallID: "c1"
+            )
+        ]
+        let turn = ConversationTurn(
+            id: "turn",
+            userPrompt: nil,
+            blocks: [
+                .toolGroup(ToolGroup(id: "c1", tools: [tool])),
+                .text(id: "t1", MessageNodePayload(
+                    role: .assistant,
+                    text: """
+                    | # | 文件 | 行号 | 上下文 |
+                    |---|------|------|--------|
+                    | 1 | `\(path)` | 99 | `struct HTMLBuilder {` |
+                    | 2 | `\(path)` | 109 | `@HTMLBuilder content: () -> String) -> String {` |
+                    """,
+                    textAnnotations: annotations
+                ))
+            ],
+            footer: nil,
+            isLive: false
+        )
+
+        let transcript = TurnTranscriptBuilder.build(
+            turn: turn,
+            state: TranscriptDocumentState()
+        )
+        let structuredIDs = transcript.actions.values.compactMap { action -> String? in
+            guard case .openAsset(let reference) = action,
+                  reference.display == path else {
+                return nil
+            }
+            return reference.structuredAsset?.id
+        }
+
+        XCTAssertTrue(structuredIDs.contains(asset99.id))
+        XCTAssertTrue(structuredIDs.contains(asset109.id))
     }
 
     func testBodyPathResolvesKnownArtifact() {
