@@ -53,6 +53,10 @@ public struct InspectorView: View {
                     toolName: tool
                 )
 
+            case .childStream(let selection):
+
+                ChildStreamInspectorView(selection: selection)
+
             default:
 
                 ContentUnavailableView(
