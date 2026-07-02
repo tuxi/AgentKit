@@ -18,8 +18,105 @@ struct FileArtifactBody: View {
     var maxHeight: CGFloat? = 400
     var focusLine: Int?
     var focusID: String?
+    var focusRevision = 0
+
+    #if os(macOS)
+    @State private var searchQuery = ""
+    @State private var searchRevision = 0
+    @State private var searchDirection = 1
+    #endif
 
     var body: some View {
+        #if os(macOS)
+        nativePreview
+        #else
+        legacyLinePreview
+        #endif
+    }
+
+    #if os(macOS)
+    @ViewBuilder
+    private var nativePreview: some View {
+        let preview = VStack(spacing: 0) {
+            codeSearchBar
+            NativeCodePreviewView(
+                filePath: filePath,
+                content: content,
+                language: language,
+                focusLine: focusLine,
+                focusID: focusID,
+                focusRevision: focusRevision,
+                searchQuery: searchQuery,
+                searchRevision: searchRevision,
+                searchDirection: searchDirection
+            )
+        }
+        .background(.black.opacity(0.06))
+        .clipShape(RoundedRectangle(cornerRadius: 6))
+
+        if let maxHeight {
+            preview.frame(maxHeight: maxHeight)
+        } else {
+            preview.frame(maxWidth: .infinity, maxHeight: .infinity)
+        }
+    }
+
+    private var codeSearchBar: some View {
+        HStack(spacing: 8) {
+            Image(systemName: "magnifyingglass")
+                .font(.caption)
+                .foregroundStyle(.tertiary)
+            TextField("Search", text: $searchQuery)
+                .textFieldStyle(.plain)
+                .font(.caption)
+            Text(searchStatusText)
+                .font(.caption2.monospacedDigit())
+                .foregroundStyle(.tertiary)
+                .frame(minWidth: 42, alignment: .trailing)
+            Button {
+                searchDirection = -1
+                searchRevision += 1
+            } label: {
+                Image(systemName: "chevron.up")
+            }
+            .disabled(searchMatchCount == 0)
+            .help("Previous match")
+            Button {
+                searchDirection = 1
+                searchRevision += 1
+            } label: {
+                Image(systemName: "chevron.down")
+            }
+            .disabled(searchMatchCount == 0)
+            .help("Next match")
+            if !searchQuery.isEmpty {
+                Button {
+                    searchQuery = ""
+                } label: {
+                    Image(systemName: "xmark.circle.fill")
+                }
+                .help("Clear search")
+            }
+        }
+        .buttonStyle(.borderless)
+        .controlSize(.small)
+        .padding(.horizontal, 10)
+        .padding(.vertical, 6)
+        .background(.quaternary.opacity(0.45))
+    }
+
+    private var searchStatusText: String {
+        searchQuery.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? "" : "\(searchMatchCount)"
+    }
+
+    private var searchMatchCount: Int {
+        CodePreviewSearch.matchCount(in: content, query: searchQuery)
+    }
+    #endif
+
+    #if !os(macOS)
+    @ViewBuilder
+    private var legacyLinePreview: some View {
         let scroll = ScrollViewReader { proxy in
             ScrollView([.horizontal, .vertical]) {
                 VStack(alignment: .leading, spacing: 0) {
@@ -60,13 +157,14 @@ struct FileArtifactBody: View {
             scroll
         }
     }
+    #endif
 
     private var numberedLines: [String] {
         content.components(separatedBy: "\n")
     }
 
     private var focusToken: String {
-        "\(focusID ?? filePath):\(focusLine ?? 0):\(numberedLines.count)"
+        "\(focusID ?? filePath):\(focusLine ?? 0):\(focusRevision):\(numberedLines.count)"
     }
 
     private func scrollToFocusLine(_ proxy: ScrollViewProxy) {

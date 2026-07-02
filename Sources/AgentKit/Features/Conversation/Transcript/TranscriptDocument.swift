@@ -1151,7 +1151,7 @@ private struct TranscriptAttributedBuilder {
         [
             .font: PlatformFont.monospacedSystemFont(ofSize: codeFontSize, weight: .regular),
             .foregroundColor: primaryColor,
-            .paragraphStyle: paragraphStyle(spacingAfter: 2, blockInset: true)
+            .paragraphStyle: paragraphStyle(spacingAfter: 2, blockInset: true, charWrap: true)
         ]
     }
 
@@ -1159,7 +1159,7 @@ private struct TranscriptAttributedBuilder {
         [
             .font: PlatformFont.monospacedSystemFont(ofSize: codeLabelFontSize, weight: .semibold),
             .foregroundColor: secondaryColor,
-            .paragraphStyle: paragraphStyle(spacingAfter: 0, blockInset: true)
+            .paragraphStyle: paragraphStyle(spacingAfter: 0, blockInset: true, charWrap: true)
         ]
     }
 
@@ -1167,7 +1167,7 @@ private struct TranscriptAttributedBuilder {
         [
             .font: PlatformFont.monospacedSystemFont(ofSize: codeFontSize, weight: .regular),
             .foregroundColor: primaryColor,
-            .paragraphStyle: paragraphStyle(spacingAfter: 2, blockInset: true)
+            .paragraphStyle: paragraphStyle(spacingAfter: 2, blockInset: true, charWrap: true)
         ]
     }
 
@@ -1175,7 +1175,7 @@ private struct TranscriptAttributedBuilder {
         [
             .font: PlatformFont.monospacedSystemFont(ofSize: codeFontSize, weight: .semibold),
             .foregroundColor: primaryColor,
-            .paragraphStyle: paragraphStyle(spacingAfter: 1, blockInset: true)
+            .paragraphStyle: paragraphStyle(spacingAfter: 1, blockInset: true, charWrap: true)
         ]
     }
 
@@ -1183,7 +1183,7 @@ private struct TranscriptAttributedBuilder {
         [
             .font: PlatformFont.monospacedSystemFont(ofSize: codeFontSize, weight: .regular),
             .foregroundColor: tertiaryColor,
-            .paragraphStyle: paragraphStyle(spacingAfter: 1, blockInset: true)
+            .paragraphStyle: paragraphStyle(spacingAfter: 1, blockInset: true, charWrap: true)
         ]
     }
 
@@ -1231,7 +1231,13 @@ private struct TranscriptAttributedBuilder {
     /// wrapped lines align under the item text; quote depth indents the
     /// whole run to make room for the drawn bar; `blockInset` pads decorated
     /// blocks (code/table/error) inside their full-width background.
-    private func paragraphStyle(spacingAfter: CGFloat, blockInset: Bool = false) -> NSParagraphStyle {
+    /// `charWrap` is for monospaced content (code, tables, diffs) where
+    /// breaking anywhere beats overflowing; prose wraps at word boundaries.
+    private func paragraphStyle(
+        spacingAfter: CGFloat,
+        blockInset: Bool = false,
+        charWrap: Bool = false
+    ) -> NSParagraphStyle {
         let style = NSMutableParagraphStyle()
         style.lineSpacing = lineSpacing
         style.paragraphSpacing = spacingAfter
@@ -1254,10 +1260,7 @@ private struct TranscriptAttributedBuilder {
         }
         style.firstLineHeadIndent = firstLineIndent
         style.headIndent = wrapIndent
-
-        #if os(iOS)
-        style.lineBreakMode = .byCharWrapping
-        #endif
+        style.lineBreakMode = charWrap ? .byCharWrapping : .byWordWrapping
         return style
     }
 

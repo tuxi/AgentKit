@@ -261,7 +261,8 @@ private struct PlatformTranscriptTextView: UIViewRepresentable {
         textView.textContainer.lineFragmentPadding = 0
         textView.textContainer.widthTracksTextView = true
         textView.textContainer.heightTracksTextView = false
-        textView.textContainer.lineBreakMode = .byCharWrapping
+        // Wrapping is per-paragraph: prose wraps at word boundaries, code
+        // and tables wrap by character (see TranscriptAttributedBuilder).
         textView.adjustsFontForContentSizeCategory = false
         textView.linkTextAttributes = [:]
         textView.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)

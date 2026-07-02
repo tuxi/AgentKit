@@ -77,6 +77,8 @@ struct AssetPreviewInspectorView: View {
     @State private var source: String?
     @State private var isLoading = false
     @State private var errorMessage: String?
+    @State private var contentLoadError: String?
+    @State private var focusRevision = 0
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
@@ -113,7 +115,13 @@ struct AssetPreviewInspectorView: View {
             HStack(spacing: 6) {
                 chip(displayAsset.kind)
                 if let range = displayAsset.range?.displayText {
-                    chip(range)
+                    Button {
+                        focusRevision += 1
+                    } label: {
+                        chip(range)
+                    }
+                    .buttonStyle(.plain)
+                    .help("Jump to focused line")
                 }
                 if let source {
                     chip(source)
@@ -139,6 +147,10 @@ struct AssetPreviewInspectorView: View {
                     .font(.caption)
                     .foregroundStyle(.orange)
                     .lineLimit(2)
+            }
+
+            if shouldShowReadNotice {
+                readNotice
             }
         }
         .padding()
@@ -169,14 +181,22 @@ struct AssetPreviewInspectorView: View {
             )
             .padding()
         } else {
-            FileArtifactBody(
-                filePath: displayAsset.assetPath ?? displayAsset.id,
-                content: displayContent,
-                language: loadedLanguageHint,
-                maxHeight: nil,
-                focusLine: displayAsset.range?.startLine,
-                focusID: displayAsset.id
-            )
+            VStack(alignment: .leading, spacing: 0) {
+                if displayContent.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                    ContentUnavailableView("No Preview", systemImage: "doc.text.magnifyingglass")
+                        .frame(maxWidth: .infinity, maxHeight: .infinity)
+                } else {
+                    FileArtifactBody(
+                        filePath: displayAsset.assetPath ?? displayAsset.id,
+                        content: displayedTextContent,
+                        language: loadedLanguageHint,
+                        maxHeight: nil,
+                        focusLine: displayAsset.range?.startLine,
+                        focusID: displayAsset.id,
+                        focusRevision: focusRevision
+                    )
+                }
+            }
             .padding()
         }
     }
@@ -190,6 +210,11 @@ struct AssetPreviewInspectorView: View {
             return loadedContent
         }
         return displayAsset.previewContent
+    }
+
+    private var displayedTextContent: String {
+        guard shouldUseClientPreviewWindow else { return displayContent }
+        return clientPreviewWindow.text
     }
 
     private var hasDisplayableContent: Bool {
@@ -208,11 +233,76 @@ struct AssetPreviewInspectorView: View {
         "\(payload.conversationID ?? "local"):\(payload.asset.id)"
     }
 
+    private var shouldShowReadNotice: Bool {
+        isTruncated || contentLoadError != nil || shouldUseClientPreviewWindow
+    }
+
+    private var shouldUseClientPreviewWindow: Bool {
+        loadedContent == nil && displayContent.utf8.count > AssetPreviewLimits.clientPreviewBytes
+    }
+
+    private var clientPreviewWindow: AssetTextWindow {
+        AssetTextWindow(content: displayContent, maxBytes: AssetPreviewLimits.clientPreviewBytes)
+    }
+
+    private var readNotice: some View {
+        HStack(alignment: .top, spacing: 8) {
+            Image(systemName: readNoticeIconName)
+                .font(.caption)
+                .foregroundStyle(readNoticeColor)
+                .frame(width: 14)
+            VStack(alignment: .leading, spacing: 2) {
+                Text(readNoticeTitle)
+                    .font(.caption.weight(.medium))
+                    .foregroundStyle(readNoticeColor)
+                Text(readNoticeDetail)
+                    .font(.caption2)
+                    .foregroundStyle(.secondary)
+                    .lineLimit(3)
+            }
+            Spacer()
+        }
+        .padding(8)
+        .background(readNoticeColor.opacity(0.08))
+        .clipShape(RoundedRectangle(cornerRadius: 7))
+    }
+
+    private var readNoticeIconName: String {
+        if contentLoadError != nil { return "exclamationmark.triangle" }
+        if isTruncated { return "scissors" }
+        return "speedometer"
+    }
+
+    private var readNoticeColor: Color {
+        contentLoadError != nil ? .orange : .secondary
+    }
+
+    private var readNoticeTitle: String {
+        if contentLoadError != nil { return "Preview Only" }
+        if isTruncated { return "Content Truncated" }
+        return "Large Preview Window"
+    }
+
+    private var readNoticeDetail: String {
+        if let contentLoadError {
+            return "Full content could not be loaded: \(contentLoadError)"
+        }
+        if isTruncated {
+            if let loadedSizeBytes {
+                return "Runtime returned a capped text response for a \(byteCount(loadedSizeBytes)) asset."
+            }
+            return "Runtime returned a capped text response."
+        }
+        let window = clientPreviewWindow
+        return "Showing the first \(byteCount(Int64(window.byteCount))) locally to keep the inspector responsive."
+    }
+
     private func loadRuntimePreview() async {
         guard let conversationID = payload.conversationID else { return }
         resetLoadedStateForNewAsset()
         isLoading = true
         errorMessage = nil
+        contentLoadError = nil
         defer { isLoading = false }
 
         do {
@@ -244,6 +334,7 @@ struct AssetPreviewInspectorView: View {
             } catch {
                 // Preview is still useful; content can be rejected for directories,
                 // non-text assets, or server-side caps.
+                contentLoadError = error.localizedDescription
             }
         } catch {
             if hasDisplayableContent {
@@ -262,6 +353,7 @@ struct AssetPreviewInspectorView: View {
         loadedSizeBytes = nil
         isTruncated = false
         source = payload.asset.fallbackPreviewSource
+        contentLoadError = nil
     }
 
     private func shouldLoadFullContent(asset: AgentAssetRef, mimeType: String?) -> Bool {
@@ -382,6 +474,37 @@ private struct DirectoryAssetPreview: View {
 
     private var trimmedContent: String {
         content.trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+}
+
+private enum AssetPreviewLimits {
+    static let clientPreviewBytes = 512_000
+}
+
+private struct AssetTextWindow: Hashable {
+    let text: String
+    let byteCount: Int
+    let totalBytes: Int
+
+    init(content: String, maxBytes: Int) {
+        totalBytes = content.utf8.count
+        guard totalBytes > maxBytes else {
+            text = content
+            byteCount = totalBytes
+            return
+        }
+
+        var consumed = 0
+        var scalars = String.UnicodeScalarView()
+        for scalar in content.unicodeScalars {
+            let scalarBytes = String(scalar).utf8.count
+            guard consumed + scalarBytes <= maxBytes else { break }
+            scalars.append(scalar)
+            consumed += scalarBytes
+        }
+
+        text = String(scalars)
+        byteCount = consumed
     }
 }
 
