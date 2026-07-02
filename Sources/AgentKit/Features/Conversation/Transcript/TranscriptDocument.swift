@@ -25,6 +25,7 @@ enum TranscriptAction: Hashable {
     case openAsset(AssetReference)
     case openURL(String)
     case openPath(String)
+    case openChildStream(childID: String)
 }
 
 struct TranscriptDocumentState: Hashable {
@@ -81,6 +82,12 @@ enum TurnTranscriptBuilder {
 
             case .system(_, let payload):
                 appendSystem(payload, to: &builder)
+
+            case .childStream(_, let payload):
+                builder.appendChildStreamRow(
+                    payload,
+                    action: .openChildStream(childID: payload.childID)
+                )
             }
 
             if index < turn.blocks.count - 1 {
@@ -373,6 +380,64 @@ private struct TranscriptAttributedBuilder {
         }
         appendLinked(" \(indicator)", id: id, attributes: toolChevronAttributes)
         copyParts.append(presentation.compactLine)
+    }
+
+    /// P8.7 — 子流入口卡行（task 子agent / 后台 job）：
+    /// 图标 + 类别 + 一句话摘要 + 状态，整行可点，点击展开子流查看器。
+    /// 结束后追加一行结果摘要（dim）。
+    mutating func appendChildStreamRow(_ payload: ChildStreamNodePayload, action: TranscriptAction) {
+        let id = register(action)
+        let tone: ToolTranscriptStatusTone = {
+            switch payload.status {
+            case .running: return .running
+            case .failed: return .failed
+            case .completed: return .completed
+            }
+        }()
+
+        let label = payload.kind == .task ? "Subagent" : "Job"
+        let summary = singleLineSummary(payload.title, limit: 60)
+        let statusText: String? = {
+            switch payload.status {
+            case .running: return "running"
+            case .failed:
+                if let code = payload.exitCode, code != 0 { return "exit \(code)" }
+                return "failed"
+            case .completed: return "done"
+            }
+        }()
+
+        appendLinked(toolIcon(for: .other, tone: tone), id: id,
+                     attributes: toolIconAttributes(for: .other, tone: tone))
+        appendLinked(" \(label)", id: id, attributes: toolTitleAttributes(for: tone, nested: false))
+        if !summary.isEmpty {
+            appendLinked("  \(summary)", id: id, attributes: toolDetailAttributes)
+        }
+        if let statusText {
+            appendLinked("  \(statusText)", id: id, attributes: toolStatusTextAttributes(for: tone))
+        }
+        appendLinked(" ›", id: id, attributes: toolChevronAttributes)
+        copyParts.append("\(label): \(summary)")
+
+        if payload.status != .running,
+           let result = payload.result?.trimmingCharacters(in: .whitespacesAndNewlines),
+           !result.isEmpty {
+            let resultLine = singleLineSummary(result, limit: 120)
+            append("\n", attributes: metaAttributes)
+            appendLinked("  \(resultLine)", id: id, attributes: metaAttributes)
+            copyParts.append(resultLine)
+        }
+    }
+
+    private func singleLineSummary(_ text: String, limit: Int) -> String {
+        let firstLine = text
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+            .components(separatedBy: "\n")
+            .first ?? ""
+        if firstLine.count > limit {
+            return String(firstLine.prefix(limit - 1)) + "…"
+        }
+        return firstLine
     }
 
     mutating func appendCode(_ text: String, language: String? = nil, recordCopy: Bool = true) {

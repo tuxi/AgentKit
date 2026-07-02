@@ -115,6 +115,10 @@ public struct TimelineProjection: Sendable {
             case .artifact(let p):
                 flushTools()
                 blocks.append(.artifact(id: node.id, p.node))
+            case .childStream(let p):
+                // 子流入口卡：内嵌在 turn card 中的折叠卡片（Claude Code 式）。
+                flushTools()
+                blocks.append(.childStream(id: node.id, p))
             case .system(let p):
                 if p.kind == .modelActivity, let phase = p.metadata["phase"] {
                     // Model lifecycle → footer / spinner, never a block.
@@ -241,13 +245,19 @@ public struct TimelineProjection: Sendable {
                 kind: nodeKind, text: payload.text, metadata: payload.metadata
             ))
 
-        case .subagent(let payload):
-            // Project subagent as a system node for now
-            let text = payload.result.map {
-                "Sub-agent: \(payload.prompt) → \($0)"
-            } ?? "Sub-agent: \(payload.prompt)"
-            kind = .system(SystemNodePayload(kind: .modelActivity, text: text,
-                                              metadata: ["type": "subagent", "sessionID": payload.subSessionID]))
+        case .childStream(let payload):
+            let status: ChildStreamNodeStatus = {
+                switch graphNode.status {
+                case .running: return .running
+                case .failed: return .failed
+                default: return .completed
+                }
+            }()
+            kind = .childStream(ChildStreamNodePayload(
+                kind: payload.kind, childID: payload.childID, title: payload.title,
+                status: status, result: payload.result,
+                exitCode: payload.exitCode, output: payload.output
+            ))
 
         case .approval(let payload):
             let statusText = payload.resolved

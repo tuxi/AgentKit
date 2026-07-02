@@ -80,8 +80,14 @@ struct TurnView: View {
 
     private var hasRunningTool: Bool {
         turn.blocks.contains { block in
-            guard case .toolGroup(let group) = block else { return false }
-            return group.tools.contains { $0.status == .running }
+            switch block {
+            case .toolGroup(let group):
+                return group.tools.contains { $0.status == .running }
+            case .childStream(_, let payload):
+                return payload.status == .running
+            default:
+                return false
+            }
         }
     }
 
@@ -134,7 +140,24 @@ struct TurnView: View {
             } else {
                 Clipboard.copy(path)
             }
+
+        case .openChildStream(let childID):
+            guard let payload = childStreamPayload(childID: childID) else { return }
+            store.showInspector(.childStream(ChildStreamSelection(
+                childID: payload.childID,
+                kind: payload.kind,
+                title: payload.title
+            )))
         }
+    }
+
+    private func childStreamPayload(childID: String) -> ChildStreamNodePayload? {
+        for block in turn.blocks {
+            if case .childStream(_, let payload) = block, payload.childID == childID {
+                return payload
+            }
+        }
+        return nil
     }
 
     private func openAsset(_ reference: AssetReference) {

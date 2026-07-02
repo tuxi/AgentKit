@@ -378,6 +378,25 @@ extension ConversationState {
                 turns[tid] = turn
             }
 
+        // ── Background job（P8.7，与 subagent 同一引用列表）──
+
+        case .jobStarted(let turnID, let jobID, let command):
+            let tid = turnID ?? currentTurnID
+            guard let tid, var turn = turns[tid] else { return }
+            turn.subagentRefs.append(SubagentItem(sessionID: jobID, prompt: command))
+            turns[tid] = turn
+
+        case .jobFinished(let turnID, let jobID, _, let err, let text):
+            let tid = turnID ?? currentTurnID
+            guard let tid, var turn = turns[tid] else { return }
+            if let idx = turn.subagentRefs.firstIndex(where: { $0.sessionID == jobID }) {
+                turn.subagentRefs[idx].result = (err?.isEmpty == false) ? err : text
+                turns[tid] = turn
+            }
+
+        case .jobOutput:
+            break // 输出分块只属于子流自己的 transcript
+
         // ── 上下文 ──
 
         case .reflected:

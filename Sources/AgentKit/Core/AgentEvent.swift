@@ -53,6 +53,14 @@ public enum AgentEvent: Sendable {
     case taskStarted(turnID: String?, sessionId: String, parentSessionId: String, text: String)
     case taskFinished(turnID: String?, sessionId: String, parentSessionId: String, text: String)
 
+    // ── Background job（P8.7 —— 与 task 共用"子流"渲染，见 docs/p8.7-client-plan.md）──
+    /// `job_started`：后台 job 启动。子流 id 复用 `session_id` 字段（§8.4 决策点 1）。
+    case jobStarted(turnID: String?, jobID: String, command: String)
+    /// `job_output`：job 输出分块。只出现在 job 自己的子流里，不进父会话直播流。
+    case jobOutput(turnID: String?, jobID: String, chunk: String)
+    /// `job_finished`：job 结束。`err` 非空或 `exitCode` 非零 = 失败。
+    case jobFinished(turnID: String?, jobID: String, exitCode: Int?, err: String?, text: String)
+
     // ── 上下文 ──
     case reflected(turnID: String?, text: String)
     case compacted(turnID: String?, beforeTokens: Int, afterTokens: Int, savedTokens: Int, summaryChars: Int, ratio: Double)
@@ -187,6 +195,29 @@ extension AgentEvent {
                 turnID: turnID,
                 sessionId: wire.sessionId ?? "",
                 parentSessionId: wire.parentSessionId ?? "",
+                text: wire.text ?? ""
+            )
+
+        case "job_started":
+            return .jobStarted(
+                turnID: turnID,
+                jobID: wire.sessionId ?? "",
+                command: wire.text ?? ""
+            )
+
+        case "job_output":
+            return .jobOutput(
+                turnID: turnID,
+                jobID: wire.sessionId ?? "",
+                chunk: wire.chunk ?? ""
+            )
+
+        case "job_finished":
+            return .jobFinished(
+                turnID: turnID,
+                jobID: wire.sessionId ?? "",
+                exitCode: wire.exitCode,
+                err: wire.err.normalized,
                 text: wire.text ?? ""
             )
 

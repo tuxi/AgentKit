@@ -154,7 +154,7 @@ public enum GraphNodeKind: String, Sendable, CaseIterable {
     case reflection
     case assistantMessage
     case system
-    case subagent
+    case childStream
     case approval
 }
 
@@ -169,7 +169,7 @@ public enum NodePayload: Sendable {
     case reflection(text: String)
     case assistantMessage(text: String, textAnnotations: [AgentTextAnnotation])
     case system(SystemPayload)
-    case subagent(SubagentExecPayload)
+    case childStream(ChildStreamPayload)
     case approval(ApprovalExecPayload)
 }
 
@@ -221,15 +221,35 @@ public enum SystemPayloadKind: String, Sendable {
     case error
 }
 
-public struct SubagentExecPayload: Sendable {
-    public let subSessionID: String
-    public let prompt: String
-    public var result: String?
+/// 子流类别 —— task 子agent（P8.3）与后台 job（P8.7）共用一套渲染。
+public enum ChildStreamKind: String, Sendable, Hashable {
+    case task
+    case job
+}
 
-    public init(subSessionID: String, prompt: String, result: String? = nil) {
-        self.subSessionID = subSessionID
-        self.prompt = prompt
+/// 一个"子流"（task 子agent / 后台 job）在父时间线中的入口节点。
+/// `childID` 是子流 id（task 的子 session id / job 的 job id），
+/// 可通过 `GET /v1/conversations/{childID}/events` attach 子流详情。
+public struct ChildStreamPayload: Sendable {
+    public let kind: ChildStreamKind
+    public let childID: String
+    /// task 的委派 prompt / job 的 command。
+    public let title: String
+    /// 结束时写入：task 的结论 / job 的收尾说明（失败时为错误信息）。
+    public var result: String?
+    /// job 专用：进程退出码。
+    public var exitCode: Int?
+    /// 输出累积（`job_output` 分块；只在子流自己的 graph 里增长）。
+    public var output: String
+
+    public init(kind: ChildStreamKind, childID: String, title: String,
+                result: String? = nil, exitCode: Int? = nil, output: String = "") {
+        self.kind = kind
+        self.childID = childID
+        self.title = title
         self.result = result
+        self.exitCode = exitCode
+        self.output = output
     }
 }
 

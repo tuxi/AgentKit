@@ -33,6 +33,7 @@ final class TimelineProjectionTurnsTests: XCTestCase {
             case .toolGroup: return "tools"
             case .artifact: return "artifact"
             case .system: return "system"
+            case .childStream: return "childStream"
             }
         }
     }

@@ -40,6 +40,7 @@ public enum ExecutionNodeKind: Sendable {
     case tool(ToolNodePayload)
     case artifact(ArtifactNodePayload)
     case system(SystemNodePayload)
+    case childStream(ChildStreamNodePayload)
 }
 
 // MARK: - Payloads
@@ -142,4 +143,37 @@ public enum SystemNodeKind: String, Sendable {
     case contextCompact
     case skillLoaded
     case error
+}
+
+/// 子流入口卡（task 子agent / 后台 job）— 父时间线中的折叠卡片，
+/// 点击展开子流查看器（macOS 右侧面板 / iOS sheet）。
+public struct ChildStreamNodePayload: Sendable, Hashable {
+    public let kind: ChildStreamKind
+    public let childID: String
+    /// task 的委派 prompt / job 的 command。
+    public let title: String
+    public let status: ChildStreamNodeStatus
+    /// 结束后的结果摘要（task 结论 / job 收尾说明或错误）。
+    public let result: String?
+    public let exitCode: Int?
+    /// 累积输出（job 子流内部使用；父流入口卡不展示）。
+    public let output: String
+
+    public init(kind: ChildStreamKind, childID: String, title: String,
+                status: ChildStreamNodeStatus, result: String? = nil,
+                exitCode: Int? = nil, output: String = "") {
+        self.kind = kind
+        self.childID = childID
+        self.title = title
+        self.status = status
+        self.result = result
+        self.exitCode = exitCode
+        self.output = output
+    }
+}
+
+public enum ChildStreamNodeStatus: String, Sendable, Hashable {
+    case running
+    case completed
+    case failed
 }

@@ -56,6 +56,7 @@ struct WireFrame: Decodable {
     let invocationId: String?       // v1.2: 同一个模型调用产生的所有事件共享此 ID
     let turnStatus: String?         // v1.2 lifecycle status
     let pausedAt: Int64?            // v1.2 unix seconds
+    let exitCode: Int?              // P8.7: job_finished 终态（线格式待后端冻结，暂按可选解码）
 
     enum CodingKeys: String, CodingKey {
         case type, kind, at, step, id, server
@@ -69,6 +70,7 @@ struct WireFrame: Decodable {
         case invocationId = "invocation_id"
         case turnStatus = "turn_status"
         case pausedAt = "paused_at"
+        case exitCode = "exit_code"
         case toolName = "tool_name"
         case toolArgs = "tool_args"
         case planId = "plan_id"

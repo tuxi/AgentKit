@@ -199,7 +199,7 @@ public actor RuntimeEngine {
 
         // Notify UI — coalesce deltas, immediate for terminal events
         switch event {
-        case .tokenDelta, .thinking, .toolStdout, .toolStderr:
+        case .tokenDelta, .thinking, .toolStdout, .toolStderr, .jobOutput:
             scheduleFlush()
         default:
             yieldSnapshot()

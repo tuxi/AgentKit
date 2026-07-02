@@ -64,6 +64,9 @@ public struct PresentationResolver: Sendable {
             }
         case .artifact:
             return .full
+        case .childStream(let payload):
+            // 入口卡：running 全量（活跃态可见），结束后折叠。
+            return payload.status == .running ? .full : .compact
         case .system(let payload):
             switch payload.kind {
             case .observation:

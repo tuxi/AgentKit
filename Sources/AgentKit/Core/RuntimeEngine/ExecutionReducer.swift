@@ -122,14 +122,29 @@ public struct ExecutionReducer: Sendable {
             return handleTodoUpdated(turnID: turnID ?? internalState.currentTurnID ?? "",
                                      todos: todos, ts: ts, graph: &graph)
 
-        // ── Subagent ──
+        // ── 子流（task 子agent + 后台 job，共用 handler）──
         case .taskStarted(let turnID, let sessionId, _, let text):
-            return handleTaskStarted(turnID: turnID ?? internalState.currentTurnID ?? "",
-                                     sessionID: sessionId, prompt: text, ts: ts, graph: &graph)
+            return handleChildStarted(kind: .task, childID: sessionId, title: text,
+                                      turnID: turnID ?? internalState.currentTurnID ?? "",
+                                      ts: ts, graph: &graph)
 
         case .taskFinished(let turnID, let sessionId, _, let text):
-            return handleTaskFinished(turnID: turnID ?? internalState.currentTurnID ?? "",
-                                      sessionID: sessionId, result: text, ts: ts, graph: &graph)
+            return handleChildFinished(childID: sessionId, result: text, exitCode: nil,
+                                       err: nil, turnID: turnID ?? internalState.currentTurnID ?? "",
+                                       ts: ts, graph: &graph)
+
+        case .jobStarted(let turnID, let jobID, let command):
+            return handleChildStarted(kind: .job, childID: jobID, title: command,
+                                      turnID: turnID ?? internalState.currentTurnID ?? "",
+                                      ts: ts, graph: &graph)
+
+        case .jobOutput(_, let jobID, let chunk):
+            return handleChildOutput(childID: jobID, chunk: chunk, ts: ts, graph: &graph)
+
+        case .jobFinished(let turnID, let jobID, let exitCode, let err, let text):
+            return handleChildFinished(childID: jobID, result: text, exitCode: exitCode,
+                                       err: err, turnID: turnID ?? internalState.currentTurnID ?? "",
+                                       ts: ts, graph: &graph)
 
         // ── Plan Approval (handled at RuntimeEngine level, not in graph) ──
         case .planApprovalRequest:
@@ -595,30 +610,49 @@ public struct ExecutionReducer: Sendable {
         return [nodeID]
     }
 
-    // MARK: - Subagent handlers
+    // MARK: - Child stream handlers (task subagent + background job)
 
-    private mutating func handleTaskStarted(turnID: String, sessionID: String, prompt: String,
-                                             ts: TimeInterval,
-                                             graph: inout ExecutionGraph) -> [NodeID] {
-        let nodeID = "sub_\(sessionID)"
-        let payload = SubagentExecPayload(subSessionID: sessionID, prompt: prompt)
-        let node = GraphNode(id: nodeID, kind: .subagent, payload: .subagent(payload),
+    private mutating func handleChildStarted(kind: ChildStreamKind, childID: String, title: String,
+                                              turnID: String, ts: TimeInterval,
+                                              graph: inout ExecutionGraph) -> [NodeID] {
+        let nodeID = "sub_\(childID)"
+        // Replay can deliver a duplicate started — keep the existing node's identity.
+        guard graph.nodes[nodeID] == nil else { return [nodeID] }
+        let payload = ChildStreamPayload(kind: kind, childID: childID, title: title)
+        let node = GraphNode(id: nodeID, kind: .childStream, payload: .childStream(payload),
                              status: .running, timestamp: ts, turnID: turnID)
         appendNode(node, to: &graph)
         return [nodeID]
     }
 
-    private mutating func handleTaskFinished(turnID: String, sessionID: String, result: String?,
-                                              ts: TimeInterval,
-                                              graph: inout ExecutionGraph) -> [NodeID] {
-        let nodeID = "sub_\(sessionID)"
+    private mutating func handleChildOutput(childID: String, chunk: String, ts: TimeInterval,
+                                             graph: inout ExecutionGraph) -> [NodeID] {
+        let nodeID = "sub_\(childID)"
         guard var node = graph.nodes[nodeID],
-              case .subagent(var payload) = node.payload else {
+              case .childStream(var payload) = node.payload else {
             return []
         }
-        payload.result = result
-        node.payload = .subagent(payload)
-        node.status = result != nil ? .completed : .completed
+        payload.output += chunk
+        node.payload = .childStream(payload)
+        node.timestamp = ts
+        graph.upsertNode(node)
+        return [nodeID]
+    }
+
+    private mutating func handleChildFinished(childID: String, result: String?, exitCode: Int?,
+                                               err: String?, turnID: String, ts: TimeInterval,
+                                               graph: inout ExecutionGraph) -> [NodeID] {
+        let nodeID = "sub_\(childID)"
+        guard var node = graph.nodes[nodeID],
+              case .childStream(var payload) = node.payload else {
+            // finished without started（乱序/部分回放）— 不崩，静默忽略。
+            return []
+        }
+        let failed = (err?.isEmpty == false) || (exitCode ?? 0) != 0
+        payload.result = (err?.isEmpty == false) ? err : result
+        payload.exitCode = exitCode
+        node.payload = .childStream(payload)
+        node.status = failed ? .failed : .completed
         node.timestamp = ts
         graph.upsertNode(node)
         return [nodeID]
