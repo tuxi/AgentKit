@@ -155,9 +155,18 @@ public final class AgentWireSocket: @unchecked Sendable {
         send(input: .text(text))
     }
 
-    /// 发送审批回复。
+    /// 发送审批回复（两态兼容）。
     public func sendApproval(id: String, approved: Bool) {
         send(outgoing: OutgoingApprovalResponse(id: id, approved: approved))
+    }
+
+    /// 发送三态审批回复（v1.2）。
+    /// - Parameters:
+    ///   - id: 对应 approval_request.id
+    ///   - decision: "once" | "always" | "deny"
+    ///   - scope: "local"（默认）或 "user"，仅 decision="always" 时有效
+    public func sendApproval(id: String, decision: String, scope: String?) {
+        send(outgoing: OutgoingApprovalResponse(id: id, decision: decision, scope: scope))
     }
 
     /// 发送计划审批回复。

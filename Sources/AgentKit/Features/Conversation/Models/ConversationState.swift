@@ -43,6 +43,13 @@ public struct ConversationState {
     /// 历史事件已回放完毕。
     public var historyReplayed: Bool = false
 
+    /// v1.2 三态审批：已见过的审批请求 ID，用于断线重连去重。
+    /// 服务端重连后会用同一 `id` 重发未决请求，客户端按此 set 去重。
+    public var seenApprovalIDs: Set<String> = []
+
+    /// 已回复过的审批请求 ID（重连后直接忽略，不重弹卡片）。
+    public var resolvedApprovalIDs: Set<String> = []
+
     // MARK: - 流式文本（便利字段）
 
     /// 当前 turn 的实时助手文本（token_delta 累积；turn_finished 锁定到 TurnGroup 后清空）。
@@ -345,7 +352,15 @@ extension ConversationState {
             break // no-op — plan approval handled by RuntimeEngine
 
         case .approvalRequest(let turnID, let request):
+            // v1.2 去重：已回复过的 id 直接忽略
+            guard !resolvedApprovalIDs.contains(request.id) else { break }
             let tid = turnID ?? currentTurnID
+            // 已显示过的 id：不重复创建卡片，但恢复 pending 状态
+            if seenApprovalIDs.contains(request.id) {
+                pendingApproval = request
+                break
+            }
+            seenApprovalIDs.insert(request.id)
             if let tid, var turn = turns[tid] {
                 turn.approvalRequests.append(ApprovalItem(request: request))
                 turns[tid] = turn
@@ -431,6 +446,7 @@ extension ConversationState {
 
     /// 标记审批结果为已批准/已拒绝。
     public mutating func resolveApproval(id: String, approved: Bool) {
+        resolvedApprovalIDs.insert(id)
         for turnID in turnIDs {
             if let idx = turns[turnID]?.approvalRequests.firstIndex(where: { $0.id == id }) {
                 turns[turnID]?.approvalRequests[idx].resolved = true

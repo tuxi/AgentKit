@@ -61,21 +61,25 @@ struct AssetIndex: Sendable {
         func index(_ artifact: ArtifactNode) {
             byCallID[artifact.callID] = artifact
             if let path = artifact.path, !path.isEmpty {
-                byPath[Self.normalizedPath(path)] = artifact
+                for alias in Self.pathAliases(for: path, includeRelativeForms: true) {
+                    byPath[alias] = artifact
+                }
             }
         }
 
         func index(_ asset: AgentAssetRef) {
             structuredByID[asset.id] = asset
-            let paths = [
-                asset.workspaceRelativePath,
-                asset.absolutePath,
-                asset.uri,
-                asset.displayName
+            let paths: [(String?, Bool)] = [
+                (asset.workspaceRelativePath, true),
+                (asset.uri, true),
+                (asset.displayName, true),
+                (asset.absolutePath, false)
             ]
-            for raw in paths {
+            for (raw, includeRelativeForms) in paths {
                 guard let raw, !raw.isEmpty else { continue }
-                structuredByPath[Self.normalizedPath(raw)] = asset
+                for alias in Self.pathAliases(for: raw, includeRelativeForms: includeRelativeForms) {
+                    structuredByPath[alias] = asset
+                }
             }
         }
 
@@ -108,7 +112,12 @@ struct AssetIndex: Sendable {
     }
 
     func artifact(path: String) -> ArtifactNode? {
-        artifactsByPath[Self.normalizedPath(path)]
+        for alias in Self.pathAliases(for: path, includeRelativeForms: true) {
+            if let artifact = artifactsByPath[alias] {
+                return artifact
+            }
+        }
+        return nil
     }
 
     func reference(forURL raw: String) -> AssetReference {
@@ -177,8 +186,13 @@ struct AssetIndex: Sendable {
         return Self.normalizedPath(lhsPath) == Self.normalizedPath(rhsPath)
     }
 
-    private func structuredAsset(path: String) -> AgentAssetRef? {
-        structuredAssetsByPath[path] ?? structuredAssetsByPath[Self.normalizedPath(path)]
+    func structuredAsset(path: String) -> AgentAssetRef? {
+        for alias in Self.pathAliases(for: path, includeRelativeForms: true) {
+            if let asset = structuredAssetsByPath[alias] {
+                return asset
+            }
+        }
+        return nil
     }
 
     private static func normalizedPath(_ path: String) -> String {
@@ -187,6 +201,44 @@ struct AssetIndex: Sendable {
             .replacingOccurrences(of: "\\/", with: "/")
         guard trimmed != "/" else { return trimmed }
         return trimmed.hasSuffix("/") ? String(trimmed.dropLast()) : trimmed
+    }
+
+    private static func pathAliases(for raw: String, includeRelativeForms: Bool) -> [String] {
+        var aliases: [String] = []
+
+        func append(_ value: String) {
+            let normalized = normalizedPath(value)
+            guard !normalized.isEmpty, !aliases.contains(normalized) else { return }
+            aliases.append(normalized)
+        }
+
+        append(raw)
+
+        if let url = URL(string: raw),
+           url.scheme == "workspace" {
+            append(url.path)
+        }
+
+        let normalized = normalizedPath(raw)
+        if normalized.hasPrefix("./") {
+            append(String(normalized.dropFirst(2)))
+        }
+
+        guard includeRelativeForms else { return aliases }
+        if normalized.hasPrefix("/") {
+            append(String(normalized.dropFirst()))
+        }
+        let baseAliases = aliases
+        for alias in baseAliases {
+            if !alias.hasPrefix("/") {
+                append("/" + alias)
+            }
+            if !alias.hasPrefix("./"), !alias.hasPrefix("/") {
+                append("./" + alias)
+            }
+        }
+
+        return aliases
     }
 }
 

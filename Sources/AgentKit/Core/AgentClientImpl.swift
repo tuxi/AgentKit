@@ -102,6 +102,10 @@ public final class CodeAgentTransport: AgentTransport, @unchecked Sendable {
         socket?.sendApproval(id: id, approved: value)
     }
 
+    public func approve(id: String, decision: String, scope: String?) async {
+        socket?.sendApproval(id: id, decision: decision, scope: scope)
+    }
+
     public func approvePlan(id: String, value: Bool) async {
         socket?.sendPlanApproval(id: id, approved: value)
     }
@@ -239,6 +243,10 @@ public final class DefaultAgentClient: RuntimeClient, @unchecked Sendable {
 
     public func sendApproval(id: String, approved: Bool) async {
         await transport.approve(id: id, value: approved)
+    }
+
+    public func sendApproval(id: String, decision: String, scope: String?) async {
+        await transport.approve(id: id, decision: decision, scope: scope)
     }
 
     public func sendPlanApproval(id: String, approved: Bool) async {

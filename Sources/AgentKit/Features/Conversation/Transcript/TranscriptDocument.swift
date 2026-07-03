@@ -682,6 +682,12 @@ private struct TranscriptAttributedBuilder {
                 columnWidths[column] = max(columnWidths[column], width)
             }
         }
+        // The attributed string is built width-blind, so tab positions must
+        // stay sane in narrow containers: an oversized cell may not push
+        // later columns arbitrarily far right. Rows with a capped-width cell
+        // wrap within the row instead of shifting the whole table.
+        let columnWidthCap: CGFloat = 280
+        columnWidths = columnWidths.map { min($0, columnWidthCap) }
 
         let columnGap: CGFloat = 16
         var columnStarts: [CGFloat] = []
@@ -690,7 +696,6 @@ private struct TranscriptAttributedBuilder {
             columnStarts.append(x)
             x += width + columnGap
         }
-        let lastColumnStart = columnStarts.last ?? 0
 
         func line(_ row: [String]) -> String {
             (0..<columnCount)
@@ -704,15 +709,13 @@ private struct TranscriptAttributedBuilder {
         headerAttrs[.transcriptTableHeader] = true
         headerAttrs[.paragraphStyle] = tableRowParagraphStyle(
             spacingAfter: 5, // room for the hairline drawn under the header
-            columnStarts: columnStarts,
-            lastColumnStart: lastColumnStart
+            columnStarts: columnStarts
         )
         var rowAttrs = tableAttributes
         rowAttrs[.transcriptBlock] = block
         rowAttrs[.paragraphStyle] = tableRowParagraphStyle(
             spacingAfter: 1,
-            columnStarts: columnStarts,
-            lastColumnStart: lastColumnStart
+            columnStarts: columnStarts
         )
 
         if !headTexts.isEmpty {
@@ -730,11 +733,14 @@ private struct TranscriptAttributedBuilder {
     }
 
     /// Row paragraphs share the block inset; tab stops sit at each column's
-    /// measured start, and wrapped lines hang under the last column.
+    /// measured start. Wrapped lines hang under the *second* column with a
+    /// hard cap — hanging under the wrapping cell's own column would need
+    /// the container width, which the width-blind builder doesn't have, and
+    /// an indent beyond the container degenerates into one-glyph-per-line
+    /// vertical text in narrow windows.
     private func tableRowParagraphStyle(
         spacingAfter: CGFloat,
-        columnStarts: [CGFloat],
-        lastColumnStart: CGFloat
+        columnStarts: [CGFloat]
     ) -> NSParagraphStyle {
         guard let style = paragraphStyle(spacingAfter: spacingAfter, blockInset: true)
             .mutableCopy() as? NSMutableParagraphStyle else {
@@ -744,7 +750,9 @@ private struct TranscriptAttributedBuilder {
         style.tabStops = columnStarts.dropFirst().map {
             NSTextTab(textAlignment: .left, location: base + $0, options: [:])
         }
-        style.headIndent = base + lastColumnStart
+        let hangCap: CGFloat = 132
+        let secondColumnStart = columnStarts.count > 1 ? columnStarts[1] : 0
+        style.headIndent = base + min(secondColumnStart, hangCap)
         style.lineBreakMode = .byWordWrapping
         return style
     }

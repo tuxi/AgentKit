@@ -103,6 +103,9 @@ public actor RuntimeEngine {
     /// Pending approval (mirrors ConversationState for backward compat).
     private var _pendingApproval: ApprovalRequest?
 
+    /// v1.2 三态审批去重：已回复过的审批请求 ID（重连后直接忽略）。
+    private var resolvedApprovalIDs: Set<String> = []
+
     /// Pending plan approval (Plan Mode).
     private var _pendingPlanApproval: PlanApprovalRequest?
 
@@ -145,8 +148,9 @@ public actor RuntimeEngine {
     /// Ingest a v1 AgentEvent from the wire.
     /// Persist → Reduce → Project → Notify UI (coalesced).
     public func ingest(_ event: AgentEvent) {
-        // Track pending approval
-        if case .approvalRequest(_, let request) = event {
+        // Track pending approval (v1.2 去重：已回复过的 id 忽略)
+        if case .approvalRequest(_, let request) = event,
+           !resolvedApprovalIDs.contains(request.id) {
             _pendingApproval = request
         }
         // Track plan approval
@@ -241,6 +245,7 @@ public actor RuntimeEngine {
         // If approval was rejected, mark associated running tool nodes as failed
         for node in graph.nodes.values {
             if case .approval(let payload) = node.payload, payload.resolved {
+                resolvedApprovalIDs.insert(payload.requestID)
                 _pendingApproval = nil
                 if payload.approved == false {
                     for (_, var toolNode) in graph.nodes where toolNode.status == .running {
@@ -253,6 +258,10 @@ public actor RuntimeEngine {
             }
         }
 
+        // History events reflect past state — they should not block the UI
+        // with a pending approval bar. If an approval is genuinely still pending,
+        // the server will re-send it through the live stream after reconnect.
+        _pendingApproval = nil
         isLive = false
         yieldSnapshot()
     }
@@ -269,6 +278,7 @@ public actor RuntimeEngine {
 
     /// Resolve an approval (called by ViewModel when user approves/rejects).
     public func resolveApproval(requestID: String, approved: Bool) {
+        resolvedApprovalIDs.insert(requestID)
         _pendingApproval = nil
         let approvalNodeID = "approval_\(requestID)"
         var rejectedToolName: String?

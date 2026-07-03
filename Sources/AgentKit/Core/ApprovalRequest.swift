@@ -49,6 +49,44 @@ public struct ApprovalRequest: Sendable, Identifiable, Hashable {
             turnId: wire.turnId
         )
     }
+
+    // MARK: - MCP tool name display
+
+    /// 是否为 MCP 外部工具（`tool_name` 以 `mcp__` 开头）。
+    public var isMCP: Bool { toolName.hasPrefix("mcp__") }
+
+    /// MCP server 名（第一个 `__` 之前的字符串），非 MCP 工具返回 nil。
+    /// 例：`mcp__github__list_issues` → `"github"`。
+    public var mcpServer: String? {
+        guard isMCP else { return nil }
+        let withoutPrefix = String(toolName.dropFirst(5)) // drop "mcp__"
+        guard let separatorRange = withoutPrefix.range(of: "__") else { return nil }
+        return String(withoutPrefix[..<separatorRange.lowerBound])
+    }
+
+    /// MCP 工具裸名（去掉 `mcp__<server>__` 前缀），非 MCP 工具返回原始 toolName。
+    /// 例：`mcp__github__list_issues` → `"list_issues"`。
+    public var mcpBareToolName: String {
+        guard isMCP, let server = mcpServer else { return toolName }
+        let prefix = "mcp__\(server)__"
+        return String(toolName.dropFirst(prefix.count))
+    }
+
+    /// UI 展示用的工具名：MCP 工具显示为 `"MCP: server → tool"`，内置工具显示原始名。
+    public var displayToolName: String {
+        guard let server = mcpServer else { return toolName }
+        return "MCP: \(server) → \(mcpBareToolName)"
+    }
+
+    /// "Always allow" 按钮的提示文案。
+    /// MCP 工具：`"Always allow all tools from \"\(server)\""`
+    /// 内置工具：`"Always allow \"\(toolName)\""`
+    public var alwaysAllowPrompt: String {
+        if let server = mcpServer {
+            return "Always allow all tools from \"\(server)\""
+        }
+        return "Always allow \"\(toolName)\""
+    }
 }
 
 // MARK: - PlanApprovalRequest

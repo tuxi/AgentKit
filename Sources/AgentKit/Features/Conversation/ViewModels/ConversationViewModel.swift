@@ -166,9 +166,20 @@ public final class ConversationViewModel {
         await client.send(input: .text(text))
     }
 
-    /// 回复审批请求。
+    /// 回复审批请求（两态兼容）。
     public func approve(id: String, approved: Bool) async {
         await client.sendApproval(id: id, approved: approved)
+        state.resolveApproval(id: id, approved: approved)
+        await engine?.resolveApproval(requestID: id, approved: approved)
+    }
+
+    /// 回复审批请求（v1.2 三态）。
+    /// - Parameters:
+    ///   - decision: "once" | "always" | "deny"
+    ///   - scope: "local"（默认）或 "user"，仅 decision="always" 时有效
+    public func approve(id: String, decision: String, scope: String? = nil) async {
+        await client.sendApproval(id: id, decision: decision, scope: scope)
+        let approved = decision != "deny"
         state.resolveApproval(id: id, approved: approved)
         await engine?.resolveApproval(requestID: id, approved: approved)
     }
@@ -321,10 +332,8 @@ public final class ConversationViewModel {
 
     /// Mirror engine snapshot to legacy ConversationState for backward compat.
     private func mirrorToLegacyState(_ snap: RuntimeSnapshot) {
-        // Keep pending approval in sync
-        if let approval = snap.pendingApproval {
-            state.pendingApproval = approval
-        }
+        // Keep pending approval in sync (both set and clear)
+        state.pendingApproval = snap.pendingApproval
         // Note: full TurnGroup mirror is not needed — legacy state is only
         // used for quick-access fields (pendingApproval, latestTodos) during transition.
         // Timeline UI reads exclusively from snapshot.

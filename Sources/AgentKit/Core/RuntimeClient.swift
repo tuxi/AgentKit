@@ -55,8 +55,14 @@ public protocol RuntimeClient: Sendable {
     /// 应在连接建立后调用，服务端据此知道哪些工具可委托给客户端。
     func registerTools(_ tools: [ClientToolInfo]) async
 
-    /// 审批回复 — 对应某条 `approval_request`。
+    /// 审批回复 — 对应某条 `approval_request`（两态兼容）。
     func sendApproval(id: String, approved: Bool) async
+
+    /// 审批回复 — v1.2 三态（decision + scope）。
+    /// - Parameters:
+    ///   - decision: "once" | "always" | "deny"
+    ///   - scope: "local"（默认）或 "user"，仅 decision="always" 时有效
+    func sendApproval(id: String, decision: String, scope: String?) async
 
     /// 计划审批回复 — 对应某条 `plan_approval_request`。
     func sendPlanApproval(id: String, approved: Bool) async

@@ -35,6 +35,13 @@ private enum TranscriptPreviewData {
     | TranscriptTheme.swift | 342 | 调色板与块级标注 |
     | NativeTranscriptView.swift | 310 | TextKit 渲染层 |
 
+    宽单元格表格（验证窄容器下的退化行为——续行应悬挂在第二列下，而不是竖排）：
+
+    | 项目 | samber/cc-skills-golang | code-agent |
+    | --- | --- | --- |
+    | 额外字段 | user-invocable, metadata, requires, allowed-tools, homepage, openclaw | 静默忽略，不报错 |
+    | 说明 | 行号标注（中文"第 109 行"、英文"L109"等）、Markdown 表格行号列，目录类型带 trailing-slash | 同，还支持裸 .md |
+
     ```swift
     struct Example {
         // 注释色验证 comment tone
@@ -138,5 +145,13 @@ private struct TranscriptPreviewHost: View {
 #Preview("Transcript — Dark") {
     TranscriptPreviewHost()
         .preferredColorScheme(.dark)
+}
+
+/// Narrow canvas — tables and code must degrade gracefully, never into
+/// one-glyph-per-line vertical text.
+#Preview("Transcript — Narrow") {
+    TranscriptPreviewHost()
+        .frame(width: 390)
+        .preferredColorScheme(.light)
 }
 #endif

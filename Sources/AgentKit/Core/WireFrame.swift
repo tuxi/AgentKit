@@ -223,11 +223,51 @@ struct OutgoingCancelTurn: Encodable {
     let type = "cancel_turn"
 }
 
-/// 出站：审批回复。
+/// 出站：审批回复（v1.2 三态：decision + scope）。
+/// 向后兼容：老客户端只发 `approved` 布尔仍可工作。
 struct OutgoingApprovalResponse: Encodable {
     let type = "approval_response"
     let id: String
-    let approved: Bool
+    /// 兼容字段。`decision` 存在时服务端忽略此字段。
+    var approved: Bool? = nil
+    /// v1.2 三态决策："once" | "always" | "deny"。存在时优先于 `approved`。
+    var decision: String? = nil
+    /// v1.2 作用域："local"（项目本地，默认）或 "user"（全局）。
+    /// 仅 `decision = "always"` 时有意义。
+    var scope: String? = nil
+
+    /// 兼容初始化（两态布尔）。
+    init(id: String, approved: Bool) {
+        self.id = id
+        self.approved = approved
+    }
+
+    /// v1.2 三态初始化。
+    init(id: String, decision: String, scope: String? = nil) {
+        self.id = id
+        self.decision = decision
+        self.scope = scope
+    }
+
+    enum CodingKeys: String, CodingKey {
+        case type, id, approved, decision, scope
+    }
+
+    func encode(to encoder: Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encode(type, forKey: .type)
+        try container.encode(id, forKey: .id)
+        // 只编码非 nil 字段：decision 优先于 approved
+        if let decision {
+            try container.encode(decision, forKey: .decision)
+            try container.encodeIfPresent(scope, forKey: .scope)
+        } else if let approved {
+            try container.encode(approved, forKey: .approved)
+        } else {
+            // 不可达：两个 init 保证至少设置其一
+            assertionFailure("OutgoingApprovalResponse: both decision and approved are nil — must set one")
+        }
+    }
 }
 
 /// 出站：计划审批回复。

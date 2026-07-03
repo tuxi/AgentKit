@@ -85,8 +85,14 @@ public protocol AgentTransport: Sendable {
 
     // MARK: - Control plane
 
-    /// 回复工具审批请求。`id` 对应 `approval_request.id`。
+    /// 回复工具审批请求（两态兼容）。`id` 对应 `approval_request.id`。
     func approve(id: String, value: Bool) async
+
+    /// 回复工具审批请求（v1.2 三态）。
+    /// - Parameters:
+    ///   - decision: "once" | "always" | "deny"
+    ///   - scope: "local"（默认）或 "user"，仅 decision="always" 时有效
+    func approve(id: String, decision: String, scope: String?) async
 
     /// 回复 Plan Mode 审批请求。`id` 对应 `plan_approval_request.id`。
     func approvePlan(id: String, value: Bool) async

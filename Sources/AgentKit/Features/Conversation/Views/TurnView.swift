@@ -185,6 +185,8 @@ struct TurnView: View {
         case .filePath:
             if let artifact = artifact(path: reference.target) {
                 openInInspector(artifact)
+            } else if let asset = AssetIndex(turn: turn).structuredAsset(path: reference.target) {
+                openStructuredAsset(asset)
             } else {
                 Clipboard.copy(reference.target)
             }

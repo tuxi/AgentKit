@@ -438,6 +438,61 @@ final class TranscriptDocumentTests: XCTestCase {
         })
     }
 
+    func testStructuredAssetMatchesWorkspaceRelativePathAliases() {
+        let asset = AgentAssetRef(
+            id: "asset_video",
+            kind: "video",
+            uri: "workspace://ai-local/all_highlights/highlight_2.mp4",
+            displayName: "highlight_2.mp4",
+            workspaceID: "ai-local",
+            workspaceRelativePath: "all_highlights/highlight_2.mp4",
+            absolutePath: "/Users/example/ai/all_highlights/highlight_2.mp4",
+            mimeType: "video/mp4",
+            sourceCallID: "c1"
+        )
+        let tool = ToolNodePayload(
+            callID: "c1",
+            toolName: "list_files",
+            args: .object(["path": .string(".")]),
+            status: .completed,
+            output: "all_highlights/highlight_2.mp4",
+            assets: [asset]
+        )
+        let turn = ConversationTurn(
+            id: "turn",
+            userPrompt: nil,
+            blocks: [
+                .toolGroup(ToolGroup(id: "c1", tools: [tool])),
+                .text(id: "t1", MessageNodePayload(
+                    role: .assistant,
+                    text: "Open ./all_highlights/highlight_2.mp4 or /all_highlights/highlight_2.mp4."
+                ))
+            ],
+            footer: nil,
+            isLive: false
+        )
+
+        let transcript = TurnTranscriptBuilder.build(
+            turn: turn,
+            state: TranscriptDocumentState()
+        )
+        let references = transcript.actions.values.compactMap { action -> AssetReference? in
+            guard case .openAsset(let reference) = action else { return nil }
+            return reference
+        }
+
+        XCTAssertTrue(references.contains {
+            $0.display == "./all_highlights/highlight_2.mp4"
+                && $0.kind == .structured
+                && $0.structuredAsset?.id == asset.id
+        })
+        XCTAssertTrue(references.contains {
+            $0.display == "/all_highlights/highlight_2.mp4"
+                && $0.kind == .structured
+                && $0.structuredAsset?.id == asset.id
+        })
+    }
+
     func testAssetDisplayIndexDeduplicatesSameFileLineAcrossTools() {
         let projectGraphAsset = AgentAssetRef(
             id: "asset_project_graph",
