@@ -245,5 +245,6 @@ rm -rf ~/Library/Caches/org.swift.swiftpm/artifacts/https___github_com_tuxi_code
 | `code-agent/internal/embed/` | 嵌入式运行时实现 |
 | `code-agent/build/CodeAgentRuntime.xcframework/` | 构建产物（gitignored） |
 | `AgentKit/Package.swift` | binaryTarget 声明 — url + checksum |
+| `AgentKit/.gitignore` | `/Frameworks` 已排除，防止本地 xcframework 被误提交 |
 | `AgentKit/Sources/AgentKit/Core/AgentRuntime.swift` | iOS 端 Runtime 封装（`#if os(iOS)`） |
 | `CodeAgent/CodeAgent.xcodeproj/project.pbxproj` | App 对 AgentKit 的依赖声明 |
