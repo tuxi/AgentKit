@@ -24,14 +24,6 @@ public final class ConversationViewModel {
     /// Latest snapshot from the engine — primary UI data source.
     public private(set) var snapshot: RuntimeSnapshot = .empty(sessionID: "")
 
-    // ── v1 (deprecated): kept for backward-compat during transition ──
-
-    /// Legacy state machine. NO LONGER FED — events are not reduced into it
-    /// anymore (it duplicated the entire conversation in memory alongside the
-    /// engine's graph). Kept only so downstream code still compiles.
-    @available(*, deprecated, message: "Use snapshot instead; this is no longer populated")
-    public private(set) var state = ConversationState()
-
     /// Current turn ID (from turn_started) — used by cancelTurn.
     private var currentTurnID: String?
 
