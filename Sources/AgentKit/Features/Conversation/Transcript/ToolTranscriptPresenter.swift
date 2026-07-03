@@ -76,6 +76,12 @@ enum ToolTranscriptPresenter {
         if tool.toolName == "job_wait" {
             return jobWaitPresentation(for: tool)
         }
+        // task 委派卡：prompt 含 "/" 会被通用路径缩写截成尾巴（"directories."），
+        // 给专属形态。后端把 task_started bracket 接进父流后，childStream 入口卡
+        // 是主形态，这张普通卡仍并存 —— 届时考虑在投影层合并二者。
+        if tool.toolName == "task" {
+            return taskPresentation(for: tool)
+        }
         let family = family(for: tool)
         let target = targetValue(for: tool)
         let displayTarget = target.map(shortDisplayName)
@@ -117,6 +123,31 @@ enum ToolTranscriptPresenter {
             statusText: tool.status == .running ? "waiting" : statusText(for: tool),
             title: "Waiting for background job",
             detail: jobID,
+            elapsed: tool.elapsedMs.map(formatElapsed),
+            changeSummary: nil,
+            outputKind: .text
+        )
+    }
+
+    private static func taskPresentation(for tool: ToolNodePayload) -> ToolTranscriptPresentation {
+        let prompt: String? = {
+            if case .object(let dict)? = tool.args {
+                return dict["prompt"]?.stringValue.nilIfEmpty
+                    ?? dict["task"]?.stringValue.nilIfEmpty
+            }
+            return nil
+        }()
+        let detail = prompt.map { p -> String in
+            let firstLine = p.components(separatedBy: "\n").first ?? p
+            return firstLine.count > 60 ? String(firstLine.prefix(57)) + "..." : firstLine
+        }
+        return ToolTranscriptPresentation(
+            callID: tool.callID,
+            family: .other,
+            statusTone: statusTone(for: tool),
+            statusText: statusText(for: tool),
+            title: "Subagent",
+            detail: detail,
             elapsed: tool.elapsedMs.map(formatElapsed),
             changeSummary: nil,
             outputKind: .text
@@ -321,6 +352,9 @@ enum ToolTranscriptPresenter {
             return diffSummary(added: payload.addedLines, removed: payload.removedLines)
         }
 
+        // 只有真 diff 才逐行统计 — markdown 列表（"- item"）会被 +/- 前缀误判，
+        // 曾把 task observation 里的 13 行列表渲染成 "+0 -13"。
+        guard looksLikeDiff(tool.output) else { return nil }
         let counts = countDiffLines(tool.output)
         return diffSummary(added: counts.added, removed: counts.removed)
     }
@@ -370,13 +404,12 @@ enum ToolTranscriptPresenter {
         return "\(ms)ms"
     }
 
+    /// 结构化 diff 证据（hunk 头 / 文件头）才算 diff。不能只看行首 +/-：
+    /// markdown 列表、命令输出都常以 "-" 开头，会把普通文本渲染成 diff。
     private static func looksLikeDiff(_ text: String) -> Bool {
         text.contains("@@")
-            || text.contains("\n+++ ")
-            || text.contains("\n--- ")
-            || text.split(separator: "\n").contains { line in
-                line.hasPrefix("+") || line.hasPrefix("-")
-            }
+            || text.contains("\n+++ ") || text.hasPrefix("+++ ")
+            || text.contains("\n--- ") || text.hasPrefix("--- ")
     }
 }
 

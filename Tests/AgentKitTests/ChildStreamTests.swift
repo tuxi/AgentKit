@@ -262,6 +262,45 @@ final class ChildStreamTests: XCTestCase {
         XCTAssertEqual(childBlocks[0].status, .completed)
     }
 
+    // MARK: - task 工具卡过渡形态（后端接通 task bracket 前，普通卡是唯一形态）
+
+    func testTaskToolCardPresentation() {
+        let tool = ToolNodePayload(
+            callID: "c1", toolName: "task",
+            args: .object(["prompt": .string("Search Sources/, Tests/, and Examples/ directories.\nBe thorough.")]),
+            status: .completed,
+            output: "- **Sources/A.swift:1** — hit\n- **Sources/B.swift:2** — hit",
+            elapsedMs: 10111
+        )
+        let p = ToolTranscriptPresenter.presentation(for: tool)
+        // 不能走通用路径缩写：prompt 含 "/" 曾被截成 "directories."
+        XCTAssertEqual(p.title, "Subagent")
+        XCTAssertEqual(p.detail, "Search Sources/, Tests/, and Examples/ directories.")
+        // observation 里的 markdown 列表不是 diff，不得出 "+0 -2"
+        XCTAssertNil(p.changeSummary)
+        XCTAssertEqual(p.outputKind, .text)
+    }
+
+    // markdown 列表行首的 "-" 不是删除行（曾误判为 "+0 -13"）。
+    func testMarkdownListOutputIsNotADiff() {
+        let tool = ToolNodePayload(
+            callID: "c1", toolName: "grep", args: nil, status: .completed,
+            output: "- item one\n- item two\n- item three"
+        )
+        let p = ToolTranscriptPresenter.presentation(for: tool)
+        XCTAssertNil(p.changeSummary)
+        XCTAssertNotEqual(p.outputKind, .diff)
+
+        // 真 diff（带 hunk 头）仍然要被识别
+        let diffTool = ToolNodePayload(
+            callID: "c2", toolName: "apply_patch", args: nil, status: .completed,
+            output: "@@ -1,2 +1,2 @@\n-old line\n+new line"
+        )
+        let d = ToolTranscriptPresenter.presentation(for: diffTool)
+        XCTAssertEqual(d.changeSummary, "+1 -1")
+        XCTAssertEqual(d.outputKind, .diff)
+    }
+
     // MARK: - FixtureChildStreamTransport
 
     func testFixtureTransportServesBatchesByCursor() async throws {
