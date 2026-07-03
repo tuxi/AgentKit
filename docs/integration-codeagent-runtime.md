@@ -28,24 +28,33 @@
               │
        ┌──────▼──────────────────────────────────┐
        │  tuxi/code-agent (Go)                    │
-       │  mobile/mobile.go  ──gomobile bind──▶ xcframework
-       │  GitHub Release: zip + checksum          │
+       │  mobile/mobile.go  ──gomobile bind──▶    │
+       │  scripts/release-ios.sh ──▶ Release     │
+       └──────────────────────────────────────────┘
+              │
+       ┌──────▼──────────────────────────────────┐
+       │  tuxi/code-agent-releases (public)       │
+       │  GitHub Releases: xcframework.zip        │
+       │  (no source — pure artifact hosting)     │
        └──────────────────────────────────────────┘
 ```
 
 ## 仓库与职责
 
-| 仓库 | 职责 | 关键文件 |
-|---|---|---|
-| `tuxi/code-agent` | Go 源码 + gomobile 构建 + 发布 xcframework | `mobile/mobile.go`, `scripts/build-ios.sh` |
-| `tuxi/AgentKit` | Swift Package，通过 `binaryTarget(url:)` 引用 xcframework | `Package.swift` |
-| `CodeAgent` | App 项目，依赖 AgentKit | `project.pbxproj` |
+| 仓库 | 可见性 | 职责 | 关键文件 |
+|---|---|---|---|
+| `tuxi/code-agent` | 可私有 | Go 源码 + gomobile 构建 | `mobile/mobile.go`, `scripts/build-ios.sh`, `scripts/release-ios.sh` |
+| `tuxi/code-agent-releases` | **public** | 托管 xcframework 的 GitHub Release | 无源码，仅 Release artifacts |
+| `tuxi/AgentKit` | public | Swift Package，通过 `binaryTarget(url:)` 引用 xcframework | `Package.swift` |
+| `CodeAgent` | 本地 | App 项目，依赖 AgentKit | `project.pbxproj` |
+
+> **闭源设计**：`code-agent` 可以设为 private，因为 `release-ios.sh` 将 xcframework 发布到独立的 public 仓库 `code-agent-releases`。AgentKit 和 SPM 只访问 public 仓库的 Release URL，不受源码仓库可见性影响。
 
 ## 构建流程
 
 ### 1. Go 源码 → xcframework
 
-在 `code-agent` 仓库中运行：
+在 `code-agent` 仓库中构建：
 
 ```bash
 # 前置条件：Go 1.25+、Xcode
@@ -53,6 +62,13 @@
 ./scripts/build-ios.sh
 ```
 
+发布：
+```bash
+./scripts/release-ios.sh 0.2.0
+```
+
+把脚本打印的 url/checksum 更新到 AgentKit/Package.swift
+```text
 脚本做了什么：
 
 1. **gomobile init** — 初始化 gomobile 工具链
@@ -61,6 +77,7 @@
    - `-iosversion=15.0` — 设置 MinimumOSVersion
 3. **normalize Info.plist** — 确保每个内部 framework 的 `MinimumOSVersion` 为 15.0
 4. **打包 skills** — 将内置 skills 复制到 `build/skills/`
+```
 
 产物：
 
@@ -75,26 +92,14 @@ build/
 └── skills/                         # 内置 skills
 ```
 
-### 2. xcframework → zip → GitHub Release
+### 2. 发布到 GitHub Release
 
 ```bash
-# 打包（macOS 下需要 -y 保留符号链接）
-cd build
-zip -r -y CodeAgentRuntime.xcframework.zip CodeAgentRuntime.xcframework/
-
-# 计算 checksum
-swift package compute-checksum CodeAgentRuntime.xcframework.zip
-# 输出示例：aaac9eace1aa812e5dc972a711fbf4e2093a48297fff5b0f19ad604b5bfe8b4d
-
-# 创建 Release 并上传
-VERSION="0.2.0"   # 按需修改版本号
-gh release create "$VERSION" \
-  --title "v$VERSION" \
-  --notes "CodeAgentRuntime.xcframework — gomobile bind from ./mobile" \
-  CodeAgentRuntime.xcframework.zip
+# 一条命令：打包 zip → 算 checksum → 发 Release → 打印 AgentKit 配置
+./scripts/release-ios.sh 0.2.0
 ```
 
-> **注意**：Release 创建在 `tuxi/code-agent` 仓库，而非 AgentKit。二进制产物的版本与其源码仓库一致。
+Release 创建在 `tuxi/code-agent-releases`（public 仓库），不需要 `code-agent` 仓库本身公开。
 
 ### 3. AgentKit 引用新版本
 
@@ -159,13 +164,14 @@ import CodeAgentRuntime
 #endif
 ```
 
-### 为什么 Release 放在 code-agent 仓库而非 AgentKit？
+### 为什么 Release 放在 code-agent-releases 而非 code-agent 或 AgentKit？
 
-关注点分离：
-- **code-agent**：Go 源码的所有者，负责编译和发布
-- **AgentKit**：纯 Swift 消费者，通过 URL 引用
+三层分离：
+- **code-agent**（可私有）：Go 源码的所有者，负责编译
+- **code-agent-releases**（public）：纯 artifact 托管，零源码，永远公开
+- **AgentKit**（public）：纯 Swift 消费者，通过 URL 引用
 
-这样 Go 代码的版本、Release Note、构建历史都在同一个仓库，不需要跨仓库搬运二进制。
+这样 `code-agent` 闭源后，AgentKit 的 SPM 解析不受任何影响——它只访问 public 仓库的 Release URL。
 
 ## 更新 Runtime 的标准流程
 
@@ -176,33 +182,14 @@ import CodeAgentRuntime
 cd code-agent
 ./scripts/build-ios.sh
 
-# 2. 打包 + checksum
-cd build
-zip -r -y CodeAgentRuntime.xcframework.zip CodeAgentRuntime.xcframework/
-swift package compute-checksum CodeAgentRuntime.xcframework.zip
+# 2. 发布到 public release 仓库
+./scripts/release-ios.sh 0.2.0
 
-# 3. 发 Release
-VERSION="0.2.0"  # 遵循语义化版本
-git tag "$VERSION"
-git push origin "$VERSION"
-gh release create "$VERSION" \
-  --title "v$VERSION" \
-  --notes "$(cat <<EOF
-## Changes
-
-- <描述这次 Go 侧的改动>
-- <对 iOS 端的影响>
-
-**xcframework built via:** \`gomobile bind -target=ios,iossimulator\`
-EOF
-)" \
-  CodeAgentRuntime.xcframework.zip
-
-# 4. 更新 AgentKit
+# 3. 把脚本打印的 url/checksum 更新到 AgentKit/Package.swift
 cd ../AgentKit
-# 手动编辑 Package.swift，更新 url 和 checksum
+# 编辑 Package.swift，替换 binaryTarget 的 url 和 checksum
 git add Package.swift
-git commit -m "chore: bump CodeAgentRuntime to $VERSION"
+git commit -m "chore: bump CodeAgentRuntime to 0.2.0"
 git push origin main
 ```
 
@@ -225,6 +212,7 @@ rm -rf ~/Library/Developer/Xcode/DerivedData/CodeAgent-*
 ```bash
 # 删除特定 artifact 缓存
 rm -rf ~/Library/Caches/org.swift.swiftpm/artifacts/https___github_com_tuxi_code_agent_releases_download_*
+rm -rf ~/Library/Caches/org.swift.swiftpm/artifacts/https___github_com_tuxi_code_agent-releases_download_*
 ```
 
 ### SPM 一直使用旧版本
