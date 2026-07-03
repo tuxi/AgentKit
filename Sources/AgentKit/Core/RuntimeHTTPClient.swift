@@ -29,6 +29,17 @@ struct RuntimeHTTPClient: Sendable {
         return url
     }
 
+    func resolveRuntimeURL(_ value: String) -> URL? {
+        guard !value.isEmpty else { return nil }
+        if let absolute = URL(string: value), absolute.scheme != nil {
+            return absolute
+        }
+        guard let baseURL = try? resolveBaseURL() else {
+            return URL(string: value)
+        }
+        return URL(string: value, relativeTo: baseURL)?.absoluteURL
+    }
+
     // MARK: - Endpoints
 
     /// `POST /v1/conversations`

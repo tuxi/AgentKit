@@ -147,6 +147,10 @@ public final class CodeAgentTransport: AgentTransport, @unchecked Sendable {
         try await http.getAssetContent(conversationID: conversationID, assetID: assetID)
     }
 
+    public func resolveRuntimeURL(_ value: String) -> URL? {
+        http.resolveRuntimeURL(value)
+    }
+
     // MARK: - AgentTransport: Tool registration
 
     public func registerTools(_ tools: [ClientToolInfo]) async {
@@ -275,5 +279,9 @@ public final class DefaultAgentClient: RuntimeClient, @unchecked Sendable {
 
     public func getAssetContent(conversationID: String, assetID: String) async throws -> AgentAssetContentResponse {
         try await transport.getAssetContent(conversationID: conversationID, assetID: assetID)
+    }
+
+    public func resolveRuntimeURL(_ value: String) -> URL? {
+        transport.resolveRuntimeURL(value)
     }
 }

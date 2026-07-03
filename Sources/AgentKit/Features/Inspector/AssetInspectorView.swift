@@ -6,6 +6,15 @@
 //
 
 import SwiftUI
+import AVKit
+
+#if os(macOS)
+import AppKit
+private typealias PlatformImage = NSImage
+#elseif os(iOS)
+import UIKit
+private typealias PlatformImage = UIImage
+#endif
 
 struct AssetListInspectorView: View {
     let payload: AssetPanelPayload
@@ -73,6 +82,7 @@ struct AssetPreviewInspectorView: View {
     @State private var loadedContent: String?
     @State private var loadedMIMEType: String?
     @State private var loadedSizeBytes: Int64?
+    @State private var loadedMetadata: [String: JSONValue]?
     @State private var isTruncated = false
     @State private var source: String?
     @State private var isLoading = false
@@ -180,6 +190,19 @@ struct AssetPreviewInspectorView: View {
                 content: displayContent
             )
             .padding()
+        } else if displayAsset.isImageAsset {
+            MediaImageAssetPreview(
+                asset: displayAsset,
+                mediaURL: mediaURL,
+                thumbnailURL: thumbnailURL
+            )
+                .padding()
+        } else if displayAsset.isVideoAsset {
+            MediaVideoAssetPreview(
+                asset: displayAsset,
+                mediaURL: mediaURL
+            )
+                .padding()
         } else {
             VStack(alignment: .leading, spacing: 0) {
                 if displayContent.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
@@ -248,6 +271,18 @@ struct AssetPreviewInspectorView: View {
 
     private var clientPreviewWindow: AssetTextWindow {
         AssetTextWindow(content: displayContent, maxBytes: AssetPreviewLimits.clientPreviewBytes)
+    }
+
+    private var mediaURL: URL? {
+        displayAsset.mediaURL ?? resolvedPreviewURL(for: "media_url")
+    }
+
+    private var thumbnailURL: URL? {
+        resolvedPreviewURL(for: "thumbnail_url")
+    }
+
+    private var previewMetadata: [String: JSONValue]? {
+        loadedMetadata ?? displayAsset.metadata
     }
 
     private var isDisplayingLoadedContent: Bool {
@@ -326,6 +361,7 @@ struct AssetPreviewInspectorView: View {
             }
             loadedMIMEType = preview.mimeType
             loadedSizeBytes = preview.sizeBytes
+            loadedMetadata = preview.metadata
             isTruncated = preview.truncated
             source = preview.source
 
@@ -361,6 +397,7 @@ struct AssetPreviewInspectorView: View {
         loadedContent = nil
         loadedMIMEType = nil
         loadedSizeBytes = nil
+        loadedMetadata = nil
         isTruncated = false
         source = payload.asset.fallbackPreviewSource
         contentLoadError = nil
@@ -369,6 +406,7 @@ struct AssetPreviewInspectorView: View {
     private func shouldLoadFullContent(asset: AgentAssetRef, mimeType: String?) -> Bool {
         let candidate = asset.mergedForDisplay(fallback: payload.asset)
         guard candidate.assetPath != nil else { return false }
+        guard !candidate.isImageAsset, !candidate.isVideoAsset else { return false }
         switch candidate.kind {
         case "file", "file_location", "symbol", "search_result", "markdown", "diff":
             return true
@@ -391,6 +429,11 @@ struct AssetPreviewInspectorView: View {
         // read_file asset whose event preview is only the first line. When a
         // local workspace file is available, use the richer on-disk text.
         return localContent.utf8.count > loadedContent.utf8.count
+    }
+
+    private func resolvedPreviewURL(for key: String) -> URL? {
+        guard let value = previewMetadata?[key]?.string, !value.isEmpty else { return nil }
+        return store.client.resolveRuntimeURL(value)
     }
 
     private func byteCount(_ value: Int64) -> String {
@@ -525,6 +568,151 @@ private struct DirectoryAssetPreview: View {
     }
 }
 
+private struct MediaImageAssetPreview: View {
+    let asset: AgentAssetRef
+    let mediaURL: URL?
+    let thumbnailURL: URL?
+    @Environment(\.openURL) private var openURL
+    @State private var localImage: PlatformImage?
+    @State private var useFullMedia = false
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            if let url = displayURL {
+                mediaFrame(url: url)
+                HStack(spacing: 8) {
+                    Button {
+                        if let mediaURL {
+                            openURL(mediaURL)
+                        }
+                    } label: {
+                        Label("Open", systemImage: "arrow.up.right.square")
+                    }
+                    .buttonStyle(.bordered)
+                    .disabled(mediaURL == nil)
+
+                    Text(asset.assetSubtitle)
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .lineLimit(2)
+                        .textSelection(.enabled)
+                }
+            } else {
+                ContentUnavailableView("Image Unavailable", systemImage: "photo")
+            }
+            Spacer()
+        }
+        .task(id: displayURL) {
+            await loadLocalImage()
+        }
+    }
+
+    private var displayURL: URL? {
+        if let thumbnailURL, !useFullMedia {
+            return thumbnailURL
+        }
+        return mediaURL
+    }
+
+    @ViewBuilder
+    private func mediaFrame(url: URL) -> some View {
+        if url.isFileURL {
+            if let localImage {
+                platformImageView(localImage)
+            } else {
+                ProgressView()
+                    .frame(maxWidth: .infinity, minHeight: 220)
+            }
+        } else {
+            AsyncImage(url: url) { phase in
+                switch phase {
+                case .success(let image):
+                    image
+                        .resizable()
+                        .scaledToFit()
+                case .failure:
+                    if thumbnailURL != nil, !useFullMedia, mediaURL != nil {
+                        ProgressView()
+                            .task { useFullMedia = true }
+                    } else {
+                        ContentUnavailableView("Image Unavailable", systemImage: "photo")
+                    }
+                case .empty:
+                    ProgressView()
+                @unknown default:
+                    ProgressView()
+                }
+            }
+            .frame(maxWidth: .infinity, minHeight: 220)
+        }
+    }
+
+    @ViewBuilder
+    private func platformImageView(_ image: PlatformImage) -> some View {
+        #if os(macOS)
+        Image(nsImage: image)
+            .resizable()
+            .scaledToFit()
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+            .background(Color.secondary.opacity(0.06))
+            .clipShape(RoundedRectangle(cornerRadius: 8))
+        #elseif os(iOS)
+        Image(uiImage: image)
+            .resizable()
+            .scaledToFit()
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+            .background(Color.secondary.opacity(0.06))
+            .clipShape(RoundedRectangle(cornerRadius: 8))
+        #endif
+    }
+
+    @MainActor
+    private func loadLocalImage() async {
+        localImage = nil
+        guard let url = displayURL, url.isFileURL else { return }
+        #if os(macOS)
+        localImage = NSImage(contentsOf: url)
+        #elseif os(iOS)
+        localImage = UIImage(contentsOfFile: url.path)
+        #endif
+    }
+}
+
+private struct MediaVideoAssetPreview: View {
+    let asset: AgentAssetRef
+    let mediaURL: URL?
+    @Environment(\.openURL) private var openURL
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            if let url = mediaURL {
+                VideoPlayer(player: AVPlayer(url: url))
+                    .frame(maxWidth: .infinity, minHeight: 260)
+                    .background(Color.black)
+                    .clipShape(RoundedRectangle(cornerRadius: 8))
+
+                HStack(spacing: 8) {
+                    Button {
+                        openURL(url)
+                    } label: {
+                        Label("Open", systemImage: "arrow.up.right.square")
+                    }
+                    .buttonStyle(.bordered)
+
+                    Text(asset.assetSubtitle)
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .lineLimit(2)
+                        .textSelection(.enabled)
+                }
+            } else {
+                ContentUnavailableView("Video Unavailable", systemImage: "film")
+            }
+            Spacer()
+        }
+    }
+}
+
 private enum AssetPreviewLimits {
     static let clientPreviewBytes = 512_000
 }
@@ -615,9 +803,33 @@ extension AgentAssetRef {
 
     var localTextContent: String? {
         guard kind != "directory",
+              !isImageAsset,
+              !isVideoAsset,
               let absolutePath,
               !absolutePath.isEmpty else { return nil }
         return try? String(contentsOfFile: absolutePath, encoding: .utf8)
+    }
+
+    var isImageAsset: Bool {
+        if kind == "image" { return true }
+        if let mimeType, mimeType.lowercased().hasPrefix("image/") { return true }
+        return Self.imageExtensions.contains(assetExtension)
+    }
+
+    var isVideoAsset: Bool {
+        if kind == "video" { return true }
+        if let mimeType, mimeType.lowercased().hasPrefix("video/") { return true }
+        return Self.videoExtensions.contains(assetExtension)
+    }
+
+    var mediaURL: URL? {
+        if let absolutePath, !absolutePath.isEmpty {
+            return URL(fileURLWithPath: absolutePath)
+        }
+        if let uri, let url = URL(string: uri), ["http", "https", "file"].contains(url.scheme?.lowercased() ?? "") {
+            return url
+        }
+        return nil
     }
 
     var fallbackPreviewSource: String? {
@@ -678,6 +890,8 @@ extension AgentAssetRef {
     var assetIconName: String {
         switch kind {
         case "file", "file_location", "search_result":
+            if isImageAsset { return "photo" }
+            if isVideoAsset { return "film" }
             return "doc.text"
         case "symbol":
             return "curlybraces"
@@ -691,6 +905,8 @@ extension AgentAssetRef {
             return "terminal"
         case "image":
             return "photo"
+        case "video":
+            return "film"
         default:
             return "paperclip"
         }
@@ -699,6 +915,8 @@ extension AgentAssetRef {
     var assetAccentColor: Color {
         switch kind {
         case "file", "file_location", "search_result", "symbol":
+            if isImageAsset { return .pink }
+            if isVideoAsset { return .indigo }
             return .blue
         case "directory":
             return .blue
@@ -710,10 +928,25 @@ extension AgentAssetRef {
             return .orange
         case "image":
             return .pink
+        case "video":
+            return .indigo
         default:
             return .secondary
         }
     }
+
+    private var assetExtension: String {
+        let candidate = absolutePath ?? workspaceRelativePath ?? uri ?? displayName ?? ""
+        return (candidate as NSString).pathExtension.lowercased()
+    }
+
+    private static let imageExtensions: Set<String> = [
+        "png", "jpg", "jpeg", "gif", "heic", "heif", "webp", "tiff", "tif", "bmp"
+    ]
+
+    private static let videoExtensions: Set<String> = [
+        "mp4", "mov", "m4v", "avi", "mkv", "webm"
+    ]
 }
 
 extension AgentAssetRange {

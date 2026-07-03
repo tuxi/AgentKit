@@ -90,6 +90,18 @@ final class TranscriptLayoutManager: NSLayoutManager {
                 return
             }
 
+            if block.kind == .divider {
+                let inset = TranscriptTheme.blockHorizontalPadding
+                let line = CGRect(
+                    x: origin.x + inset,
+                    y: origin.y + union.midY - 0.5,
+                    width: max(0, containerWidth - inset * 2),
+                    height: 1
+                )
+                Self.fill(line, color: TranscriptTheme.hairline, radius: 0.5)
+                return
+            }
+
             guard let color = TranscriptTheme.blockFill(for: block.kind) else { return }
             var rect = CGRect(
                 x: origin.x,
@@ -106,6 +118,26 @@ final class TranscriptLayoutManager: NSLayoutManager {
                 break
             }
             Self.fill(rect, color: color, radius: TranscriptTheme.blockCornerRadius(for: block.kind))
+        }
+
+        // Hairline under table header rows, inside the table background.
+        textStorage.enumerateAttribute(.transcriptTableHeader, in: fullRange) { value, range, _ in
+            guard value != nil else { return }
+            let glyphRange = self.glyphRange(forCharacterRange: range, actualCharacterRange: nil)
+            guard glyphRange.length > 0 else { return }
+            var union = CGRect.null
+            self.enumerateLineFragments(forGlyphRange: glyphRange) { rect, _, _, _, _ in
+                union = union.union(rect)
+            }
+            guard !union.isNull else { return }
+            let inset = TranscriptTheme.blockHorizontalPadding
+            let line = CGRect(
+                x: origin.x + inset,
+                y: origin.y + union.maxY - 2,
+                width: max(0, containerWidth - inset * 2),
+                height: 1
+            )
+            Self.fill(line, color: TranscriptTheme.hairline, radius: 0.5)
         }
 
         textStorage.enumerateAttribute(.transcriptChip, in: fullRange) { value, range, _ in

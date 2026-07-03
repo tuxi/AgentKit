@@ -93,6 +93,9 @@ public protocol RuntimeClient: Sendable {
     /// Full text content for workspace-scoped text assets.
     func getAssetContent(conversationID: String, assetID: String) async throws -> AgentAssetContentResponse
 
+    /// Resolve a runtime-relative URL such as `/v1/.../blob` against the active backend.
+    func resolveRuntimeURL(_ value: String) -> URL?
+
     // MARK: - Repos
 
     /// clone 一个公开 GitHub 仓库到 backend 的 workspace 根下，返回其工作区路径。
@@ -126,6 +129,10 @@ extension RuntimeClient {
 
     public func getAssetContent(conversationID: String, assetID: String) async throws -> AgentAssetContentResponse {
         throw RuntimeHTTPError.unsupported
+    }
+
+    public func resolveRuntimeURL(_ value: String) -> URL? {
+        URL(string: value)
     }
 
     /// 默认实现：全量拉取后切尾（mock backend）。`DefaultAgentClient` 覆盖为 transport 直达。

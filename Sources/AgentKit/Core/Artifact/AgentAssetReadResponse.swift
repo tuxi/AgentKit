@@ -15,6 +15,7 @@ public struct AgentAssetPreviewResponse: Sendable, Hashable, Decodable {
     public let sizeBytes: Int64?
     public let truncated: Bool
     public let source: String?
+    public let metadata: [String: JSONValue]?
 
     public init(
         asset: AgentAssetRef,
@@ -23,7 +24,8 @@ public struct AgentAssetPreviewResponse: Sendable, Hashable, Decodable {
         mimeType: String? = nil,
         sizeBytes: Int64? = nil,
         truncated: Bool = false,
-        source: String? = nil
+        source: String? = nil,
+        metadata: [String: JSONValue]? = nil
     ) {
         self.asset = asset
         self.kind = kind
@@ -32,10 +34,11 @@ public struct AgentAssetPreviewResponse: Sendable, Hashable, Decodable {
         self.sizeBytes = sizeBytes
         self.truncated = truncated
         self.source = source
+        self.metadata = metadata
     }
 
     enum CodingKeys: String, CodingKey {
-        case asset, kind, content, source, truncated
+        case asset, kind, content, source, truncated, metadata
         case mimeType = "mime_type"
         case sizeBytes = "size_bytes"
     }
@@ -49,6 +52,7 @@ public struct AgentAssetPreviewResponse: Sendable, Hashable, Decodable {
         self.sizeBytes = try container.decodeIfPresent(Int64.self, forKey: .sizeBytes)
         self.truncated = try container.decodeIfPresent(Bool.self, forKey: .truncated) ?? false
         self.source = try container.decodeIfPresent(String.self, forKey: .source)
+        self.metadata = try container.decodeIfPresent([String: JSONValue].self, forKey: .metadata)
     }
 }
 

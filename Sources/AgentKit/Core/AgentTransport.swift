@@ -117,6 +117,9 @@ public protocol AgentTransport: Sendable {
     /// Full text content for workspace-scoped text assets.
     func getAssetContent(conversationID: String, assetID: String) async throws -> AgentAssetContentResponse
 
+    /// Resolve a runtime-relative URL such as `/v1/.../blob` against the active backend.
+    func resolveRuntimeURL(_ value: String) -> URL?
+
     // MARK: - Tool registration
 
     /// 向服务端注册客户端可执行工具。
@@ -151,6 +154,10 @@ extension AgentTransport {
 
     public func getAssetContent(conversationID: String, assetID: String) async throws -> AgentAssetContentResponse {
         throw RuntimeHTTPError.unsupported
+    }
+
+    public func resolveRuntimeURL(_ value: String) -> URL? {
+        URL(string: value)
     }
 
     /// 默认实现：全量拉取后按已转换事件数切尾（mock / 不支持 `since` 的 backend）。

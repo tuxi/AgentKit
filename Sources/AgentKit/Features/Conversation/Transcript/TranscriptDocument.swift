@@ -593,7 +593,11 @@ private struct TranscriptAttributedBuilder {
             appendList(items: items) { i in "\(Int(startIndex) + i)." }
 
         case .thematicBreak:
-            append(String(repeating: "─", count: 16), attributes: metaAttributes)
+            // A placeholder space keeps the paragraph in the selectable text
+            // flow; the renderer draws the full-width hairline over it.
+            var dividerAttrs = metaAttributes
+            dividerAttrs[.transcriptBlock] = makeBlock(.divider)
+            append(" ", attributes: dividerAttrs)
 
         case .table(let head, let body):
             appendTable(head: head, rows: body)
@@ -654,84 +658,95 @@ private struct TranscriptAttributedBuilder {
         }
     }
 
-    /// Column-aligned monospaced table: header emphasized, hairline rule,
-    /// then rows. CJK-aware padding keeps columns straight.
+    /// Tab-stop table: each row is one paragraph with cells joined by tabs,
+    /// and tab stops placed at measured column positions. Wrapped cell text
+    /// hangs under the last column instead of snapping back to the margin,
+    /// and selection copy yields tab-separated rows. Cells skip syntax
+    /// highlighting (no stray number tinting in prose) but keep link and
+    /// annotation detection.
     private mutating func appendTable(head: [TableCell], rows: [[TableCell]]) {
-        let headTexts = head.map { inlinePlainText($0.content) }
-        let bodyTexts = rows.map { row in row.map { inlinePlainText($0.content) } }
+        // Tabs are the column separator — scrub them from cell content.
+        let headTexts = head.map { inlinePlainText($0.content).replacingOccurrences(of: "\t", with: " ") }
+        let bodyTexts = rows.map { row in
+            row.map { inlinePlainText($0.content).replacingOccurrences(of: "\t", with: " ") }
+        }
         let allRows = (headTexts.isEmpty ? [] : [headTexts]) + bodyTexts
         guard !allRows.isEmpty else { return }
 
         let columnCount = allRows.map(\.count).max() ?? 0
-        var widths = [Int](repeating: 0, count: columnCount)
+        let measureFont = PlatformFont.monospacedSystemFont(ofSize: codeFontSize, weight: .semibold)
+        var columnWidths = [CGFloat](repeating: 0, count: columnCount)
         for row in allRows {
             for (column, cell) in row.enumerated() {
-                widths[column] = max(widths[column], displayWidth(cell))
+                let width = ceil((cell as NSString).size(withAttributes: [.font: measureFont]).width)
+                columnWidths[column] = max(columnWidths[column], width)
             }
         }
 
-        func paddedLine(_ row: [String]) -> String {
-            (0..<columnCount).map { column in
-                let cell = column < row.count ? row[column] : ""
-                guard column < columnCount - 1 else { return cell }
-                let padding = max(0, widths[column] - displayWidth(cell))
-                return cell + String(repeating: " ", count: padding)
-            }.joined(separator: "  ")
+        let columnGap: CGFloat = 16
+        var columnStarts: [CGFloat] = []
+        var x: CGFloat = 0
+        for width in columnWidths {
+            columnStarts.append(x)
+            x += width + columnGap
+        }
+        let lastColumnStart = columnStarts.last ?? 0
+
+        func line(_ row: [String]) -> String {
+            (0..<columnCount)
+                .map { $0 < row.count ? row[$0] : "" }
+                .joined(separator: "\t")
         }
 
         let block = makeBlock(.table)
         var headerAttrs = tableHeaderAttributes
         headerAttrs[.transcriptBlock] = block
+        headerAttrs[.transcriptTableHeader] = true
+        headerAttrs[.paragraphStyle] = tableRowParagraphStyle(
+            spacingAfter: 5, // room for the hairline drawn under the header
+            columnStarts: columnStarts,
+            lastColumnStart: lastColumnStart
+        )
         var rowAttrs = tableAttributes
         rowAttrs[.transcriptBlock] = block
-        var ruleAttrs = tableRuleAttributes
-        ruleAttrs[.transcriptBlock] = block
+        rowAttrs[.paragraphStyle] = tableRowParagraphStyle(
+            spacingAfter: 1,
+            columnStarts: columnStarts,
+            lastColumnStart: lastColumnStart
+        )
 
         if !headTexts.isEmpty {
-            appendHighlightedCode(paddedLine(headTexts), language: "table", attributes: headerAttrs)
-            append("\n", attributes: headerAttrs)
-            let rule = widths
-                .map { String(repeating: "─", count: max(1, $0)) }
-                .joined(separator: "──")
-            append(rule, attributes: ruleAttrs)
+            appendHighlightedCode(line(headTexts), language: nil, attributes: headerAttrs, highlighted: false)
             if !bodyTexts.isEmpty {
-                append("\n", attributes: ruleAttrs)
+                append("\n", attributes: headerAttrs)
             }
         }
         for (index, row) in bodyTexts.enumerated() {
-            appendHighlightedCode(paddedLine(row), language: "table", attributes: rowAttrs)
+            appendHighlightedCode(line(row), language: nil, attributes: rowAttrs, highlighted: false)
             if index < bodyTexts.count - 1 {
                 append("\n", attributes: rowAttrs)
             }
         }
     }
 
-    /// Terminal-style display width: CJK and fullwidth characters count as 2.
-    private func displayWidth(_ text: String) -> Int {
-        text.unicodeScalars.reduce(0) { width, scalar in
-            width + (isWideScalar(scalar) ? 2 : 1)
+    /// Row paragraphs share the block inset; tab stops sit at each column's
+    /// measured start, and wrapped lines hang under the last column.
+    private func tableRowParagraphStyle(
+        spacingAfter: CGFloat,
+        columnStarts: [CGFloat],
+        lastColumnStart: CGFloat
+    ) -> NSParagraphStyle {
+        guard let style = paragraphStyle(spacingAfter: spacingAfter, blockInset: true)
+            .mutableCopy() as? NSMutableParagraphStyle else {
+            return paragraphStyle(spacingAfter: spacingAfter, blockInset: true)
         }
-    }
-
-    private func isWideScalar(_ scalar: Unicode.Scalar) -> Bool {
-        switch scalar.value {
-        case 0x1100...0x115F,   // Hangul Jamo
-             0x2E80...0x303E,   // CJK radicals, punctuation
-             0x3041...0x33FF,   // Kana, CJK symbols
-             0x3400...0x4DBF,   // CJK ext A
-             0x4E00...0x9FFF,   // CJK unified
-             0xA000...0xA4CF,   // Yi
-             0xAC00...0xD7A3,   // Hangul syllables
-             0xF900...0xFAFF,   // CJK compat
-             0xFE30...0xFE4F,   // CJK compat forms
-             0xFF00...0xFF60,   // Fullwidth forms
-             0xFFE0...0xFFE6,
-             0x20000...0x2FFFD,
-             0x30000...0x3FFFD:
-            return true
-        default:
-            return false
+        let base = style.firstLineHeadIndent
+        style.tabStops = columnStarts.dropFirst().map {
+            NSTextTab(textAlignment: .left, location: base + $0, options: [:])
         }
+        style.headIndent = base + lastColumnStart
+        style.lineBreakMode = .byWordWrapping
+        return style
     }
 
     private mutating func appendInlines(
@@ -860,10 +875,13 @@ private struct TranscriptAttributedBuilder {
     private mutating func appendHighlightedCode(
         _ text: String,
         language: String?,
-        attributes: [NSAttributedString.Key: Any]
+        attributes: [NSAttributedString.Key: Any],
+        highlighted: Bool = true
     ) {
         let base = NSMutableAttributedString(string: text, attributes: attributes)
-        applyCodeHighlight(to: base, language: language ?? "")
+        if highlighted {
+            applyCodeHighlight(to: base, language: language ?? "")
+        }
 
         let matches = referenceMatches(in: text)
         for match in matches {
@@ -1009,15 +1027,22 @@ private struct TranscriptAttributedBuilder {
 
     private func markdownHeadingAttributes(level: Int) -> [NSAttributedString.Key: Any] {
         let size: CGFloat
+        let spacingBefore: CGFloat
         switch level {
-        case 1: size = markdownH1FontSize
-        case 2: size = markdownH2FontSize
-        default: size = markdownH3FontSize
+        case 1:
+            size = markdownH1FontSize
+            spacingBefore = 10
+        case 2:
+            size = markdownH2FontSize
+            spacingBefore = 8
+        default:
+            size = markdownH3FontSize
+            spacingBefore = 6
         }
         return [
             .font: PlatformFont.boldSystemFont(ofSize: size),
             .foregroundColor: primaryColor,
-            .paragraphStyle: paragraphStyle(spacingAfter: 4)
+            .paragraphStyle: paragraphStyle(spacingAfter: 4, spacingBefore: spacingBefore)
         ]
     }
 
@@ -1175,15 +1200,7 @@ private struct TranscriptAttributedBuilder {
         [
             .font: PlatformFont.monospacedSystemFont(ofSize: codeFontSize, weight: .semibold),
             .foregroundColor: primaryColor,
-            .paragraphStyle: paragraphStyle(spacingAfter: 1, blockInset: true, charWrap: true)
-        ]
-    }
-
-    private var tableRuleAttributes: [NSAttributedString.Key: Any] {
-        [
-            .font: PlatformFont.monospacedSystemFont(ofSize: codeFontSize, weight: .regular),
-            .foregroundColor: tertiaryColor,
-            .paragraphStyle: paragraphStyle(spacingAfter: 1, blockInset: true, charWrap: true)
+            .paragraphStyle: paragraphStyle(spacingAfter: 3, blockInset: true)
         ]
     }
 
@@ -1235,12 +1252,14 @@ private struct TranscriptAttributedBuilder {
     /// breaking anywhere beats overflowing; prose wraps at word boundaries.
     private func paragraphStyle(
         spacingAfter: CGFloat,
+        spacingBefore: CGFloat = 0,
         blockInset: Bool = false,
         charWrap: Bool = false
     ) -> NSParagraphStyle {
         let style = NSMutableParagraphStyle()
         style.lineSpacing = lineSpacing
         style.paragraphSpacing = spacingAfter
+        style.paragraphSpacingBefore = spacingBefore
 
         var firstLineIndent: CGFloat = 0
         var wrapIndent: CGFloat = 0
@@ -1281,11 +1300,7 @@ private struct TranscriptAttributedBuilder {
     }
 
     private var blockHorizontalPadding: CGFloat {
-        #if os(iOS)
-        return 10
-        #else
-        return 8
-        #endif
+        TranscriptTheme.blockHorizontalPadding
     }
 
     private var bodyFontSize: CGFloat {

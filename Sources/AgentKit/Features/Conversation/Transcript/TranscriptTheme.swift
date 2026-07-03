@@ -27,6 +27,8 @@ extension NSAttributedString.Key {
     static let transcriptBlock = NSAttributedString.Key("agentkit.transcriptBlock")
     /// Marks a run as an inline chip (inline code, nested tool title).
     static let transcriptChip = NSAttributedString.Key("agentkit.transcriptChip")
+    /// Marks a table's header row — the renderer draws a hairline under it.
+    static let transcriptTableHeader = NSAttributedString.Key("agentkit.transcriptTableHeader")
 }
 
 enum TranscriptBlockKind: Int {
@@ -40,6 +42,8 @@ enum TranscriptBlockKind: Int {
     /// Unchanged context lines inside a diff — code-tinted, but tiled edge
     /// to edge with the added/removed stripes around them.
     case diffContext
+    /// Thematic break — no fill; the renderer draws a centered hairline.
+    case divider
 }
 
 enum TranscriptChipKind: Int {
@@ -199,6 +203,24 @@ enum TranscriptTheme {
         )
     }
 
+    /// Thematic breaks and the rule under table headers.
+    static var hairline: TranscriptPlatformColor {
+        dynamic(
+            light: color(0.15, 0.15, 0.14, alpha: 0.16),
+            dark: color(0.92, 0.90, 0.84, alpha: 0.18)
+        )
+    }
+
+    /// Horizontal padding inside decorated blocks — shared between the
+    /// builder (paragraph indents) and the renderer (hairline insets).
+    static var blockHorizontalPadding: CGFloat {
+        #if os(iOS)
+        return 10
+        #else
+        return 8
+        #endif
+    }
+
     // MARK: Diff
 
     static var diffAddedText: TranscriptPlatformColor {
@@ -285,6 +307,7 @@ enum TranscriptTheme {
         case .diffRemoved: return diffRemovedBackground
         case .diffHunk: return diffHunkBackground
         case .diffContext: return codeBlockBackground
+        case .divider: return nil // renderer draws a centered hairline
         }
     }
 
@@ -292,7 +315,7 @@ enum TranscriptTheme {
         switch kind {
         case .code, .table, .error: return 6
         case .diffAdded, .diffRemoved, .diffHunk, .diffContext: return 3
-        case .quote: return 0
+        case .quote, .divider: return 0
         }
     }
 

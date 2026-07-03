@@ -64,6 +64,35 @@ final class AssetAPIResponseTests: XCTestCase {
         XCTAssertEqual(response.content, "1\t//")
     }
 
+    func testAssetPreviewResponseDecodesMediaMetadata() throws {
+        let json = """
+        {
+          "kind": "asset_preview",
+          "source": "metadata",
+          "mime_type": "image/png",
+          "size_bytes": 438210,
+          "metadata": {
+            "media_url": "/v1/conversations/session/assets/asset_1/blob",
+            "thumbnail_url": "/v1/conversations/session/assets/asset_1/thumbnail?max_px=512"
+          },
+          "asset": {
+            "id": "asset_1",
+            "kind": "image",
+            "display_name": "cat_sunset.png",
+            "workspace_relative_path": "cat_sunset.png"
+          }
+        }
+        """
+
+        let response = try JSONDecoder().decode(AgentAssetPreviewResponse.self, from: Data(json.utf8))
+
+        XCTAssertFalse(response.truncated)
+        XCTAssertEqual(response.mimeType, "image/png")
+        XCTAssertEqual(response.sizeBytes, 438_210)
+        XCTAssertEqual(response.metadata?["media_url"]?.string, "/v1/conversations/session/assets/asset_1/blob")
+        XCTAssertEqual(response.metadata?["thumbnail_url"]?.string, "/v1/conversations/session/assets/asset_1/thumbnail?max_px=512")
+    }
+
     func testAssetContentResponseDecodes() throws {
         let json = """
         {
