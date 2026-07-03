@@ -14,7 +14,7 @@ import Foundation
 
 /// One round of conversation: a user prompt and the assistant activity it
 /// triggered, presented as a single continuous message.
-public struct ConversationTurn: Identifiable, Sendable {
+public struct ConversationTurn: Identifiable, Sendable, Equatable {
     public let id: String                  // = turnID
     public let userPrompt: MessageNodePayload?
     public let blocks: [TurnBlock]
@@ -42,7 +42,7 @@ public struct ConversationTurn: Identifiable, Sendable {
 /// One ordered block inside a turn. Text can repeat (interleaved with tools).
 /// Note: `thinking` events project into `.text` (assistant narration), so there
 /// is no separate thinking block — see TimelineProjection.buildTurn.
-public enum TurnBlock: Identifiable, Sendable {
+public enum TurnBlock: Identifiable, Sendable, Equatable {
     case text(id: String, MessageNodePayload)
     case toolGroup(ToolGroup)
     case artifact(id: String, ArtifactNode)
@@ -65,7 +65,7 @@ public enum TurnBlock: Identifiable, Sendable {
 /// A run of consecutive same-name tool calls, rendered as one stable, compact
 /// block (eager merge): completed tools fold into a count, the running one shows
 /// a single inline status line, details on tap. See ToolGroupView.
-public struct ToolGroup: Identifiable, Sendable {
+public struct ToolGroup: Identifiable, Sendable, Equatable {
     public let id: String                  // = first tool's callID
     public let tools: [ToolNodePayload]
 
@@ -84,7 +84,7 @@ public struct ToolGroup: Identifiable, Sendable {
 // MARK: - TurnStats
 
 /// Turn footer: aggregated from the turn's model_finished events.
-public struct TurnStats: Sendable {
+public struct TurnStats: Sendable, Equatable {
     public let promptTokens: Int           // last invocation's prompt size
     public let elapsedMs: Int              // summed across invocations
     public let invocationCount: Int

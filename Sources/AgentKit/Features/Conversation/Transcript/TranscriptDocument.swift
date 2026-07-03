@@ -53,14 +53,10 @@ enum TurnTranscriptBuilder {
 
     static func build(
         turn: ConversationTurn,
-        state: TranscriptDocumentState,
-        animationFrame: Int = 0
+        state: TranscriptDocumentState
     ) -> AttributedTranscript {
         let assetIndex = AssetIndex(turn: turn)
-        var builder = TranscriptAttributedBuilder(
-            assetIndex: assetIndex,
-            animationFrame: animationFrame
-        )
+        var builder = TranscriptAttributedBuilder(assetIndex: assetIndex)
 
         if let user = turn.userPrompt {
             builder.appendHeading("You")
@@ -274,7 +270,6 @@ private struct TranscriptAttributedBuilder {
 
     private var attributed = NSMutableAttributedString()
     private let assetIndex: AssetIndex
-    private let animationFrame: Int
     private(set) var actions: [String: TranscriptAction] = [:]
     private var copyParts: [String] = []
     private var nextActionIndex = 0
@@ -284,9 +279,8 @@ private struct TranscriptAttributedBuilder {
     private var activeTextAnnotations: [AgentTextAnnotation] = []
     private var consumedTextAnnotationKeys = Set<String>()
 
-    init(assetIndex: AssetIndex, animationFrame: Int) {
+    init(assetIndex: AssetIndex) {
         self.assetIndex = assetIndex
-        self.animationFrame = animationFrame
     }
 
     mutating func appendHeading(_ text: String) {
@@ -1464,8 +1458,10 @@ private struct TranscriptAttributedBuilder {
     ) -> String {
         if tone == .failed { return "!" }
         if tone == .running {
-            let frames = ["◐", "◓", "◑", "◒"]
-            return frames[abs(animationFrame) % frames.count]
+            // Static glyph on purpose: animating it required rebuilding the
+            // attributed transcript every frame, which reset text selection.
+            // The running tint (runningColor) carries the "in progress" signal.
+            return "●"
         }
         switch family {
         case .read: return "□"

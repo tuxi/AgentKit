@@ -8,6 +8,11 @@
 //  chips described by the builder's `.transcriptBlock` / `.transcriptChip`
 //  attributes — glyph-run `.backgroundColor` can't produce those visuals.
 //
+//  Streaming updates are applied INCREMENTALLY: only the changed tail of the
+//  text storage is replaced. That keeps the user's selection alive while
+//  tokens stream in / tools run, and limits TextKit relayout to the tail
+//  instead of the whole turn.
+//
 
 import SwiftUI
 
@@ -15,30 +20,74 @@ struct NativeTranscriptView: View {
     let transcript: AttributedTranscript
     let onAction: (TranscriptAction) -> Void
 
-    #if os(macOS)
-    @State private var measuredHeight: CGFloat = 1
-    #endif
-
     var body: some View {
-        #if os(macOS)
-        GeometryReader { geometry in
-            PlatformTranscriptTextView(
-                attributedText: transcript.attributedString,
-                actions: transcript.actions,
-                width: max(1, geometry.size.width),
-                measuredHeight: $measuredHeight,
-                onAction: onAction
-            )
-        }
-        .frame(height: measuredHeight)
-        #else
         PlatformTranscriptTextView(
             attributedText: transcript.attributedString,
             actions: transcript.actions,
             onAction: onAction
         )
         .frame(maxWidth: .infinity, alignment: .leading)
-        #endif
+    }
+}
+
+// MARK: - Incremental text application
+
+/// Applies a new attributed string to an NSTextStorage by replacing only the
+/// suffix that actually changed (common-prefix diff in UTF-16 space).
+/// Selection survives because platform text views keep selections that lie
+/// before an edit, and adjust ones after it.
+enum TranscriptTextApplier {
+
+    enum Result {
+        case noChange
+        /// Only the tail was replaced — selection in the prefix survives.
+        case incremental
+        /// Characters were identical but attributes changed — full replace.
+        /// Caller should restore the selection (string length is unchanged).
+        case attributesOnly
+    }
+
+    static func apply(_ new: NSAttributedString, to storage: NSTextStorage) -> Result {
+        let oldLength = storage.length
+        let newLength = new.length
+        let prefix = commonPrefixLength(storage.string as NSString, new.string as NSString)
+
+        if prefix == oldLength && prefix == newLength {
+            // Characters identical. Attribute-only changes (rare: e.g. a link
+            // gains a target with the same visible text) need a full pass.
+            if storage.isEqual(to: new) { return .noChange }
+            storage.setAttributedString(new)
+            return .attributesOnly
+        }
+
+        storage.beginEditing()
+        storage.replaceCharacters(
+            in: NSRange(location: prefix, length: oldLength - prefix),
+            with: new.attributedSubstring(
+                from: NSRange(location: prefix, length: newLength - prefix)
+            )
+        )
+        storage.endEditing()
+        return .incremental
+    }
+
+    /// Longest common prefix of two strings in UTF-16 code units, backed off
+    /// so it never splits a surrogate pair.
+    private static func commonPrefixLength(_ a: NSString, _ b: NSString) -> Int {
+        let n = min(a.length, b.length)
+        guard n > 0 else { return 0 }
+
+        var bufferA = [unichar](repeating: 0, count: n)
+        var bufferB = [unichar](repeating: 0, count: n)
+        a.getCharacters(&bufferA, range: NSRange(location: 0, length: n))
+        b.getCharacters(&bufferB, range: NSRange(location: 0, length: n))
+
+        var i = 0
+        while i < n && bufferA[i] == bufferB[i] { i += 1 }
+        if i > 0 && i < n && UTF16.isLeadSurrogate(bufferA[i - 1]) {
+            i -= 1
+        }
+        return i
     }
 }
 
@@ -173,8 +222,6 @@ import AppKit
 private struct PlatformTranscriptTextView: NSViewRepresentable {
     let attributedText: NSAttributedString
     let actions: [String: TranscriptAction]
-    let width: CGFloat
-    @Binding var measuredHeight: CGFloat
     let onAction: (TranscriptAction) -> Void
 
     func makeCoordinator() -> Coordinator {
@@ -210,37 +257,51 @@ private struct PlatformTranscriptTextView: NSViewRepresentable {
         context.coordinator.actions = actions
         context.coordinator.onAction = onAction
 
-        if textView.textStorage?.isEqual(to: attributedText) != true {
-            textView.textStorage?.setAttributedString(attributedText)
-        }
+        // Fast path: unchanged transcript instance (cache hit upstream).
+        guard context.coordinator.lastApplied !== attributedText else { return }
+        context.coordinator.lastApplied = attributedText
 
-        textView.textContainer?.containerSize = NSSize(
-            width: width,
-            height: CGFloat.greatestFiniteMagnitude
-        )
-        textView.frame.size.width = width
-
-        let newHeight = measuredTextHeight(textView)
-        if abs(newHeight - measuredHeight) > 0.5 {
-            DispatchQueue.main.async {
-                measuredHeight = newHeight
-            }
+        guard let storage = textView.textStorage else { return }
+        let savedSelection = textView.selectedRanges
+        if TranscriptTextApplier.apply(attributedText, to: storage) == .attributesOnly {
+            // Same characters, new attributes — the full replace dropped the
+            // selection, but every saved range is still valid. Put it back.
+            textView.selectedRanges = savedSelection
         }
     }
 
-    private func measuredTextHeight(_ textView: NSTextView) -> CGFloat {
-        guard let layoutManager = textView.layoutManager,
+    /// Synchronous self-sizing — replaces the old GeometryReader +
+    /// measuredHeight @State round-trip, which forced a second layout pass
+    /// (and a visible stutter) on every streaming update.
+    func sizeThatFits(
+        _ proposal: ProposedViewSize,
+        nsView textView: NSTextView,
+        context: Context
+    ) -> CGSize? {
+        guard let proposedWidth = proposal.width, proposedWidth.isFinite, proposedWidth > 0,
+              let layoutManager = textView.layoutManager,
               let textContainer = textView.textContainer else {
-            return 1
+            return nil
+        }
+        let width = max(1, proposedWidth)
+        if textContainer.containerSize.width != width {
+            textContainer.containerSize = NSSize(
+                width: width,
+                height: CGFloat.greatestFiniteMagnitude
+            )
         }
         layoutManager.ensureLayout(for: textContainer)
-        let rect = layoutManager.usedRect(for: textContainer)
-        return max(1, ceil(rect.height + textView.textContainerInset.height * 2))
+        let used = layoutManager.usedRect(for: textContainer)
+        let height = max(1, ceil(used.height + textView.textContainerInset.height * 2))
+        return CGSize(width: width, height: height)
     }
 
     final class Coordinator: NSObject, NSTextViewDelegate {
         var actions: [String: TranscriptAction] = [:]
         var onAction: (TranscriptAction) -> Void
+        /// Identity of the last applied transcript — skips diffing entirely
+        /// when the upstream cache hands back the same instance.
+        var lastApplied: NSAttributedString?
 
         init(onAction: @escaping (TranscriptAction) -> Void) {
             self.onAction = onAction
@@ -307,8 +368,13 @@ private struct PlatformTranscriptTextView: UIViewRepresentable {
         context.coordinator.actions = actions
         context.coordinator.onAction = onAction
 
-        if textView.attributedText.isEqual(to: attributedText) != true {
-            textView.attributedText = attributedText
+        // Fast path: unchanged transcript instance (cache hit upstream).
+        guard context.coordinator.lastApplied !== attributedText else { return }
+        context.coordinator.lastApplied = attributedText
+
+        let savedSelection = textView.selectedRange
+        if TranscriptTextApplier.apply(attributedText, to: textView.textStorage) == .attributesOnly {
+            textView.selectedRange = savedSelection
         }
     }
 
@@ -333,6 +399,9 @@ private struct PlatformTranscriptTextView: UIViewRepresentable {
     final class Coordinator: NSObject, UITextViewDelegate {
         var actions: [String: TranscriptAction] = [:]
         var onAction: (TranscriptAction) -> Void
+        /// Identity of the last applied transcript — skips diffing entirely
+        /// when the upstream cache hands back the same instance.
+        var lastApplied: NSAttributedString?
 
         init(onAction: @escaping (TranscriptAction) -> Void) {
             self.onAction = onAction

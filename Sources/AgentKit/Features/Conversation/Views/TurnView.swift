@@ -9,28 +9,28 @@
 
 import SwiftUI
 
-struct TurnView: View {
+struct TurnView: View, Equatable {
     let turn: ConversationTurn
     @Environment(WorkspaceStore.self) private var store
     @Environment(\.openURL) private var openURL
     @State private var documentState = TranscriptDocumentState()
 
-    var body: some View {
-        if hasRunningTool {
-            TimelineView(.periodic(from: .now, by: 0.32)) { context in
-                transcriptBody(animationFrame: animationFrame(for: context.date))
-            }
-        } else {
-            transcriptBody(animationFrame: 0)
-        }
+    /// With `.equatable()` at the call site, SwiftUI skips body entirely for
+    /// turns whose content didn't change — the common case while another turn
+    /// streams. (Environment is only read inside action closures, and @State
+    /// changes invalidate independently, so comparing `turn` is sufficient.)
+    nonisolated static func == (lhs: TurnView, rhs: TurnView) -> Bool {
+        lhs.turn == rhs.turn
     }
 
-    @ViewBuilder
-    private func transcriptBody(animationFrame: Int) -> some View {
-        let transcript = TurnTranscriptBuilder.build(
-            turn: turn,
-            state: documentState,
-            animationFrame: animationFrame
+    // NOTE: no TimelineView(.periodic) here. Rebuilding the transcript on a
+    // timer replaced the NSTextView's text storage every 320ms, which reset
+    // the user's text selection while a tool was running. The running state
+    // is shown with a static glyph instead.
+    var body: some View {
+        let transcript = TranscriptCache.shared.transcript(
+            for: turn,
+            state: documentState
         )
         VStack(alignment: .leading, spacing: 6) {
             NativeTranscriptView(transcript: transcript) { action in
@@ -76,23 +76,6 @@ struct TurnView: View {
             }
             .padding(.top, 2)
         }
-    }
-
-    private var hasRunningTool: Bool {
-        turn.blocks.contains { block in
-            switch block {
-            case .toolGroup(let group):
-                return group.tools.contains { $0.status == .running }
-            case .childStream(_, let payload):
-                return payload.status == .running
-            default:
-                return false
-            }
-        }
-    }
-
-    private func animationFrame(for date: Date) -> Int {
-        Int(date.timeIntervalSinceReferenceDate * 3.0)
     }
 
     /// True while the latest text block is still streaming in.

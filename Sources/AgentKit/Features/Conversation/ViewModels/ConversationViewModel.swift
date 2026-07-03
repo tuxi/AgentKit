@@ -26,9 +26,14 @@ public final class ConversationViewModel {
 
     // ── v1 (deprecated): kept for backward-compat during transition ──
 
-    /// Legacy state machine. Prefer `snapshot` for new code.
-    @available(*, deprecated, message: "Use snapshot.timeline instead of state.orderedTurns")
+    /// Legacy state machine. NO LONGER FED — events are not reduced into it
+    /// anymore (it duplicated the entire conversation in memory alongside the
+    /// engine's graph). Kept only so downstream code still compiles.
+    @available(*, deprecated, message: "Use snapshot instead; this is no longer populated")
     public private(set) var state = ConversationState()
+
+    /// Current turn ID (from turn_started) — used by cancelTurn.
+    private var currentTurnID: String?
 
     // ── Session identity ──
 
@@ -103,7 +108,7 @@ public final class ConversationViewModel {
     public func connect(to conversation: ConversationRef) async {
         self.conversation = conversation
         self.snapshot = .empty(sessionID: conversation.id)
-        state = ConversationState()
+        currentTurnID = nil
         detail = nil
         lifecycleStatus = conversation.turnStatus
         pausedAt = conversation.pausedDate
@@ -119,8 +124,6 @@ public final class ConversationViewModel {
             for await snap in stream {
                 guard let self else { return }
                 self.snapshot = snap
-                // Also mirror to legacy state for backward compat
-                self.mirrorToLegacyState(snap)
             }
         }
 
@@ -169,7 +172,6 @@ public final class ConversationViewModel {
     /// 回复审批请求（两态兼容）。
     public func approve(id: String, approved: Bool) async {
         await client.sendApproval(id: id, approved: approved)
-        state.resolveApproval(id: id, approved: approved)
         await engine?.resolveApproval(requestID: id, approved: approved)
     }
 
@@ -179,9 +181,7 @@ public final class ConversationViewModel {
     ///   - scope: "local"（默认）或 "user"，仅 decision="always" 时有效
     public func approve(id: String, decision: String, scope: String? = nil) async {
         await client.sendApproval(id: id, decision: decision, scope: scope)
-        let approved = decision != "deny"
-        state.resolveApproval(id: id, approved: approved)
-        await engine?.resolveApproval(requestID: id, approved: approved)
+        await engine?.resolveApproval(requestID: id, approved: decision != "deny")
     }
 
     /// 回复计划审批请求。
@@ -193,10 +193,7 @@ public final class ConversationViewModel {
     /// 取消当前 turn。
     public func cancelTurn() async {
         await client.cancelTurn()
-        if let id = state.currentTurnID {
-            state.turns[id]?.status = .cancelled
-            state.currentTurnID = nil
-        }
+        currentTurnID = nil
     }
 
     /// Optimistically reflect that ResumeSession was accepted by the host wrapper.
@@ -242,13 +239,7 @@ public final class ConversationViewModel {
 
             // v2: import into engine (replays through reducer → projects timeline)
             await engine.importHistory(batch.events)
-
-            // Also replay into legacy state for backward compat
-            for event in batch.events {
-                state.reduce(event)
-            }
         }
-        state.historyReplayed = true
         return sinceCursor
     }
 
@@ -257,7 +248,6 @@ public final class ConversationViewModel {
     /// v2: delegate to engine. ViewModel does NOT reduce.
     private func handleEvent(_ event: AgentEvent, engine: RuntimeEngine) async {
         updateLifecycle(from: event)
-        state.reduce(event)
         await engine.ingest(event)
 
         // P1: 拦截客户端工具执行
@@ -269,7 +259,8 @@ public final class ConversationViewModel {
 
     private func updateLifecycle(from event: AgentEvent) {
         switch event {
-        case .turnStarted:
+        case .turnStarted(let turnID, _):
+            currentTurnID = turnID
             lifecycleStatus = "running"
             pausedAt = nil
         case .turnFinished:
@@ -328,15 +319,6 @@ public final class ConversationViewModel {
             output: result.output,
             assets: result.assets
         )))
-    }
-
-    /// Mirror engine snapshot to legacy ConversationState for backward compat.
-    private func mirrorToLegacyState(_ snap: RuntimeSnapshot) {
-        // Keep pending approval in sync (both set and clear)
-        state.pendingApproval = snap.pendingApproval
-        // Note: full TurnGroup mirror is not needed — legacy state is only
-        // used for quick-access fields (pendingApproval, latestTodos) during transition.
-        // Timeline UI reads exclusively from snapshot.
     }
 
     private func setDisconnected() async {

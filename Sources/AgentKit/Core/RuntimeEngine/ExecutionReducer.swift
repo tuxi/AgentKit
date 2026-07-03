@@ -394,7 +394,7 @@ public struct ExecutionReducer: Sendable {
             return []
         }
         let prefix = isStderr ? "[stderr] " : ""
-        payload.output += prefix + chunk
+        payload.output = Self.appendCapped(payload.output, prefix + chunk)
         toolNode.payload = .toolCall(payload)
         toolNode.timestamp = ts
         graph.upsertNode(toolNode)
@@ -643,7 +643,7 @@ public struct ExecutionReducer: Sendable {
               case .childStream(var payload) = node.payload else {
             return []
         }
-        payload.output += chunk
+        payload.output = Self.appendCapped(payload.output, chunk)
         node.payload = .childStream(payload)
         node.timestamp = ts
         graph.upsertNode(node)
@@ -688,6 +688,24 @@ public struct ExecutionReducer: Sendable {
     }
 
     // MARK: - Helpers
+
+    /// Streamed output cap. Long-running tools/jobs can emit megabytes of
+    /// stdout; every byte lives in the graph AND in each published snapshot,
+    /// so it is capped here at the source. Head + tail are kept — the middle
+    /// is dropped once, then the tail keeps absorbing subsequent trims.
+    static let maxStreamedOutput = 262_144        // characters
+    private static let cappedHead = 131_072
+    private static let cappedTail = 65_536
+    private static let truncationMarker = "\n… [output truncated] …\n"
+
+    static func appendCapped(_ current: String, _ chunk: String) -> String {
+        var result = current + chunk
+        guard result.count > maxStreamedOutput else { return result }
+        let head = result.prefix(cappedHead)
+        let tail = result.suffix(cappedTail)
+        result = head + truncationMarker + tail
+        return result
+    }
 
     /// Append a node to the graph, linking it via .next edge from the previous last node.
     /// Uses cached lastNodeID for O(1) instead of O(n) traversal.

@@ -90,126 +90,103 @@ final class TranscriptChipValue: NSObject {
 /// Single source of truth for transcript colors, light and dark.
 /// Dark values keep the warm Claude-style tones already in use; light
 /// values are a matching warm-paper palette instead of bare system colors.
+///
+/// Colors MUST be `static let` singletons: provider-based dynamic colors
+/// compare by identity, and both the transcript cache and the incremental
+/// (selection-preserving) text-storage updates rely on rebuilt attributed
+/// strings comparing equal when nothing changed.
 enum TranscriptTheme {
 
     // MARK: Text
 
-    static var primaryText: TranscriptPlatformColor {
-        dynamic(
-            light: color(0.15, 0.15, 0.14),
-            dark: color(0.88, 0.86, 0.82)
-        )
-    }
+    static let primaryText: TranscriptPlatformColor = dynamic(
+        light: color(0.15, 0.15, 0.14),
+        dark: color(0.88, 0.86, 0.82)
+    )
 
-    static var secondaryText: TranscriptPlatformColor {
-        dynamic(
-            light: color(0.42, 0.41, 0.38),
-            dark: color(0.67, 0.65, 0.60)
-        )
-    }
+    static let secondaryText: TranscriptPlatformColor = dynamic(
+        light: color(0.42, 0.41, 0.38),
+        dark: color(0.67, 0.65, 0.60)
+    )
 
-    static var tertiaryText: TranscriptPlatformColor {
-        dynamic(
-            light: color(0.60, 0.59, 0.55),
-            dark: color(0.46, 0.45, 0.42)
-        )
-    }
+    static let tertiaryText: TranscriptPlatformColor = dynamic(
+        light: color(0.60, 0.59, 0.55),
+        dark: color(0.46, 0.45, 0.42)
+    )
 
     /// Blockquote body text.
-    static var quoteText: TranscriptPlatformColor { secondaryText }
+    static let quoteText: TranscriptPlatformColor = secondaryText
 
     // MARK: Links
 
     /// External URLs — the only links that keep an underline.
-    static var urlLink: TranscriptPlatformColor {
-        dynamic(
-            light: color(0.20, 0.42, 0.76),
-            dark: color(0.56, 0.70, 0.93)
-        )
-    }
+    static let urlLink: TranscriptPlatformColor = dynamic(
+        light: color(0.20, 0.42, 0.76),
+        dark: color(0.56, 0.70, 0.93)
+    )
 
     /// Workspace file paths and assets.
-    static var pathLink: TranscriptPlatformColor {
-        dynamic(
-            light: color(0.10, 0.46, 0.44),
-            dark: color(0.52, 0.78, 0.74)
-        )
-    }
+    static let pathLink: TranscriptPlatformColor = dynamic(
+        light: color(0.10, 0.46, 0.44),
+        dark: color(0.52, 0.78, 0.74)
+    )
 
     /// Artifact rows share the path tint so "local resource" reads as one color.
-    static var artifactLink: TranscriptPlatformColor { pathLink }
+    static let artifactLink: TranscriptPlatformColor = pathLink
 
     // MARK: Status
 
-    static var running: TranscriptPlatformColor {
-        dynamic(
-            light: color(0.80, 0.48, 0.14),
-            dark: color(0.87, 0.57, 0.32)
-        )
-    }
+    static let running: TranscriptPlatformColor = dynamic(
+        light: color(0.80, 0.48, 0.14),
+        dark: color(0.87, 0.57, 0.32)
+    )
 
-    static var failed: TranscriptPlatformColor {
-        dynamic(
-            light: color(0.77, 0.25, 0.25),
-            dark: color(1.00, 0.42, 0.42)
-        )
-    }
+    static let failed: TranscriptPlatformColor = dynamic(
+        light: color(0.77, 0.25, 0.25),
+        dark: color(1.00, 0.42, 0.42)
+    )
 
     // MARK: Blocks & chips
     // Backgrounds are translucent warm tints so they adapt to whatever
     // surface the turn card sits on.
 
-    static var codeBlockBackground: TranscriptPlatformColor {
-        dynamic(
-            light: color(0.36, 0.33, 0.24, alpha: 0.07),
-            dark: color(0.92, 0.90, 0.84, alpha: 0.07)
-        )
-    }
+    static let codeBlockBackground: TranscriptPlatformColor = dynamic(
+        light: color(0.36, 0.33, 0.24, alpha: 0.07),
+        dark: color(0.92, 0.90, 0.84, alpha: 0.07)
+    )
 
-    static var tableBackground: TranscriptPlatformColor { codeBlockBackground }
+    static let tableBackground: TranscriptPlatformColor = codeBlockBackground
 
-    static var errorBackground: TranscriptPlatformColor {
-        dynamic(
-            light: color(0.77, 0.25, 0.25, alpha: 0.08),
-            dark: color(1.00, 0.42, 0.42, alpha: 0.12)
-        )
-    }
+    static let errorBackground: TranscriptPlatformColor = dynamic(
+        light: color(0.77, 0.25, 0.25, alpha: 0.08),
+        dark: color(1.00, 0.42, 0.42, alpha: 0.12)
+    )
 
-    static var inlineCodeBackground: TranscriptPlatformColor {
-        dynamic(
-            light: color(0.36, 0.33, 0.24, alpha: 0.10),
-            dark: color(0.92, 0.90, 0.84, alpha: 0.11)
-        )
-    }
+    static let inlineCodeBackground: TranscriptPlatformColor = dynamic(
+        light: color(0.36, 0.33, 0.24, alpha: 0.10),
+        dark: color(0.92, 0.90, 0.84, alpha: 0.11)
+    )
 
-    static var inlineCodeText: TranscriptPlatformColor {
-        dynamic(
-            light: color(0.68, 0.30, 0.20),
-            dark: color(0.92, 0.64, 0.48)
-        )
-    }
+    static let inlineCodeText: TranscriptPlatformColor = dynamic(
+        light: color(0.68, 0.30, 0.20),
+        dark: color(0.92, 0.64, 0.48)
+    )
 
-    static var toolSurface: TranscriptPlatformColor {
-        dynamic(
-            light: color(0.36, 0.33, 0.24, alpha: 0.07),
-            dark: color(1.00, 1.00, 1.00, alpha: 0.08)
-        )
-    }
+    static let toolSurface: TranscriptPlatformColor = dynamic(
+        light: color(0.36, 0.33, 0.24, alpha: 0.07),
+        dark: color(1.00, 1.00, 1.00, alpha: 0.08)
+    )
 
-    static var quoteBar: TranscriptPlatformColor {
-        dynamic(
-            light: color(0.36, 0.33, 0.24, alpha: 0.28),
-            dark: color(0.92, 0.90, 0.84, alpha: 0.25)
-        )
-    }
+    static let quoteBar: TranscriptPlatformColor = dynamic(
+        light: color(0.36, 0.33, 0.24, alpha: 0.28),
+        dark: color(0.92, 0.90, 0.84, alpha: 0.25)
+    )
 
     /// Thematic breaks and the rule under table headers.
-    static var hairline: TranscriptPlatformColor {
-        dynamic(
-            light: color(0.15, 0.15, 0.14, alpha: 0.16),
-            dark: color(0.92, 0.90, 0.84, alpha: 0.18)
-        )
-    }
+    static let hairline: TranscriptPlatformColor = dynamic(
+        light: color(0.15, 0.15, 0.14, alpha: 0.16),
+        dark: color(0.92, 0.90, 0.84, alpha: 0.18)
+    )
 
     /// Horizontal padding inside decorated blocks — shared between the
     /// builder (paragraph indents) and the renderer (hairline insets).
@@ -223,77 +200,57 @@ enum TranscriptTheme {
 
     // MARK: Diff
 
-    static var diffAddedText: TranscriptPlatformColor {
-        dynamic(
-            light: color(0.13, 0.50, 0.24),
-            dark: color(0.45, 0.80, 0.50)
-        )
-    }
+    static let diffAddedText: TranscriptPlatformColor = dynamic(
+        light: color(0.13, 0.50, 0.24),
+        dark: color(0.45, 0.80, 0.50)
+    )
 
-    static var diffRemovedText: TranscriptPlatformColor {
-        dynamic(
-            light: color(0.75, 0.22, 0.22),
-            dark: color(0.95, 0.45, 0.45)
-        )
-    }
+    static let diffRemovedText: TranscriptPlatformColor = dynamic(
+        light: color(0.75, 0.22, 0.22),
+        dark: color(0.95, 0.45, 0.45)
+    )
 
-    static var diffHunkText: TranscriptPlatformColor {
-        dynamic(
-            light: color(0.30, 0.42, 0.70),
-            dark: color(0.55, 0.68, 0.92)
-        )
-    }
+    static let diffHunkText: TranscriptPlatformColor = dynamic(
+        light: color(0.30, 0.42, 0.70),
+        dark: color(0.55, 0.68, 0.92)
+    )
 
-    static var diffAddedBackground: TranscriptPlatformColor {
-        dynamic(
-            light: color(0.13, 0.60, 0.24, alpha: 0.10),
-            dark: color(0.45, 0.80, 0.50, alpha: 0.13)
-        )
-    }
+    static let diffAddedBackground: TranscriptPlatformColor = dynamic(
+        light: color(0.13, 0.60, 0.24, alpha: 0.10),
+        dark: color(0.45, 0.80, 0.50, alpha: 0.13)
+    )
 
-    static var diffRemovedBackground: TranscriptPlatformColor {
-        dynamic(
-            light: color(0.75, 0.22, 0.22, alpha: 0.09),
-            dark: color(0.95, 0.45, 0.45, alpha: 0.12)
-        )
-    }
+    static let diffRemovedBackground: TranscriptPlatformColor = dynamic(
+        light: color(0.75, 0.22, 0.22, alpha: 0.09),
+        dark: color(0.95, 0.45, 0.45, alpha: 0.12)
+    )
 
-    static var diffHunkBackground: TranscriptPlatformColor {
-        dynamic(
-            light: color(0.30, 0.42, 0.70, alpha: 0.08),
-            dark: color(0.55, 0.68, 0.92, alpha: 0.10)
-        )
-    }
+    static let diffHunkBackground: TranscriptPlatformColor = dynamic(
+        light: color(0.30, 0.42, 0.70, alpha: 0.08),
+        dark: color(0.55, 0.68, 0.92, alpha: 0.10)
+    )
 
     // MARK: Syntax highlight
 
-    static var codeKeyword: TranscriptPlatformColor {
-        dynamic(
-            light: color(0.62, 0.17, 0.51),
-            dark: color(0.86, 0.55, 0.72)
-        )
-    }
+    static let codeKeyword: TranscriptPlatformColor = dynamic(
+        light: color(0.62, 0.17, 0.51),
+        dark: color(0.86, 0.55, 0.72)
+    )
 
-    static var codeString: TranscriptPlatformColor {
-        dynamic(
-            light: color(0.63, 0.30, 0.11),
-            dark: color(0.82, 0.66, 0.45)
-        )
-    }
+    static let codeString: TranscriptPlatformColor = dynamic(
+        light: color(0.63, 0.30, 0.11),
+        dark: color(0.82, 0.66, 0.45)
+    )
 
-    static var codeComment: TranscriptPlatformColor {
-        dynamic(
-            light: color(0.45, 0.50, 0.42),
-            dark: color(0.52, 0.56, 0.47)
-        )
-    }
+    static let codeComment: TranscriptPlatformColor = dynamic(
+        light: color(0.45, 0.50, 0.42),
+        dark: color(0.52, 0.56, 0.47)
+    )
 
-    static var codeNumber: TranscriptPlatformColor {
-        dynamic(
-            light: color(0.14, 0.43, 0.60),
-            dark: color(0.56, 0.74, 0.86)
-        )
-    }
+    static let codeNumber: TranscriptPlatformColor = dynamic(
+        light: color(0.14, 0.43, 0.60),
+        dark: color(0.56, 0.74, 0.86)
+    )
 
     // MARK: Renderer lookup
 

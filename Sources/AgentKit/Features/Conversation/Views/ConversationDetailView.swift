@@ -119,7 +119,7 @@ public struct ConversationDetailView: View {
 
             ConversationTimelineView(viewModel: vm)
         }
-            .safeAreaInset(edge: .bottom, spacing: 30) {
+            .safeAreaInset(edge: .bottom, spacing: 8) {
                 VStack(spacing: 0) {
                     // ── 计划审批拦截栏（Plan Mode）──
                     if let plan = vm.snapshot.pendingPlanApproval {

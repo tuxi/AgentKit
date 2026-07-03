@@ -12,9 +12,14 @@ import Foundation
 // MARK: - RuntimeSnapshot
 
 /// Pure snapshot published to UI. Immutable. Contains pre-computed timeline.
+/// Deliberately does NOT carry the ExecutionGraph: the engine keeps mutating
+/// its graph after each yield, so a graph captured here would force a full
+/// CoW dictionary copy on every subsequent mutation (~60Hz while streaming).
 public struct RuntimeSnapshot: Sendable {
-    public let graph: ExecutionGraph
     public let timeline: [ExecutionNode]
+    /// Turn → Block projection consumed by the timeline UI. Projected once
+    /// per snapshot on the engine actor — views must not re-project.
+    public let turns: [ConversationTurn]
     public let pendingApproval: ApprovalRequest?
     public let pendingPlanApproval: PlanApprovalRequest?
     public let latestTodos: [TodoItem]
@@ -30,7 +35,8 @@ public struct RuntimeSnapshot: Sendable {
     /// the agent is actively working on a turn. Drives the live working indicator.
     public let turnStartedAt: Date?
 
-    public init(graph: ExecutionGraph, timeline: [ExecutionNode],
+    public init(timeline: [ExecutionNode],
+                turns: [ConversationTurn] = [],
                 pendingApproval: ApprovalRequest? = nil,
                 pendingPlanApproval: PlanApprovalRequest? = nil,
                 latestTodos: [TodoItem] = [],
@@ -39,8 +45,8 @@ public struct RuntimeSnapshot: Sendable {
                 generation: UInt64 = 0,
                 modelStartedAt: Date? = nil,
                 turnStartedAt: Date? = nil) {
-        self.graph = graph
         self.timeline = timeline
+        self.turns = turns
         self.pendingApproval = pendingApproval
         self.pendingPlanApproval = pendingPlanApproval
         self.latestTodos = latestTodos
@@ -53,7 +59,7 @@ public struct RuntimeSnapshot: Sendable {
 
     /// Empty snapshot for initial state.
     public static func empty(sessionID: String) -> RuntimeSnapshot {
-        RuntimeSnapshot(graph: ExecutionGraph(), timeline: [])
+        RuntimeSnapshot(timeline: [])
     }
 }
 
@@ -271,6 +277,12 @@ public actor RuntimeEngine {
         isLive = true
     }
 
+    /// Mark the stream as finished (child streams: terminal event received).
+    public func markFinished() {
+        isLive = false
+        yieldSnapshot()
+    }
+
     /// Get current pending approval (for backward compat with ConversationState).
     public func pendingApproval() -> ApprovalRequest? {
         _pendingApproval
@@ -333,10 +345,13 @@ public actor RuntimeEngine {
     }
 
     private func buildSnapshot() -> RuntimeSnapshot {
-        let timeline = timelineProjection.project(graph)
+        // Project the graph exactly once per snapshot; timeline and turns
+        // both derive from the same node walk.
+        let timeline = timelineProjection.projectNodes(graph)
+        let turns = timelineProjection.projectTurns(nodes: timeline, isLive: isLive)
         return RuntimeSnapshot(
-            graph: graph,
             timeline: timeline,
+            turns: turns,
             pendingApproval: _pendingApproval,
             pendingPlanApproval: _pendingPlanApproval,
             latestTodos: _latestTodos,
@@ -360,7 +375,9 @@ public actor RuntimeEngine {
         pendingFlush = true
         flushTask?.cancel()
         flushTask = Task { [weak self] in
-            try? await Task.sleep(nanoseconds: 16_000_000) // 16ms ≈ 60fps debounce
+            // 33ms ≈ 30fps coalescing. Indistinguishable from 60fps for text
+            // streaming, halves projection + snapshot + render work.
+            try? await Task.sleep(nanoseconds: 33_000_000)
             guard let self, await self.pendingFlush else { return }
             await self.yieldSnapshot()
         }

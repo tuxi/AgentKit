@@ -32,6 +32,13 @@ public struct ExecutionGraph: Sendable {
     /// Cached last node ID — avoids O(n) traversal on every append.
     var lastNodeID: NodeID?
 
+    /// Adjacency index for `.next` edges (from → to). Keeps linearWalk and
+    /// lastNode O(N) instead of scanning `edges` once per hop.
+    private var nextByFrom: [NodeID: NodeID] = [:]
+
+    /// Dedup index for addEdge — (from, to, type) triples already present.
+    private var edgeKeys: Set<String> = []
+
     public init() {}
 
     // MARK: - Mutations
@@ -53,10 +60,13 @@ public struct ExecutionGraph: Sendable {
 
     /// Add an edge. Deduplicates by (from, to, type).
     public mutating func addEdge(_ edge: GraphEdge) {
-        let exists = edges.values.contains { $0.from == edge.from && $0.to == edge.to && $0.type == edge.type }
-        guard !exists else { return }
+        let key = "\(edge.from)\u{1F}\(edge.to)\u{1F}\(edge.type.rawValue)"
+        guard edgeKeys.insert(key).inserted else { return }
         edges[edge.id] = edge
         edgeOrder.append(edge.id)
+        if edge.type == .next {
+            nextByFrom[edge.from] = edge.to
+        }
     }
 
     /// Find the last node of a given kind (used by Reducer for coalescing).
@@ -72,7 +82,7 @@ public struct ExecutionGraph: Sendable {
                 lastMatch = node
             }
             // Follow .next edge
-            current = edges.values.first { $0.from == id && $0.type == .next }?.to
+            current = nextByFrom[id]
         }
         return lastMatch
     }
@@ -84,8 +94,8 @@ public struct ExecutionGraph: Sendable {
         var visited = Set<NodeID>()
         while !visited.contains(current) {
             visited.insert(current)
-            if let next = edges.values.first(where: { $0.from == current && $0.type == .next }) {
-                current = next.to
+            if let next = nextByFrom[current] {
+                current = next
             } else {
                 return nodes[current]
             }
@@ -97,14 +107,15 @@ public struct ExecutionGraph: Sendable {
     public func linearWalk() -> [GraphNode] {
         guard let root = rootID else { return [] }
         var result: [GraphNode] = []
+        result.reserveCapacity(nodes.count)
         var current: NodeID? = root
-        var visited = Set<NodeID>()
+        var visited = Set<NodeID>(minimumCapacity: nodes.count)
         while let id = current, !visited.contains(id) {
             visited.insert(id)
             if let node = nodes[id] {
                 result.append(node)
             }
-            current = edges.values.first { $0.from == id && $0.type == .next }?.to
+            current = nextByFrom[id]
         }
         return result
     }

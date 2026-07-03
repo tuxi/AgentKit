@@ -46,7 +46,12 @@ public struct TimelineProjection: Sendable {
     /// block — it folds into the turn footer. `isLive` marks the runtime as
     /// streaming; only the last turn is treated as live.
     public func projectTurns(_ graph: ExecutionGraph, isLive: Bool = false) -> [ConversationTurn] {
-        let nodes = projectNodes(graph)
+        projectTurns(nodes: projectNodes(graph), isLive: isLive)
+    }
+
+    /// Same as `projectTurns(_:isLive:)` but takes already-projected nodes,
+    /// so callers that also need the flat timeline walk the graph only once.
+    public func projectTurns(nodes: [ExecutionNode], isLive: Bool = false) -> [ConversationTurn] {
         guard !nodes.isEmpty else { return [] }
 
         // Split into turns at each user prompt (turn_started). `turn_id` is NOT

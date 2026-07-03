@@ -76,6 +76,8 @@ public final class ChildStreamViewModel {
     // MARK: - Poll loop
 
     private func pollLoop() async {
+        // 子流轮询期间视为 live — snapshot.turns 的 isLive 与旧的 `!isFinished` 一致。
+        await engine.markLive()
         while !Task.isCancelled && !isFinished {
             do {
                 let batch = try await transport.fetch(childID: selection.childID, since: since)
@@ -85,6 +87,7 @@ public final class ChildStreamViewModel {
                     if isTerminal(event) { isFinished = true }
                     await engine.ingest(event)
                 }
+                if isFinished { await engine.markFinished() }
             } catch {
                 // 子流可能尚未产生事件（404）或网络抖动 — 下一轮重试。
                 lastError = error.localizedDescription
@@ -115,9 +118,9 @@ public final class ChildStreamViewModel {
         return nil
     }
 
-    /// task 子流的 turn card 列表（复用主会话的 Turn → Block 投影）。
+    /// task 子流的 turn card 列表（复用主会话的 Turn → Block 投影，引擎侧已投影好）。
     public var turns: [ConversationTurn] {
-        TimelineProjection().projectTurns(snapshot.graph, isLive: !isFinished)
+        snapshot.turns
     }
 
     public var isEmpty: Bool {
@@ -292,61 +295,50 @@ struct ChildStreamContentView: View {
     }
 
     /// task 子流：完整 turn card 时间线（复用主会话渲染器）。
+    /// 滚动跟随与主时间线同一套 FollowingScrollView —— 贴底才跟随，
+    /// 用户上滑看历史时子流事件不会拉回。
     private var taskTranscript: some View {
-        ScrollViewReader { proxy in
-            ScrollView {
-                LazyVStack(alignment: .leading, spacing: 16) {
-                    ForEach(viewModel.turns) { turn in
-                        TurnView(turn: turn)
-                            .id(turn.id)
-                    }
+        FollowingScrollView {
+            LazyVStack(alignment: .leading, spacing: 16) {
+                ForEach(viewModel.turns) { turn in
+                    TurnView(turn: turn)
+                        .equatable()
+                        .id(turn.id)
                 }
-                .padding(12)
-                .frame(maxWidth: .infinity, alignment: .leading)
             }
-            .onChange(of: viewModel.snapshot.generation) {
-                guard !viewModel.isFinished, let last = viewModel.turns.last else { return }
-                proxy.scrollTo(last.id, anchor: .bottom)
-            }
+            .padding(12)
+            .frame(maxWidth: .infinity, alignment: .leading)
         }
     }
 
     /// job 子流：终端式实时输出。
     private var jobOutput: some View {
-        ScrollViewReader { proxy in
-            ScrollView {
-                VStack(alignment: .leading, spacing: 8) {
-                    if let payload = viewModel.jobPayload {
-                        Text("$ \(payload.title)")
-                            .font(.caption.monospaced().weight(.semibold))
-                            .foregroundStyle(.secondary)
+        FollowingScrollView {
+            VStack(alignment: .leading, spacing: 8) {
+                if let payload = viewModel.jobPayload {
+                    Text("$ \(payload.title)")
+                        .font(.caption.monospaced().weight(.semibold))
+                        .foregroundStyle(.secondary)
+                        .textSelection(.enabled)
+
+                    if !payload.output.isEmpty {
+                        Text(payload.output)
+                            .font(.caption.monospaced())
                             .textSelection(.enabled)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                    }
 
-                        if !payload.output.isEmpty {
-                            Text(payload.output)
-                                .font(.caption.monospaced())
-                                .textSelection(.enabled)
-                                .frame(maxWidth: .infinity, alignment: .leading)
-                        }
-
-                        if let result = payload.result, !result.isEmpty,
-                           payload.status != .running {
-                            Divider()
-                            Text(result)
-                                .font(.caption)
-                                .foregroundStyle(payload.status == .failed ? .red : .secondary)
-                                .textSelection(.enabled)
-                        }
-
-                        Color.clear.frame(height: 1).id("bottom")
+                    if let result = payload.result, !result.isEmpty,
+                       payload.status != .running {
+                        Divider()
+                        Text(result)
+                            .font(.caption)
+                            .foregroundStyle(payload.status == .failed ? .red : .secondary)
+                            .textSelection(.enabled)
                     }
                 }
-                .padding(12)
             }
-            .onChange(of: viewModel.snapshot.generation) {
-                guard !viewModel.isFinished else { return }
-                proxy.scrollTo("bottom", anchor: .bottom)
-            }
+            .padding(12)
         }
     }
 }

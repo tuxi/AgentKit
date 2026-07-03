@@ -12,7 +12,7 @@ import Foundation
 // MARK: - ExecutionNode
 
 /// A single entry in the chronological timeline, produced by TimelineProjection.
-public struct ExecutionNode: Identifiable, Sendable {
+public struct ExecutionNode: Identifiable, Sendable, Equatable {
     public let id: NodeID
     public let kind: ExecutionNodeKind
     public let timestamp: TimeInterval
@@ -34,7 +34,7 @@ public struct ExecutionNode: Identifiable, Sendable {
 // MARK: - ExecutionNodeKind
 
 /// UI-level node kind — small set, detail in payloads.
-public enum ExecutionNodeKind: Sendable {
+public enum ExecutionNodeKind: Sendable, Equatable {
     case message(MessageNodePayload)
     case thinking(ThinkingNodePayload)
     case tool(ToolNodePayload)
@@ -45,7 +45,7 @@ public enum ExecutionNodeKind: Sendable {
 
 // MARK: - Payloads
 
-public struct MessageNodePayload: Sendable {
+public struct MessageNodePayload: Sendable, Equatable {
     public let role: MessageRole
     public let text: String
     public let isStreaming: Bool
@@ -64,7 +64,7 @@ public struct MessageNodePayload: Sendable {
     }
 }
 
-public struct ThinkingNodePayload: Sendable {
+public struct ThinkingNodePayload: Sendable, Equatable {
     public let text: String
     public let isStreaming: Bool
 
@@ -74,7 +74,7 @@ public struct ThinkingNodePayload: Sendable {
     }
 }
 
-public struct ToolNodePayload: Sendable {
+public struct ToolNodePayload: Sendable, Equatable {
     public let callID: String
     public let toolName: String
     public let args: JSONValue?
@@ -109,14 +109,14 @@ public struct ToolNodePayload: Sendable {
     }
 }
 
-public enum ToolNodeStatus: String, Sendable {
+public enum ToolNodeStatus: String, Sendable, Equatable {
     case running
     case completed
     case failed
     case autoApproved
 }
 
-public struct ArtifactNodePayload: Sendable {
+public struct ArtifactNodePayload: Sendable, Equatable {
     public let node: ArtifactNode
 
     public init(node: ArtifactNode) {
@@ -124,7 +124,7 @@ public struct ArtifactNodePayload: Sendable {
     }
 }
 
-public struct SystemNodePayload: Sendable {
+public struct SystemNodePayload: Sendable, Equatable {
     public let kind: SystemNodeKind
     public let text: String
     public let metadata: [String: String]

@@ -172,7 +172,10 @@ final class TranscriptDocumentTests: XCTestCase {
         XCTAssertEqual(ToolTranscriptPresenter.presentation(for: failed).statusTone, .failed)
     }
 
-    func testRunningToolAnimationFrameChangesTranscriptGlyph() {
+    /// A running tool must render IDENTICALLY across rebuilds — any
+    /// frame-to-frame difference forces a text-storage replace that resets
+    /// the user's text selection (the old animated spinner did exactly that).
+    func testRunningToolTranscriptIsStableAcrossRebuilds() {
         let tool = ToolNodePayload(
             callID: "run",
             toolName: "run_command",
@@ -189,18 +192,15 @@ final class TranscriptDocumentTests: XCTestCase {
 
         let first = TurnTranscriptBuilder.build(
             turn: turn,
-            state: TranscriptDocumentState(),
-            animationFrame: 0
+            state: TranscriptDocumentState()
         )
         let second = TurnTranscriptBuilder.build(
             turn: turn,
-            state: TranscriptDocumentState(),
-            animationFrame: 1
+            state: TranscriptDocumentState()
         )
 
         XCTAssertTrue(first.attributedString.string.contains("running"))
-        XCTAssertTrue(second.attributedString.string.contains("running"))
-        XCTAssertNotEqual(first.attributedString.string, second.attributedString.string)
+        XCTAssertTrue(first.attributedString.isEqual(to: second.attributedString))
     }
 
     func testDiffSummaryAppearsOnCollapsedToolLine() {
