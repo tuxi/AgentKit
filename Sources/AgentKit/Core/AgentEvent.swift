@@ -238,7 +238,9 @@ extension AgentEvent {
             )
 
         default:
-            // 前向兼容：忽略未知 kind，不崩
+            // 前向兼容：忽略未知 kind，不崩。打一行日志——runtime 升级改了
+            // 事件词汇表时（如 task_started 改名），这里是唯一的线索。
+            print("⚠️ [Wire] dropped unknown event kind=\(wire.kind ?? "<nil>")")
             return nil
         }
     }

@@ -42,6 +42,8 @@ struct FollowingScrollView<Content: View>: View {
     /// programmatic scrolling while the user (or momentum) owns the viewport.
     @State private var isUserScrolling = false
     @State private var scrollPosition = ScrollPosition(edge: .bottom)
+    /// Debounced snap-to-bottom after a viewport resize settles.
+    @State private var resizeSettleTask: Task<Void, Never>?
 
     var body: some View {
         ScrollView {
@@ -70,10 +72,52 @@ struct FollowingScrollView<Content: View>: View {
         .onScrollGeometryChange(for: FollowScrollMetrics.self) { geometry in
             FollowScrollMetrics(
                 distanceFromBottom: max(0, geometry.contentSize.height - geometry.visibleRect.maxY),
+                // How far the viewport rests BEYOND the legitimate bottom
+                // (content bottom + bottom inset). Positive = blank space:
+                // scrolling to the bottom of a freshly opened conversation
+                // targets LazyVStack's estimated height, and when rows
+                // measure shorter than the estimate the viewport is left
+                // stranded past the real content with nothing to pull it back.
+                overshootBeyondBottom: geometry.visibleRect.maxY
+                    - geometry.contentSize.height - geometry.contentInsets.bottom,
                 contentHeight: geometry.contentSize.height,
-                bottomInset: geometry.contentInsets.bottom
+                bottomInset: geometry.contentInsets.bottom,
+                containerSize: geometry.containerSize
             )
         } action: { old, new in
+            if new.containerSize != old.containerSize {
+                // Viewport is being resized (window drag / inspector toggle).
+                // Row heights are re-wrapping every frame, so any animated
+                // scroll would chase a stale target and bounce the list.
+                // Pin state must not change either. Once the size settles,
+                // snap back to the bottom if we were following — re-wrapping
+                // can leave the viewport a few points shy of the edge.
+                resizeSettleTask?.cancel()
+                if isPinnedToBottom, !isUserScrolling {
+                    resizeSettleTask = Task { @MainActor in
+                        try? await Task.sleep(nanoseconds: 200_000_000)
+                        guard !Task.isCancelled, isPinnedToBottom, !isUserScrolling else { return }
+                        scrollPosition.scrollTo(edge: .bottom)
+                    }
+                }
+                return
+            }
+
+            if !isUserScrolling,
+               new.contentHeight > new.containerSize.height,
+               new.overshootBeyondBottom > 1 {
+                // Stranded past the real bottom (lazy height estimates,
+                // shrinking insets, …) — snap back immediately, no animation:
+                // the viewport is showing blank space, there is nothing to
+                // animate from. Gated on scrollable content so a short
+                // conversation (viewport taller than content) never loops.
+                Task { @MainActor in
+                    guard !isUserScrolling else { return }
+                    scrollPosition.scrollTo(edge: .bottom)
+                }
+                return
+            }
+
             if isUserScrolling {
                 // Pin state changes ONLY from user-driven movement. Content
                 // growth also increases the distance, but that must never
@@ -110,10 +154,15 @@ struct FollowingScrollView<Content: View>: View {
                 }
             }
         }
-        .onChange(of: repinTrigger) { _, _ in
+        .onChange(of: repinTrigger) { oldValue, _ in
             // A new turn appeared — i.e. the user just sent a message. Always
             // bring it into view and resume following.
             isPinnedToBottom = true
+            // nil → id is the FIRST population (history import on open), not
+            // a send. The initial-offset anchor + overshoot correction handle
+            // that; an animated scroll here would chase LazyVStack's height
+            // estimates and strand the viewport past the real bottom.
+            guard oldValue != nil else { return }
             withAnimation(.easeOut(duration: 0.25)) {
                 scrollPosition.scrollTo(edge: .bottom)
             }
@@ -152,6 +201,8 @@ struct FollowingScrollView<Content: View>: View {
 /// `onScrollGeometryChange` only fires the action when something relevant moved.
 private struct FollowScrollMetrics: Equatable {
     var distanceFromBottom: CGFloat
+    var overshootBeyondBottom: CGFloat
     var contentHeight: CGFloat
     var bottomInset: CGFloat
+    var containerSize: CGSize
 }

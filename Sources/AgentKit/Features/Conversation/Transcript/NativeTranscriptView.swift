@@ -263,7 +263,11 @@ private struct PlatformTranscriptTextView: NSViewRepresentable {
 
         guard let storage = textView.textStorage else { return }
         let savedSelection = textView.selectedRanges
-        if TranscriptTextApplier.apply(attributedText, to: storage) == .attributesOnly {
+        let result = TranscriptTextApplier.apply(attributedText, to: storage)
+        if result != .noChange {
+            context.coordinator.textVersion += 1
+        }
+        if result == .attributesOnly {
             // Same characters, new attributes — the full replace dropped the
             // selection, but every saved range is still valid. Put it back.
             textView.selectedRanges = savedSelection
@@ -273,17 +277,32 @@ private struct PlatformTranscriptTextView: NSViewRepresentable {
     /// Synchronous self-sizing — replaces the old GeometryReader +
     /// measuredHeight @State round-trip, which forced a second layout pass
     /// (and a visible stutter) on every streaming update.
+    ///
+    /// Measurements are memoized per (width, text version): live window
+    /// resizing probes every visible row on every frame, and re-running a
+    /// full TextKit layout each time dropped frames and flashed white.
+    /// Width-less probes (mid-resize) return the last size instead of nil —
+    /// returning nil let rows collapse to their intrinsic (near-zero) height.
     func sizeThatFits(
         _ proposal: ProposedViewSize,
         nsView textView: NSTextView,
         context: Context
     ) -> CGSize? {
-        guard let proposedWidth = proposal.width, proposedWidth.isFinite, proposedWidth > 0,
-              let layoutManager = textView.layoutManager,
+        let coordinator = context.coordinator
+        guard let proposedWidth = proposal.width, proposedWidth.isFinite, proposedWidth > 0 else {
+            return coordinator.lastMeasuredSize == .zero ? nil : coordinator.lastMeasuredSize
+        }
+        let width = max(1, proposedWidth.rounded())
+        if width == coordinator.lastMeasuredWidth,
+           coordinator.measuredTextVersion == coordinator.textVersion,
+           coordinator.lastMeasuredSize != .zero {
+            return coordinator.lastMeasuredSize
+        }
+
+        guard let layoutManager = textView.layoutManager,
               let textContainer = textView.textContainer else {
             return nil
         }
-        let width = max(1, proposedWidth)
         if textContainer.containerSize.width != width {
             textContainer.containerSize = NSSize(
                 width: width,
@@ -293,7 +312,11 @@ private struct PlatformTranscriptTextView: NSViewRepresentable {
         layoutManager.ensureLayout(for: textContainer)
         let used = layoutManager.usedRect(for: textContainer)
         let height = max(1, ceil(used.height + textView.textContainerInset.height * 2))
-        return CGSize(width: width, height: height)
+
+        coordinator.lastMeasuredWidth = width
+        coordinator.measuredTextVersion = coordinator.textVersion
+        coordinator.lastMeasuredSize = CGSize(width: width, height: height)
+        return coordinator.lastMeasuredSize
     }
 
     final class Coordinator: NSObject, NSTextViewDelegate {
@@ -302,6 +325,12 @@ private struct PlatformTranscriptTextView: NSViewRepresentable {
         /// Identity of the last applied transcript — skips diffing entirely
         /// when the upstream cache hands back the same instance.
         var lastApplied: NSAttributedString?
+
+        /// Measurement memo — see sizeThatFits.
+        var textVersion = 0
+        var measuredTextVersion = -1
+        var lastMeasuredWidth: CGFloat = 0
+        var lastMeasuredSize: CGSize = .zero
 
         init(onAction: @escaping (TranscriptAction) -> Void) {
             self.onAction = onAction
@@ -373,17 +402,31 @@ private struct PlatformTranscriptTextView: UIViewRepresentable {
         context.coordinator.lastApplied = attributedText
 
         let savedSelection = textView.selectedRange
-        if TranscriptTextApplier.apply(attributedText, to: textView.textStorage) == .attributesOnly {
+        let result = TranscriptTextApplier.apply(attributedText, to: textView.textStorage)
+        if result != .noChange {
+            context.coordinator.textVersion += 1
+        }
+        if result == .attributesOnly {
             textView.selectedRange = savedSelection
         }
     }
 
+    /// Memoized per (width, text version) — same rationale as macOS: live
+    /// resizing (iPad multitasking / Stage Manager) probes every visible row
+    /// per frame, and TextKit relayout per probe drops frames.
     func sizeThatFits(
         _ proposal: ProposedViewSize,
         uiView textView: UITextView,
         context: Context
     ) -> CGSize? {
-        let width = max(1, proposal.width ?? UIScreen.main.bounds.width)
+        let coordinator = context.coordinator
+        let width = max(1, (proposal.width ?? UIScreen.main.bounds.width).rounded())
+        if width == coordinator.lastMeasuredWidth,
+           coordinator.measuredTextVersion == coordinator.textVersion,
+           coordinator.lastMeasuredSize != .zero {
+            return coordinator.lastMeasuredSize
+        }
+
         textView.bounds.size.width = width
         textView.textContainer.size = CGSize(
             width: width,
@@ -393,7 +436,11 @@ private struct PlatformTranscriptTextView: UIViewRepresentable {
             width: width,
             height: CGFloat.greatestFiniteMagnitude
         ))
-        return CGSize(width: width, height: max(1, ceil(fitting.height)))
+
+        coordinator.lastMeasuredWidth = width
+        coordinator.measuredTextVersion = coordinator.textVersion
+        coordinator.lastMeasuredSize = CGSize(width: width, height: max(1, ceil(fitting.height)))
+        return coordinator.lastMeasuredSize
     }
 
     final class Coordinator: NSObject, UITextViewDelegate {
@@ -402,6 +449,12 @@ private struct PlatformTranscriptTextView: UIViewRepresentable {
         /// Identity of the last applied transcript — skips diffing entirely
         /// when the upstream cache hands back the same instance.
         var lastApplied: NSAttributedString?
+
+        /// Measurement memo — see sizeThatFits.
+        var textVersion = 0
+        var measuredTextVersion = -1
+        var lastMeasuredWidth: CGFloat = 0
+        var lastMeasuredSize: CGSize = .zero
 
         init(onAction: @escaping (TranscriptAction) -> Void) {
             self.onAction = onAction
