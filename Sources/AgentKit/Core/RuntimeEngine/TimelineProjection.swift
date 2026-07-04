@@ -74,6 +74,16 @@ public struct TimelineProjection: Sendable {
             .filter { !$0.isEmpty }
     }
 
+    /// 该 `task` 工具卡是否对应本 turn 里的某张 childStream 入口卡（按委派 prompt 关联）。
+    /// task 工具的 prompt 在 args `prompt` / `task` 键里，与 bracket 的 `Text` 同源。
+    private static func taskToolMatchesEntryCard(_ tool: ToolNodePayload,
+                                                 in prompts: Set<String>) -> Bool {
+        guard !prompts.isEmpty, case .object(let dict)? = tool.args else { return false }
+        let raw = dict["prompt"]?.stringValue ?? dict["task"]?.stringValue ?? ""
+        let key = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+        return !key.isEmpty && prompts.contains(key)
+    }
+
     private func isUserMessageNode(_ node: ExecutionNode) -> Bool {
         if case .message(let p) = node.kind, p.role == .user { return true }
         return false
@@ -88,6 +98,17 @@ public struct TimelineProjection: Sendable {
         var pendingTools: [ToolNodePayload] = []
         var footerTokens = 0, footerElapsed = 0, footerCount = 0
         var sawFinished = false
+
+        // P8.7 ①：同一次委派会同时出现普通 `task` 工具卡（tool_started/finished）和
+        // childStream 入口卡（task_started/finished bracket）。合并：入口卡为准，隐藏冗余
+        // 的 task 工具卡。用委派 prompt 关联（后端 bracket 不带 call_id），trim 后比较；
+        // 匹配不上则两者都保留（不丢数据）。
+        let delegatedTaskPrompts: Set<String> = Set(
+            nodes.compactMap { node -> String? in
+                guard case .childStream(let p) = node.kind, p.kind == .task else { return nil }
+                return p.title.trimmingCharacters(in: .whitespacesAndNewlines)
+            }
+        )
 
         func flushTools() {
             guard let first = pendingTools.first else { return }
@@ -111,6 +132,10 @@ public struct TimelineProjection: Sendable {
                 blocks.append(.text(id: node.id,
                     MessageNodePayload(role: .assistant, text: p.text, isStreaming: p.isStreaming)))
             case .tool(let p):
+                // 隐藏与入口卡重复的 task 工具卡（详情在入口卡 → 子流查看器里看）。
+                if p.toolName == "task", Self.taskToolMatchesEntryCard(p, in: delegatedTaskPrompts) {
+                    continue
+                }
                 // Group only consecutive SAME-NAME tools, so a run renders as
                 // "read_file ×4" then "grep" rather than one mixed blob.
                 if let last = pendingTools.last, last.toolName != p.toolName {

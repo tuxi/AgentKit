@@ -262,6 +262,70 @@ final class ChildStreamTests: XCTestCase {
         XCTAssertEqual(childBlocks[0].status, .completed)
     }
 
+    // ① 合并：同一委派的 task 工具卡 + childStream 入口卡 → 只留入口卡，隐藏工具卡。
+    func testTaskToolCardMergedIntoEntryCard() {
+        var reducer = ExecutionReducer()
+        var graph = ExecutionGraph()
+        let prompt = "查询所有引用了 AgentTransport 的地方"
+        let events: [AgentEvent] = [
+            .turnStarted(turnID: "t1", text: "查一下"),
+            // 普通 task 工具卡（tool_started/finished）
+            .toolStarted(turnID: "t1", callID: "c1",
+                         tool: ToolCall(callID: "c1", toolName: "task",
+                                        toolArgs: .object(["prompt": .string(prompt)]))),
+            // 同一委派的 bracket（task_started/finished）
+            .taskStarted(turnID: "t1", sessionId: "sub_1", parentSessionId: "root", text: prompt),
+            .taskFinished(turnID: "t1", sessionId: "sub_1", parentSessionId: "root", text: "找到 1 处"),
+            .toolFinished(turnID: "t1", callID: "c1",
+                          result: ToolResult(callID: "c1", toolName: "task",
+                                             observation: "找到 1 处", error: nil)),
+            .turnFinished(turnID: "t1", text: "结论：只有一处引用", textAnnotations: []),
+        ]
+        for e in events { _ = reducer.reduce(e, into: &graph) }
+
+        let turns = TimelineProjection().projectTurns(graph)
+        XCTAssertEqual(turns.count, 1)
+        let blocks = turns[0].blocks
+
+        // 入口卡在，工具卡被隐藏（不出现 task 的 toolGroup）。
+        let entryCards = blocks.compactMap { block -> ChildStreamNodePayload? in
+            if case .childStream(_, let p) = block { return p }
+            return nil
+        }
+        XCTAssertEqual(entryCards.count, 1)
+        XCTAssertEqual(entryCards[0].kind, .task)
+
+        let hasTaskToolGroup = blocks.contains { block in
+            if case .toolGroup(let g) = block { return g.tools.contains { $0.toolName == "task" } }
+            return false
+        }
+        XCTAssertFalse(hasTaskToolGroup, "task 工具卡应被入口卡合并隐藏")
+    }
+
+    // 关联不上（prompt 不匹配）→ 两者都保留，不丢数据。
+    func testUnmatchedTaskToolCardIsKept() {
+        var reducer = ExecutionReducer()
+        var graph = ExecutionGraph()
+        let events: [AgentEvent] = [
+            .turnStarted(turnID: "t1", text: "查一下"),
+            .toolStarted(turnID: "t1", callID: "c1",
+                         tool: ToolCall(callID: "c1", toolName: "task",
+                                        toolArgs: .object(["prompt": .string("prompt A")]))),
+            .taskStarted(turnID: "t1", sessionId: "sub_1", parentSessionId: "root", text: "完全不同的 prompt B"),
+            .toolFinished(turnID: "t1", callID: "c1",
+                          result: ToolResult(callID: "c1", toolName: "task", observation: "ok", error: nil)),
+            .turnFinished(turnID: "t1", text: "done", textAnnotations: []),
+        ]
+        for e in events { _ = reducer.reduce(e, into: &graph) }
+
+        let blocks = TimelineProjection().projectTurns(graph).flatMap(\.blocks)
+        let hasTaskToolGroup = blocks.contains { block in
+            if case .toolGroup(let g) = block { return g.tools.contains { $0.toolName == "task" } }
+            return false
+        }
+        XCTAssertTrue(hasTaskToolGroup, "prompt 关联不上时应保留工具卡")
+    }
+
     // MARK: - task 工具卡过渡形态（后端接通 task bracket 前，普通卡是唯一形态）
 
     func testTaskToolCardPresentation() {
@@ -301,31 +365,46 @@ final class ChildStreamTests: XCTestCase {
         XCTAssertEqual(d.outputKind, .diff)
     }
 
-    // MARK: - FixtureChildStreamTransport
+    // MARK: - FixtureChildStreamTransport（stream 模型）
 
-    func testFixtureTransportServesBatchesByCursor() async throws {
-        let transport = FixtureChildStreamTransport(batches: [
-            [.jobStarted(turnID: nil, jobID: "j", command: "make")],
-            [.jobOutput(turnID: nil, jobID: "j", chunk: "a"),
-             .jobOutput(turnID: nil, jobID: "j", chunk: "b")],
-            [.jobFinished(turnID: nil, jobID: "j", exitCode: nil, err: nil, elapsedMs: nil, text: "exited")],
-        ])
+    func testFixtureTransportStreamsAllBatchesInOrder() async throws {
+        let transport = FixtureChildStreamTransport(
+            batches: [
+                [.jobStarted(turnID: nil, jobID: "j", command: "make")],
+                [.jobOutput(turnID: nil, jobID: "j", chunk: "a"),
+                 .jobOutput(turnID: nil, jobID: "j", chunk: "b")],
+                [.jobFinished(turnID: nil, jobID: "j", exitCode: nil, err: nil, elapsedMs: nil, text: "exited")],
+            ],
+            batchDelayNs: 0
+        )
 
-        let first = try await transport.fetch(childID: "j", since: 0)
-        XCTAssertEqual(first.events.count, 1)
-        XCTAssertEqual(first.nextSince, 1)
+        var kinds: [String] = []
+        for await event in transport.open(childID: "j") {
+            switch event {
+            case .jobStarted: kinds.append("started")
+            case .jobOutput: kinds.append("output")
+            case .jobFinished: kinds.append("finished")
+            default: kinds.append("other")
+            }
+        }
+        // 全部 4 帧按批次顺序产出，流自然结束。
+        XCTAssertEqual(kinds, ["started", "output", "output", "finished"])
+    }
 
-        let second = try await transport.fetch(childID: "j", since: first.nextSince)
-        XCTAssertEqual(second.events.count, 2)
-        XCTAssertEqual(second.nextSince, 3)
-
-        let third = try await transport.fetch(childID: "j", since: second.nextSince)
-        XCTAssertEqual(third.events.count, 1)
-        XCTAssertEqual(third.nextSince, 4)
-
-        // 批次耗尽 → 空批，游标不回退。
-        let drained = try await transport.fetch(childID: "j", since: third.nextSince)
-        XCTAssertTrue(drained.events.isEmpty)
-        XCTAssertEqual(drained.nextSince, 4)
+    // 迭代提前中止（consumer break）→ onTermination 取消回放任务，不再吐后续帧。
+    func testFixtureTransportStopsOnConsumerCancel() async throws {
+        let transport = FixtureChildStreamTransport(
+            batches: [
+                [.jobStarted(turnID: nil, jobID: "j", command: "make")],
+                [.jobFinished(turnID: nil, jobID: "j", exitCode: nil, err: nil, elapsedMs: nil, text: "exited")],
+            ],
+            batchDelayNs: 50_000_000
+        )
+        var count = 0
+        for await _ in transport.open(childID: "j") {
+            count += 1
+            break
+        }
+        XCTAssertEqual(count, 1)
     }
 }
