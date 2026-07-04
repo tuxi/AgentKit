@@ -434,7 +434,8 @@ private struct ApprovalBar: View {
                                 .frame(maxWidth: .infinity, alignment: .leading)
                                 .fixedSize(horizontal: false, vertical: true)
                         }
-                        .frame(maxHeight: 180)
+                        .frame(minHeight: 0, idealHeight: 14, maxHeight: 180, alignment: .topLeading)
+                        .fixedSize(horizontal: false, vertical: true) // 让外层 ScrollView 遵循内部 Text 的理想垂直高度
                     } else if !request.isMCP {
                         Text("No arguments provided.")
                             .font(.system(.caption, design: .monospaced))

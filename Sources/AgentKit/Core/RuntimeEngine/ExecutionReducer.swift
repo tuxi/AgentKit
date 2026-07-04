@@ -123,8 +123,9 @@ public struct ExecutionReducer: Sendable {
                                      todos: todos, ts: ts, graph: &graph)
 
         // ── 子流（task 子agent + 后台 job，共用 handler）──
-        case .taskStarted(let turnID, let sessionId, _, let text):
+        case .taskStarted(let turnID, let sessionId, _, let callID, let text):
             return handleChildStarted(kind: .task, childID: sessionId, title: text,
+                                      originCallID: callID,
                                       turnID: turnID ?? internalState.currentTurnID ?? "",
                                       ts: ts, graph: &graph)
 
@@ -134,8 +135,9 @@ public struct ExecutionReducer: Sendable {
                                        turnID: turnID ?? internalState.currentTurnID ?? "",
                                        ts: ts, graph: &graph)
 
-        case .jobStarted(let turnID, let jobID, let command):
+        case .jobStarted(let turnID, let jobID, let callID, let command):
             return handleChildStarted(kind: .job, childID: jobID, title: command,
+                                      originCallID: callID,
                                       turnID: turnID ?? internalState.currentTurnID ?? "",
                                       ts: ts, graph: &graph)
 
@@ -624,12 +626,13 @@ public struct ExecutionReducer: Sendable {
     // MARK: - Child stream handlers (task subagent + background job)
 
     private mutating func handleChildStarted(kind: ChildStreamKind, childID: String, title: String,
-                                              turnID: String, ts: TimeInterval,
+                                              originCallID: String?, turnID: String, ts: TimeInterval,
                                               graph: inout ExecutionGraph) -> [NodeID] {
         let nodeID = "sub_\(childID)"
         // Replay can deliver a duplicate started — keep the existing node's identity.
         guard graph.nodes[nodeID] == nil else { return [nodeID] }
-        let payload = ChildStreamPayload(kind: kind, childID: childID, title: title)
+        let payload = ChildStreamPayload(kind: kind, childID: childID, title: title,
+                                         originCallID: originCallID)
         let node = GraphNode(id: nodeID, kind: .childStream, payload: .childStream(payload),
                              status: .running, timestamp: ts, turnID: turnID)
         appendNode(node, to: &graph)

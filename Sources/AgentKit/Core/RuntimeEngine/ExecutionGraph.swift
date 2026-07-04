@@ -246,6 +246,9 @@ public struct ChildStreamPayload: Sendable {
     public let childID: String
     /// task 的委派 prompt / job 的 command。
     public let title: String
+    /// 发起此子流的工具调用 id（task→`task` 调用 / job→`run_command` 调用）。
+    /// 与工具卡共享，投影层据此合并去重（比按 prompt 字符串更稳）。
+    public let originCallID: String?
     /// 结束时写入：task 的结论 / job 失败时的展示文案（`err`，如 "exit code 2"）。
     public var result: String?
     /// job 专用（P8.7 §8.5）：仅失败时出现；>0 = 非零退出，-1 = 启动失败/被信号杀死。
@@ -258,11 +261,13 @@ public struct ChildStreamPayload: Sendable {
     public var output: String
 
     public init(kind: ChildStreamKind, childID: String, title: String,
+                originCallID: String? = nil,
                 result: String? = nil, exitCode: Int? = nil,
                 canceled: Bool = false, elapsedMs: Int? = nil, output: String = "") {
         self.kind = kind
         self.childID = childID
         self.title = title
+        self.originCallID = originCallID
         self.result = result
         self.exitCode = exitCode
         self.canceled = canceled

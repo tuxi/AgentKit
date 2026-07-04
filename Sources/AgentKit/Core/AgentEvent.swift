@@ -50,12 +50,16 @@ public enum AgentEvent: Sendable {
     case todoUpdated(turnID: String?, todos: [TodoItem])
 
     // ── Subagent ──
-    case taskStarted(turnID: String?, sessionId: String, parentSessionId: String, text: String)
+    /// `task_started`：subagent 委派开始。`callID` = 发起的 `task` 工具调用 id
+    /// （bracket 与工具卡共享，用于合并去重，比按 prompt 字符串更稳）。
+    case taskStarted(turnID: String?, sessionId: String, parentSessionId: String,
+                     callID: String?, text: String)
     case taskFinished(turnID: String?, sessionId: String, parentSessionId: String, text: String)
 
     // ── Background job（P8.7 —— 与 task 共用"子流"渲染，见 docs/p8.7-client-plan.md）──
     /// `job_started`：后台 job 启动。子流 id 复用 `session_id` 字段（§8.4 决策点 1）。
-    case jobStarted(turnID: String?, jobID: String, command: String)
+    /// `callID` = 发起的 `run_command` 调用 id（与 job 入口卡合并去重用）。
+    case jobStarted(turnID: String?, jobID: String, callID: String?, command: String)
     /// `job_output`：job 输出分块。只出现在 job 自己的子流里，不进父会话直播流。
     case jobOutput(turnID: String?, jobID: String, chunk: String)
     /// `job_finished`：job 结束（§8.5 冻结契约）。`text` ∈ exited/failed/canceled；
@@ -189,6 +193,7 @@ extension AgentEvent {
                 turnID: turnID,
                 sessionId: wire.sessionId ?? "",
                 parentSessionId: wire.parentSessionId ?? "",
+                callID: wire.callId,
                 text: wire.text ?? ""
             )
 
@@ -204,6 +209,7 @@ extension AgentEvent {
             return .jobStarted(
                 turnID: turnID,
                 jobID: wire.sessionId ?? "",
+                callID: wire.callId,
                 command: wire.text ?? ""
             )
 

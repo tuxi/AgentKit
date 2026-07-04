@@ -82,7 +82,10 @@ v1 只返回 `id`（model / 消息数 / 时间等 metadata 属于 P1-B）。
 ```
 - 与 WS 唯一差异：历史事件**不带 `event_id`**（它在 WS 发送时才盖戳，未持久化）。客户端按可选处理。
 - **不含 `token_delta`**（流式增量不持久化）。回放时用 `turn_finished.text` 还原助手最终文本即可。
-- 历史 subagent 事件**不带 `parent_session_id`**（同样未持久化）——嵌套关系在 v1 回放里降级。
+- 历史 subagent 事件**不带 `parent_session_id`**（同样未持久化）。但自 p8.7 §8.4-2 起，
+  `task_started`/`task_finished` **在父会话的回放里出现**（双写进父分区，payload 的
+  `session_id` 是子会话 id）——嵌套关系可从"这条 bracket 出现在父会话的 `GET /events` 结果里"
+  推出，不再依赖 `parent_session_id`。
 
 #### `GET /v1/conversations/{id}/messages`
 对话主干，由 `turn_started`(user) / `turn_finished`(assistant) 还原：
@@ -102,6 +105,22 @@ v1 只含 user/assistant；工具/系统消息的全量保真属于 P1-B。
 
 ### `GET /v1/conversations/{id}/stream`
 升级为 WebSocket（见 §3）。`{id}` 不存在 → `404`（不升级）。
+
+### 子流（后台 job）：`GET /v1/jobs/{id}/events` + `GET /v1/jobs/{id}/stream`（P8.7 Phase C）
+
+后台 job 有自己的事件流（`job_started`/`job_output`/`job_finished`），可独立打开一个"子流查看器"。
+两个端点与会话版**帧格式完全一致**（同一个 `WireFrame` 解码器）：
+
+- **`GET /v1/jobs/{id}/events[?since=<seq>]`** —— job 的历史（backlog），`since` 增量续传，和
+  会话 `/events` 同形。`{id}` 从无事件 → `404`。
+- **`GET /v1/jobs/{id}/stream`** —— job 的**实时** WS 流：`hello` 之后推 job 的实时事件
+  （含 `job_output` 全量）。**只读**——不接受 `send_message`/审批等任何入站帧（job 是被观察对象，
+  不是可驱动的会话）。`{id}` 未知 → `404`（不升级）。
+- **恢复流程同会话**："先 `GET /v1/jobs/{id}/events` 补历史、再连 `/stream` 接实时"，用 `seq`
+  去重（§2 恢复流程）。job 的 `seq` 是**它自己分区**的游标，与父会话的 `seq` 是两套空间。
+- job **永远不出现在 `GET /v1/conversations` 列表**里（列表来自会话表，job 只在事件流里）。
+- 说明：subagent（`task`）子会话**同步执行**、拿到 `task_finished` 时已结束，没有"实时可接"的流；
+  用 `GET /v1/conversations/{child_session_id}/events` 回放即可，无需 `/stream`。
 
 ### 推荐的恢复流程（History + Live）
 
@@ -168,11 +187,11 @@ v1 只含 user/assistant；工具/系统消息的全量保真属于 P1-B。
 | `todo_updated` | `todos` | 任务清单变化（见 §3.6） |
 | `compacted` | `before_tokens` `after_tokens` `saved_tokens` `summary_chars` `ratio` | 上下文压缩 |
 | `turn_finished` | `text` | 本轮最终答复（这一轮的终点） |
-| `task_started` | `session_id`(子) `parent_session_id` `text` | subagent 委派开始（`text`=委派 prompt） |
-| `task_finished` | `session_id`(子) `parent_session_id` `text` | subagent 结束（`text`=结论） |
-| `job_started` | `session_id`(=job id) `turn_id`(=发起 turn) `text` | 后台 job 开始（P8.7；`text`=完整命令）。**bracket 事件（started/finished）同时进父会话流**（直播 WS + 父会话 `GET /events` 回放，§8.4-2 定稿）——入口卡靠它发现 job；`job_output` 只在 job 自己的分区（`GET /v1/conversations/{job_id}/events`） |
+| `task_started` | `session_id`(子) `turn_id`(=发起 turn) `call_id`(=发起的 `task` 调用) `parent_session_id` `text` | subagent 委派开始（`text`=委派 prompt）。**bracket 双写进父流**（直播 + 父会话 `GET /events` 回放），与 job bracket 同一机制（p8.7 §8.4-2）——入口卡按 `session_id` 开子流查看器。用 **`call_id`** 与同一委派的 `task` 工具卡关联去重（比按 prompt 字符串相等更稳） |
+| `task_finished` | `session_id`(子) `turn_id` `call_id` `parent_session_id` `text` | subagent 结束（`text`=结论），同上双写，`call_id` 同 `task_started` |
+| `job_started` | `session_id`(=job id) `turn_id`(=发起 turn) `call_id`(=发起的 `run_command` 调用) `text` | 后台 job 开始（P8.7；`text`=完整命令）。**bracket 事件（started/finished）同时进父会话流**（直播 WS + 父会话 `GET /events` 回放，§8.4-2 定稿）——入口卡靠它发现 job，用 `call_id` 与 `run_command` 工具卡关联；`job_output` 只在 job 自己的分区（`GET /v1/jobs/{id}/events`） |
 | `job_output` | `session_id`(=job id) `chunk` | job 输出片段（stdout+stderr 交错，服务端已按 ~4KB/750ms 合并，不会每行一条）。**仅 job 分区**，父会话流里没有 |
-| `job_finished` | `session_id`(=job id) `text` `elapsed_ms` `exit_code` `err` | job 终态。`text` ∈ `exited`（成功）\| `failed` \| `canceled`；`exit_code` 仅失败时出现（>0 = 命令非零退出，-1 = 启动失败/被信号杀死；成功时省略）；`err` 是配套的人读描述（如 `exit code 2`），仅失败时出现。形状以 golden `internal/server/testdata/job_*.json` 为准 |
+| `job_finished` | `session_id`(=job id) `call_id` `text` `elapsed_ms` `exit_code` `err` | job 终态（`call_id` 同 `job_started`）。`text` ∈ `exited`（成功）\| `failed` \| `canceled`；`exit_code` 仅失败时出现（>0 = 命令非零退出，-1 = 启动失败/被信号杀死；成功时省略）；`err` 是配套的人读描述（如 `exit code 2`），仅失败时出现。形状以 golden `internal/server/testdata/job_*.json` 为准 |
 
 > 渲染建议：按 `turn_id` 把一轮的事件聚成一个气泡；`token_delta` 实时拼接成助手文本；subagent 事件按 `parent_session_id` 折叠成子流。job 终态三分支的入口卡/查看器顶栏显示：`exited` → 成功；`failed` → 失败（用 `exit_code` 细分：-1 显示"被终止/启动失败"，>0 显示"退出码 N"）；`canceled` → 已取消（用户/模型主动停止，不是失败）。
 
@@ -201,15 +220,15 @@ turn 进行中，副作用工具（如 `run_command`、`apply_patch`）需要确
   "type": "approval_request",
   "id": "appr_3f9a1c",
   "tool_name": "run_command",
-  "tool_args": { "command": "git push" },
-  "deadline_ms": 120000
+  "tool_args": { "command": "git push" }
 }
 ```
 
 - **`id` 是关联键**——回复时必须原样带回。
 - ⚠️ **v1 实际行为**：`session_id` / `turn_id` 当前**不下发**（审批器没有 turn 上下文）。因为一条 WS 只服务一个会话，客户端本就知道是哪个会话，用 `id` 关联即可。schema 允许这两个字段，未来可能补上，客户端按可选处理。
 - 收到此帧时，**该 turn 已暂停、在等你的回复**。
-- `deadline_ms` 内不回复，或连接断开 → 服务端按**拒绝**处理（fail-safe）。
+- `deadline_ms` **可选**：仅当服务端显式配置了审批超时才出现，期限内不回复按拒绝。**默认不下发 = 无期限**——审批一直挂起等用户，隔夜再批准也有效。
+- **断线不会拒绝**：未决审批跨连接存活。切走对话/断线后重连，服务端会用**同一 `id` 重发** `approval_request`——客户端按 `id` 去重（同 `id` 的重复帧覆盖或忽略即可），回复照常带原 `id`。
 
 ### 3.5 入站：命令 + 审批应答（client → server）
 
@@ -255,7 +274,7 @@ server → turn_finished {text}   ← 本轮结束，可发下一条
 client → {type:send_message, text:"提交并推送"}
 server → turn_started
 server → tool_started {tool_name:"run_command", tool_args:{command:"git push"}}
-server → {type:approval_request, id:"appr_x", tool_args:{...}, deadline_ms:120000}   ⏸ turn 暂停
+server → {type:approval_request, id:"appr_x", tool_args:{...}}                       ⏸ turn 暂停
         ── 客户端弹审批卡片 ──
 client → {type:approval_response, id:"appr_x", approved:true}                        ▶ turn 继续
 server → tool_finished {tool_name:"run_command", observation:"..."}
@@ -271,7 +290,7 @@ server → turn_finished {text:"已推送"}
 3. **`tool_args` 是结构化 JSON 对象**（`{"command":"..."}`），不是字符串。
 4. **`at` 是 RFC3339 毫秒 UTC**。
 5. **忽略未知 `kind` 和未知字段**（前向兼容）；版本只在 `hello` 协商一次，别期望逐事件带版本。收到不认识的 `kind` 应 no-op，**不要崩**——服务端新增事件不该让旧客户端挂掉。
-6. **审批是阻塞往返**：收到 `approval_request` 即代表 turn 在等你；尽快在 `deadline_ms` 内回 `approval_response`。
+6. **审批是阻塞往返**：收到 `approval_request` 即代表 turn 在等你回 `approval_response`；默认无期限（帧里带 `deadline_ms` 时才有超时）。重连后同 `id` 的重发帧要去重。
 7. **一轮一发**：`turn_finished` 之前不要再 `send_message`。
 8. **断线重连**：WS 重连只给新 `hello`。用 `seq` 精确续传（v1.2 §4 起可用，本条旧文"`seq` 是 v2 预留"已过时）：断线前记住收到的最大 `seq`，重连后先 `GET /events?since=<seq>` 补缺口、再接实时流（去重同 §2 恢复流程）。`token_delta` 不持久化，断线期间的打字机增量补不回来——用补回的 `turn_finished.text` 还原最终文本即可。
 

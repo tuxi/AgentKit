@@ -30,11 +30,12 @@ final class ChildStreamTests: XCTestCase {
         let event = try decodeEvent(
             #"{"kind":"job_started","at":"2026-07-02T10:00:00.000Z","session_id":"job_1","turn_id":"t1","text":"npx skills add okx/onchainos-skills"}"#
         )
-        guard case .jobStarted(let turnID, let jobID, let command)? = event else {
+        guard case .jobStarted(let turnID, let jobID, let callID, let command)? = event else {
             return XCTFail("expected jobStarted, got \(String(describing: event))")
         }
         XCTAssertEqual(turnID, "t1")
         XCTAssertEqual(jobID, "job_1")
+        XCTAssertNil(callID)   // 本例 JSON 未带 call_id → 可选解码为 nil
         XCTAssertEqual(command, "npx skills add okx/onchainos-skills")
     }
 
@@ -90,10 +91,11 @@ final class ChildStreamTests: XCTestCase {
 
     func testGoldenJobStarted() throws {
         let event = AgentEvent.from(wire: try goldenFrame("job_started.json"))
-        guard case .jobStarted(_, let jobID, let command)? = event else {
+        guard case .jobStarted(_, let jobID, let callID, let command)? = event else {
             return XCTFail("golden job_started must decode")
         }
         XCTAssertEqual(jobID, "job_1")
+        XCTAssertEqual(callID, "call_run_1")   // bracket 带发起的 run_command call_id
         XCTAssertEqual(command, "npx skills add okx/onchainos-skills --yes -g")
     }
 
@@ -132,7 +134,7 @@ final class ChildStreamTests: XCTestCase {
         var reducer = ExecutionReducer()
         var graph = ExecutionGraph()
 
-        _ = reducer.reduce(.jobStarted(turnID: "t1", jobID: "job_1", command: "npm install"), into: &graph)
+        _ = reducer.reduce(.jobStarted(turnID: "t1", jobID: "job_1", callID: nil, command: "npm install"), into: &graph)
         guard let (started, startedPayload) = childNode(graph, id: "job_1") else {
             return XCTFail("job_started must create a childStream node")
         }
@@ -161,7 +163,7 @@ final class ChildStreamTests: XCTestCase {
         // 命令非零退出（§8.5：exit_code > 0，err 冗余退出码作展示文案）
         var reducer = ExecutionReducer()
         var graph = ExecutionGraph()
-        _ = reducer.reduce(.jobStarted(turnID: nil, jobID: "j", command: "make"), into: &graph)
+        _ = reducer.reduce(.jobStarted(turnID: nil, jobID: "j", callID: nil, command: "make"), into: &graph)
         _ = reducer.reduce(.jobFinished(turnID: nil, jobID: "j", exitCode: 2,
                                         err: "exit code 2", elapsedMs: nil, text: "failed"), into: &graph)
         guard let (node, payload) = childNode(graph, id: "j") else { return XCTFail() }
@@ -172,7 +174,7 @@ final class ChildStreamTests: XCTestCase {
         // 启动失败/被信号杀死（§8.5：exit_code == -1）
         var reducer2 = ExecutionReducer()
         var graph2 = ExecutionGraph()
-        _ = reducer2.reduce(.jobStarted(turnID: nil, jobID: "j", command: "make"), into: &graph2)
+        _ = reducer2.reduce(.jobStarted(turnID: nil, jobID: "j", callID: nil, command: "make"), into: &graph2)
         _ = reducer2.reduce(.jobFinished(turnID: nil, jobID: "j", exitCode: -1,
                                          err: "signal: killed", elapsedMs: nil, text: "failed"), into: &graph2)
         guard let (killed, killedPayload) = childNode(graph2, id: "j") else { return XCTFail() }
@@ -186,7 +188,7 @@ final class ChildStreamTests: XCTestCase {
         var reducer = ExecutionReducer()
         var graph = ExecutionGraph()
         _ = reducer.reduce(.turnStarted(turnID: "t1", text: "install"), into: &graph)
-        _ = reducer.reduce(.jobStarted(turnID: "t1", jobID: "j", command: "sleep 100"), into: &graph)
+        _ = reducer.reduce(.jobStarted(turnID: "t1", jobID: "j", callID: nil, command: "sleep 100"), into: &graph)
         _ = reducer.reduce(.jobFinished(turnID: "t1", jobID: "j", exitCode: nil,
                                         err: nil, elapsedMs: nil, text: "canceled"), into: &graph)
         guard let (node, payload) = childNode(graph, id: "j") else { return XCTFail() }
@@ -216,8 +218,8 @@ final class ChildStreamTests: XCTestCase {
     func testDuplicateJobStartedKeepsIdentity() {
         var reducer = ExecutionReducer()
         var graph = ExecutionGraph()
-        _ = reducer.reduce(.jobStarted(turnID: nil, jobID: "j", command: "sleep 100"), into: &graph)
-        _ = reducer.reduce(.jobStarted(turnID: nil, jobID: "j", command: "sleep 100"), into: &graph)
+        _ = reducer.reduce(.jobStarted(turnID: nil, jobID: "j", callID: nil, command: "sleep 100"), into: &graph)
+        _ = reducer.reduce(.jobStarted(turnID: nil, jobID: "j", callID: nil, command: "sleep 100"), into: &graph)
         XCTAssertEqual(graph.nodes.values.filter { $0.kind == .childStream }.count, 1)
     }
 
@@ -226,7 +228,7 @@ final class ChildStreamTests: XCTestCase {
         var reducer = ExecutionReducer()
         var graph = ExecutionGraph()
         _ = reducer.reduce(.taskStarted(turnID: "t1", sessionId: "sub_sess",
-                                        parentSessionId: "root", text: "explore repo"), into: &graph)
+                                        parentSessionId: "root", callID: nil, text: "explore repo"), into: &graph)
         _ = reducer.reduce(.taskFinished(turnID: "t1", sessionId: "sub_sess",
                                          parentSessionId: "root", text: "found 3 issues"), into: &graph)
         guard let (node, payload) = childNode(graph, id: "sub_sess") else {
@@ -245,7 +247,7 @@ final class ChildStreamTests: XCTestCase {
         var graph = ExecutionGraph()
         let events: [AgentEvent] = [
             .turnStarted(turnID: "t1", text: "安装 Onchain OS"),
-            .jobStarted(turnID: "t1", jobID: "job_1", command: "npx skills add"),
+            .jobStarted(turnID: "t1", jobID: "job_1", callID: nil, command: "npx skills add"),
             .jobFinished(turnID: "t1", jobID: "job_1", exitCode: nil, err: nil, elapsedMs: nil, text: "exited"),
             .turnFinished(turnID: "t1", text: "装好了", textAnnotations: []),
         ]
@@ -262,19 +264,19 @@ final class ChildStreamTests: XCTestCase {
         XCTAssertEqual(childBlocks[0].status, .completed)
     }
 
-    // ① 合并：同一委派的 task 工具卡 + childStream 入口卡 → 只留入口卡，隐藏工具卡。
+    // ① 合并：同一委派的 task 工具卡 + childStream 入口卡（共享 call_id）→ 只留入口卡。
     func testTaskToolCardMergedIntoEntryCard() {
         var reducer = ExecutionReducer()
         var graph = ExecutionGraph()
-        let prompt = "查询所有引用了 AgentTransport 的地方"
         let events: [AgentEvent] = [
             .turnStarted(turnID: "t1", text: "查一下"),
-            // 普通 task 工具卡（tool_started/finished）
+            // 普通 task 工具卡（tool_started/finished），call_id = c1
             .toolStarted(turnID: "t1", callID: "c1",
                          tool: ToolCall(callID: "c1", toolName: "task",
-                                        toolArgs: .object(["prompt": .string(prompt)]))),
-            // 同一委派的 bracket（task_started/finished）
-            .taskStarted(turnID: "t1", sessionId: "sub_1", parentSessionId: "root", text: prompt),
+                                        toolArgs: .object(["prompt": .string("查引用")]))),
+            // 同一委派的 bracket：带同一个发起 call_id = c1
+            .taskStarted(turnID: "t1", sessionId: "sub_1", parentSessionId: "root",
+                         callID: "c1", text: "查引用"),
             .taskFinished(turnID: "t1", sessionId: "sub_1", parentSessionId: "root", text: "找到 1 处"),
             .toolFinished(turnID: "t1", callID: "c1",
                           result: ToolResult(callID: "c1", toolName: "task",
@@ -283,9 +285,7 @@ final class ChildStreamTests: XCTestCase {
         ]
         for e in events { _ = reducer.reduce(e, into: &graph) }
 
-        let turns = TimelineProjection().projectTurns(graph)
-        XCTAssertEqual(turns.count, 1)
-        let blocks = turns[0].blocks
+        let blocks = TimelineProjection().projectTurns(graph)[0].blocks
 
         // 入口卡在，工具卡被隐藏（不出现 task 的 toolGroup）。
         let entryCards = blocks.compactMap { block -> ChildStreamNodePayload? in
@@ -293,37 +293,76 @@ final class ChildStreamTests: XCTestCase {
             return nil
         }
         XCTAssertEqual(entryCards.count, 1)
-        XCTAssertEqual(entryCards[0].kind, .task)
+        XCTAssertEqual(entryCards[0].originCallID, "c1")
 
         let hasTaskToolGroup = blocks.contains { block in
             if case .toolGroup(let g) = block { return g.tools.contains { $0.toolName == "task" } }
             return false
         }
-        XCTAssertFalse(hasTaskToolGroup, "task 工具卡应被入口卡合并隐藏")
+        XCTAssertFalse(hasTaskToolGroup, "task 工具卡应被入口卡按 call_id 合并隐藏")
     }
 
-    // 关联不上（prompt 不匹配）→ 两者都保留，不丢数据。
-    func testUnmatchedTaskToolCardIsKept() {
+    // 同 prompt 但不同 call_id 的两次委派：只合并各自 call_id 匹配的那张，不串。
+    func testTwoDelegationsSamePromptMergeByCallID() {
+        var reducer = ExecutionReducer()
+        var graph = ExecutionGraph()
+        let prompt = "相同的委派 prompt"
+        let events: [AgentEvent] = [
+            .turnStarted(turnID: "t1", text: "跑两个"),
+            .toolStarted(turnID: "t1", callID: "cA",
+                         tool: ToolCall(callID: "cA", toolName: "task",
+                                        toolArgs: .object(["prompt": .string(prompt)]))),
+            .taskStarted(turnID: "t1", sessionId: "subA", parentSessionId: "root",
+                         callID: "cA", text: prompt),
+            .taskFinished(turnID: "t1", sessionId: "subA", parentSessionId: "root", text: "A done"),
+            .toolFinished(turnID: "t1", callID: "cA",
+                          result: ToolResult(callID: "cA", toolName: "task", observation: "A done", error: nil)),
+            .toolStarted(turnID: "t1", callID: "cB",
+                         tool: ToolCall(callID: "cB", toolName: "task",
+                                        toolArgs: .object(["prompt": .string(prompt)]))),
+            .taskStarted(turnID: "t1", sessionId: "subB", parentSessionId: "root",
+                         callID: "cB", text: prompt),
+            .taskFinished(turnID: "t1", sessionId: "subB", parentSessionId: "root", text: "B done"),
+            .toolFinished(turnID: "t1", callID: "cB",
+                          result: ToolResult(callID: "cB", toolName: "task", observation: "B done", error: nil)),
+            .turnFinished(turnID: "t1", text: "都跑完了", textAnnotations: []),
+        ]
+        for e in events { _ = reducer.reduce(e, into: &graph) }
+
+        let blocks = TimelineProjection().projectTurns(graph)[0].blocks
+        // 两张入口卡，两张 task 工具卡都被合并——同 prompt 不再退化。
+        let entryCards = blocks.filter { if case .childStream = $0 { return true }; return false }
+        XCTAssertEqual(entryCards.count, 2)
+        let hasTaskToolGroup = blocks.contains { block in
+            if case .toolGroup(let g) = block { return g.tools.contains { $0.toolName == "task" } }
+            return false
+        }
+        XCTAssertFalse(hasTaskToolGroup)
+    }
+
+    // 前台 run_command（无 job 入口卡，call_id 不匹配）→ 工具卡照常保留。
+    func testForegroundRunCommandToolCardIsKept() {
         var reducer = ExecutionReducer()
         var graph = ExecutionGraph()
         let events: [AgentEvent] = [
-            .turnStarted(turnID: "t1", text: "查一下"),
-            .toolStarted(turnID: "t1", callID: "c1",
-                         tool: ToolCall(callID: "c1", toolName: "task",
-                                        toolArgs: .object(["prompt": .string("prompt A")]))),
-            .taskStarted(turnID: "t1", sessionId: "sub_1", parentSessionId: "root", text: "完全不同的 prompt B"),
-            .toolFinished(turnID: "t1", callID: "c1",
-                          result: ToolResult(callID: "c1", toolName: "task", observation: "ok", error: nil)),
+            .turnStarted(turnID: "t1", text: "跑个命令"),
+            .toolStarted(turnID: "t1", callID: "fg",
+                         tool: ToolCall(callID: "fg", toolName: "run_command",
+                                        toolArgs: .object(["command": .string("ls")]))),
+            // 后台 job 用的是另一个 call_id，与前台 run_command 无关
+            .jobStarted(turnID: "t1", jobID: "job_1", callID: "bg", command: "npm install"),
+            .toolFinished(turnID: "t1", callID: "fg",
+                          result: ToolResult(callID: "fg", toolName: "run_command", observation: "a\nb", error: nil)),
             .turnFinished(turnID: "t1", text: "done", textAnnotations: []),
         ]
         for e in events { _ = reducer.reduce(e, into: &graph) }
 
         let blocks = TimelineProjection().projectTurns(graph).flatMap(\.blocks)
-        let hasTaskToolGroup = blocks.contains { block in
-            if case .toolGroup(let g) = block { return g.tools.contains { $0.toolName == "task" } }
+        let hasForegroundCard = blocks.contains { block in
+            if case .toolGroup(let g) = block { return g.tools.contains { $0.callID == "fg" } }
             return false
         }
-        XCTAssertTrue(hasTaskToolGroup, "prompt 关联不上时应保留工具卡")
+        XCTAssertTrue(hasForegroundCard, "前台 run_command 的 call_id 不匹配入口卡，应保留")
     }
 
     // MARK: - task 工具卡过渡形态（后端接通 task bracket 前，普通卡是唯一形态）
@@ -370,7 +409,7 @@ final class ChildStreamTests: XCTestCase {
     func testFixtureTransportStreamsAllBatchesInOrder() async throws {
         let transport = FixtureChildStreamTransport(
             batches: [
-                [.jobStarted(turnID: nil, jobID: "j", command: "make")],
+                [.jobStarted(turnID: nil, jobID: "j", callID: nil, command: "make")],
                 [.jobOutput(turnID: nil, jobID: "j", chunk: "a"),
                  .jobOutput(turnID: nil, jobID: "j", chunk: "b")],
                 [.jobFinished(turnID: nil, jobID: "j", exitCode: nil, err: nil, elapsedMs: nil, text: "exited")],
@@ -395,7 +434,7 @@ final class ChildStreamTests: XCTestCase {
     func testFixtureTransportStopsOnConsumerCancel() async throws {
         let transport = FixtureChildStreamTransport(
             batches: [
-                [.jobStarted(turnID: nil, jobID: "j", command: "make")],
+                [.jobStarted(turnID: nil, jobID: "j", callID: nil, command: "make")],
                 [.jobFinished(turnID: nil, jobID: "j", exitCode: nil, err: nil, elapsedMs: nil, text: "exited")],
             ],
             batchDelayNs: 50_000_000

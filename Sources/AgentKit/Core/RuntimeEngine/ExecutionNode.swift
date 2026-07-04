@@ -153,6 +153,8 @@ public struct ChildStreamNodePayload: Sendable, Hashable {
     /// task 的委派 prompt / job 的 command。
     public let title: String
     public let status: ChildStreamNodeStatus
+    /// 发起此子流的工具调用 id（task→`task` / job→`run_command`）。合并去重键。
+    public let originCallID: String?
     /// 结束后的结果摘要（task 结论 / job 收尾说明或错误）。
     public let result: String?
     public let exitCode: Int?
@@ -162,12 +164,14 @@ public struct ChildStreamNodePayload: Sendable, Hashable {
     public let output: String
 
     public init(kind: ChildStreamKind, childID: String, title: String,
-                status: ChildStreamNodeStatus, result: String? = nil,
+                status: ChildStreamNodeStatus, originCallID: String? = nil,
+                result: String? = nil,
                 exitCode: Int? = nil, elapsedMs: Int? = nil, output: String = "") {
         self.kind = kind
         self.childID = childID
         self.title = title
         self.status = status
+        self.originCallID = originCallID
         self.result = result
         self.exitCode = exitCode
         self.elapsedMs = elapsedMs

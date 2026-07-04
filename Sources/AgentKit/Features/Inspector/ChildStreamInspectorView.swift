@@ -344,7 +344,7 @@ private func previewViewModel(
     ChildStreamContentView(viewModel: previewViewModel(
         kind: .job, title: "npx skills add okx/onchainos-skills --yes -g",
         batches: [
-            [.jobStarted(turnID: nil, jobID: "job_preview",
+            [.jobStarted(turnID: nil, jobID: "job_preview", callID: nil,
                          command: "npx skills add okx/onchainos-skills --yes -g")],
             [.jobOutput(turnID: nil, jobID: "job_preview", chunk: "Cloning repository...\n")],
             [.jobOutput(turnID: nil, jobID: "job_preview", chunk: "Resolving deltas: 100%\n"),
@@ -361,7 +361,7 @@ private func previewViewModel(
     ChildStreamContentView(viewModel: previewViewModel(
         kind: .job, title: "make release",
         batches: [
-            [.jobStarted(turnID: nil, jobID: "job_preview", command: "make release"),
+            [.jobStarted(turnID: nil, jobID: "job_preview", callID: nil, command: "make release"),
              .jobOutput(turnID: nil, jobID: "job_preview", chunk: "ld: symbol not found\n"),
              .jobFinished(turnID: nil, jobID: "job_preview", exitCode: 2,
                           err: "exit code 2", elapsedMs: 4200, text: "failed")],
@@ -375,7 +375,7 @@ private func previewViewModel(
     ChildStreamContentView(viewModel: previewViewModel(
         kind: .job, title: "sleep 600",
         batches: [
-            [.jobStarted(turnID: nil, jobID: "job_preview", command: "sleep 600"),
+            [.jobStarted(turnID: nil, jobID: "job_preview", callID: nil, command: "sleep 600"),
              .jobFinished(turnID: nil, jobID: "job_preview", exitCode: nil,
                           err: nil, elapsedMs: 12000, text: "canceled")],
         ]
