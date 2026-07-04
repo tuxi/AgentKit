@@ -24,77 +24,57 @@ public final class ChildStreamViewModel {
 
     /// 子流自己的快照 — 查看器唯一数据源。
     public private(set) var snapshot: RuntimeSnapshot
-    /// 收到终态事件（task_finished / job_finished）后置位，轮询随之停止。
+    /// 子流终态：收到终态事件、或事件流自然结束（回放到尾 / socket 关闭）后置位。
     public private(set) var isFinished = false
-    /// 最近一次取数失败的描述（有事件后不再展示）。
+    /// 保留字段（空态展示用）；stream 模型下由传输层内部重试，通常保持 nil。
     public private(set) var lastError: String?
 
     private let transport: ChildStreamTransport
     private let engine: RuntimeEngine
-    private var since = 0
-    private var pollTask: Task<Void, Never>?
+    private var streamTask: Task<Void, Never>?
     private var snapshotTask: Task<Void, Never>?
 
-    /// 轮询间隔（纳秒）。fixture/测试可注入更短的间隔。
-    private let pollIntervalNs: UInt64
-
-    public init(selection: ChildStreamSelection,
-                transport: ChildStreamTransport,
-                pollIntervalNs: UInt64 = 1_000_000_000) {
+    public init(selection: ChildStreamSelection, transport: ChildStreamTransport) {
         self.selection = selection
         self.transport = transport
         self.engine = RuntimeEngine(sessionID: selection.childID)
         self.snapshot = .empty(sessionID: selection.childID)
-        self.pollIntervalNs = pollIntervalNs
     }
 
     // MARK: - Lifecycle
 
     public func start() {
-        guard pollTask == nil else { return }
+        guard streamTask == nil else { return }
 
-        let stream = engine.stateStream()
+        let snapStream = engine.stateStream()
         snapshotTask = Task { [weak self] in
-            for await snap in stream {
+            for await snap in snapStream {
                 guard let self else { return }
                 self.snapshot = snap
             }
         }
 
-        pollTask = Task { [weak self] in
-            await self?.pollLoop()
+        streamTask = Task { [weak self] in
+            guard let self else { return }
+            await self.engine.markLive()
+            // 消费一条子流事件流。job 是实时 WS（收到 job_finished 才终态），subagent 是
+            // 回放（翻页到尾自然结束）。break / 流结束都会 drop 迭代器 → 传输层 onTermination
+            // 断开 socket / 取消翻页。
+            for await event in self.transport.open(childID: self.selection.childID) {
+                if self.isTerminal(event) { self.isFinished = true }
+                await self.engine.ingest(event)
+                if self.isFinished { break }
+            }
+            self.isFinished = true
+            await self.engine.markFinished()
         }
     }
 
     public func stop() {
-        pollTask?.cancel()
-        pollTask = nil
+        streamTask?.cancel()
+        streamTask = nil
         snapshotTask?.cancel()
         snapshotTask = nil
-    }
-
-    // MARK: - Poll loop
-
-    private func pollLoop() async {
-        // 子流轮询期间视为 live — snapshot.turns 的 isLive 与旧的 `!isFinished` 一致。
-        await engine.markLive()
-        while !Task.isCancelled && !isFinished {
-            do {
-                let batch = try await transport.fetch(childID: selection.childID, since: since)
-                since = batch.nextSince
-                lastError = nil
-                for event in batch.events {
-                    if isTerminal(event) { isFinished = true }
-                    await engine.ingest(event)
-                }
-                if isFinished { await engine.markFinished() }
-            } catch {
-                // 子流可能尚未产生事件（404）或网络抖动 — 下一轮重试。
-                lastError = error.localizedDescription
-            }
-            if isFinished || Task.isCancelled { break }
-            try? await Task.sleep(nanoseconds: pollIntervalNs)
-        }
     }
 
     private func isTerminal(_ event: AgentEvent) -> Bool {
@@ -150,10 +130,11 @@ public struct ChildStreamInspectorView: View {
         }
         .task(id: selection) {
             viewModel?.stop()
-            let vm = ChildStreamViewModel(
-                selection: selection,
-                transport: PollingChildStreamTransport(client: store.client)
-            )
+            // §③ 路由：job 有实时 WS 子流；subagent 是回放-only（同步执行，打开时已结束）。
+            let transport: ChildStreamTransport = selection.kind == .job
+                ? JobLiveChildStreamTransport(client: store.client)
+                : ConversationReplayChildStreamTransport(client: store.client)
+            let vm = ChildStreamViewModel(selection: selection, transport: transport)
             viewModel = vm
             vm.start()
         }
@@ -353,8 +334,7 @@ private func previewViewModel(
 ) -> ChildStreamViewModel {
     let vm = ChildStreamViewModel(
         selection: ChildStreamSelection(childID: "job_preview", kind: kind, title: title),
-        transport: FixtureChildStreamTransport(batches: batches),
-        pollIntervalNs: 600_000_000
+        transport: FixtureChildStreamTransport(batches: batches, batchDelayNs: 600_000_000)
     )
     vm.start()
     return vm

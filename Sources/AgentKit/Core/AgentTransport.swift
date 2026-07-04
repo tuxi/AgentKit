@@ -115,6 +115,16 @@ public protocol AgentTransport: Sendable {
     /// 下一次调用传返回值里的 `nextSince`。CodeAgent backend 的游标 = 最大 `seq`。
     func getEventBatch(conversationID: String, since: Int) async throws -> AgentEventBatch
 
+    // MARK: - Job 子流（P8.7 §4 Phase C）
+
+    /// 后台 job 子流的 backlog 增量读取（`GET /v1/jobs/{id}/events?since=`）。
+    /// job 分区 seq 独立于父会话，`since` 只用 job 自己的游标。
+    func getJobEventBatch(jobID: String, since: Int) async throws -> AgentEventBatch
+
+    /// 后台 job 子流的实时只读流（`GET /v1/jobs/{id}/stream`）：先 backlog 后直播、
+    /// seq 去重，收到 `job_finished` 即终态。流被取消 / consumer 退出时自动断开。
+    func openJobStream(jobID: String) -> AsyncStream<AgentEvent>
+
     // MARK: - Assets
 
     /// Structured asset preview derived from persisted conversation events.
@@ -172,5 +182,15 @@ extension AgentTransport {
         let events = try await getEvents(conversationID: conversationID)
         let tail = since < events.count ? Array(events[since...]) : []
         return AgentEventBatch(events: tail, nextSince: max(since, events.count))
+    }
+
+    /// 默认实现：不支持 job 端点（mock / 非 CodeAgent backend）。
+    public func getJobEventBatch(jobID: String, since: Int) async throws -> AgentEventBatch {
+        throw RuntimeHTTPError.unsupported
+    }
+
+    /// 默认实现：无 job 实时流，返回立即结束的空流。
+    public func openJobStream(jobID: String) -> AsyncStream<AgentEvent> {
+        AsyncStream { $0.finish() }
     }
 }

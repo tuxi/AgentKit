@@ -142,6 +142,26 @@ struct RuntimeHTTPClient: Sendable {
         return try decoder.decode([WireFrame].self, from: data)
     }
 
+    /// `GET /v1/jobs/{id}/events[?since=N]` — 后台 job 子流 backlog（P8.7 §4 Phase C）。
+    /// 帧格式与会话 `/events` 字节一致（同一 `WireFrame` 解码器）。job 分区的 seq 与父会话
+    /// 是两套独立空间——`since` 只能用 job 自己已收帧的最大 seq，不能混用父会话游标。
+    func getJobEvents(jobID: String, since: Int = 0) async throws -> [WireFrame] {
+        var url = try resolveBaseURL()
+            .appendingPathComponent("v1/jobs")
+            .appendingPathComponent(jobID)
+            .appendingPathComponent("events")
+        if since > 0, var components = URLComponents(url: url, resolvingAgainstBaseURL: false) {
+            components.queryItems = [URLQueryItem(name: "since", value: String(since))]
+            url = components.url ?? url
+        }
+        var request = URLRequest(url: url)
+        request.httpMethod = "GET"
+
+        let (data, response) = try await session.data(for: request)
+        try validateHTTP(response, data: data)
+        return try decoder.decode([WireFrame].self, from: data)
+    }
+
     /// `GET /v1/conversations/{id}/assets/{asset_id}/preview`.
     func getAssetPreview(conversationID: String, assetID: String) async throws -> AgentAssetPreviewResponse {
         let url = try assetURL(conversationID: conversationID, assetID: assetID)

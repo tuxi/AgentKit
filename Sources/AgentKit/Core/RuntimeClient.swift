@@ -91,6 +91,14 @@ public protocol RuntimeClient: Sendable {
     /// 直读事件日志，不要求是根会话。
     func getEventBatch(conversationID: String, since: Int) async throws -> AgentEventBatch
 
+    // MARK: - Job 子流（P8.7 §4 Phase C）
+
+    /// 后台 job 子流 backlog（`GET /v1/jobs/{id}/events`）。job 分区 seq 独立于父会话。
+    func getJobEventBatch(jobID: String, since: Int) async throws -> AgentEventBatch
+
+    /// 后台 job 子流实时只读流（`GET /v1/jobs/{id}/stream`）：backlog + 直播、seq 去重。
+    func openJobStream(jobID: String) -> AsyncStream<AgentEvent>
+
     // MARK: - Assets
 
     /// Structured asset preview derived from persisted conversation events.
@@ -146,5 +154,15 @@ extension RuntimeClient {
         let events = try await getEvents(conversationID: conversationID)
         let tail = since < events.count ? Array(events[since...]) : []
         return AgentEventBatch(events: tail, nextSince: max(since, events.count))
+    }
+
+    /// 默认实现：不支持 job 端点（mock backend）。
+    public func getJobEventBatch(jobID: String, since: Int) async throws -> AgentEventBatch {
+        throw RuntimeHTTPError.unsupported
+    }
+
+    /// 默认实现：无 job 实时流（mock backend）。
+    public func openJobStream(jobID: String) -> AsyncStream<AgentEvent> {
+        AsyncStream { $0.finish() }
     }
 }

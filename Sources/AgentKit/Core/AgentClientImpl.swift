@@ -133,9 +133,41 @@ public final class CodeAgentTransport: AgentTransport, @unchecked Sendable {
 
     public func getEventBatch(conversationID: String, since: Int) async throws -> AgentEventBatch {
         let wireFrames = try await http.getEvents(conversationID: conversationID, since: since)
-        // 游标 = 已收到帧里最大的 seq（v1.2 §4）。seq 会话内单调递增但**有空洞**
-        // （底层是跨会话共享的自增 rowid），绝不能按条数推进。
-        // 未知 kind 被 compactMap 丢弃也不影响游标 —— seq 来自原始帧。
+        return Self.batch(from: wireFrames, since: since)
+    }
+
+    public func getJobEventBatch(jobID: String, since: Int) async throws -> AgentEventBatch {
+        let wireFrames = try await http.getJobEvents(jobID: jobID, since: since)
+        return Self.batch(from: wireFrames, since: since)
+    }
+
+    /// job 实时子流：复用 AgentWireSocket 的握手 / backfill / seq 去重 / 重连机制，
+    /// 只把路径切到 `/v1/jobs/{id}/stream`，backfill 走 `/v1/jobs/{id}/events`。
+    /// 只读——不注册工具、不发任何入站帧。stream 被取消时断开 socket（socket 由
+    /// onTermination 闭包持有存活）。
+    public func openJobStream(jobID: String) -> AsyncStream<AgentEvent> {
+        let socket = AgentWireSocket(environment: environment, conversationID: jobID, streamKind: .job)
+        let http = self.http
+        socket.gapFetch = { since in
+            (try? await http.getJobEvents(jobID: jobID, since: since)) ?? []
+        }
+        let inner = socket.connect()
+        return AsyncStream { continuation in
+            let pump = Task {
+                for await event in inner { continuation.yield(event) }
+                continuation.finish()
+            }
+            continuation.onTermination = { _ in
+                pump.cancel()
+                socket.disconnect()
+            }
+        }
+    }
+
+    /// wire 帧 → 事件批。游标 = 已收到帧里最大的 seq（v1.2 §4）。seq 单调递增但**有空洞**
+    /// （底层是共享自增 rowid），绝不能按条数推进；未知 kind 被 compactMap 丢弃也不影响
+    /// 游标——seq 来自原始帧。job 分区与会话分区共用此逻辑（各自的 seq 空间）。
+    private static func batch(from wireFrames: [WireFrame], since: Int) -> AgentEventBatch {
         let maxSeq = wireFrames.compactMap(\.seq).max() ?? since
         return AgentEventBatch(
             events: wireFrames.compactMap { AgentEvent.from(wire: $0) },
@@ -279,6 +311,14 @@ public final class DefaultAgentClient: RuntimeClient, @unchecked Sendable {
 
     public func getEventBatch(conversationID: String, since: Int) async throws -> AgentEventBatch {
         try await transport.getEventBatch(conversationID: conversationID, since: since)
+    }
+
+    public func getJobEventBatch(jobID: String, since: Int) async throws -> AgentEventBatch {
+        try await transport.getJobEventBatch(jobID: jobID, since: since)
+    }
+
+    public func openJobStream(jobID: String) -> AsyncStream<AgentEvent> {
+        transport.openJobStream(jobID: jobID)
     }
 
     public func getAssetPreview(conversationID: String, assetID: String) async throws -> AgentAssetPreviewResponse {

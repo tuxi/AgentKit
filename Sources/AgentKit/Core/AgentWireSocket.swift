@@ -9,6 +9,25 @@
 
 import Foundation
 
+// MARK: - Wire stream kind
+
+/// 直播 WS 的目标分区。会话流与 job 子流（P8.7 Phase C）用同一套握手/backfill/
+/// seq 去重/重连机制，只有 URL 路径不同。
+public enum WireStreamKind: Sendable {
+    /// `/v1/conversations/{id}/stream` —— 主会话双向流。
+    case conversation
+    /// `/v1/jobs/{id}/stream` —— 后台 job 只读子流（P8.7 §4 Phase C）。
+    case job
+
+    /// 直播 WS 路径。
+    func streamPath(id: String) -> String {
+        switch self {
+        case .conversation: return "v1/conversations/\(id)/stream"
+        case .job:          return "v1/jobs/\(id)/stream"
+        }
+    }
+}
+
 // MARK: - AgentWireSocket
 
 public final class AgentWireSocket: @unchecked Sendable {
@@ -17,6 +36,7 @@ public final class AgentWireSocket: @unchecked Sendable {
 
     private let environment: RuntimeEnvironment
     private let conversationID: String
+    private let streamKind: WireStreamKind
     private let decoder = JSONDecoder()
 
     /// 底层 WebSocket（来自 CoreKit，处理重连/心跳/前后台）。
@@ -64,13 +84,19 @@ public final class AgentWireSocket: @unchecked Sendable {
 
     // MARK: - Init
 
-    /// - Parameter since: 续传游标初值 = 调用方已回放事件里最大的 `seq`（0 = 无历史）。
-    ///   直播流里 `seq <= since` 的帧会被当作与历史批重叠的重复帧丢弃（§2 恢复流程）。
-    public init(environment: RuntimeEnvironment, conversationID: String, since: Int = 0) {
+    /// - Parameters:
+    ///   - since: 续传游标初值 = 调用方已回放事件里最大的 `seq`（0 = 无历史）。
+    ///     直播流里 `seq <= since` 的帧会被当作与历史批重叠的重复帧丢弃（§2 恢复流程）。
+    ///   - streamKind: 目标分区。`.job` 走 `/v1/jobs/{id}/stream`（只读子流），
+    ///     不发任何入站帧、不注册工具。默认 `.conversation`（主会话双向流）。
+    public init(environment: RuntimeEnvironment, conversationID: String,
+                since: Int = 0, streamKind: WireStreamKind = .conversation) {
         self.environment = environment
         self.conversationID = conversationID
+        self.streamKind = streamKind
         self.maxSeq = since
-        self.wsClient = WebSocketClient(identifier: "agent-wire.\(conversationID)")
+        let tag = streamKind == .job ? "job" : "agent-wire"
+        self.wsClient = WebSocketClient(identifier: "\(tag).\(conversationID)")
     }
 
     deinit {
@@ -107,10 +133,11 @@ public final class AgentWireSocket: @unchecked Sendable {
             // （旧实现把含端口的 URL 在闭包外捕获死了，重启后重连仍连旧死口）。
             // 端口未就绪（≤0 → wsURL 为 nil）时返回 nil，由 WebSocketClient 当作 preflight
             // 失败退避重试，待 runtime 起来后自然连上（前台重连由其 handleAppForeground 触发）。
+            let streamKind = self.streamKind
             self.wsClient.connectionValidatorRequest = { [weak self] in
                 guard let self,
                       let wsBase = self.environment.wsURL,
-                      let url = URL(string: "\(wsBase)/v1/conversations/\(conversationID)/stream")
+                      let url = URL(string: "\(wsBase)/\(streamKind.streamPath(id: conversationID))")
                 else { return nil }
                 return URLRequest(url: url)
             }
