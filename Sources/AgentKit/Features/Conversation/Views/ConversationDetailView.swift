@@ -286,11 +286,34 @@ private struct ChatComposer: View {
 
     @State private var text = ""
     @State private var isSending = false
+#if os(macOS)
+    @State private var composerHeight: CGFloat = 22
+    private let composerMinHeight: CGFloat = 22
+    private let composerMaxHeight: CGFloat = 120
+#endif
 
     var body: some View {
         VStack(spacing: 0) {
             Divider()
             HStack(alignment: .bottom, spacing: 8) {
+#if os(macOS)
+                MacComposerTextView(
+                    text: $text,
+                    height: $composerHeight,
+                    placeholder: placeholder,
+                    isEnabled: isEnabled,
+                    minHeight: composerMinHeight,
+                    maxHeight: composerMaxHeight,
+                    onSend: {
+                        send()
+                    }
+                )
+                .frame(height: composerHeight)
+                .padding(.horizontal, 4)
+                .padding(.vertical, 4)
+                .background(.quaternary)
+                .clipShape(RoundedRectangle(cornerRadius: 8))
+#else
                 TextField(placeholder, text: $text, axis: .vertical)
                     .textFieldStyle(.plain)
                     .lineLimit(1...5)
@@ -299,6 +322,7 @@ private struct ChatComposer: View {
                     .background(.quaternary)
                     .clipShape(RoundedRectangle(cornerRadius: 8))
                     .disabled(!isEnabled)
+#endif
 
                 Button {
                     send()
