@@ -50,6 +50,10 @@ enum ToolTranscriptFamily: Hashable {
     case create
     case edit
     case terminal
+    case projectGraph
+    case git
+    case skill
+    case web
     case other
 }
 
@@ -155,6 +159,16 @@ enum ToolTranscriptPresenter {
     }
 
     private static func title(for family: ToolTranscriptFamily, target: String?, tool: ToolNodePayload) -> String {
+        if family == .git {
+            return "Git \(titleize(tool.toolName.replacingOccurrences(of: "git_", with: "")))"
+        }
+        if family == .web {
+            let verb = titleize(tool.toolName.replacingOccurrences(of: "web_", with: ""))
+            if let target, !target.isEmpty {
+                return "Web \(verb.lowercased()): \(target)"
+            }
+            return "Web \(verb)"
+        }
         if let target, !target.isEmpty {
             return "\(verb(for: family)) \(target)"
         }
@@ -163,7 +177,7 @@ enum ToolTranscriptPresenter {
 
     private static func detail(for family: ToolTranscriptFamily, target: String?, tool: ToolNodePayload) -> String? {
         switch family {
-        case .terminal:
+        case .terminal, .git, .skill:
             return nil
         case .search:
             return nil
@@ -211,8 +225,11 @@ enum ToolTranscriptPresenter {
         if name.contains("read") || name.contains("cat") || name.contains("view") || name.contains("open") || name.contains("get") {
             return .read
         }
-        if name.contains("list") || name.contains("ls") {
+        if name.contains("list") || name.contains("ls") { 
             return .list
+        }
+        if name.hasPrefix("web_") || name.hasPrefix("web.") {
+            return .web
         }
         if name.contains("grep") || name.contains("search") || name.contains("find") || name == "rg" {
             return .search
@@ -225,6 +242,15 @@ enum ToolTranscriptPresenter {
         }
         if name.contains("bash") || name.contains("shell") || name.contains("exec") || name.contains("terminal") || name.contains("run") || name.contains("cmd") {
             return .terminal
+        }
+        if name.contains("project_graph") {
+            return .projectGraph
+        }
+        if name.contains("git") {
+            return .git
+        }
+        if name.contains("load_skill") || name.contains("skill") {
+            return .skill
         }
         return .other
     }
@@ -282,6 +308,10 @@ enum ToolTranscriptPresenter {
         case .create: return "Create"
         case .edit: return "Edit"
         case .terminal: return "Run"
+        case .projectGraph: return "Query"
+        case .git: return "Git"
+        case .skill: return "Load skill"
+        case .web: return "Search web"
         case .other: return fallback
         }
     }
@@ -294,6 +324,10 @@ enum ToolTranscriptPresenter {
         case .create: return count == 1 ? "file" : "files"
         case .edit: return count == 1 ? "file" : "files"
         case .terminal: return count == 1 ? "command" : "commands"
+        case .projectGraph: return count == 1 ? "query" : "queries"
+        case .git: return count == 1 ? "operation" : "operations"
+        case .skill: return count == 1 ? "skill" : "skills"
+        case .web: return count == 1 ? "search" : "searches"
         case .other: return count == 1 ? "tool" : "tools"
         }
     }
@@ -334,6 +368,14 @@ enum ToolTranscriptPresenter {
             return count == 1 ? "edited a file" : "edited \(count) files"
         case .terminal:
             return count == 1 ? "ran a command" : "ran \(count) commands"
+        case .projectGraph:
+            return count == 1 ? "queried project graph" : "ran \(count) graph queries"
+        case .git:
+            return count == 1 ? "ran git operation" : "ran \(count) git operations"
+        case .skill:
+            return count == 1 ? "loaded a skill" : "loaded \(count) skills"
+        case .web:
+            return count == 1 ? "searched the web" : "ran \(count) web searches"
         case .other:
             return count == 1 ? "used a tool" : "used \(count) tools"
         }

@@ -1470,6 +1470,10 @@ private struct TranscriptAttributedBuilder {
         case .create: return "+"
         case .edit: return "±"
         case .terminal: return "$"
+        case .projectGraph: return "⌕"
+        case .git: return "⎇"
+        case .skill: return "⚙"
+        case .web: return "⌂"
         case .other: return "◇"
         }
     }
@@ -1489,9 +1493,9 @@ private struct TranscriptAttributedBuilder {
             switch family {
             case .read, .list:
                 return secondaryColor
-            case .search:
+            case .search, .projectGraph, .skill, .web:
                 return accentColor
-            case .create, .edit:
+            case .create, .edit, .git:
                 return diffAddedColor
             case .terminal:
                 return runningColor
