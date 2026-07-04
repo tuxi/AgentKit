@@ -25,11 +25,12 @@ public struct ConversationDetailView: View {
         self.conversation = conversation
         self.viewModel = nil
     }
-
+   
     /// 带 ViewModel 的初始化。
     public init(conversation: ConversationRef?, viewModel: ConversationViewModel) {
         self.conversation = conversation
         self.viewModel = viewModel
+        
     }
 
     public var body: some View {
@@ -339,6 +340,14 @@ private struct ChatComposer: View {
 
 // MARK: - ApprovalBar
 
+/// 文本高度测量 PreferenceKey。
+private struct TextHeightKey: PreferenceKey {
+    static let defaultValue: CGFloat = 0
+    static func reduce(value: inout CGFloat, nextValue: () -> CGFloat) {
+        value = nextValue()
+    }
+}
+
 /// 审批拦截栏 — 显示在输入框上方，阻断 input pipeline。
 /// 对标 Claude Code / Cursor：审批不是消息，而是阻塞输入的状态。
 
@@ -365,6 +374,7 @@ private struct ApprovalBar: View {
     let onAllowOnce: () -> Void      // Allow once 3 ↩
 
     @State private var scope: ApprovalScope = .local
+    @State private var contentHeight: CGFloat = 0
 
     var body: some View {
         VStack(spacing: 0) {
@@ -427,15 +437,20 @@ private struct ApprovalBar: View {
                     }
 
                     if let args = request.toolArgs, case .object(let dict) = args, !dict.isEmpty {
+                        // 测量文本真实高度：≤10行自适应；>10行固定180pt可滚动
                         ScrollView(.vertical, showsIndicators: true) {
-                            Text(argsSummary(dict))
-                                .font(.system(.caption, design: .monospaced))
-                                .foregroundStyle(.secondary)
-                                .frame(maxWidth: .infinity, alignment: .leading)
-                                .fixedSize(horizontal: false, vertical: true)
+                            argsText(dict)
+                                .background(GeometryReader { geo in
+                                    Color.clear.preference(
+                                        key: TextHeightKey.self,
+                                        value: geo.size.height
+                                    )
+                                })
                         }
-                        .frame(minHeight: 0, idealHeight: 14, maxHeight: 180, alignment: .topLeading)
-                        .fixedSize(horizontal: false, vertical: true) // 让外层 ScrollView 遵循内部 Text 的理想垂直高度
+                        .onPreferenceChange(TextHeightKey.self) { contentHeight = $0 }
+                        .frame(height: contentHeight > 0 ? min(contentHeight, 180) : nil)
+                        .animation(.none, value: contentHeight)
+                        
                     } else if !request.isMCP {
                         Text("No arguments provided.")
                             .font(.system(.caption, design: .monospaced))
@@ -493,6 +508,13 @@ private struct ApprovalBar: View {
 
     private func argsSummary(_ dict: [String: JSONValue]) -> String {
         dict.map { "\($0.key): \($0.value.stringValue)" }.joined(separator: "\n")
+    }
+
+    private func argsText(_ dict: [String: JSONValue]) -> some View {
+        Text(argsSummary(dict))
+            .font(.system(.caption, design: .monospaced))
+            .foregroundStyle(.secondary)
+            .frame(maxWidth: .infinity, alignment: .leading)
     }
 }
 
