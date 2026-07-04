@@ -54,6 +54,9 @@ enum ToolTranscriptFamily: Hashable {
     case git
     case skill
     case web
+    case todo
+    case plan
+    case workflow
     case other
 }
 
@@ -95,7 +98,7 @@ enum ToolTranscriptPresenter {
             family: family,
             statusTone: statusTone(for: tool),
             statusText: statusText(for: tool),
-            title: title(for: family, target: displayTarget, tool: tool),
+            title: title(for: family, target: family == .terminal ? target : displayTarget, tool: tool),
             detail: detail(for: family, target: target, tool: tool),
             elapsed: tool.elapsedMs.map(formatElapsed),
             changeSummary: changeSummary(for: tool),
@@ -169,6 +172,33 @@ enum ToolTranscriptPresenter {
             }
             return "Web \(verb)"
         }
+        if family == .todo {
+            return "Todo: Write todos"
+        }
+        if family == .plan {
+            return tool.toolName == "enter_plan_mode"
+                ? "Plan: Enter plan mode"
+                : "Plan: Propose plan"
+        }
+        if family == .workflow {
+            if let target, !target.isEmpty {
+                return "Workflow: \(target)"
+            }
+            return "Workflow"
+        }
+        if family == .terminal {
+            if let target, !target.isEmpty {
+                return "Run \(terminalCommandPrefix(target))"
+            }
+            return "Run command"
+        }
+        // download_file — show filename not URL.
+        if tool.toolName == "download_file" {
+            if let target, !target.isEmpty {
+                return "Download \(shortDisplayName(target))"
+            }
+            return "Download file"
+        }
         if let target, !target.isEmpty {
             return "\(verb(for: family)) \(target)"
         }
@@ -177,7 +207,7 @@ enum ToolTranscriptPresenter {
 
     private static func detail(for family: ToolTranscriptFamily, target: String?, tool: ToolNodePayload) -> String? {
         switch family {
-        case .terminal, .git, .skill:
+        case .terminal, .git, .skill, .plan, .todo, .workflow:
             return nil
         case .search:
             return nil
@@ -222,6 +252,13 @@ enum ToolTranscriptPresenter {
 
     private static func family(for tool: ToolNodePayload) -> ToolTranscriptFamily {
         let name = tool.toolName.lowercased()
+        // Agent self-orchestration — exact match before keyword rules.
+        // (todo_write contains "write" which would otherwise hit .create.)
+        if name == "todo_write" { return .todo }
+        if name == "enter_plan_mode" || name == "propose_plan" { return .plan }
+        if name == "plan_workflow" { return .workflow }
+        // download_file — pulls external content, semantically read.
+        if name == "download_file" { return .read }
         if name.contains("read") || name.contains("cat") || name.contains("view") || name.contains("open") || name.contains("get") {
             return .read
         }
@@ -312,6 +349,9 @@ enum ToolTranscriptPresenter {
         case .git: return "Git"
         case .skill: return "Load skill"
         case .web: return "Search web"
+        case .todo: return "Todo"
+        case .plan: return "Plan"
+        case .workflow: return "Workflow"
         case .other: return fallback
         }
     }
@@ -328,6 +368,9 @@ enum ToolTranscriptPresenter {
         case .git: return count == 1 ? "operation" : "operations"
         case .skill: return count == 1 ? "skill" : "skills"
         case .web: return count == 1 ? "search" : "searches"
+        case .todo: return count == 1 ? "item" : "items"
+        case .plan: return count == 1 ? "plan" : "plans"
+        case .workflow: return count == 1 ? "workflow" : "workflows"
         case .other: return count == 1 ? "tool" : "tools"
         }
     }
@@ -376,6 +419,12 @@ enum ToolTranscriptPresenter {
             return count == 1 ? "loaded a skill" : "loaded \(count) skills"
         case .web:
             return count == 1 ? "searched the web" : "ran \(count) web searches"
+        case .todo:
+            return count == 1 ? "wrote todos" : "wrote \(count) todo lists"
+        case .plan:
+            return count == 1 ? "entered plan mode" : "made \(count) plans"
+        case .workflow:
+            return count == 1 ? "ran a workflow" : "ran \(count) workflows"
         case .other:
             return count == 1 ? "used a tool" : "used \(count) tools"
         }
@@ -427,6 +476,19 @@ enum ToolTranscriptPresenter {
             return String(value.prefix(49)) + "..."
         }
         return value
+    }
+
+    /// Extracts a compact command prefix from a full shell command string.
+    /// "git add file1 file2..." → "git add", "ls /some/path" → "ls".
+    private static func terminalCommandPrefix(_ command: String) -> String {
+        let tokens = command.split(separator: " ", omittingEmptySubsequences: true)
+        guard !tokens.isEmpty else { return command }
+        // For two-token git/docker/npm/cargo/etc subcommands, show both tokens.
+        let knownSub = Set(["git", "docker", "npm", "yarn", "cargo", "swift", "go", "rustc", "pip", "pip3", "brew", "bundle", "pod", "xcodebuild", "make", "cmake", "curl", "wget"])
+        if let first = tokens.first, knownSub.contains(String(first)), tokens.count >= 2 {
+            return "\(first) \(tokens[1])"
+        }
+        return String(tokens[0])
     }
 
     private static func titleize(_ name: String) -> String {
