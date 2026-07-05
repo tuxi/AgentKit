@@ -13,6 +13,7 @@ public struct SettingsView: View {
     @Environment(\.dismiss) private var dismiss
     @State private var settings = AgentSettingsStore()
     @State private var showKey = false
+    @State private var showTavilyKey = false
 
     public init() {}
 
@@ -33,6 +34,30 @@ public struct SettingsView: View {
                     Text("DeepSeek API Key")
                 } footer: {
                     Text("存于设备钥匙串（Keychain），不会上传、不进源码。")
+                }
+
+                Section {
+                    HStack {
+                        if showTavilyKey {
+                            TextField("tvly-…", text: $settings.tavilyApiKey)
+                                .autocorrectionDisabled()
+                                #if os(iOS)
+                                .textInputAutocapitalization(.never)
+                                #endif
+                        } else {
+                            SecureField("tvly-…", text: $settings.tavilyApiKey)
+                        }
+                        Button {
+                            showTavilyKey.toggle()
+                        } label: {
+                            Image(systemName: showTavilyKey ? "eye.slash" : "eye")
+                        }
+                        .buttonStyle(.borderless)
+                    }
+                } header: {
+                    Text("Tavily API Key")
+                } footer: {
+                    Text("用于联网搜索，存于设备钥匙串（Keychain）。")
                 }
 
                 Section("模型") {

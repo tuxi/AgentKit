@@ -16,6 +16,7 @@ public enum AgentSettings {
 
     public static let keychainService = "com.codeagent.runtime"
     public static let apiKeyAccount = "deepseek_api_key"
+    public static let tavilyApiKeyAccount = "tavily_api_key"
     static let modelDefaultsKey = "code_agent.runtime.model"
 
     static let keychain = KeychainStore(service: keychainService)
@@ -28,6 +29,7 @@ public enum AgentSettings {
     // MARK: - Reads（runtime 用）
 
     public static var apiKey: String { keychain.string(for: apiKeyAccount) ?? "" }
+    public static var tavilyApiKey: String { keychain.string(for: tavilyApiKeyAccount) ?? "" }
 
     /// 已选模型别名。**清洗**：若持久化的值不在 `availableModels`（例如旧版本存过的非法名）
     /// → 回退到 ""，避免把 runtime 不认得的 modelName 传给 MobileStart 导致启动崩溃。
@@ -40,8 +42,9 @@ public enum AgentSettings {
     /// 用 JSONEncoder 转义，避免 key 中的特殊字符破坏 JSON。
     public static func secretsJSON() -> String {
         let key = apiKey
+        let tavilyApiKey = tavilyApiKey
         guard !key.isEmpty else { return "{}" }
-        guard let data = try? JSONEncoder().encode(["DEEPSEEK_API_KEY": key]),
+        guard let data = try? JSONEncoder().encode(["DEEPSEEK_API_KEY": key, "TAVILY_API_KEY": tavilyApiKey]),
               let json = String(data: data, encoding: .utf8) else {
             return "{}"
         }
@@ -56,10 +59,12 @@ public enum AgentSettings {
 public final class AgentSettingsStore {
 
     public var apiKey: String
+    public var tavilyApiKey: String
     public var model: String
 
     public init() {
         self.apiKey = AgentSettings.apiKey
+        self.tavilyApiKey = AgentSettings.tavilyApiKey
         self.model = AgentSettings.model
     }
 
@@ -73,6 +78,10 @@ public final class AgentSettingsStore {
         AgentSettings.keychain.set(
             apiKey.trimmingCharacters(in: .whitespacesAndNewlines),
             for: AgentSettings.apiKeyAccount
+        )
+        AgentSettings.keychain.set(
+            tavilyApiKey.trimmingCharacters(in: .whitespacesAndNewlines),
+            for: AgentSettings.tavilyApiKeyAccount
         )
         UserDefaults.standard.set(model, forKey: AgentSettings.modelDefaultsKey)
     }
