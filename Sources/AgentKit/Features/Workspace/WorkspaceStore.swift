@@ -142,10 +142,12 @@ public final class WorkspaceStore {
     public func handleAppBecameActive() async {
         #if os(iOS)
         let wasAlive = AgentRuntime.shared.isAlive
-        _ = try? AgentRuntime.shared.ensureStarted()
+        // 前台探活：iOS 挂起会回收回环 listening socket，但指针/端口仍在 → 指针存活≠listener存活。
+        // ensureHealthy() 探 /healthz，死则重启 runtime（新端口，会话从 DB 重载），杜绝「回来后恒 -1004」。
+        let healthy = await RuntimeConnectionMonitor.shared.ensureHealthy()
         await listViewModel.refresh()
 
-        guard wasAlive else { return }
+        guard wasAlive, healthy else { return }
         await resumeCurrentConversation(silent: true)
         #else
         await listViewModel.refresh()

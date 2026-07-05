@@ -34,7 +34,41 @@ public struct RuntimeSnapshot: Sendable {
     /// When the current turn started (turn_started → turn_finished). Non-nil =
     /// the agent is actively working on a turn. Drives the live working indicator.
     public let turnStartedAt: Date?
-
+    
+    static let mcpGithubMock = ApprovalRequest(
+        id: "req_mcp_003",
+        toolName: "mcp__github__create_issue",
+        toolArgs: .object([
+            "owner": .string("claudecode-org"),
+            "repo": .string("flux-mcp-server"),
+            "title": .string("Bug: Memory leak in binary tracker stream pipeline"),
+            "body": .string("The file watcher service retains reference cycles when handling rapid git status modifications in background compilation workers.")
+        ]),
+        deadlineMs: nil, // 永不超时
+        sessionId: "session_flux_123",
+        turnId: "turn_007"
+    )
+    static let megaArgsMock = ApprovalRequest(
+        id: "req_write_004",
+        toolName: "write_file",
+        toolArgs: .object([
+            "path": .string("src/core/pipeline/state.go"),
+            "content": .string("package pipeline\n\nimport (\n\t\"context\"\n\t\"fmt\"\n)\n\ntype State struct {\n\tID        string\n\tStatus    string\n\tIsChecked bool\n}\n\nfunc NewState(id string) *State {\n\treturn &State{\n\t\tID: id,\n\t\tStatus: \"idle\",\n\t}\n}\n\nfunc (s *State) Update(ctx context.Context, nextStatus string) error {\n\tif s.Status == \"running\" {\n\t\treturn fmt.Errorf(\"pipeline is already busy\")\n\t}\n\ts.Status = nextStatus\n\treturn nil\n}")
+        ]),
+        deadlineMs: 60000,
+        sessionId: "session_flux_123",
+        turnId: "turn_008"
+    )
+    static let gitRemoveBinaryMock = ApprovalRequest(
+        id: "req_git_001",
+        toolName: "run_command",
+        toolArgs: .object([
+            "command": .string("git commit --quiet -m \"chore: untrack prebuilt flux-mcp-server binary (already in .gitignore)\"\n\nThe 8.4MB binary was committed before being added to .gitignore, so it stayed tracked and went stale. Remove from index; .gitignore already covers it, so fresh builds won't re-add it.\n\nCo-Authored-By: Claude Opus 4.8 <noreply@anthropic.com> -- flux-mcp-server && echo \"committed\" && git log --oneline -1 && echo \"=== remaining uncommitted (diagnostics + .mcp.json) ===\" && git status --shortpackage pipeline\n\nimport (\n\t\"context\"\n\t\"fmt\"\n)\n\ntype State struct {\n\tID        string\n\tStatus    string\n\tIsChecked bool\n}\n\nfunc NewState(id string) *State {\n\treturn &State{\n\t\tID: id,\n\t\tStatus: \"idle\",\n\t}\n}\n\nfunc (s *State) Update(ctx context.Context, nextStatus string) error {\n\tif s.Status == \"running\" {\n\t\treturn fmt.Errorf(\"pipeline is already busy\")\n\t}\n\ts.Status = nextStatus\n\treturn nil\n}")
+        ]),
+        deadlineMs: 30000,
+        sessionId: "session_flux_123",
+        turnId: "turn_005"
+    )
     public init(timeline: [ExecutionNode],
                 turns: [ConversationTurn] = [],
                 pendingApproval: ApprovalRequest? = nil,
@@ -55,6 +89,11 @@ public struct RuntimeSnapshot: Sendable {
         self.generation = generation
         self.modelStartedAt = modelStartedAt
         self.turnStartedAt = turnStartedAt
+//        if arc4random() % 2 == 0 {
+//            self.pendingApproval = Self.gitRemoveBinaryMock
+//        } else {
+//            self.pendingApproval = Self.mcpGithubMock
+//        }
     }
 
     /// Empty snapshot for initial state.

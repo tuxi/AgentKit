@@ -44,6 +44,37 @@ struct ConversationListView: View {
         }
     }
 
+    #if os(iOS)
+    /// runtime 连接状态横幅：重连中显示进度，连接失败显示重试按钮。连接正常时不渲染。
+    @ViewBuilder
+    private var connectionBanner: some View {
+        switch RuntimeConnectionMonitor.shared.state {
+        case .reconnecting:
+            Label("正在重连运行时…", systemImage: "arrow.triangle.2.circlepath")
+                .foregroundStyle(.secondary)
+                .font(.caption)
+        case .disconnected:
+            HStack {
+                Label("运行时连接失败", systemImage: "exclamationmark.triangle")
+                    .foregroundStyle(.orange)
+                    .font(.caption)
+                Spacer()
+                Button("重试") {
+                    Task {
+                        if await RuntimeConnectionMonitor.shared.ensureHealthy() {
+                            await viewModel.refresh()
+                        }
+                    }
+                }
+                .font(.caption)
+                .buttonStyle(.borderless)
+            }
+        case .connected, .connecting:
+            EmptyView()
+        }
+    }
+    #endif
+
     var body: some View {
         let listRevision = viewModel.revision
 
@@ -58,11 +89,23 @@ struct ConversationListView: View {
                 .listRowSeparator(.hidden)
             }
 
+            #if os(iOS)
+            connectionBanner
+            // 连接类错误由 connectionBanner 呈现；其余错误才用原始文案，避免与横幅重复。
+            if RuntimeConnectionMonitor.shared.state == .connected
+                || RuntimeConnectionMonitor.shared.state == .connecting,
+               let error = viewModel.errorMessage {
+                Label(error, systemImage: "exclamationmark.triangle")
+                    .foregroundStyle(.secondary)
+                    .font(.caption)
+            }
+            #else
             if let error = viewModel.errorMessage {
                 Label(error, systemImage: "exclamationmark.triangle")
                     .foregroundStyle(.secondary)
                     .font(.caption)
             }
+            #endif
 
             if !viewModel.isLoading && filteredConversations.isEmpty && !searchText.isEmpty {
                 ContentUnavailableView.search(text: searchText)

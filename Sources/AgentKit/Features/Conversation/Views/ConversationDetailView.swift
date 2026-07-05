@@ -163,6 +163,7 @@ public struct ConversationDetailView: View {
                             : "输入消息…",
                         isEnabled: !isPaused && vm.snapshot.pendingApproval == nil && vm.snapshot.pendingPlanApproval == nil
                     ) { text in
+                        let text = text.trimmingCharacters(in: .whitespacesAndNewlines)
                         await vm.send(input: .text(text))
                         return true
                     }

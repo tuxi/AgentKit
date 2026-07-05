@@ -217,6 +217,7 @@ struct RuntimeHTTPClient: Sendable {
         let url = try resolveBaseURL().appendingPathComponent("healthz")
         var request = URLRequest(url: url)
         request.httpMethod = "GET"
+        request.timeoutInterval = 3   // 存活探针：死 socket 即刻 -1004；挂死的 server 也以此为界，别拖住恢复
 
         let (data, response) = try await session.data(for: request)
         guard let httpResponse = response as? HTTPURLResponse,

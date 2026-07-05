@@ -53,12 +53,16 @@ public final class ConversationListViewModel {
         errorMessage = nil
         defer { isLoading = false }
 
+        var didAttemptRecover = false // -1004 反应式恢复只做一次，防重启风暴
         let maxAttempts = 30          // ≈ 30 × 150ms = 4.5s，覆盖冷启动 start() 的延迟
         for attempt in 1...maxAttempts {
             do {
                 conversations = try await client.listConversations()
                 revision += 1
                 errorMessage = nil
+                #if os(iOS)
+                RuntimeConnectionMonitor.shared.markConnected()
+                #endif
                 return
             } catch {
                 if let httpError = error as? RuntimeHTTPError,
@@ -67,11 +71,37 @@ public final class ConversationListViewModel {
                     try? await Task.sleep(for: .milliseconds(150))
                     continue            // runtime 尚未 start → 等端口就绪重试
                 }
+                #if os(iOS)
+                // listener 被 iOS 挂起回收 → -1004。探活+重启一次，成功则重试本次拉取。
+                if Self.isCannotConnect(error), !didAttemptRecover {
+                    didAttemptRecover = true
+                    if await RuntimeConnectionMonitor.shared.ensureHealthy() {
+                        continue
+                    }
+                }
+                #endif
                 errorMessage = error.localizedDescription
                 return
             }
         }
     }
+
+    #if os(iOS)
+    /// 判断是否「连不上端口」类错误（回环 listener 已死），用于触发 runtime 重启恢复。
+    private static func isCannotConnect(_ error: Error) -> Bool {
+        let ns = error as NSError
+        guard ns.domain == NSURLErrorDomain else { return false }
+        switch ns.code {
+        case NSURLErrorCannotConnectToHost,   // -1004
+             NSURLErrorCannotFindHost,        // -1003
+             NSURLErrorNetworkConnectionLost, // -1005
+             NSURLErrorTimedOut:              // -1001
+            return true
+        default:
+            return false
+        }
+    }
+    #endif
 
     /// 新建会话。
     /// - Parameter workspacePath: 工作区路径（v1 忽略，但协议要求写入）。
