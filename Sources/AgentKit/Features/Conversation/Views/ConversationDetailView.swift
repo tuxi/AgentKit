@@ -161,7 +161,11 @@ public struct ConversationDetailView: View {
                             : (vm.snapshot.pendingApproval != nil || vm.snapshot.pendingPlanApproval != nil)
                             ? "审批中 — 请选择「允许」或「拒绝」"
                             : "输入消息…",
-                        isEnabled: !isPaused && vm.snapshot.pendingApproval == nil && vm.snapshot.pendingPlanApproval == nil
+                        isEnabled: !isPaused && vm.snapshot.pendingApproval == nil && vm.snapshot.pendingPlanApproval == nil,
+                        isTurnRunning: vm.lifecycleStatus == "running",
+                        onStop: {
+                            Task { await vm.cancelTurn() }
+                        }
                     ) { text in
                         let text = text.trimmingCharacters(in: .whitespacesAndNewlines)
                         await vm.send(input: .text(text))
@@ -283,6 +287,8 @@ private struct ChatComposer: View {
 
     let placeholder: String
     let isEnabled: Bool
+    var isTurnRunning: Bool = false
+    var onStop: (() -> Void)? = nil
     let onSend: (String) async -> Bool
 
     @State private var text = ""
@@ -326,16 +332,24 @@ private struct ChatComposer: View {
 #endif
 
                 Button {
-                    send()
+                    if isTurnRunning {
+                        onStop?()
+                    } else {
+                        send()
+                    }
                 } label: {
-                    if isSending {
+                    if isTurnRunning {
+                        Image(systemName: "stop.circle.fill")
+                            .font(.title2)
+                            .foregroundStyle(.red)
+                    } else if isSending {
                         ProgressView().controlSize(.small)
                     } else {
                         Image(systemName: "arrow.up.circle.fill")
                             .font(.title2)
                     }
                 }
-                .disabled(!canSend)
+                .disabled(!isTurnRunning && !canSend)
                 .buttonStyle(.plain)
             }
             .padding(.horizontal, 12)
@@ -348,7 +362,7 @@ private struct ChatComposer: View {
     }
 
     private var canSend: Bool {
-        isEnabled && !trimmed.isEmpty && !isSending
+        isEnabled && !trimmed.isEmpty && !isSending && !isTurnRunning
     }
 
     private func send() {

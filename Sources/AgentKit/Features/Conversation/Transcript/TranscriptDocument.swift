@@ -59,8 +59,7 @@ enum TurnTranscriptBuilder {
         var builder = TranscriptAttributedBuilder(assetIndex: assetIndex)
 
         if let user = turn.userPrompt {
-            builder.appendHeading("You")
-            builder.appendMarkdown(user.text)
+            builder.appendUserPrompt(user.text)
             builder.appendBlankLine()
         }
 
@@ -285,6 +284,24 @@ private struct TranscriptAttributedBuilder {
 
     mutating func appendHeading(_ text: String) {
         append(text + "\n", attributes: headingAttributes)
+        copyParts.append(text)
+    }
+
+    /// User prompt as a right-side message lane. The text remains left-aligned
+    /// for readable wrapping; `TranscriptTextContainer` constrains this block
+    /// to the lane and the renderer paints the lane background.
+    mutating func appendUserPrompt(_ text: String) {
+        let block = makeBlock(.userPrompt)
+        var attrs = bodyAttributes
+        if let style = paragraphStyle(spacingAfter: 2).mutableCopy() as? NSMutableParagraphStyle {
+            style.alignment = .left
+            style.firstLineHeadIndent = userBubbleHorizontalPadding
+            style.headIndent = userBubbleHorizontalPadding
+            style.tailIndent = -userBubbleHorizontalPadding
+            attrs[.paragraphStyle] = style
+        }
+        attrs[.transcriptBlock] = block
+        appendTextWithAssetLinks(text.trimmingCharacters(in: .whitespacesAndNewlines), attributes: attrs)
         copyParts.append(text)
     }
 
@@ -1303,6 +1320,10 @@ private struct TranscriptAttributedBuilder {
 
     private var blockHorizontalPadding: CGFloat {
         TranscriptTheme.blockHorizontalPadding
+    }
+
+    private var userBubbleHorizontalPadding: CGFloat {
+        TranscriptTheme.userBubbleHorizontalPadding
     }
 
     private var bodyFontSize: CGFloat {

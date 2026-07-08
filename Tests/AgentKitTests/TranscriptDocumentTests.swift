@@ -1028,6 +1028,31 @@ final class TranscriptDocumentTests: XCTestCase {
         XCTAssertNotNil(attrs[.font])
     }
 
+    func testUserPromptRendersAsLeftAlignedBubbleLane() {
+        let turn = ConversationTurn(
+            id: "turn",
+            userPrompt: MessageNodePayload(role: .user, text: "**ship it**"),
+            blocks: [],
+            footer: nil,
+            isLive: false
+        )
+
+        let transcript = TurnTranscriptBuilder.build(
+            turn: turn,
+            state: TranscriptDocumentState()
+        )
+
+        XCTAssertFalse(transcript.attributedString.string.contains("You"))
+        XCTAssertTrue(transcript.copyText.contains("**ship it**"))
+
+        let attrs = attributes(in: transcript.attributedString, for: "**ship it**")
+        XCTAssertEqual((attrs[.transcriptBlock] as? TranscriptBlockValue)?.kind, .userPrompt)
+        let paragraphStyle = attrs[.paragraphStyle] as? NSParagraphStyle
+        XCTAssertEqual(paragraphStyle?.alignment, .left)
+        XCTAssertEqual(paragraphStyle?.headIndent, TranscriptTheme.userBubbleHorizontalPadding)
+        XCTAssertEqual(paragraphStyle?.tailIndent, -TranscriptTheme.userBubbleHorizontalPadding)
+    }
+
     func testExpandedDiffOutputHasLineColors() {
         let diff = """
         @@ -1,2 +1,2 @@

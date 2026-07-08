@@ -93,6 +93,60 @@ enum TranscriptTextApplier {
 
 // MARK: - Block decoration layout manager
 
+/// Gives selected transcript blocks their own layout geometry while keeping
+/// everything in one native text view, so selection can cross user/assistant
+/// boundaries. User prompts occupy a right-side lane with left-aligned text;
+/// this is layout, not a paragraph alignment trick.
+final class TranscriptTextContainer: NSTextContainer {
+
+    override func lineFragmentRect(
+        forProposedRect proposedRect: CGRect,
+        at characterIndex: Int,
+        writingDirection baseWritingDirection: NSWritingDirection,
+        remaining remainingRect: UnsafeMutablePointer<CGRect>?
+    ) -> CGRect {
+        let rect = super.lineFragmentRect(
+            forProposedRect: proposedRect,
+            at: characterIndex,
+            writingDirection: baseWritingDirection,
+            remaining: remainingRect
+        )
+        guard isUserPrompt(at: characterIndex), rect.width > 0 else { return rect }
+
+        let laneWidth = TranscriptTheme.userBubbleLaneWidth(for: rect.width)
+        guard laneWidth > 0, laneWidth < rect.width else { return rect }
+        remainingRect?.pointee = .zero
+        return CGRect(
+            x: rect.maxX - laneWidth,
+            y: rect.minY,
+            width: laneWidth,
+            height: rect.height
+        )
+    }
+
+    private func isUserPrompt(at characterIndex: Int) -> Bool {
+        guard let textStorage = layoutManager?.textStorage,
+              textStorage.length > 0 else {
+            return false
+        }
+
+        let clamped = min(max(characterIndex, 0), textStorage.length - 1)
+        if blockKind(at: clamped) == .userPrompt {
+            return true
+        }
+        return clamped > 0 && blockKind(at: clamped - 1) == .userPrompt
+    }
+
+    private func blockKind(at index: Int) -> TranscriptBlockKind? {
+        let block = layoutManager?.textStorage?.attribute(
+            .transcriptBlock,
+            at: index,
+            effectiveRange: nil
+        ) as? TranscriptBlockValue
+        return block?.kind
+    }
+}
+
 /// Draws the transcript's block-level chrome behind the text:
 /// - `.transcriptBlock` runs get a full-width rounded background
 ///   (code/table/error) or per-run stripes (diff lines) or a leading
@@ -148,6 +202,31 @@ final class TranscriptLayoutManager: NSLayoutManager {
                     height: 1
                 )
                 Self.fill(line, color: TranscriptTheme.hairline, radius: 0.5)
+                return
+            }
+
+            if block.kind == .userPrompt {
+                var lane = CGRect.null
+                var used = CGRect.null
+                self.enumerateLineFragments(forGlyphRange: glyphRange) { rect, usedRect, _, _, _ in
+                    lane = lane.union(rect)
+                    used = used.union(usedRect)
+                }
+                guard !lane.isNull, let fill = TranscriptTheme.blockFill(for: .userPrompt) else { return }
+                let verticalPadding = TranscriptTheme.userBubbleVerticalPadding
+                let contentY = used.isNull ? lane.minY : used.minY
+                let contentHeight = used.isNull ? lane.height : used.height
+                let bubble = CGRect(
+                    x: origin.x + lane.minX,
+                    y: origin.y + contentY - verticalPadding,
+                    width: lane.width,
+                    height: contentHeight + verticalPadding * 2
+                )
+                Self.fillUnclipped(
+                    bubble,
+                    color: fill,
+                    radius: TranscriptTheme.blockCornerRadius(for: .userPrompt)
+                )
                 return
             }
 
@@ -214,6 +293,25 @@ final class TranscriptLayoutManager: NSLayoutManager {
         UIBezierPath(roundedRect: rect, cornerRadius: radius).fill()
         #endif
     }
+
+    private static func fillUnclipped(_ rect: CGRect, color: TranscriptPlatformColor, radius: CGFloat) {
+        guard rect.width > 0, rect.height > 0 else { return }
+        #if os(macOS)
+        NSGraphicsContext.saveGraphicsState()
+        NSGraphicsContext.current?.cgContext.resetClip()
+        fill(rect, color: color, radius: radius)
+        NSGraphicsContext.restoreGraphicsState()
+        #else
+        guard let context = UIGraphicsGetCurrentContext() else {
+            fill(rect, color: color, radius: radius)
+            return
+        }
+        context.saveGState()
+        context.resetClip()
+        fill(rect, color: color, radius: radius)
+        context.restoreGState()
+        #endif
+    }
 }
 
 #if os(macOS)
@@ -232,7 +330,7 @@ private struct PlatformTranscriptTextView: NSViewRepresentable {
         let textStorage = NSTextStorage()
         let layoutManager = TranscriptLayoutManager()
         textStorage.addLayoutManager(layoutManager)
-        let textContainer = NSTextContainer(
+        let textContainer = TranscriptTextContainer(
             containerSize: NSSize(width: 0, height: CGFloat.greatestFiniteMagnitude)
         )
         layoutManager.addTextContainer(textContainer)
@@ -241,7 +339,9 @@ private struct PlatformTranscriptTextView: NSViewRepresentable {
         textView.isEditable = false
         textView.isSelectable = true
         textView.drawsBackground = false
-        textView.textContainerInset = .zero
+        // Small vertical inset so block chrome that outsets beyond the first/
+        // last line is not clipped.
+        textView.textContainerInset = NSSize(width: 0, height: TranscriptTheme.userBubbleVerticalPadding)
         textView.textContainer?.lineFragmentPadding = 0
         textView.textContainer?.widthTracksTextView = false
         textView.textContainer?.heightTracksTextView = false
@@ -369,7 +469,7 @@ private struct PlatformTranscriptTextView: UIViewRepresentable {
         let textStorage = NSTextStorage()
         let layoutManager = TranscriptLayoutManager()
         textStorage.addLayoutManager(layoutManager)
-        let textContainer = NSTextContainer(
+        let textContainer = TranscriptTextContainer(
             size: CGSize(width: 0, height: CGFloat.greatestFiniteMagnitude)
         )
         layoutManager.addTextContainer(textContainer)
@@ -379,7 +479,14 @@ private struct PlatformTranscriptTextView: UIViewRepresentable {
         textView.isSelectable = true
         textView.isScrollEnabled = false
         textView.backgroundColor = .clear
-        textView.textContainerInset = .zero
+        // Small vertical inset so block chrome that outsets beyond the first/
+        // last line is not clipped.
+        textView.textContainerInset = UIEdgeInsets(
+            top: TranscriptTheme.userBubbleVerticalPadding,
+            left: 0,
+            bottom: TranscriptTheme.userBubbleVerticalPadding,
+            right: 0
+        )
         textView.textContainer.lineFragmentPadding = 0
         textView.textContainer.widthTracksTextView = true
         textView.textContainer.heightTracksTextView = false

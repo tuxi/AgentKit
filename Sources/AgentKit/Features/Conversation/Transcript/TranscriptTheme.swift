@@ -44,6 +44,8 @@ enum TranscriptBlockKind: Int {
     case diffContext
     /// Thematic break — no fill; the renderer draws a centered hairline.
     case divider
+    /// User prompt bubble — right-anchored snug fill, not full width.
+    case userPrompt
 }
 
 enum TranscriptChipKind: Int {
@@ -182,6 +184,12 @@ enum TranscriptTheme {
         dark: color(0.92, 0.90, 0.84, alpha: 0.25)
     )
 
+    /// User prompt bubble fill.
+    static let userBubble: TranscriptPlatformColor = dynamic(
+        light: color(0.36, 0.33, 0.24, alpha: 0.09),
+        dark: color(0.92, 0.90, 0.84, alpha: 0.10)
+    )
+
     /// Thematic breaks and the rule under table headers.
     static let hairline: TranscriptPlatformColor = dynamic(
         light: color(0.15, 0.15, 0.14, alpha: 0.16),
@@ -195,6 +203,54 @@ enum TranscriptTheme {
         return 10
         #else
         return 8
+        #endif
+    }
+
+    /// Left/right padding inside the user message lane.
+    static var userBubbleHorizontalPadding: CGFloat {
+        #if os(iOS)
+        return 14
+        #else
+        return 12
+        #endif
+    }
+
+    /// Vertical padding around the glyph bounds for the drawn user bubble.
+    /// The text view also uses this as its outer inset so first/last bubbles
+    /// are not clipped.
+    static var userBubbleVerticalPadding: CGFloat {
+        #if os(iOS)
+        return 8
+        #else
+        return 7
+        #endif
+    }
+
+    /// Width of the right-side user-message lane for the current text
+    /// container. It leaves a stable leading gutter on desktop while capping
+    /// very wide windows so long prompts remain readable.
+    static func userBubbleLaneWidth(for containerWidth: CGFloat) -> CGFloat {
+        guard containerWidth > 0 else { return 0 }
+        let gutter = userBubbleLeadingGutter(for: containerWidth)
+        return max(0, min(userBubbleMaximumWidth, containerWidth - gutter))
+    }
+
+    private static func userBubbleLeadingGutter(for containerWidth: CGFloat) -> CGFloat {
+        #if os(iOS)
+        let minimum: CGFloat = 48
+        let maximum: CGFloat = 120
+        #else
+        let minimum: CGFloat = 160
+        let maximum: CGFloat = 360
+        #endif
+        return min(maximum, max(minimum, containerWidth * 0.26))
+    }
+
+    private static var userBubbleMaximumWidth: CGFloat {
+        #if os(iOS)
+        return 560
+        #else
+        return 760
         #endif
     }
 
@@ -265,6 +321,7 @@ enum TranscriptTheme {
         case .diffHunk: return diffHunkBackground
         case .diffContext: return codeBlockBackground
         case .divider: return nil // renderer draws a centered hairline
+        case .userPrompt: return userBubble
         }
     }
 
@@ -273,6 +330,7 @@ enum TranscriptTheme {
         case .code, .table, .error: return 6
         case .diffAdded, .diffRemoved, .diffHunk, .diffContext: return 3
         case .quote, .divider: return 0
+        case .userPrompt: return 12
         }
     }
 
