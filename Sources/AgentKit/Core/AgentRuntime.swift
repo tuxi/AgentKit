@@ -218,10 +218,73 @@ public final class AgentRuntime: @unchecked Sendable {
         }
     }
 
+    // MARK: - CredentialStore Integration
+
+    /// 使用 CredentialStore 启动 Runtime（替代直接传 secretsJSON）。
+    /// 向后兼容：CredentialStore 为空时回退到旧的 AgentSettings.secretsJSON()。
+    @discardableResult
+    public func launch(with credentialStore: any CredentialStore) async throws -> Int {
+        let map = (try? await credentialStore.all()) ?? CredentialMap()
+        let secretsJSON = map.toSecretsJSON()
+        let finalSecrets = secretsJSON == "{}"
+            ? AgentSettings.secretsJSON()
+            : secretsJSON
+        return try launch(secretsJSON: finalSecrets)
+    }
+
+    /// 热更新 credential（用户登录/切换 BYOK key/Token 刷新后）。
+    /// CredentialStore → CredentialMap → secretsJSON → Runtime。
+    /// 注意：secretsJSON 已经 `strippedForInjection()`——不含 refresh_token。
+    public func reconfigure(with credentialStore: any CredentialStore) async throws {
+        guard let server else { return }
+        let map = (try? await credentialStore.all()) ?? CredentialMap()
+        try server.reconfigure(secretsJSON: map.toSecretsJSON(), modelName: "")
+    }
+
+    // MARK: - Accessors
+
     public func endpoint() -> String { server?.endpoint() ?? "" }  // ws://127.0.0.1:<port>
     public func port() -> Int { server?.port() ?? -1 }
     public func stop()              {
         try? server?.stop(); server = nil
+    }
+
+    // MARK: - Private
+
+    /// 内部冷启动入口。`secretsJSON` 为空时回退 AgentSettings。
+    @discardableResult
+    private func launch(secretsJSON: String = "") throws -> Int {
+        stop()
+        let finalSecrets = secretsJSON.isEmpty ? AgentSettings.secretsJSON() : secretsJSON
+        return try _launch(secretsJSON: finalSecrets)
+    }
+
+    /// 原始冷启动逻辑（改名以避免与带参数版本冲突）。
+    private func _launch(secretsJSON: String) throws -> Int {
+        let fm = FileManager.default
+        let docs = fm.urls(for: .documentDirectory, in: .userDomainMask)[0].path
+        let support = fm.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
+        try? fm.createDirectory(at: support, withIntermediateDirectories: true)
+        Self.applyDataProtection(to: support)
+        let model = AgentSettings.model
+        let configYAML = Self.bundledConfigYAML()
+        Self.installBundledSkillsIfNeeded()
+        var error: NSError?
+        guard let srv = MobileStart(
+            docs,
+            support.path,
+            configYAML,
+            model,
+            secretsJSON,
+            "",
+            true,
+            &error
+        ) else {
+            throw error ?? NSError(domain: "CodeAgent", code: -1,
+                userInfo: [NSLocalizedDescriptionKey: "MobileStart failed"])
+        }
+        server = srv
+        return srv.port()
     }
 }
 #endif
