@@ -11,8 +11,8 @@ import SwiftUI
 // MARK: - SettingsView
 
 public struct SettingsView: View {
+    @Environment(AccountManager.self) private var accountManager
     @Environment(\.dismiss) private var dismiss
-    @State private var accountManager = AccountManager()
     @State private var credentialSettings = CredentialSettingsStore()
     @State private var showLogin = false
     @State private var showKey = false
@@ -40,6 +40,7 @@ public struct SettingsView: View {
             }
             .sheet(isPresented: $showLogin) {
                 LoginView()
+                    .environment(accountManager)
             }
             .task {
                 await credentialSettings.refresh()
