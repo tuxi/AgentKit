@@ -47,6 +47,16 @@ struct RuntimeHTTPClient: Sendable {
         request.setValue("Bearer \(cred.secret)", forHTTPHeaderField: "Authorization")
     }
 
+    /// 从 Runtime 的 `{trace_id, code, msg, data}` 信封中解码 data 字段。
+    /// 格式与 Agent Gateway 的 ApiResponse<T> 完全兼容。
+    private func decodeEnvelope<T: Decodable>(_ type: T.Type, from data: Data) throws -> T {
+        let envelope = try decodeEnvelope(RuntimeEnvelope<T>.self, from: data)
+        guard envelope.code == 0, let payload = envelope.data else {
+            throw RuntimeHTTPError.unexpectedStatus(envelope.code, body: envelope.msg)
+        }
+        return payload
+    }
+
     func resolveRuntimeURL(_ value: String) -> URL? {
         guard !value.isEmpty else { return nil }
         if let absolute = URL(string: value), absolute.scheme != nil {
@@ -95,7 +105,7 @@ struct RuntimeHTTPClient: Sendable {
         let request = try await buildRequest("POST", pathComponents: "v1/conversations", body: ["workspace_path": wp])
         let (data, response) = try await session.data(for: request)
         try validateHTTP(response, data: data)
-        return try decoder.decode(ConversationRef.self, from: data)
+        return try decodeEnvelope(ConversationRef.self, from: data)
     }
 
     /// `GET /v1/conversations`
@@ -103,7 +113,7 @@ struct RuntimeHTTPClient: Sendable {
         let request = try await buildRequest("GET", pathComponents: "v1/conversations")
         let (data, response) = try await session.data(for: request)
         try validateHTTP(response, data: data)
-        return try decoder.decode([ConversationRef].self, from: data)
+        return try decodeEnvelope([ConversationRef].self, from: data)
     }
 
     // MARK: - 历史读取（§2 历史读取）
@@ -113,7 +123,7 @@ struct RuntimeHTTPClient: Sendable {
         let request = try await buildRequest("GET", pathComponents: "v1/conversations", id)
         let (data, response) = try await session.data(for: request)
         try validateHTTP(response, data: data)
-        return try decoder.decode(ConversationDetail.self, from: data)
+        return try decodeEnvelope(ConversationDetail.self, from: data)
     }
 
     /// `PATCH /v1/conversations/{id}` — 修改会话名称。
@@ -121,7 +131,7 @@ struct RuntimeHTTPClient: Sendable {
         let request = try await buildRequest("PATCH", pathComponents: "v1/conversations", id, body: ["name": name])
         let (data, response) = try await session.data(for: request)
         try validateHTTP(response, data: data)
-        return try decoder.decode(ConversationRef.self, from: data)
+        return try decodeEnvelope(ConversationRef.self, from: data)
     }
 
     /// `GET /v1/conversations/{id}/messages` — 对话主干。
@@ -129,7 +139,7 @@ struct RuntimeHTTPClient: Sendable {
         let request = try await buildRequest("GET", pathComponents: "v1/conversations", conversationID, "messages")
         let (data, response) = try await session.data(for: request)
         try validateHTTP(response, data: data)
-        return try decoder.decode([Message].self, from: data)
+        return try decodeEnvelope([Message].self, from: data)
     }
 
     /// `GET /v1/conversations/{id}/events[?since=N]` — 历史事件。
@@ -138,7 +148,7 @@ struct RuntimeHTTPClient: Sendable {
         let request = try await buildRequest("GET", pathComponents: "v1/conversations", conversationID, "events", queryItems: queryItems)
         let (data, response) = try await session.data(for: request)
         try validateHTTP(response, data: data)
-        return try decoder.decode([WireFrame].self, from: data)
+        return try decodeEnvelope([WireFrame].self, from: data)
     }
 
     /// `GET /v1/jobs/{id}/events[?since=N]` — 后台 job 子流 backlog。
@@ -147,7 +157,7 @@ struct RuntimeHTTPClient: Sendable {
         let request = try await buildRequest("GET", pathComponents: "v1/jobs", jobID, "events", queryItems: queryItems)
         let (data, response) = try await session.data(for: request)
         try validateHTTP(response, data: data)
-        return try decoder.decode([WireFrame].self, from: data)
+        return try decodeEnvelope([WireFrame].self, from: data)
     }
 
     /// `GET /v1/conversations/{id}/assets/{asset_id}/preview`.
@@ -155,7 +165,7 @@ struct RuntimeHTTPClient: Sendable {
         let request = try await buildRequest("GET", pathComponents: "v1/conversations", conversationID, "assets", assetID, "preview")
         let (data, response) = try await session.data(for: request)
         try validateHTTP(response, data: data)
-        return try decoder.decode(AgentAssetPreviewResponse.self, from: data)
+        return try decodeEnvelope(AgentAssetPreviewResponse.self, from: data)
     }
 
     /// `GET /v1/conversations/{id}/assets/{asset_id}/content`.
@@ -163,7 +173,7 @@ struct RuntimeHTTPClient: Sendable {
         let request = try await buildRequest("GET", pathComponents: "v1/conversations", conversationID, "assets", assetID, "content")
         let (data, response) = try await session.data(for: request)
         try validateHTTP(response, data: data)
-        return try decoder.decode(AgentAssetContentResponse.self, from: data)
+        return try decodeEnvelope(AgentAssetContentResponse.self, from: data)
     }
 
     /// `POST /v1/repos/clone` — go-git clone。
@@ -176,7 +186,7 @@ struct RuntimeHTTPClient: Sendable {
         guard (200...201).contains(http.statusCode) else {
             throw RuntimeHTTPError.unexpectedStatus(http.statusCode, body: String(data: data, encoding: .utf8) ?? "")
         }
-        return try decoder.decode(ClonedRepo.self, from: data)
+        return try decodeEnvelope(ClonedRepo.self, from: data)
     }
 
     /// `GET /healthz` — 存活探针（不注入 credential，无需认证）。
@@ -204,6 +214,17 @@ struct RuntimeHTTPClient: Sendable {
             throw RuntimeHTTPError.unexpectedStatus(httpResponse.statusCode, body: body)
         }
     }
+}
+
+// MARK: - Runtime Response Envelope
+
+/// Runtime 的 HTTP JSON 响应信封 — 格式与 Agent Gateway 的 `{trace_id, code, msg, data}` 完全兼容。
+/// 见 `docs/runtime-integration/runtime-api-response-envelope-v1.md`。
+/// `trace_id` 不在此处解码（客户端只消费 code/msg/data）。
+private struct RuntimeEnvelope<T: Decodable>: Decodable {
+    let code: Int
+    let msg: String
+    let data: T?
 }
 
 // MARK: - Clone result
@@ -249,6 +270,7 @@ extension RuntimeHTTPError: LocalizedError {
               let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
             return trimmed
         }
+        if let m = obj["msg"] as? String, !m.isEmpty, m != "success" { return m }
         if let e = obj["error"] as? String { return e }
         if let m = obj["message"] as? String { return m }
         return trimmed
