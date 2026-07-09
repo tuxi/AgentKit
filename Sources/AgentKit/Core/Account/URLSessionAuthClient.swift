@@ -97,8 +97,8 @@ public final class URLSessionAuthClient: AuthClientProtocol, Sendable {
         var request = URLRequest(url: url)
         request.httpMethod = method
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
-        request.setValue("ios", forHTTPHeaderField: "X-Device-Type")
         request.timeoutInterval = 30
+        DeviceContext.apply(to: &request)
         return request
     }
 

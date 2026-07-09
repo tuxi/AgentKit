@@ -82,6 +82,7 @@ struct RuntimeHTTPClient: Sendable {
             request.httpBody = try JSONEncoder().encode(body)
         }
         await applyAuth(to: &request)
+        DeviceContext.apply(to: &request)
         return request
     }
 

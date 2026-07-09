@@ -157,6 +157,7 @@ public final class AgentWireSocket: @unchecked Sendable {
                    !cred.secret.isEmpty, cred.kind == .bearer {
                     request.setValue("Bearer \(cred.secret)", forHTTPHeaderField: "Authorization")
                 }
+                DeviceContext.apply(to: &request)
                 return request
             }
 
