@@ -114,6 +114,7 @@ struct OutgoingAgentInput: Encodable {
     let kind: String                // "text" | "tool_result" | "command" | "system"
     let text: String?
     let toolResult: OutgoingToolResult?
+    let model: String?              // per-message model selection (v1.4)
     let metadata: [String: String]?
     // system command fields
     let command: String?            // system command name
@@ -121,7 +122,7 @@ struct OutgoingAgentInput: Encodable {
     let commandValue: String?
 
     enum CodingKeys: String, CodingKey {
-        case type, kind, text, metadata, command
+        case type, kind, text, metadata, command, model
         case toolResult = "tool_result"
         case commandKey = "command_key"
         case commandValue = "command_value"
@@ -132,7 +133,7 @@ struct OutgoingAgentInput: Encodable {
         switch input.kind {
         case .text:
             return OutgoingAgentInput(
-                kind: "text", text: input.text, toolResult: nil,
+                kind: "text", text: input.text, toolResult: nil, model: input.model,
                 metadata: input.metadata, command: nil, commandKey: nil, commandValue: nil
             )
         case .toolResult:
@@ -146,31 +147,31 @@ struct OutgoingAgentInput: Encodable {
                 )
             }
             return OutgoingAgentInput(
-                kind: "tool_result", text: nil, toolResult: tr,
+                kind: "tool_result", text: nil, toolResult: tr, model: input.model,
                 metadata: input.metadata, command: nil, commandKey: nil, commandValue: nil
             )
         case .command:
             return OutgoingAgentInput(
-                kind: "command", text: input.text, toolResult: nil,
+                kind: "command", text: input.text, toolResult: nil, model: input.model,
                 metadata: input.metadata, command: nil, commandKey: nil, commandValue: nil
             )
         case .system(let cmd):
             switch cmd {
             case .patchContext(let key, let value):
                 return OutgoingAgentInput(
-                    kind: "system", text: nil, toolResult: nil,
+                    kind: "system", text: nil, toolResult: nil, model: input.model,
                     metadata: input.metadata,
                     command: "patch_context", commandKey: key, commandValue: value
                 )
             case .updateMemory(let key, let value):
                 return OutgoingAgentInput(
-                    kind: "system", text: nil, toolResult: nil,
+                    kind: "system", text: nil, toolResult: nil, model: input.model,
                     metadata: input.metadata,
                     command: "update_memory", commandKey: key, commandValue: value
                 )
             case .overridePlan(let planID):
                 return OutgoingAgentInput(
-                    kind: "system", text: nil, toolResult: nil,
+                    kind: "system", text: nil, toolResult: nil, model: input.model,
                     metadata: input.metadata,
                     command: "override_plan", commandKey: nil, commandValue: planID
                 )

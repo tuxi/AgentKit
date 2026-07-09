@@ -294,14 +294,14 @@ public final class WorkspaceStore {
 
     /// 提交草稿（发送首条消息）：创建真实 Session → 连接 → 发送首条消息 → 替换为活跃会话。
     /// 这是唯一的 Session 创建点。失败时草稿进入 `.failed`，保留用户输入以便重试。
-    public func commitDraft(firstMessage: String) async {
+    public func commitDraft(firstMessage: String, model: String = "") async {
         guard let current = draft, let workspace = current.workspace else { return }
         draft?.state = .committing
         do {
             let ref = try await client.createConversation(workspacePath: workspace.url.path)
-            let vm = ConversationViewModel(client: client, toolRegistry: toolRegistry, workspace: workspace)
+            let vm = ConversationViewModel(client: client, toolRegistry: toolRegistry, workspace: workspace, model: model)
             await vm.connect(to: ref)
-            await vm.send(input: .text(firstMessage))
+            await vm.send(input: .text(firstMessage, model: model))
 
             // 草稿 → 真实会话
             activeConversationViewModel = vm

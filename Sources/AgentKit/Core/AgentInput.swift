@@ -43,13 +43,15 @@ public struct AgentInput: Sendable {
     public var kind: Kind
     public var text: String?
     public var toolResult: ToolResultContent?
+    /// 当前轮使用的模型（Gateway 模型 ID 或 config alias）。为空时 Runtime 使用 default_model。
+    public var model: String?
     /// 扩展元数据。P1 收敛 schema，P0 仅保留扩展点。
     public var metadata: [String: String]?
 
     // MARK: - Convenience factories
 
-    public static func text(_ text: String) -> AgentInput {
-        AgentInput(kind: .text, text: text)
+    public static func text(_ text: String, model: String? = nil) -> AgentInput {
+        AgentInput(kind: .text, text: text, model: model)
     }
 
     public static func toolResult(_ result: ToolResultContent) -> AgentInput {
@@ -70,11 +72,13 @@ public struct AgentInput: Sendable {
         kind: Kind = .text,
         text: String? = nil,
         toolResult: ToolResultContent? = nil,
+        model: String? = nil,
         metadata: [String: String]? = nil
     ) {
         self.kind = kind
         self.text = text
         self.toolResult = toolResult
+        self.model = model
         self.metadata = metadata
     }
 }

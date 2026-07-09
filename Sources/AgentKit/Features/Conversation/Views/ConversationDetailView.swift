@@ -69,7 +69,7 @@ public struct ConversationDetailView: View {
                     placeholder: store.isPreparingWorkspace ? "正在准备工作区…" : "随心输入",
                     isEnabled: (store.draft?.canCommit ?? false) && !store.isPreparingWorkspace,
                     onSend: { text in
-                        await store.commitDraft(firstMessage: text)
+                        await store.commitDraft(firstMessage: text, model: draftModel)
                         return store.draft == nil
                     },
                     modelSettings: modelSettings,
@@ -189,7 +189,7 @@ public struct ConversationDetailView: View {
                         onStop: { Task { await vm.cancelTurn() } },
                         onSend: { text in
                             let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
-                            await vm.send(input: .text(trimmed))
+                            await vm.send(input: .text(trimmed, model: vm.selectedModel))
                             return true
                         },
                         modelSettings: modelSettings,
@@ -444,6 +444,9 @@ private struct DraftComposerPanel: View {
                 .stroke(Color.draftPanelStroke, lineWidth: 1)
         }
         .shadow(color: .black.opacity(0.10), radius: 20, y: 10)
+        .task {
+            await modelSettings?.fetchFromGateway()
+        }
     }
 
     // MARK: - Model Selector
