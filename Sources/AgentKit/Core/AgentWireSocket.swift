@@ -42,6 +42,10 @@ public final class AgentWireSocket: @unchecked Sendable {
     /// 底层 WebSocket（来自 CoreKit，处理重连/心跳/前后台）。
     private let wsClient: WebSocketClient
 
+    /// 可选的 credential store（macOS 远端 Runtime 路径）。
+    private let credentialStore: (any CredentialStore)?
+    private let credentialTarget: CredentialTarget
+
     /// AsyncStream 的 continuation，用于向 UI 推送 AgentEvent。
     private var continuation: AsyncStream<AgentEvent>.Continuation?
 
@@ -86,15 +90,20 @@ public final class AgentWireSocket: @unchecked Sendable {
 
     /// - Parameters:
     ///   - since: 续传游标初值 = 调用方已回放事件里最大的 `seq`（0 = 无历史）。
-    ///     直播流里 `seq <= since` 的帧会被当作与历史批重叠的重复帧丢弃（§2 恢复流程）。
     ///   - streamKind: 目标分区。`.job` 走 `/v1/jobs/{id}/stream`（只读子流），
     ///     不发任何入站帧、不注册工具。默认 `.conversation`（主会话双向流）。
+    ///   - credentialStore: 可选的 credential store（macOS 远端 Runtime 路径）。
+    ///     非 nil 时，WS 握手请求会注入 `Authorization: Bearer <jwt>` header。
     public init(environment: RuntimeEnvironment, conversationID: String,
-                since: Int = 0, streamKind: WireStreamKind = .conversation) {
+                since: Int = 0, streamKind: WireStreamKind = .conversation,
+                credentialStore: (any CredentialStore)? = nil,
+                credentialTarget: CredentialTarget = .gateway) {
         self.environment = environment
         self.conversationID = conversationID
         self.streamKind = streamKind
         self.maxSeq = since
+        self.credentialStore = credentialStore
+        self.credentialTarget = credentialTarget
         let tag = streamKind == .job ? "job" : "agent-wire"
         self.wsClient = WebSocketClient(identifier: "\(tag).\(conversationID)")
     }
@@ -134,12 +143,21 @@ public final class AgentWireSocket: @unchecked Sendable {
             // 端口未就绪（≤0 → wsURL 为 nil）时返回 nil，由 WebSocketClient 当作 preflight
             // 失败退避重试，待 runtime 起来后自然连上（前台重连由其 handleAppForeground 触发）。
             let streamKind = self.streamKind
+            let store = self.credentialStore
+            let target = self.credentialTarget
             self.wsClient.connectionValidatorRequest = { [weak self] in
                 guard let self,
                       let wsBase = self.environment.wsURL,
                       let url = URL(string: "\(wsBase)/\(streamKind.streamPath(id: conversationID))")
                 else { return nil }
-                return URLRequest(url: url)
+                var request = URLRequest(url: url)
+                // 同步注入 credential header（macOS 路径，Keychain 操作同步）
+                if let store,
+                   let cred = store.resolveSync(target),
+                   !cred.secret.isEmpty, cred.kind == .bearer {
+                    request.setValue("Bearer \(cred.secret)", forHTTPHeaderField: "Authorization")
+                }
+                return request
             }
 
             // 接收回调 — 每帧 JSON 经此处理

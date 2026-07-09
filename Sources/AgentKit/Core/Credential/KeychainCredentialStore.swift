@@ -63,6 +63,12 @@ public final class KeychainCredentialStore: CredentialStore, @unchecked Sendable
         keychain.remove(account)
     }
 
+    /// 同步解析 credential（用于 WebSocket 连接校验等不能 async 的上下文）。
+    /// 直接从同一 Keychain entry 读取最新值——与 `resolve()` 共享同一数据源。
+    public func resolveSync(_ target: CredentialTarget) -> Credential? {
+        loadMap().entries[target]
+    }
+
     // MARK: - Private
 
     private func loadMap() -> CredentialMap {

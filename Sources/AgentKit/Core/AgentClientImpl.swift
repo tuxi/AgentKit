@@ -26,15 +26,27 @@ public final class CodeAgentTransport: AgentTransport, @unchecked Sendable {
     private var socket: AgentWireSocket?
 
     private let environment: RuntimeEnvironment
+    private let credentialStore: (any CredentialStore)?
+    private let credentialTarget: CredentialTarget
 
     /// 待注册的客户端工具列表。在握手后自动发送。
     private var pendingTools: [ClientToolInfo] = []
 
     // MARK: - Init
 
-    public init(environment: RuntimeEnvironment) {
+    public init(
+        environment: RuntimeEnvironment,
+        credentialStore: (any CredentialStore)? = nil,
+        credentialTarget: CredentialTarget = .gateway
+    ) {
         self.environment = environment
-        self.http = RuntimeHTTPClient(environment: environment)
+        self.credentialStore = credentialStore
+        self.credentialTarget = credentialTarget
+        self.http = RuntimeHTTPClient(
+            environment: environment,
+            credentialStore: credentialStore,
+            credentialTarget: credentialTarget
+        )
     }
 
     // MARK: - AgentTransport: Session lifecycle
@@ -54,7 +66,13 @@ public final class CodeAgentTransport: AgentTransport, @unchecked Sendable {
     public func attach(sessionID: String, since: Int) async throws -> AsyncStream<AgentEvent> {
         await disconnect()
 
-        let newSocket = AgentWireSocket(environment: environment, conversationID: sessionID, since: since)
+        let newSocket = AgentWireSocket(
+            environment: environment,
+            conversationID: sessionID,
+            since: since,
+            credentialStore: credentialStore,
+            credentialTarget: credentialTarget
+        )
 
         // v1.2 §4 增量续传：每次握手（含 WebSocketClient 自动重连）后，socket 用
         // `GET /events?since=<已收最大 seq>` 补缺口再放行直播帧。取数走 HTTP 面。
@@ -146,7 +164,13 @@ public final class CodeAgentTransport: AgentTransport, @unchecked Sendable {
     /// 只读——不注册工具、不发任何入站帧。stream 被取消时断开 socket（socket 由
     /// onTermination 闭包持有存活）。
     public func openJobStream(jobID: String) -> AsyncStream<AgentEvent> {
-        let socket = AgentWireSocket(environment: environment, conversationID: jobID, streamKind: .job)
+        let socket = AgentWireSocket(
+            environment: environment,
+            conversationID: jobID,
+            streamKind: .job,
+            credentialStore: credentialStore,
+            credentialTarget: credentialTarget
+        )
         let http = self.http
         socket.gapFetch = { since in
             (try? await http.getJobEvents(jobID: jobID, since: since)) ?? []
@@ -230,9 +254,14 @@ public final class DefaultAgentClient: RuntimeClient, @unchecked Sendable {
         self.transport = transport
     }
 
-    /// 便捷初始化：连接指定 Runtime。
+    /// 便捷初始化：连接指定 Runtime（无 credential）。
     public convenience init(environment: RuntimeEnvironment) {
         self.init(transport: CodeAgentTransport(environment: environment))
+    }
+
+    /// 便捷初始化：连接指定 Runtime 并注入 credential store（macOS 路径）。
+    public convenience init(environment: RuntimeEnvironment, credentialStore: any CredentialStore, credentialTarget: CredentialTarget = .gateway) {
+        self.init(transport: CodeAgentTransport(environment: environment, credentialStore: credentialStore, credentialTarget: credentialTarget))
     }
 
     /// 便捷初始化：使用默认占位环境。调用方应在 Runtime 启动后替换为真实端口。

@@ -58,12 +58,12 @@ final class AppContainer {
         injectCredentialsIntoRuntime()
         return DefaultAgentClient.fromRuntime()
         #else
-        // macOS: 连接独立运行的 CodeAgent server（127.0.0.1:8787）。
-        // Gateway credential 通过 RuntimeHTTPClient.withCredentialStore() 注入为
-        // Authorization header。BYOK credential 由远端 server 的启动参数传入。
-        let env = RuntimeEnvironment(host: "127.0.0.1", port: 8787)
-        // TODO Phase 5: .withCredentialStore(accountManager.credentialStore)
-        return DefaultAgentClient(environment: env)
+        // macOS: 连接独立运行的 CodeAgent server（127.0.0.1:8797）。
+        // Gateway credential 通过 CredentialStore → Authorization header 注入
+        // 每个 HTTP 请求和 WebSocket 握手。BYOK credential 由远端 server 的启动参数传入。
+        let env = RuntimeEnvironment(host: "127.0.0.1", port: 8797)
+        let credentialStore = KeychainCredentialStore()
+        return DefaultAgentClient(environment: env, credentialStore: credentialStore)
         #endif
     }
 

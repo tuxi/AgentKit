@@ -2,8 +2,8 @@
 //  RuntimeHTTPClient.swift
 //  AgentKit
 //
-//  最小 HTTP 客户端 — 仅服务 CodeAgent Runtime 的 2 个端点。
-//  v1 无需 auth / interceptor / 加密，URLSession 直连。
+//  最小 HTTP 客户端 — 仅服务 CodeAgent Runtime 的端点。
+//  支持可选的 credential 注入（macOS 远端 Runtime 路径）。
 //
 
 import Foundation
@@ -14,11 +14,19 @@ struct RuntimeHTTPClient: Sendable {
     private let environment: RuntimeEnvironment
     private let session: URLSession
     private let decoder: JSONDecoder
+    private let credentialStore: (any CredentialStore)?
+    private let credentialTarget: CredentialTarget
 
-    init(environment: RuntimeEnvironment) {
+    init(
+        environment: RuntimeEnvironment,
+        credentialStore: (any CredentialStore)? = nil,
+        credentialTarget: CredentialTarget = .gateway
+    ) {
         self.environment = environment
         self.session = URLSession(configuration: .ephemeral)
         self.decoder = JSONDecoder()
+        self.credentialStore = credentialStore
+        self.credentialTarget = credentialTarget
     }
 
     /// 每次调用时从 environment 延迟取 baseURL（Avoids snapshot stale port）。
@@ -27,6 +35,16 @@ struct RuntimeHTTPClient: Sendable {
             throw RuntimeHTTPError.runtimeNotStarted
         }
         return url
+    }
+
+    /// 为请求注入 Authorization header（如果有 credential store）。
+    private func applyAuth(to request: inout URLRequest) async {
+        guard let store = credentialStore,
+              let cred = try? await store.resolve(credentialTarget),
+              !cred.secret.isEmpty,
+              cred.kind == .bearer
+        else { return }
+        request.setValue("Bearer \(cred.secret)", forHTTPHeaderField: "Authorization")
     }
 
     func resolveRuntimeURL(_ value: String) -> URL? {
@@ -40,25 +58,40 @@ struct RuntimeHTTPClient: Sendable {
         return URL(string: value, relativeTo: baseURL)?.absoluteURL
     }
 
+    // MARK: - Helpers
+
+    /// 构建带 credential 注入的请求。
+    private func buildRequest(
+        _ method: String,
+        pathComponents: String...,
+        queryItems: [URLQueryItem]? = nil,
+        body: (any Encodable)? = nil,
+        timeout: TimeInterval = 60
+    ) async throws -> URLRequest {
+        var url = try resolveBaseURL()
+        for comp in pathComponents { url = url.appendingPathComponent(comp) }
+        if let items = queryItems, var components = URLComponents(url: url, resolvingAgainstBaseURL: false) {
+            components.queryItems = items
+            url = components.url ?? url
+        }
+        var request = URLRequest(url: url)
+        request.httpMethod = method
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        request.timeoutInterval = timeout
+        if let body {
+            request.httpBody = try JSONEncoder().encode(body)
+        }
+        await applyAuth(to: &request)
+        return request
+    }
+
     // MARK: - Endpoints
 
     /// `POST /v1/conversations`
     func createConversation(workspacePath: String) async throws -> ConversationRef {
-        let url = try resolveBaseURL().appendingPathComponent("v1/conversations")
-        var request = URLRequest(url: url)
-        request.httpMethod = "POST"
-        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
-        var workspacePath = workspacePath
-        if workspacePath.isEmpty {
-            workspacePath = "."
-        }
-
-        let body: [String: String] = ["workspace_path": workspacePath]
-
-        DLLog(body)
-
-        request.httpBody = try JSONEncoder().encode(body)
-
+        var wp = workspacePath
+        if wp.isEmpty { wp = "." }
+        let request = try await buildRequest("POST", pathComponents: "v1/conversations", body: ["workspace_path": wp])
         let (data, response) = try await session.data(for: request)
         try validateHTTP(response, data: data)
         return try decoder.decode(ConversationRef.self, from: data)
@@ -66,10 +99,7 @@ struct RuntimeHTTPClient: Sendable {
 
     /// `GET /v1/conversations`
     func listConversations() async throws -> [ConversationRef] {
-        let url = try resolveBaseURL().appendingPathComponent("v1/conversations")
-        var request = URLRequest(url: url)
-        request.httpMethod = "GET"
-
+        let request = try await buildRequest("GET", pathComponents: "v1/conversations")
         let (data, response) = try await session.data(for: request)
         try validateHTTP(response, data: data)
         return try decoder.decode([ConversationRef].self, from: data)
@@ -79,12 +109,7 @@ struct RuntimeHTTPClient: Sendable {
 
     /// `GET /v1/conversations/{id}` — 会话概要。
     func getConversationDetail(id: String) async throws -> ConversationDetail {
-        let url = try resolveBaseURL()
-            .appendingPathComponent("v1/conversations")
-            .appendingPathComponent(id)
-        var request = URLRequest(url: url)
-        request.httpMethod = "GET"
-
+        let request = try await buildRequest("GET", pathComponents: "v1/conversations", id)
         let (data, response) = try await session.data(for: request)
         try validateHTTP(response, data: data)
         return try decoder.decode(ConversationDetail.self, from: data)
@@ -92,16 +117,7 @@ struct RuntimeHTTPClient: Sendable {
 
     /// `PATCH /v1/conversations/{id}` — 修改会话名称。
     func renameConversation(id: String, name: String) async throws -> ConversationRef {
-        let url = try resolveBaseURL()
-            .appendingPathComponent("v1/conversations")
-            .appendingPathComponent(id)
-        var request = URLRequest(url: url)
-        request.httpMethod = "PATCH"
-        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
-
-        let body: [String: String] = ["name": name]
-        request.httpBody = try JSONEncoder().encode(body)
-
+        let request = try await buildRequest("PATCH", pathComponents: "v1/conversations", id, body: ["name": name])
         let (data, response) = try await session.data(for: request)
         try validateHTTP(response, data: data)
         return try decoder.decode(ConversationRef.self, from: data)
@@ -109,54 +125,25 @@ struct RuntimeHTTPClient: Sendable {
 
     /// `GET /v1/conversations/{id}/messages` — 对话主干。
     func getMessages(conversationID: String) async throws -> [Message] {
-        let url = try resolveBaseURL()
-            .appendingPathComponent("v1/conversations")
-            .appendingPathComponent(conversationID)
-            .appendingPathComponent("messages")
-        var request = URLRequest(url: url)
-        request.httpMethod = "GET"
-
+        let request = try await buildRequest("GET", pathComponents: "v1/conversations", conversationID, "messages")
         let (data, response) = try await session.data(for: request)
         try validateHTTP(response, data: data)
         return try decoder.decode([Message].self, from: data)
     }
 
-    /// `GET /v1/conversations/{id}/events[?since=N]` — 历史事件（WireEvent 格式，用于 Timeline 回放）。
-    /// 返回原始 `[WireFrame]`，由调用方转为 `[AgentEvent]`。
-    /// `since` > 0 时增量读取（P8.7 子流轮询）。N = 已收到帧里最大的 `seq`（v1.2 §4，
-    /// seq 单调递增但有空洞，不能按条数推进）——见 docs/p8.7-client-plan.md §4。
+    /// `GET /v1/conversations/{id}/events[?since=N]` — 历史事件。
     func getEvents(conversationID: String, since: Int = 0) async throws -> [WireFrame] {
-        var url = try resolveBaseURL()
-            .appendingPathComponent("v1/conversations")
-            .appendingPathComponent(conversationID)
-            .appendingPathComponent("events")
-        if since > 0, var components = URLComponents(url: url, resolvingAgainstBaseURL: false) {
-            components.queryItems = [URLQueryItem(name: "since", value: String(since))]
-            url = components.url ?? url
-        }
-        var request = URLRequest(url: url)
-        request.httpMethod = "GET"
-
+        let queryItems = since > 0 ? [URLQueryItem(name: "since", value: String(since))] : nil
+        let request = try await buildRequest("GET", pathComponents: "v1/conversations", conversationID, "events", queryItems: queryItems)
         let (data, response) = try await session.data(for: request)
         try validateHTTP(response, data: data)
         return try decoder.decode([WireFrame].self, from: data)
     }
 
-    /// `GET /v1/jobs/{id}/events[?since=N]` — 后台 job 子流 backlog（P8.7 §4 Phase C）。
-    /// 帧格式与会话 `/events` 字节一致（同一 `WireFrame` 解码器）。job 分区的 seq 与父会话
-    /// 是两套独立空间——`since` 只能用 job 自己已收帧的最大 seq，不能混用父会话游标。
+    /// `GET /v1/jobs/{id}/events[?since=N]` — 后台 job 子流 backlog。
     func getJobEvents(jobID: String, since: Int = 0) async throws -> [WireFrame] {
-        var url = try resolveBaseURL()
-            .appendingPathComponent("v1/jobs")
-            .appendingPathComponent(jobID)
-            .appendingPathComponent("events")
-        if since > 0, var components = URLComponents(url: url, resolvingAgainstBaseURL: false) {
-            components.queryItems = [URLQueryItem(name: "since", value: String(since))]
-            url = components.url ?? url
-        }
-        var request = URLRequest(url: url)
-        request.httpMethod = "GET"
-
+        let queryItems = since > 0 ? [URLQueryItem(name: "since", value: String(since))] : nil
+        let request = try await buildRequest("GET", pathComponents: "v1/jobs", jobID, "events", queryItems: queryItems)
         let (data, response) = try await session.data(for: request)
         try validateHTTP(response, data: data)
         return try decoder.decode([WireFrame].self, from: data)
@@ -164,11 +151,7 @@ struct RuntimeHTTPClient: Sendable {
 
     /// `GET /v1/conversations/{id}/assets/{asset_id}/preview`.
     func getAssetPreview(conversationID: String, assetID: String) async throws -> AgentAssetPreviewResponse {
-        let url = try assetURL(conversationID: conversationID, assetID: assetID)
-            .appendingPathComponent("preview")
-        var request = URLRequest(url: url)
-        request.httpMethod = "GET"
-
+        let request = try await buildRequest("GET", pathComponents: "v1/conversations", conversationID, "assets", assetID, "preview")
         let (data, response) = try await session.data(for: request)
         try validateHTTP(response, data: data)
         return try decoder.decode(AgentAssetPreviewResponse.self, from: data)
@@ -176,67 +159,34 @@ struct RuntimeHTTPClient: Sendable {
 
     /// `GET /v1/conversations/{id}/assets/{asset_id}/content`.
     func getAssetContent(conversationID: String, assetID: String) async throws -> AgentAssetContentResponse {
-        let url = try assetURL(conversationID: conversationID, assetID: assetID)
-            .appendingPathComponent("content")
-        var request = URLRequest(url: url)
-        request.httpMethod = "GET"
-
+        let request = try await buildRequest("GET", pathComponents: "v1/conversations", conversationID, "assets", assetID, "content")
         let (data, response) = try await session.data(for: request)
         try validateHTTP(response, data: data)
         return try decoder.decode(AgentAssetContentResponse.self, from: data)
     }
 
-    /// `POST /v1/repos/clone` — go-git 把公开仓库 clone 进 workspaceRoot/<name> 下。
-    /// 同步：阻塞到 clone 完成。clone 可能慢 → 单独设较长超时（默认 60s 不够）。
+    /// `POST /v1/repos/clone` — go-git clone。
     func cloneRepo(url repoURL: String, ref: String?) async throws -> ClonedRepo {
-        let endpoint = try resolveBaseURL().appendingPathComponent("v1/repos/clone")
-        var request = URLRequest(url: endpoint)
-        request.httpMethod = "POST"
-        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
-        request.timeoutInterval = 180   // clone 同步、可能慢
-
         var body: [String: String] = ["url": repoURL]
         if let ref, !ref.isEmpty { body["ref"] = ref }
-        request.httpBody = try JSONEncoder().encode(body)
-
+        let request = try await buildRequest("POST", pathComponents: "v1/repos/clone", body: body, timeout: 180)
         let (data, response) = try await session.data(for: request)
-        // 不走 validateHTTP：clone 的 404=repo_not_found 等结构化错误带消息体，
-        // 直接透传 body 供 LocalizedError 提取，避免被通用 .notFound 吞掉。
-        guard let http = response as? HTTPURLResponse else {
-            throw RuntimeHTTPError.invalidResponse
-        }
+        guard let http = response as? HTTPURLResponse else { throw RuntimeHTTPError.invalidResponse }
         guard (200...201).contains(http.statusCode) else {
-            throw RuntimeHTTPError.unexpectedStatus(http.statusCode,
-                                                    body: String(data: data, encoding: .utf8) ?? "")
+            throw RuntimeHTTPError.unexpectedStatus(http.statusCode, body: String(data: data, encoding: .utf8) ?? "")
         }
         return try decoder.decode(ClonedRepo.self, from: data)
     }
 
-    /// `GET /healthz` — 存活探针。
+    /// `GET /healthz` — 存活探针（不注入 credential，无需认证）。
     func healthCheck() async throws -> Bool {
-        let url = try resolveBaseURL().appendingPathComponent("healthz")
-        var request = URLRequest(url: url)
-        request.httpMethod = "GET"
-        request.timeoutInterval = 3   // 存活探针：死 socket 即刻 -1004；挂死的 server 也以此为界，别拖住恢复
-
+        let request = try await buildRequest("GET", pathComponents: "healthz", timeout: 3)
         let (data, response) = try await session.data(for: request)
         guard let httpResponse = response as? HTTPURLResponse,
               httpResponse.statusCode == 200,
               let body = String(data: data, encoding: .utf8)?.trimmingCharacters(in: .whitespacesAndNewlines),
-              body == "ok" else {
-            return false
-        }
+              body == "ok" else { return false }
         return true
-    }
-
-    // MARK: - Helpers
-
-    private func assetURL(conversationID: String, assetID: String) throws -> URL {
-        try resolveBaseURL()
-            .appendingPathComponent("v1/conversations")
-            .appendingPathComponent(conversationID)
-            .appendingPathComponent("assets")
-            .appendingPathComponent(assetID)
     }
 
     private func validateHTTP(_ response: URLResponse, data: Data) throws {

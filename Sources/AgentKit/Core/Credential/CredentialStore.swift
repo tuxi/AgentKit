@@ -18,7 +18,7 @@ import Foundation
 /// AgentKit **不实现** Go 的 `Resolver` 接口。
 /// 注入方向是单向的：`CredentialStore → CredentialMap → secretsJSON → Runtime`。
 public protocol CredentialStore: Sendable {
-    /// 获取单个 credential。
+    /// 获取单个 credential（async）。
     func resolve(_ target: CredentialTarget) async throws -> Credential?
 
     /// 获取所有 credential（用于构建 secretsJSON 注入 Runtime）。
@@ -32,4 +32,14 @@ public protocol CredentialStore: Sendable {
 
     /// 清空所有 credential（登出时调用）。
     func clear() async throws
+
+    /// 同步解析（用于 WebSocket 连接校验等不能 async 的上下文）。
+    /// 默认返回 nil。实现方可覆盖以提供同步访问。
+    func resolveSync(_ target: CredentialTarget) -> Credential?
+}
+
+// MARK: - Default impl
+
+public extension CredentialStore {
+    func resolveSync(_ target: CredentialTarget) -> Credential? { nil }
 }
