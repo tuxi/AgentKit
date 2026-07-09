@@ -50,7 +50,7 @@ struct RuntimeHTTPClient: Sendable {
     /// 从 Runtime 的 `{trace_id, code, msg, data}` 信封中解码 data 字段。
     /// 格式与 Agent Gateway 的 ApiResponse<T> 完全兼容。
     private func decodeEnvelope<T: Decodable>(_ type: T.Type, from data: Data) throws -> T {
-        let envelope = try decodeEnvelope(RuntimeEnvelope<T>.self, from: data)
+        let envelope = try decoder.decode(RuntimeEnvelope<T>.self, from: data)
         guard envelope.code == 0, let payload = envelope.data else {
             throw RuntimeHTTPError.unexpectedStatus(envelope.code, body: envelope.msg)
         }
