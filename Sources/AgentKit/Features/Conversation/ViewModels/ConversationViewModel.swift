@@ -50,6 +50,10 @@ public final class ConversationViewModel {
     /// 对话主干（来自 `GET /v1/conversations/{id}/messages`）。
     public private(set) var messages: [Message] = []
 
+    /// 本会话选择的模型 ID（Gateway 原生 ID，如 `"deepseek-v4-pro"`）。
+    /// 每个对话独立跟踪自己的模型，不是全局设置。
+    public var selectedModel: String
+
     private let client: RuntimeClient
     private let toolRegistry: ToolRegistry
     private var streamTask: Task<Void, Never>?
@@ -57,10 +61,11 @@ public final class ConversationViewModel {
 
     // MARK: - Init
 
-    public init(client: RuntimeClient, toolRegistry: ToolRegistry = ToolRegistry(), workspace: Workspace? = nil) {
+    public init(client: RuntimeClient, toolRegistry: ToolRegistry = ToolRegistry(), workspace: Workspace? = nil, model: String = "") {
         self.client = client
         self.toolRegistry = toolRegistry
         self.workspace = workspace
+        self.selectedModel = model
     }
 
     /// 本会话用于展示的工作区标签。
@@ -186,6 +191,8 @@ public final class ConversationViewModel {
     public func cancelTurn() async {
         await client.cancelTurn()
         currentTurnID = nil
+        lifecycleStatus = nil
+        
     }
 
     /// Optimistically reflect that ResumeSession was accepted by the host wrapper.

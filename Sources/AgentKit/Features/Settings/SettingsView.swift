@@ -51,7 +51,7 @@ public struct SettingsView: View {
                 }
                 // 初始化模型选择：优先 last_used_model，否则 default_model
                 if credentialSettings.model.isEmpty {
-                    credentialSettings.model = modelSettings.effectiveModel
+                    credentialSettings.model = modelSettings.modelForNewConversation
                 }
                 await credentialSettings.refresh()
                 if accountManager.state.isAuthenticated {

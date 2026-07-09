@@ -29,12 +29,9 @@ public final class ModelSettingsStore {
     /// Gateway 的默认模型（首次使用提示）。
     public private(set) var gatewayDefaultModel: String?
 
-    /// 当前选择的模型 ID（Gateway 原生 ID，如 `"deepseek-v4-pro"`）。
-    public var selectedModel: String
-
-    /// 用户上次选择的有效模型。
-    /// 优先 UserDefaults 持久化的值 → 回退 Gateway default_model → 回退空字符串。
-    public var effectiveModel: String {
+    /// 新对话时使用的模型 ID。
+    /// 优先 UserDefaults 持久化值 → 回退 Gateway default_model → 回退列表第一个。
+    public var modelForNewConversation: String {
         let stored = lastUsedModel
         if let models = gatewayModels, models.contains(where: { $0.id == stored }) {
             return stored
@@ -43,7 +40,6 @@ public final class ModelSettingsStore {
            models.contains(where: { $0.id == def }) {
             return def
         }
-        // 回退：使用 Gateway 列表中第一个可用模型
         if let first = gatewayModels?.first(where: { $0.available != false }) {
             return first.id
         }
@@ -54,6 +50,7 @@ public final class ModelSettingsStore {
 
     private static let lastModelKey = "code_agent.last_model"
 
+    /// 全局记忆：用户最近一次在任意对话中使用的模型。
     private var lastUsedModel: String {
         get { UserDefaults.standard.string(forKey: Self.lastModelKey) ?? "" }
         set { UserDefaults.standard.set(newValue, forKey: Self.lastModelKey) }
@@ -70,36 +67,29 @@ public final class ModelSettingsStore {
     ) {
         self.authClient = authClient
         self.credentialStore = credentialStore
-        self.selectedModel = ""
     }
 
     // MARK: - Public
 
     /// 从 Gateway 获取模型列表。应在用户已登录时调用。
-    /// 首次调用后 `selectedModel` 设为 effective model。
     public func fetchFromGateway() async {
         guard let token = try? await credentialStore.resolve(.gateway)?.secret else { return }
         do {
             let response = try await authClient.getModels(accessToken: token)
             gatewayModels = response.models
             gatewayDefaultModel = response.defaultModel
-
-            // 首次加载：selectedModel = effective（未选择过则用默认）
-            if selectedModel.isEmpty {
-                selectedModel = effectiveModel
-            }
         } catch {
             // 网络错误不覆盖已有数据
         }
     }
 
-    /// 用户主动选择模型。持久化到本地。
-    public func selectModel(_ modelID: String) {
-        selectedModel = modelID
+    /// 用户选择模型时调用。持久化为全局 "last used"（用于新对话默认值）。
+    public func didUseModel(_ modelID: String) {
+        guard !modelID.isEmpty else { return }
         lastUsedModel = modelID
     }
 
-    /// 当前模型的 display name（用于 UI）。
+    /// 模型的 display name（用于 UI）。
     public func displayName(for modelID: String) -> String {
         gatewayModels?.first(where: { $0.id == modelID })?.displayName ?? modelID
     }

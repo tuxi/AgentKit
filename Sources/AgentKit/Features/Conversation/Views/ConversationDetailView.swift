@@ -17,9 +17,13 @@ public struct ConversationDetailView: View {
 
     @Environment(WorkspaceStore.self) private var store
     @Environment(AgentRouter.self) private var router
+    @Environment(ModelSettingsStore.self) private var modelSettings
 
     private let conversation: ConversationRef?
     private let viewModel: ConversationViewModel?
+
+    /// 草稿页的模型选择（新对话，初始值来自 modelForNewConversation）。
+    @State private var draftModel: String = ""
 
     public init(conversation: ConversationRef? = nil) {
         self.conversation = conversation
@@ -63,11 +67,14 @@ public struct ConversationDetailView: View {
 
                 DraftComposerPanel(
                     placeholder: store.isPreparingWorkspace ? "正在准备工作区…" : "随心输入",
-                    isEnabled: (store.draft?.canCommit ?? false) && !store.isPreparingWorkspace
-                ) { text in
-                    await store.commitDraft(firstMessage: text)
-                    return store.draft == nil
-                }
+                    isEnabled: (store.draft?.canCommit ?? false) && !store.isPreparingWorkspace,
+                    onSend: { text in
+                        await store.commitDraft(firstMessage: text)
+                        return store.draft == nil
+                    },
+                    modelSettings: modelSettings,
+                    selectedModel: $draftModel
+                )
                 .frame(maxWidth: 760)
 
                 if case .failed(let message) = store.draft?.state {
@@ -83,6 +90,9 @@ public struct ConversationDetailView: View {
         .scrollDismissesKeyboard(.interactively)
         .background(Color.draftPageBackground.ignoresSafeArea())
         .task {
+            if draftModel.isEmpty {
+                draftModel = modelSettings.modelForNewConversation
+            }
             if store.draft == nil
                 && store.activeConversationViewModel == nil
                 && store.selectedConversation == nil
@@ -168,7 +178,7 @@ public struct ConversationDetailView: View {
 
                     WorkspaceChipBar()          // 冻结：只读 chip
 
-                    ChatComposer(
+                    DraftComposerPanel(
                         placeholder: isPaused
                             ? "会话已暂停 — 点击继续"
                             : (vm.snapshot.pendingApproval != nil || vm.snapshot.pendingPlanApproval != nil)
@@ -176,14 +186,31 @@ public struct ConversationDetailView: View {
                             : "输入消息…",
                         isEnabled: !isPaused && vm.snapshot.pendingApproval == nil && vm.snapshot.pendingPlanApproval == nil,
                         isTurnRunning: vm.lifecycleStatus == "running",
-                        onStop: {
-                            Task { await vm.cancelTurn() }
+                        onStop: { Task { await vm.cancelTurn() } },
+                        onSend: { text in
+                            let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+                            await vm.send(input: .text(trimmed))
+                            return true
+                        },
+                        modelSettings: modelSettings,
+                        selectedModel: Binding(
+                            get: { vm.selectedModel },
+                            set: { newID in
+                                vm.selectedModel = newID
+                                modelSettings.didUseModel(newID)
+                            }
+                        ),
+                        onModelChange: { newID in
+                            #if os(iOS)
+                            Task {
+                                try? AgentRuntime.shared.reconfigure(
+                                    secretsJSON: await CredentialSettings.currentSecretsJSON(),
+                                    modelName: newID
+                                )
+                            }
+                            #endif
                         }
-                    ) { text in
-                        let text = text.trimmingCharacters(in: .whitespacesAndNewlines)
-                        await vm.send(input: .text(text))
-                        return true
-                    }
+                    )
                 }
                 .background(.bar)
                 .animation(.easeOut(duration: 0.25), value: vm.snapshot.pendingApproval != nil)
@@ -293,15 +320,25 @@ private struct ResumePausedBar: View {
     }
 }
 
-// MARK: - ChatComposer
+// MARK: - DraftComposerPanel
 
-/// 草稿页首屏输入面板。保留 `ChatComposer` 的发送语义，但使用更接近
-/// Codex/Claude 首页的紧凑圆角面板。
+/// 统一输入面板 —— 合并了原 `ChatComposer` 和 `DraftComposerPanel`。
+/// 用于草稿页（新建对话）和活跃会话两种场景。
+/// 对标 Claude Code / Codex：模型选择器在输入栏中，每个对话独立管理自己的模型。
 private struct DraftComposerPanel: View {
 
     let placeholder: String
     let isEnabled: Bool
+    var isTurnRunning: Bool = false
+    var onStop: (() -> Void)? = nil
     let onSend: (String) async -> Bool
+
+    /// 可选的模型管理。非 nil 时显示模型选择器。
+    var modelSettings: ModelSettingsStore? = nil
+    /// 当前对话的模型 ID（binding，每个对话独立）。
+    @Binding var selectedModel: String
+    /// 模型切换回调。
+    var onModelChange: ((String) -> Void)? = nil
 
     @State private var text = ""
     @State private var isSending = false
@@ -342,19 +379,12 @@ private struct DraftComposerPanel: View {
 
                     Spacer(minLength: 12)
 
-                    Menu {
-                        Button("5.5 高") { }
-                    } label: {
-                        HStack(spacing: 4) {
-                            Text("5.5 高")
-                                .font(.system(size: 13, weight: .medium))
-                            Image(systemName: "chevron.down")
-                                .font(.system(size: 9, weight: .semibold))
-                        }
+                    // ── Model Selector ──
+                    if let modelSettings {
+                        modelSelector(modelSettings)
                     }
-                    .menuStyle(.borderlessButton)
-                    .fixedSize()
-                    .foregroundStyle(.secondary)
+
+                    Spacer(minLength: 12)
 
                     Button { } label: {
                         Image(systemName: "mic")
@@ -364,24 +394,39 @@ private struct DraftComposerPanel: View {
                     .foregroundStyle(.secondary)
                     .accessibilityLabel("语音输入")
 
-                    Button {
-                        send()
-                    } label: {
-                        if isSending {
-                            ProgressView()
-                                .controlSize(.small)
-                                .frame(width: 30, height: 30)
-                        } else {
-                            Image(systemName: "arrow.up")
-                                .font(.system(size: 16, weight: .bold))
+                    // ── Send / Stop button ──
+                    if isTurnRunning {
+                        Button {
+                            onStop?()
+                        } label: {
+                            Image(systemName: "stop.fill")
+                                .font(.system(size: 12, weight: .bold))
                                 .frame(width: 30, height: 30)
                         }
+                        .buttonStyle(.plain)
+                        .foregroundStyle(.white)
+                        .background(Color.red, in: Circle())
+                        .accessibilityLabel("停止")
+                    } else {
+                        Button {
+                            send()
+                        } label: {
+                            if isSending {
+                                ProgressView()
+                                    .controlSize(.small)
+                                    .frame(width: 30, height: 30)
+                            } else {
+                                Image(systemName: "arrow.up")
+                                    .font(.system(size: 16, weight: .bold))
+                                    .frame(width: 30, height: 30)
+                            }
+                        }
+                        .buttonStyle(.plain)
+                        .foregroundStyle(canSend ? Color.draftSendForeground : Color.draftDisabledSendForeground)
+                        .background(canSend ? Color.draftSendBackground : Color.draftDisabledSendBackground, in: Circle())
+                        .disabled(!canSend)
+                        .accessibilityLabel("发送")
                     }
-                    .buttonStyle(.plain)
-                    .foregroundStyle(canSend ? Color.draftSendForeground : Color.draftDisabledSendForeground)
-                    .background(canSend ? Color.draftSendBackground : Color.draftDisabledSendBackground, in: Circle())
-                    .disabled(!canSend)
-                    .accessibilityLabel("发送")
                 }
                 .padding(.horizontal, 14)
                 .padding(.bottom, 10)
@@ -400,6 +445,40 @@ private struct DraftComposerPanel: View {
         }
         .shadow(color: .black.opacity(0.10), radius: 20, y: 10)
     }
+
+    // MARK: - Model Selector
+
+    private func modelSelector(_ modelSettings: ModelSettingsStore) -> some View {
+        Menu {
+            ForEach(modelSettings.availableModelIDs, id: \.self) { modelID in
+                Button {
+                    selectedModel = modelID
+                    modelSettings.didUseModel(modelID)
+                    onModelChange?(modelID)
+                } label: {
+                    HStack {
+                        Text(modelSettings.displayName(for: modelID))
+                        if modelID == selectedModel {
+                            Image(systemName: "checkmark")
+                        }
+                    }
+                }
+            }
+        } label: {
+            HStack(spacing: 4) {
+                Text(modelSettings.displayName(for: selectedModel))
+                    .font(.system(size: 13, weight: .medium))
+                    .lineLimit(1)
+                Image(systemName: "chevron.down")
+                    .font(.system(size: 9, weight: .semibold))
+            }
+        }
+        .menuStyle(.borderlessButton)
+        .fixedSize()
+        .foregroundStyle(.secondary)
+    }
+
+    // MARK: - Input Field
 
     @ViewBuilder
     private var inputField: some View {
@@ -426,100 +505,7 @@ private struct DraftComposerPanel: View {
 #endif
     }
 
-    private var trimmed: String {
-        text.trimmingCharacters(in: .whitespacesAndNewlines)
-    }
-
-    private var canSend: Bool {
-        isEnabled && !trimmed.isEmpty && !isSending
-    }
-
-    private func send() {
-        guard canSend else { return }
-        let toSend = text
-        isSending = true
-        Task {
-            let ok = await onSend(toSend)
-            isSending = false
-            if ok { text = "" }
-        }
-    }
-}
-
-/// 共享输入框。`onSend` 返回是否成功——成功时清空输入，失败时保留用户文本。
-private struct ChatComposer: View {
-
-    let placeholder: String
-    let isEnabled: Bool
-    var isTurnRunning: Bool = false
-    var onStop: (() -> Void)? = nil
-    let onSend: (String) async -> Bool
-
-    @State private var text = ""
-    @State private var isSending = false
-#if os(macOS)
-    @State private var composerHeight: CGFloat = 22
-    private let composerMinHeight: CGFloat = 22
-    private let composerMaxHeight: CGFloat = 120
-#endif
-
-    var body: some View {
-        VStack(spacing: 0) {
-            Divider()
-            HStack(alignment: .bottom, spacing: 8) {
-#if os(macOS)
-                MacComposerTextView(
-                    text: $text,
-                    height: $composerHeight,
-                    placeholder: placeholder,
-                    isEnabled: isEnabled,
-                    minHeight: composerMinHeight,
-                    maxHeight: composerMaxHeight,
-                    onSend: {
-                        send()
-                    }
-                )
-                .frame(height: composerHeight)
-                .padding(.horizontal, 4)
-                .padding(.vertical, 4)
-                .background(.quaternary)
-                .clipShape(RoundedRectangle(cornerRadius: 8))
-#else
-                TextField(placeholder, text: $text, axis: .vertical)
-                    .textFieldStyle(.plain)
-                    .lineLimit(1...5)
-                    .padding(.horizontal, 8)
-                    .padding(.vertical, 6)
-                    .background(.quaternary)
-                    .clipShape(RoundedRectangle(cornerRadius: 8))
-                    .disabled(!isEnabled)
-#endif
-
-                Button {
-                    if isTurnRunning {
-                        onStop?()
-                    } else {
-                        send()
-                    }
-                } label: {
-                    if isTurnRunning {
-                        Image(systemName: "stop.circle.fill")
-                            .font(.title2)
-                            .foregroundStyle(.red)
-                    } else if isSending {
-                        ProgressView().controlSize(.small)
-                    } else {
-                        Image(systemName: "arrow.up.circle.fill")
-                            .font(.title2)
-                    }
-                }
-                .disabled(!isTurnRunning && !canSend)
-                .buttonStyle(.plain)
-            }
-            .padding(.horizontal, 12)
-            .padding(.vertical, 8)
-        }
-    }
+    // MARK: - Helpers
 
     private var trimmed: String {
         text.trimmingCharacters(in: .whitespacesAndNewlines)
