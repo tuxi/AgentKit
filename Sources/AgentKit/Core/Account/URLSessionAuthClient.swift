@@ -23,7 +23,9 @@ public final class URLSessionAuthClient: AuthClientProtocol, Sendable {
     public init(baseURL: URL = URL(string: "http://localhost:12221")!, session: URLSession = .shared) {
         self.baseURL = baseURL
         self.session = session
-        self.decoder = JSONDecoder()
+        let decoder = JSONDecoder()
+        decoder.keyDecodingStrategy = .convertFromSnakeCase
+        self.decoder = decoder
         self.encoder = JSONEncoder()
     }
 
@@ -86,6 +88,10 @@ public final class URLSessionAuthClient: AuthClientProtocol, Sendable {
             throw AuthError.invalidResponse
         }
         return data
+    }
+
+    public func getModels(accessToken: String) async throws -> ModelsResponse {
+        return try await get("/api/v1/agent/models", accessToken: accessToken)
     }
 
     // MARK: - HTTP Helpers

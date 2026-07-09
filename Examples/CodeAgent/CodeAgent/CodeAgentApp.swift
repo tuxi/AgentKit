@@ -25,6 +25,7 @@ struct CodeAgentApp: App {
             CodeAgentRootView()
                 .environment(container)
                 .environment(container.accountManager)
+                .environment(container.modelSettings)
         }
     }
 }

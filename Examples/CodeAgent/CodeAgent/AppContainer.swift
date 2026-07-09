@@ -18,6 +18,9 @@ final class AppContainer {
     /// 用户身份管理 —— 登录 / Token 刷新 / 登出。
     let accountManager: AccountManager
 
+    /// 模型管理 —— 从 Gateway 获取模型列表 + 本地偏好。
+    let modelSettings: ModelSettingsStore
+
     /// 客户端工具注册表 — 注册本地可执行工具。
     let toolRegistry: ToolRegistry
 
@@ -27,6 +30,7 @@ final class AppContainer {
         // 创建 AccountManager（默认指向本地 Gateway）
         let authClient = URLSessionAuthClient()
         self.accountManager = AccountManager(authClient: authClient)
+        self.modelSettings = ModelSettingsStore(authClient: authClient)
 
         self.toolRegistry = ToolRegistry()
 
@@ -38,6 +42,9 @@ final class AppContainer {
 
         // 从 Keychain 恢复登录态
         Task { await accountManager.restore() }
+
+        // 从 Gateway 获取模型列表
+        Task { await modelSettings.fetchFromGateway() }
     }
 
     private func registerClientTools() {

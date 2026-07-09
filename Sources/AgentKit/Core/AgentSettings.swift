@@ -31,11 +31,18 @@ public enum AgentSettings {
     public static var apiKey: String { keychain.string(for: apiKeyAccount) ?? "" }
     public static var tavilyApiKey: String { keychain.string(for: tavilyApiKeyAccount) ?? "" }
 
-    /// 已选模型别名。**清洗**：若持久化的值不在 `availableModels`（例如旧版本存过的非法名）
-    /// → 回退到 ""，避免把 runtime 不认得的 modelName 传给 MobileStart 导致启动崩溃。
+    /// 已选模型别名或 Gateway 模型 ID。
+    /// 若是 Gateway 模式，model 是 Gateway 原生 ID（如 `"deepseek-v4-pro"`）。
+    /// 若是 BYOK 模式，model 需在 `availableModels` 中。
+    /// 回退规则：先在 `availableModels` 中查找 → 若非空且不在列表中 → 保留原值（Gateway ID）。
     public static var model: String {
         let stored = UserDefaults.standard.string(forKey: modelDefaultsKey) ?? ""
-        return availableModels.contains(stored) ? stored : ""
+        // 非空且在硬编码别名列表中 → 直接使用
+        if availableModels.contains(stored) { return stored }
+        // 非空但不在别名列表 → 可能是 Gateway 模型 ID，保留原值
+        if !stored.isEmpty { return stored }
+        // 空 → 回退默认
+        return ""
     }
 
     /// MobileStart 的 `secretsJSON`。无 key → 返回 `{}`（runtime 将缺凭证，UI 应提示用户填写）。

@@ -32,6 +32,8 @@ public protocol AuthClientProtocol: Sendable {
     func getUsage(accessToken: String) async throws -> UsageInfo
     /// 获取用户资料（可选）。
     func getProfile(accessToken: String) async throws -> AccountInfo
+    /// 获取可用模型列表。
+    func getModels(accessToken: String) async throws -> ModelsResponse
 }
 
 // MARK: - Types
@@ -49,7 +51,7 @@ public struct AuthResponse: Codable, Sendable {
     /// 是否新注册
     public let isNew: Bool
     /// 用户 ID
-    public let userId: String
+    public let userId: Int
     /// 用户展示名（登录时返回）
     public let nickname: String?
 
@@ -88,5 +90,38 @@ public enum AuthError: Error, LocalizedError {
         case .invalidResponse:        return "服务器响应无效。"
         case .serverError(let c, let m): return "[\(c)] \(m)"
         }
+    }
+}
+
+// MARK: - Gateway Model Types
+
+/// 单个模型的信息。对应 Gateway `GET /agent/models` 的 `models[]` 元素。
+public struct GatewayModel: Codable, Sendable, Identifiable {
+    /// 模型 ID，用于 `POST /chat/completions` 的 `model` 字段。如 `"deepseek-v4-pro"`
+    public let id: String
+    /// UI 展示名称。如 `"DeepSeek V4 Pro"`
+    public let displayName: String
+    /// 提供商
+    public let provider: String
+    /// 上下文窗口
+    public let contextWindow: Int?
+    /// 是否支持流式
+    public let supportsStreaming: Bool?
+    /// 是否支持 tool calling
+    public let supportsToolCalls: Bool?
+    /// 模型分类
+    public let category: String?
+    /// 当前用户是否可用
+    public let available: Bool?
+}
+
+/// Gateway `GET /agent/models` 的响应。
+public struct ModelsResponse: Codable, Sendable {
+    public let models: [GatewayModel]
+    public let defaultModel: String
+
+    enum CodingKeys: String, CodingKey {
+        case models
+        case defaultModel = "default_model"
     }
 }

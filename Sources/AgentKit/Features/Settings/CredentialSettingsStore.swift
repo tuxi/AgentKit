@@ -46,7 +46,19 @@ public final class CredentialSettingsStore {
     public var byokProviders: [BYOKProviderConfig]
     public var selectedBYOKName: String?
     public var byokKey: String = ""
-    public var model: String = AgentSettings.model
+    /// 当前选择的模型 ID（Gateway 原生 ID 或 BYOK alias）
+    public var model: String = ""
+
+    /// Gateway 模型列表（由外部注入，如 AppContainer.modelSettings）。
+    /// 非 nil 时 SettingsView 使用此列表；nil 时回退到 AgentSettings.availableModels。
+    public var gatewayModelIDs: [String]?
+    public var modelDisplayNames: [String: String] = [:]
+
+    /// 当前生效的可用模型列表。
+    public var effectiveModelIDs: [String] {
+        if let ids = gatewayModelIDs, !ids.isEmpty { return ids }
+        return AgentSettings.availableModels
+    }
 
     private let store: any CredentialStore
 
