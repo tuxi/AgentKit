@@ -115,13 +115,9 @@ public struct GatewayModel: Codable, Sendable, Identifiable {
     public let available: Bool?
 }
 
-/// Gateway `GET /agent/models` 的响应。
+/// Gateway `GET /agent/models` 的响应 data 部分。
+/// 字段使用 camelCase，依赖 decoder 的 `.convertFromSnakeCase` 自动映射。
 public struct ModelsResponse: Codable, Sendable {
     public let models: [GatewayModel]
     public let defaultModel: String
-
-    enum CodingKeys: String, CodingKey {
-        case models
-        case defaultModel = "default_model"
-    }
 }

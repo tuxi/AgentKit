@@ -91,7 +91,11 @@ public final class URLSessionAuthClient: AuthClientProtocol, Sendable {
     }
 
     public func getModels(accessToken: String) async throws -> ModelsResponse {
-        return try await get("/api/v1/agent/models", accessToken: accessToken)
+        let wrapper: GatewayResponse<ModelsResponse> = try await get("/api/v1/agent/models", accessToken: accessToken)
+        guard let data = wrapper.data else {
+            throw AuthError.invalidResponse
+        }
+        return data
     }
 
     // MARK: - HTTP Helpers
