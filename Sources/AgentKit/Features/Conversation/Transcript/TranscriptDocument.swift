@@ -65,30 +65,42 @@ enum TurnTranscriptBuilder {
 
         builder.appendHeading("Agent")
 
-        for (index, block) in turn.blocks.enumerated() {
+        var renderedBlockCount = 0
+        var previousRenderedBlockWasFailedTool = false
+
+        for block in turn.blocks {
+            if shouldSuppress(block: block, afterFailedTool: previousRenderedBlockWasFailedTool) {
+                continue
+            }
+            if renderedBlockCount > 0 {
+                builder.appendBlockGap()
+            }
+
             switch block {
             case .text(_, let payload):
                 builder.appendMarkdown(payload.text, textAnnotations: payload.textAnnotations)
+                previousRenderedBlockWasFailedTool = false
 
             case .toolGroup(let group):
                 appendToolGroup(group, state: state, to: &builder)
+                previousRenderedBlockWasFailedTool = group.containsFailedTool
 
             case .artifact(_, let artifact):
                 appendArtifact(artifact, to: &builder)
+                previousRenderedBlockWasFailedTool = false
 
             case .system(_, let payload):
                 appendSystem(payload, to: &builder)
+                previousRenderedBlockWasFailedTool = false
 
             case .childStream(_, let payload):
                 builder.appendChildStreamRow(
                     payload,
                     action: .openChildStream(childID: payload.childID)
                 )
+                previousRenderedBlockWasFailedTool = payload.status == .failed
             }
-
-            if index < turn.blocks.count - 1 {
-                builder.appendBlankLine()
-            }
+            renderedBlockCount += 1
         }
 
         if let footer = turn.footer {
@@ -177,18 +189,22 @@ enum TurnTranscriptBuilder {
         }
 
         if !tool.output.isEmpty {
-            builder.appendIndentedLabel("Output")
-            switch presentation.outputKind {
-            case .diff:
-                builder.appendDiff(tool.output)
-            case .json:
-                builder.appendCode(tool.output, language: "json")
-            case .code(let language):
-                builder.appendCode(tool.output, language: language)
-            case .terminal:
-                builder.appendCode(tool.output, language: "shell")
-            case .text:
-                builder.appendCode(tool.output, language: "text")
+            if presentation.statusTone == .failed {
+                builder.appendToolFailureDetail(tool.output)
+            } else {
+                builder.appendIndentedLabel("Output")
+                switch presentation.outputKind {
+                case .diff:
+                    builder.appendDiff(tool.output)
+                case .json:
+                    builder.appendCode(tool.output, language: "json")
+                case .code(let language):
+                    builder.appendCode(tool.output, language: language)
+                case .terminal:
+                    builder.appendCode(tool.output, language: "shell")
+                case .text:
+                    builder.appendCode(tool.output, language: "text")
+                }
             }
         }
 
@@ -242,6 +258,23 @@ enum TurnTranscriptBuilder {
 
     private static func groupExpansionID(for group: ToolGroup) -> String {
         "group:\(group.id)"
+    }
+
+    private static func shouldSuppress(
+        block: TurnBlock,
+        afterFailedTool: Bool
+    ) -> Bool {
+        guard afterFailedTool,
+              case .system(_, let payload) = block else {
+            return false
+        }
+        return payload.isTranscriptError
+    }
+}
+
+private extension ToolGroup {
+    var containsFailedTool: Bool {
+        tools.contains { $0.status == .failed }
     }
 }
 
@@ -349,6 +382,13 @@ private struct TranscriptAttributedBuilder {
         append("! Error  ", attributes: labelAttrs)
         append(text, attributes: bodyAttrs)
         copyParts.append("Error: \(text)")
+    }
+
+    mutating func appendToolFailureDetail(_ text: String) {
+        let detail = normalizedToolError(text)
+        guard !detail.isEmpty else { return }
+        append("\n  \(detail)", attributes: toolFailureDetailAttributes)
+        copyParts.append(detail)
     }
 
     mutating func appendIndentedLabel(_ text: String) {
@@ -472,6 +512,16 @@ private struct TranscriptAttributedBuilder {
         return firstLine
     }
 
+    private func normalizedToolError(_ text: String) -> String {
+        var detail = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        for prefix in ["Tool error:", "tool error:", "Error:", "error:"] where detail.hasPrefix(prefix) {
+            detail = String(detail.dropFirst(prefix.count))
+                .trimmingCharacters(in: .whitespacesAndNewlines)
+            break
+        }
+        return detail
+    }
+
     /// Code blocks are tagged with `.transcriptBlock` so the text view can
     /// draw a full-width rounded background; horizontal padding comes from
     /// paragraph indents, so the copied text stays clean of manual indents.
@@ -543,6 +593,11 @@ private struct TranscriptAttributedBuilder {
 
     mutating func appendBlankLine() {
         append("\n\n", attributes: bodyAttributes)
+        copyParts.append("")
+    }
+
+    mutating func appendBlockGap() {
+        append("\n", attributes: blockGapAttributes)
         copyParts.append("")
     }
 
@@ -725,7 +780,7 @@ private struct TranscriptAttributedBuilder {
         var rowAttrs = tableAttributes
         rowAttrs[.transcriptBlock] = block
         rowAttrs[.paragraphStyle] = tableRowParagraphStyle(
-            spacingAfter: 1,
+            spacingAfter: 2,
             columnStarts: columnStarts
         )
 
@@ -741,6 +796,7 @@ private struct TranscriptAttributedBuilder {
                 append("\n", attributes: rowAttrs)
             }
         }
+        append("\u{200B}", attributes: tableTailSpacerAttributes)
     }
 
     /// Row paragraphs share the block inset; tab stops sit at each column's
@@ -1073,6 +1129,14 @@ private struct TranscriptAttributedBuilder {
         ]
     }
 
+    private var blockGapAttributes: [NSAttributedString.Key: Any] {
+        [
+            .font: PlatformFont.systemFont(ofSize: 1),
+            .foregroundColor: tertiaryColor,
+            .paragraphStyle: paragraphStyle(spacingAfter: blockGapSpacing)
+        ]
+    }
+
     private var systemErrorLabelAttributes: [NSAttributedString.Key: Any] {
         [
             .font: PlatformFont.systemFont(ofSize: toolTitleFontSize, weight: .semibold),
@@ -1086,6 +1150,14 @@ private struct TranscriptAttributedBuilder {
             .font: PlatformFont.systemFont(ofSize: bodyFontSize, weight: .medium),
             .foregroundColor: failedColor,
             .paragraphStyle: paragraphStyle(spacingAfter: 2, blockInset: true)
+        ]
+    }
+
+    private var toolFailureDetailAttributes: [NSAttributedString.Key: Any] {
+        [
+            .font: PlatformFont.systemFont(ofSize: toolDetailFontSize, weight: .regular),
+            .foregroundColor: failedColor,
+            .paragraphStyle: paragraphStyle(spacingAfter: 0)
         ]
     }
 
@@ -1195,7 +1267,7 @@ private struct TranscriptAttributedBuilder {
         [
             .font: PlatformFont.monospacedSystemFont(ofSize: codeFontSize, weight: .regular),
             .foregroundColor: primaryColor,
-            .paragraphStyle: paragraphStyle(spacingAfter: 2, blockInset: true, charWrap: true)
+            .paragraphStyle: paragraphStyle(spacingAfter: codeBlockSpacingAfter, blockInset: true, charWrap: true)
         ]
     }
 
@@ -1211,7 +1283,7 @@ private struct TranscriptAttributedBuilder {
         [
             .font: PlatformFont.monospacedSystemFont(ofSize: codeFontSize, weight: .regular),
             .foregroundColor: primaryColor,
-            .paragraphStyle: paragraphStyle(spacingAfter: 2, blockInset: true, charWrap: true)
+            .paragraphStyle: paragraphStyle(spacingAfter: tableRowSpacingAfter, blockInset: true, charWrap: true)
         ]
     }
 
@@ -1220,6 +1292,14 @@ private struct TranscriptAttributedBuilder {
             .font: PlatformFont.monospacedSystemFont(ofSize: codeFontSize, weight: .semibold),
             .foregroundColor: primaryColor,
             .paragraphStyle: paragraphStyle(spacingAfter: 3, blockInset: true)
+        ]
+    }
+
+    private var tableTailSpacerAttributes: [NSAttributedString.Key: Any] {
+        [
+            .font: PlatformFont.systemFont(ofSize: 1),
+            .foregroundColor: primaryColor,
+            .paragraphStyle: paragraphStyle(spacingAfter: tableBottomSpacing)
         ]
     }
 
@@ -1324,6 +1404,38 @@ private struct TranscriptAttributedBuilder {
 
     private var userBubbleHorizontalPadding: CGFloat {
         TranscriptTheme.userBubbleHorizontalPadding
+    }
+
+    private var blockGapSpacing: CGFloat {
+        #if os(iOS)
+        return 8
+        #else
+        return 7
+        #endif
+    }
+
+    private var tableBottomSpacing: CGFloat {
+        #if os(iOS)
+        return 12
+        #else
+        return 10
+        #endif
+    }
+
+    private var codeBlockSpacingAfter: CGFloat {
+        #if os(iOS)
+        return 4
+        #else
+        return 3
+        #endif
+    }
+
+    private var tableRowSpacingAfter: CGFloat {
+        #if os(iOS)
+        return 3
+        #else
+        return 2
+        #endif
     }
 
     private var bodyFontSize: CGFloat {
@@ -1448,17 +1560,17 @@ private struct TranscriptAttributedBuilder {
 
     private var lineSpacing: CGFloat {
         #if os(iOS)
-        return 4
+        return 6
         #else
-        return 2
+        return 5
         #endif
     }
 
     private var bodySpacingAfter: CGFloat {
         #if os(iOS)
-        return 4
+        return 6
         #else
-        return 2
+        return 4
         #endif
     }
 

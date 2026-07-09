@@ -5,7 +5,7 @@
 //  中间内容，三态外壳（P5.0）：
 //    1. 草稿（store.draft != nil）→ 占位空视图 + 工作区选择 chip + 提交首条消息的输入框
 //    2. 活跃会话 → 事件时间线 + 冻结的工作区 chip + 发送消息的输入框
-//    3. 未选中 → ContentUnavailableView
+//    3. 未选中 → 草稿式占位页
 //
 //  iOS: 采用 ScrollView + safeAreaInset(.bottom) 模式，输入栏自动浮于键盘之上。
 //  macOS: safeAreaInset(.bottom) 无视觉影响，布局与原先 VStack 一致。
@@ -40,11 +40,7 @@ public struct ConversationDetailView: View {
             } else if let vm = viewModel ?? store.activeConversationViewModel {
                 activeView(vm: vm)
             } else {
-                ContentUnavailableView(
-                    "选择一个会话",
-                    systemImage: "bubble.left.and.bubble.right",
-                    description: Text("从左侧列表选择，或点击 + 新建会话")
-                )
+                draftView
             }
         }
         .toolbar { toolbarContent }
@@ -54,37 +50,54 @@ public struct ConversationDetailView: View {
 
     private var draftView: some View {
         ScrollView {
-            VStack(spacing: 0) {
-                ContentUnavailableView {
-                    Label("新建会话", systemImage: "sparkles")
-                } description: {
-                    Text(store.draft?.workspace == nil
-                         ? "先选择一个工作区，再描述你的任务"
-                         : "描述一个任务，发送后将创建会话并锁定工作区")
-                }
-                .frame(maxHeight: .infinity)
+            VStack(spacing: 18) {
+                Spacer(minLength: 120)
 
-                if case .failed(let message) = store.draft?.state {
-                    failureBanner(message)
-                }
-            }
-        }
-        .scrollDismissesKeyboard(.interactively)
-        .safeAreaInset(edge: .bottom, spacing: 0) {
-            VStack(spacing: 0) {
-                WorkspaceChipBar()
+                Text(draftTitle)
+                    .font(.system(size: 28, weight: .medium))
+                    .foregroundStyle(.primary)
+                    .multilineTextAlignment(.center)
+                    .lineLimit(2)
+                    .minimumScaleFactor(0.82)
+                    .padding(.horizontal, 24)
 
-                ChatComposer(
-                    placeholder: store.isPreparingWorkspace ? "正在准备工作区…" : "描述一个任务…",
-                    // 准备工作区（clone/import）期间 workspace 未就绪 → 禁止发送。
+                DraftComposerPanel(
+                    placeholder: store.isPreparingWorkspace ? "正在准备工作区…" : "随心输入",
                     isEnabled: (store.draft?.canCommit ?? false) && !store.isPreparingWorkspace
                 ) { text in
                     await store.commitDraft(firstMessage: text)
-                    return store.draft == nil   // draft 被清空 = 提交成功
+                    return store.draft == nil
                 }
+                .frame(maxWidth: 760)
+
+                if case .failed(let message) = store.draft?.state {
+                    failureBanner(message)
+                        .frame(maxWidth: 760)
+                }
+
+                Spacer(minLength: 180)
             }
-            .background(.bar)
+            .frame(maxWidth: .infinity)
+            .padding(.horizontal, 32)
         }
+        .scrollDismissesKeyboard(.interactively)
+        .background(Color.draftPageBackground.ignoresSafeArea())
+        .task {
+            if store.draft == nil
+                && store.activeConversationViewModel == nil
+                && store.selectedConversation == nil
+                && conversation == nil {
+                store.beginDraft()
+            }
+        }
+    }
+
+    private var draftTitle: String {
+        let name = store.draft?.workspace?.name ?? store.recentWorkspaces.mostRecent?.name
+        if let name, !name.isEmpty {
+            return "我们应该在 \(name) 中构建什么？"
+        }
+        return "我们应该构建什么？"
     }
 
     private func failureBanner(_ message: String) -> some View {
@@ -281,6 +294,157 @@ private struct ResumePausedBar: View {
 }
 
 // MARK: - ChatComposer
+
+/// 草稿页首屏输入面板。保留 `ChatComposer` 的发送语义，但使用更接近
+/// Codex/Claude 首页的紧凑圆角面板。
+private struct DraftComposerPanel: View {
+
+    let placeholder: String
+    let isEnabled: Bool
+    let onSend: (String) async -> Bool
+
+    @State private var text = ""
+    @State private var isSending = false
+#if os(macOS)
+    @State private var composerHeight: CGFloat = 56
+    private let composerMinHeight: CGFloat = 56
+    private let composerMaxHeight: CGFloat = 150
+#endif
+
+    var body: some View {
+        VStack(spacing: 0) {
+            VStack(spacing: 8) {
+                inputField
+                    .padding(.horizontal, 16)
+                    .padding(.top, 14)
+
+                HStack(spacing: 12) {
+                    Button { } label: {
+                        Image(systemName: "plus")
+                            .font(.system(size: 17, weight: .medium))
+                    }
+                    .buttonStyle(.plain)
+                    .foregroundStyle(.secondary)
+                    .accessibilityLabel("添加")
+
+                    Menu {
+                        Button("请求批准") { }
+                    } label: {
+                        Label("请求批准", systemImage: "hand.raised")
+                            .font(.system(size: 13, weight: .medium))
+                            .labelStyle(.titleAndIcon)
+                        Image(systemName: "chevron.down")
+                            .font(.system(size: 9, weight: .semibold))
+                    }
+                    .menuStyle(.borderlessButton)
+                    .fixedSize()
+                    .foregroundStyle(.secondary)
+
+                    Spacer(minLength: 12)
+
+                    Menu {
+                        Button("5.5 高") { }
+                    } label: {
+                        HStack(spacing: 4) {
+                            Text("5.5 高")
+                                .font(.system(size: 13, weight: .medium))
+                            Image(systemName: "chevron.down")
+                                .font(.system(size: 9, weight: .semibold))
+                        }
+                    }
+                    .menuStyle(.borderlessButton)
+                    .fixedSize()
+                    .foregroundStyle(.secondary)
+
+                    Button { } label: {
+                        Image(systemName: "mic")
+                            .font(.system(size: 15, weight: .medium))
+                    }
+                    .buttonStyle(.plain)
+                    .foregroundStyle(.secondary)
+                    .accessibilityLabel("语音输入")
+
+                    Button {
+                        send()
+                    } label: {
+                        if isSending {
+                            ProgressView()
+                                .controlSize(.small)
+                                .frame(width: 30, height: 30)
+                        } else {
+                            Image(systemName: "arrow.up")
+                                .font(.system(size: 16, weight: .bold))
+                                .frame(width: 30, height: 30)
+                        }
+                    }
+                    .buttonStyle(.plain)
+                    .foregroundStyle(canSend ? Color.draftSendForeground : Color.draftDisabledSendForeground)
+                    .background(canSend ? Color.draftSendBackground : Color.draftDisabledSendBackground, in: Circle())
+                    .disabled(!canSend)
+                    .accessibilityLabel("发送")
+                }
+                .padding(.horizontal, 14)
+                .padding(.bottom, 10)
+            }
+
+            WorkspaceChipBar()
+                .padding(.horizontal, 8)
+                .padding(.vertical, 3)
+                .background(Color.draftPanelFooterBackground)
+        }
+        .background(Color.draftPanelBackground)
+        .clipShape(RoundedRectangle(cornerRadius: 20, style: .continuous))
+        .overlay {
+            RoundedRectangle(cornerRadius: 20, style: .continuous)
+                .stroke(Color.draftPanelStroke, lineWidth: 1)
+        }
+        .shadow(color: .black.opacity(0.10), radius: 20, y: 10)
+    }
+
+    @ViewBuilder
+    private var inputField: some View {
+#if os(macOS)
+        MacComposerTextView(
+            text: $text,
+            height: $composerHeight,
+            placeholder: placeholder,
+            isEnabled: isEnabled,
+            minHeight: composerMinHeight,
+            maxHeight: composerMaxHeight,
+            onSend: {
+                send()
+            }
+        )
+        .frame(height: composerHeight)
+#else
+        TextField(placeholder, text: $text, axis: .vertical)
+            .textFieldStyle(.plain)
+            .font(.body)
+            .lineLimit(2...6)
+            .frame(minHeight: 56, alignment: .topLeading)
+            .disabled(!isEnabled)
+#endif
+    }
+
+    private var trimmed: String {
+        text.trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    private var canSend: Bool {
+        isEnabled && !trimmed.isEmpty && !isSending
+    }
+
+    private func send() {
+        guard canSend else { return }
+        let toSend = text
+        isSending = true
+        Task {
+            let ok = await onSend(toSend)
+            isSending = false
+            if ok { text = "" }
+        }
+    }
+}
 
 /// 共享输入框。`onSend` 返回是否成功——成功时清空输入，失败时保留用户文本。
 private struct ChatComposer: View {
@@ -645,6 +809,70 @@ private struct PlanApprovalBar: View {
 /// The approval panel uses window/fill surfaces that AppKit and UIKit name
 /// differently; these bridge them so the file compiles on both platforms.
 private extension Color {
+    static var draftPageBackground: Color {
+        #if os(macOS)
+        Color(NSColor.windowBackgroundColor)
+        #else
+        Color(UIColor.systemBackground)
+        #endif
+    }
+
+    static var draftPanelBackground: Color {
+        #if os(macOS)
+        Color(NSColor.controlBackgroundColor)
+        #else
+        Color(UIColor.secondarySystemBackground)
+        #endif
+    }
+
+    static var draftPanelFooterBackground: Color {
+        #if os(macOS)
+        Color(NSColor.separatorColor).opacity(0.12)
+        #else
+        Color(UIColor.tertiarySystemBackground)
+        #endif
+    }
+
+    static var draftPanelStroke: Color {
+        #if os(macOS)
+        Color(NSColor.separatorColor).opacity(0.35)
+        #else
+        Color(UIColor.separator).opacity(0.28)
+        #endif
+    }
+
+    static var draftSendBackground: Color {
+        #if os(macOS)
+        Color(NSColor.labelColor)
+        #else
+        Color(UIColor.label)
+        #endif
+    }
+
+    static var draftSendForeground: Color {
+        #if os(macOS)
+        Color(NSColor.windowBackgroundColor)
+        #else
+        Color(UIColor.systemBackground)
+        #endif
+    }
+
+    static var draftDisabledSendBackground: Color {
+        #if os(macOS)
+        Color(NSColor.separatorColor).opacity(0.45)
+        #else
+        Color(UIColor.tertiaryLabel).opacity(0.35)
+        #endif
+    }
+
+    static var draftDisabledSendForeground: Color {
+        #if os(macOS)
+        Color(NSColor.secondaryLabelColor)
+        #else
+        Color(UIColor.secondaryLabel)
+        #endif
+    }
+
     static var approvalPanelBackground: Color {
         #if os(macOS)
         Color(NSColor.windowBackgroundColor)

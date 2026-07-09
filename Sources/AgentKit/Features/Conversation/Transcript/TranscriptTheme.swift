@@ -254,6 +254,14 @@ enum TranscriptTheme {
         #endif
     }
 
+    static var userBubbleMinimumWidth: CGFloat {
+        #if os(iOS)
+        return 64
+        #else
+        return 72
+        #endif
+    }
+
     // MARK: Diff
 
     static let diffAddedText: TranscriptPlatformColor = dynamic(

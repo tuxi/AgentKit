@@ -16,6 +16,14 @@
 
 import SwiftUI
 
+#if os(macOS)
+import AppKit
+private typealias TranscriptPlatformFont = NSFont
+#else
+import UIKit
+private typealias TranscriptPlatformFont = UIFont
+#endif
+
 struct NativeTranscriptView: View {
     let transcript: AttributedTranscript
     let onAction: (TranscriptAction) -> Void
@@ -111,9 +119,10 @@ final class TranscriptTextContainer: NSTextContainer {
             writingDirection: baseWritingDirection,
             remaining: remainingRect
         )
-        guard isUserPrompt(at: characterIndex), rect.width > 0 else { return rect }
+        guard let userPromptRange = userPromptRange(at: characterIndex), rect.width > 0 else { return rect }
 
-        let laneWidth = TranscriptTheme.userBubbleLaneWidth(for: rect.width)
+        let maxLaneWidth = TranscriptTheme.userBubbleLaneWidth(for: rect.width)
+        let laneWidth = userBubbleLineFragmentWidth(for: userPromptRange, maxWidth: maxLaneWidth)
         guard laneWidth > 0, laneWidth < rect.width else { return rect }
         remainingRect?.pointee = .zero
         return CGRect(
@@ -124,17 +133,22 @@ final class TranscriptTextContainer: NSTextContainer {
         )
     }
 
-    private func isUserPrompt(at characterIndex: Int) -> Bool {
+    private func userPromptRange(at characterIndex: Int) -> NSRange? {
         guard let textStorage = layoutManager?.textStorage,
               textStorage.length > 0 else {
-            return false
+            return nil
         }
 
         let clamped = min(max(characterIndex, 0), textStorage.length - 1)
-        if blockKind(at: clamped) == .userPrompt {
-            return true
+        if let range = blockRange(at: clamped), blockKind(at: clamped) == .userPrompt {
+            return range
         }
-        return clamped > 0 && blockKind(at: clamped - 1) == .userPrompt
+        if clamped > 0,
+           let range = blockRange(at: clamped - 1),
+           blockKind(at: clamped - 1) == .userPrompt {
+            return range
+        }
+        return nil
     }
 
     private func blockKind(at index: Int) -> TranscriptBlockKind? {
@@ -144,6 +158,45 @@ final class TranscriptTextContainer: NSTextContainer {
             effectiveRange: nil
         ) as? TranscriptBlockValue
         return block?.kind
+    }
+
+    private func blockRange(at index: Int) -> NSRange? {
+        var range = NSRange(location: 0, length: 0)
+        _ = layoutManager?.textStorage?.attribute(
+            .transcriptBlock,
+            at: index,
+            effectiveRange: &range
+        )
+        return range.length > 0 ? range : nil
+    }
+
+    private func userBubbleLineFragmentWidth(for range: NSRange, maxWidth: CGFloat) -> CGFloat {
+        guard maxWidth > 0,
+              let textStorage = layoutManager?.textStorage else {
+            return maxWidth
+        }
+
+        let text = (textStorage.string as NSString).substring(with: range)
+        guard !text.contains("\n") else { return maxWidth }
+
+        let measuredWidth = unwrappedTextWidth(in: range, textStorage: textStorage)
+        guard measuredWidth > 0 else { return maxWidth }
+
+        let paddedWidth = ceil(measuredWidth + TranscriptTheme.userBubbleHorizontalPadding * 2)
+        return min(maxWidth, max(TranscriptTheme.userBubbleMinimumWidth, paddedWidth))
+    }
+
+    private func unwrappedTextWidth(in range: NSRange, textStorage: NSTextStorage) -> CGFloat {
+        var width: CGFloat = 0
+        textStorage.enumerateAttributes(in: range) { attributes, subrange, _ in
+            let text = (textStorage.string as NSString).substring(with: subrange)
+            if let font = attributes[.font] as? TranscriptPlatformFont {
+                width += ceil((text as NSString).size(withAttributes: [.font: font]).width)
+            } else {
+                width += ceil((text as NSString).size(withAttributes: nil).width)
+            }
+        }
+        return width
     }
 }
 

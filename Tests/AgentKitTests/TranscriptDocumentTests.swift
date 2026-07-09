@@ -248,6 +248,42 @@ final class TranscriptDocumentTests: XCTestCase {
         XCTAssertNotNil(attributes(in: transcript.attributedString, for: "Tool error")[.foregroundColor])
     }
 
+    func testFailedToolSuppressesDuplicateSystemError() {
+        let error = "Tool error: unknown tool: portfolio_get_status"
+        let tool = ToolNodePayload(
+            callID: "c1",
+            toolName: "portfolio_get_status",
+            args: .object([:]),
+            status: .failed,
+            output: error,
+            exitCode: nil,
+            elapsedMs: 1
+        )
+        let turn = ConversationTurn(
+            id: "turn",
+            userPrompt: nil,
+            blocks: [
+                .toolGroup(ToolGroup(id: "c1", tools: [tool])),
+                .system(
+                    id: "error",
+                    SystemNodePayload(kind: .observation, text: error)
+                )
+            ],
+            footer: nil,
+            isLive: false
+        )
+
+        let transcript = TurnTranscriptBuilder.build(
+            turn: turn,
+            state: TranscriptDocumentState(expandedToolIDs: ["c1"])
+        )
+        let rendered = transcript.attributedString.string
+
+        XCTAssertFalse(rendered.contains("! Error"))
+        XCTAssertFalse(rendered.contains("Tool error: unknown tool"))
+        XCTAssertEqual(rendered.components(separatedBy: "unknown tool: portfolio_get_status").count - 1, 1)
+    }
+
     func testMarkdownTableRowsHaveBackground() {
         let turn = ConversationTurn(
             id: "turn",
@@ -278,6 +314,34 @@ final class TranscriptDocumentTests: XCTestCase {
         XCTAssertEqual((headerBlock as? TranscriptBlockValue)?.kind, .table)
         XCTAssertEqual((rowBlock as? TranscriptBlockValue)?.kind, .table)
         XCTAssertEqual(headerBlock as? TranscriptBlockValue, rowBlock as? TranscriptBlockValue)
+    }
+
+    func testMarkdownTableAddsBreathingRoomBeforeFollowingText() {
+        let turn = ConversationTurn(
+            id: "turn",
+            userPrompt: nil,
+            blocks: [
+                .text(id: "t1", MessageNodePayload(
+                    role: .assistant,
+                    text: """
+                    | 字段 | 值 |
+                    | --- | --- |
+                    | 余额 | 5016.74 USDT |
+
+                    也就是说，现在是全现金状态。
+                    """
+                ))
+            ],
+            footer: nil,
+            isLive: false
+        )
+
+        let transcript = TurnTranscriptBuilder.build(
+            turn: turn,
+            state: TranscriptDocumentState()
+        )
+
+        XCTAssertTrue(transcript.attributedString.string.contains("5016.74 USDT\u{200B}\n也就是说"))
     }
 
     func testStandaloneArtifactProducesPathAction() {
