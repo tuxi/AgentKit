@@ -137,11 +137,9 @@ struct DraftComposerPanel: View {
 //                .stroke(Color.draftPanelStroke, lineWidth: 1)
 //        }
         .shadow(color: .black.opacity(0.10), radius: 20, y: 10)
-        .task {
+        .task(id: viewModel?.conversation?.id) {
             await modelSettings.fetchFromGateway()
-            if (selectedModel ?? "").isEmpty {
-                selectedModel = modelSettings.getModel(with: viewModel?.conversation?.id)
-            }
+            selectedModel = modelSettings.getModel(with: viewModel?.conversation?.id)
         }
     }
 

@@ -14,9 +14,11 @@ import SwiftUI
 
 public struct TurnTimelineView: View {
     let snapshot: RuntimeSnapshot
+    let timelineExtensions: [any TimelineExtension]
 
-    public init(snapshot: RuntimeSnapshot) {
+    public init(snapshot: RuntimeSnapshot, timelineExtensions: [any TimelineExtension] = []) {
         self.snapshot = snapshot
+        self.timelineExtensions = timelineExtensions
     }
 
     public var body: some View {
@@ -33,6 +35,12 @@ public struct TurnTimelineView: View {
                     TurnView(turn: turn)
                         .equatable()
                         .id(turn.id)
+
+                    ForEach(timelineExtensions, id: \.id) { timelineExtension in
+                        if let content = timelineExtension.makeContent(for: turn.id) {
+                            content.id("\(timelineExtension.id).\(turn.id)")
+                        }
+                    }
                 }
 
                 // Live "agent working" indicator — only while a turn is

@@ -10,6 +10,7 @@
 import Foundation
 import AgentKit
 
+@MainActor
 @Observable
 final class AppContainer {
 
@@ -24,6 +25,9 @@ final class AppContainer {
     /// 客户端工具注册表 — 注册本地可执行工具。
     let toolRegistry: ToolRegistry
 
+    /// Product-specific additions to AgentKit's otherwise generic Timeline.
+    let timelineExtensions: [any TimelineExtension]
+
     init(wsClient: WebSocketClient) {
         self.wsClient = wsClient
 
@@ -33,6 +37,12 @@ final class AppContainer {
         self.modelSettings = ModelSettingsStore(authClient: authClient)
 
         self.toolRegistry = ToolRegistry()
+
+        #if os(macOS)
+        self.timelineExtensions = [DesktopControlEvidenceTimeline()]
+        #else
+        self.timelineExtensions = []
+        #endif
 
         // 从旧 AgentSettings 迁移到新 CredentialStore（仅一次）
         CredentialSettings.migrateFromLegacyIfNeeded()
@@ -75,7 +85,11 @@ final class AppContainer {
     }
 
     func makeAgentDependencies() -> AgentDependencies {
-        AgentDependencies(client: makeAgentClient(), toolRegistry: toolRegistry)
+        AgentDependencies(
+            client: makeAgentClient(),
+            toolRegistry: toolRegistry,
+            timelineExtensions: timelineExtensions
+        )
     }
 
     // MARK: - Credential Injection (iOS)

@@ -19,7 +19,10 @@ public struct ConversationTimelineView: View {
     }
 
     public var body: some View {
-        TurnTimelineView(snapshot: viewModel.snapshot)
+        TurnTimelineView(
+            snapshot: viewModel.snapshot,
+            timelineExtensions: viewModel.timelineExtensions
+        )
             // Scope scroll/follow state to the session — switching
             // conversations starts fresh, anchored at the bottom.
             .id(viewModel.conversation?.id)

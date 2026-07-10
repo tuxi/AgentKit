@@ -56,16 +56,24 @@ public final class ConversationViewModel {
 
     private let client: RuntimeClient
     private let toolRegistry: ToolRegistry
+    let timelineExtensions: [any TimelineExtension]
     private var streamTask: Task<Void, Never>?
     private var snapshotTask: Task<Void, Never>?
 
     // MARK: - Init
 
-    public init(client: RuntimeClient, toolRegistry: ToolRegistry = ToolRegistry(), workspace: Workspace? = nil, model: String = "") {
+    public init(
+        client: RuntimeClient,
+        toolRegistry: ToolRegistry = ToolRegistry(),
+        workspace: Workspace? = nil,
+        model: String = "",
+        timelineExtensions: [any TimelineExtension] = []
+    ) {
         self.client = client
         self.toolRegistry = toolRegistry
         self.workspace = workspace
         self.selectedModel = model
+        self.timelineExtensions = timelineExtensions
     }
 
     /// 本会话用于展示的工作区标签。
@@ -238,6 +246,9 @@ public final class ConversationViewModel {
 
             // v2: import into engine (replays through reducer → projects timeline)
             await engine.importHistory(batch.events)
+            for event in batch.events {
+                await forwardToTimelineExtensions(event)
+            }
         }
         return sinceCursor
     }
@@ -248,11 +259,18 @@ public final class ConversationViewModel {
     private func handleEvent(_ event: AgentEvent, engine: RuntimeEngine) async {
         updateLifecycle(from: event)
         await engine.ingest(event)
+        await forwardToTimelineExtensions(event)
 
         // P1: 拦截客户端工具执行
         if case .toolStarted(_, let callID, let tool) = event,
            tool.executor == .client {
             Task { await executeClientTool(callID: callID, tool: tool) }
+        }
+    }
+
+    private func forwardToTimelineExtensions(_ event: AgentEvent) async {
+        for timelineExtension in timelineExtensions {
+            await timelineExtension.handle(event)
         }
     }
 

@@ -78,6 +78,9 @@ public final class WorkspaceStore {
     /// 客户端工具注册表。
     private let toolRegistry: ToolRegistry
 
+    /// Host-owned Timeline additions. AgentKit does not interpret their state.
+    private let timelineExtensions: [any TimelineExtension]
+
     // MARK: - ViewModels
 
     /// 侧栏会话列表的 ViewModel。
@@ -102,9 +105,14 @@ public final class WorkspaceStore {
 
     // MARK: - Init
 
-    public init(client: RuntimeClient = DefaultAgentClient(), toolRegistry: ToolRegistry = ToolRegistry()) {
+    public init(
+        client: RuntimeClient = DefaultAgentClient(),
+        toolRegistry: ToolRegistry = ToolRegistry(),
+        timelineExtensions: [any TimelineExtension] = []
+    ) {
         self.client = client
         self.toolRegistry = toolRegistry
+        self.timelineExtensions = timelineExtensions
         self.listViewModel = ConversationListViewModel(client: client)
     }
 
@@ -114,7 +122,11 @@ public final class WorkspaceStore {
     private func connectToConversation(_ conversation: ConversationRef) async {
         // 已由 commitDraft 构建并连接好（首条消息路径）→ 不重复连接。
         if activeConversationViewModel?.conversation?.id == conversation.id { return }
-        let vm = ConversationViewModel(client: client, toolRegistry: toolRegistry)
+        let vm = ConversationViewModel(
+            client: client,
+            toolRegistry: toolRegistry,
+            timelineExtensions: timelineExtensions
+        )
         await vm.connect(to: conversation)
         activeConversationViewModel = vm
     }
@@ -299,7 +311,13 @@ public final class WorkspaceStore {
         draft?.state = .committing
         do {
             let ref = try await client.createConversation(workspacePath: workspace.url.path)
-            let vm = ConversationViewModel(client: client, toolRegistry: toolRegistry, workspace: workspace, model: model)
+            let vm = ConversationViewModel(
+                client: client,
+                toolRegistry: toolRegistry,
+                workspace: workspace,
+                model: model,
+                timelineExtensions: timelineExtensions
+            )
             await vm.connect(to: ref)
             await vm.send(input: .text(firstMessage, model: model))
 

@@ -1,0 +1,12 @@
+{
+  "mcpServers": {
+    "desktop_control": {
+      "type": "stdio",
+      "command": "/Users/xiaoyuan/Documents/work/git/desktop-control-mcp/.build/release/desktop-control-mcp",
+      "args": [
+        "--socket",
+        "/tmp/desktop-control.sock"
+      ]
+    }
+  }
+}

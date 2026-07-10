@@ -29,7 +29,11 @@ public struct WorkspaceView: View {
 
     public init(dependencies: AgentDependencies) {
         self.dependencies = dependencies
-        self._store = State(initialValue: WorkspaceStore(client: dependencies.client, toolRegistry: dependencies.toolRegistry))
+        self._store = State(initialValue: WorkspaceStore(
+            client: dependencies.client,
+            toolRegistry: dependencies.toolRegistry,
+            timelineExtensions: dependencies.timelineExtensions
+        ))
     }
 
     public var body: some View {

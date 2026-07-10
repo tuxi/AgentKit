@@ -18,8 +18,16 @@ public struct AgentDependencies {
     /// 默认空（不注册任何工具），由 app 层注入。
     public let toolRegistry: ToolRegistry
 
-    public init(client: RuntimeClient, toolRegistry: ToolRegistry = ToolRegistry()) {
+    /// Host-owned additions to the generic conversation Timeline.
+    public let timelineExtensions: [any TimelineExtension]
+
+    public init(
+        client: RuntimeClient,
+        toolRegistry: ToolRegistry = ToolRegistry(),
+        timelineExtensions: [any TimelineExtension] = []
+    ) {
         self.client = client
         self.toolRegistry = toolRegistry
+        self.timelineExtensions = timelineExtensions
     }
 }
