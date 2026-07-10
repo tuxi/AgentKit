@@ -32,7 +32,8 @@ public struct WorkspaceView: View {
         self._store = State(initialValue: WorkspaceStore(
             client: dependencies.client,
             toolRegistry: dependencies.toolRegistry,
-            timelineExtensions: dependencies.timelineExtensions
+            timelineExtensions: dependencies.timelineExtensions,
+            onAuthExpired: dependencies.onAuthExpired
         ))
     }
 

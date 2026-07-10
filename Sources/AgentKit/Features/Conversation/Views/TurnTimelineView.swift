@@ -20,9 +20,20 @@ public struct TurnTimelineView: View {
         self.snapshot = snapshot
         self.timelineExtensions = timelineExtensions
     }
+    
+    // 获取当前排在最底部的view的id
+    private var actualLastItemId: String? {
+        if snapshot.isLive, snapshot.turnStartedAt != nil {
+            return "thinking_timer"
+        }
+        return snapshot.turns.last?.id
+    }
 
     public var body: some View {
-        FollowingScrollView(repinTrigger: snapshot.turns.last?.id) {
+        FollowingScrollView(
+            lastItemId: actualLastItemId,
+            repinTrigger: snapshot.turns.last?.id
+        ) {
             LazyVStack(alignment: .leading, spacing: 12) {
                 // Sticky todo panel — agent's current task plan.
                 if !snapshot.latestTodos.isEmpty {
@@ -51,7 +62,7 @@ public struct TurnTimelineView: View {
                         isThinking: snapshot.modelStartedAt != nil,
                         modelStats: snapshot.modelStats
                     )
-                    .id("thinking_timer")
+                    .id("thinking_timer") // 如果它存在，它就是最底部
                 }
             }
             .frame(maxWidth: .infinity, alignment: .leading)

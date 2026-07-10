@@ -121,12 +121,35 @@ struct AssetIndex: Sendable {
     }
 
     func reference(forURL raw: String) -> AssetReference {
-        AssetReference(
+        if Self.isRuntimeResourceURI(raw) {
+            return reference(forRuntimeResourceURI: raw)
+        }
+        return AssetReference(
             display: raw,
             kind: .url,
             target: raw,
             turnID: turnID
         )
+    }
+
+    func reference(forRuntimeResourceURI raw: String) -> AssetReference {
+        let uri = Self.normalizedPath(raw)
+        if let structured = structuredAsset(path: uri) {
+            return reference(forStructuredAsset: structured, display: raw)
+        }
+
+        let lastPathComponent = URL(string: uri)?.lastPathComponent
+        let asset = AgentAssetRef(
+            id: "resource_\(turnID)_\(Self.stableHexHash(uri))",
+            kind: "mcp_resource",
+            uri: uri,
+            displayName: (lastPathComponent?.isEmpty == false) ? lastPathComponent : uri,
+            metadata: [
+                "resource_uri": .string(uri),
+                "resource_scheme": .string(URL(string: uri)?.scheme ?? "")
+            ]
+        )
+        return reference(forStructuredAsset: asset, display: raw)
     }
 
     func reference(forPath raw: String, sourceCallID: String? = nil) -> AssetReference {
@@ -195,6 +218,11 @@ struct AssetIndex: Sendable {
         return nil
     }
 
+    static func isRuntimeResourceURI(_ raw: String) -> Bool {
+        guard let scheme = URL(string: normalizedPath(raw))?.scheme?.lowercased() else { return false }
+        return !["http", "https", "file"].contains(scheme)
+    }
+
     private static func normalizedPath(_ path: String) -> String {
         let trimmed = path
             .trimmingCharacters(in: CharacterSet(charactersIn: "`'\".,;:)]}"))
@@ -240,10 +268,20 @@ struct AssetIndex: Sendable {
 
         return aliases
     }
+
+    private static func stableHexHash(_ raw: String) -> String {
+        var hash: UInt64 = 0xcbf29ce484222325
+        for byte in raw.utf8 {
+            hash ^= UInt64(byte)
+            hash &*= 0x100000001b3
+        }
+        return String(hash, radix: 16)
+    }
 }
 
 enum AssetReferenceDetector {
     private static let urlPattern = #"https?://[^\s<>)\]]+"#
+    private static let runtimeResourcePattern = #"[A-Za-z][A-Za-z0-9+.-]*://[^\s<>)\]]+"#
     private static let pathPattern = #"(?<![\w:/.-])(?:\.{1,2}/|/|[A-Za-z0-9_+.-]+/)[A-Za-z0-9_+@./:-]*\.[A-Za-z0-9_+-]+"#
     private static let directoryPattern = #"(?<![\w:/.-])(?:\.{1,2}/|/|\.?[A-Za-z0-9_+.-]+/)(?:[A-Za-z0-9_+@.-]+/)*"#
 
@@ -255,6 +293,15 @@ enum AssetReferenceDetector {
         for match in regex(urlPattern).matches(in: text, range: fullRange) {
             let raw = nsText.substring(with: match.range)
             results.append((match.range, assetIndex.reference(forURL: raw)))
+        }
+
+        for match in regex(runtimeResourcePattern).matches(in: text, range: fullRange) {
+            guard !results.contains(where: { NSIntersectionRange($0.0, match.range).length > 0 }) else {
+                continue
+            }
+            let raw = nsText.substring(with: match.range)
+            guard AssetIndex.isRuntimeResourceURI(raw) else { continue }
+            results.append((match.range, assetIndex.reference(forRuntimeResourceURI: raw)))
         }
 
         for match in regex(pathPattern).matches(in: text, range: fullRange) {

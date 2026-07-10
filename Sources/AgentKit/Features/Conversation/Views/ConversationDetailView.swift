@@ -71,6 +71,7 @@ public struct ConversationDetailView: View {
                         return store.draft == nil
                     },
                     viewModel: viewModel,
+                    draftRevision: store.draftNavigationRevision,
                 )
                 .frame(maxWidth: 760)
                 .environment(modelSettings)
@@ -86,7 +87,8 @@ public struct ConversationDetailView: View {
 //            .padding(.horizontal, 32)
         }
         .scrollDismissesKeyboard(.interactively)
-        .background(Color.draftPageBackground.ignoresSafeArea())
+//        .background(Color.draftPageBackground.ignoresSafeArea())
+        .background(.bar)
         .task {
             if store.draft == nil
                 && store.activeConversationViewModel == nil
@@ -138,6 +140,7 @@ public struct ConversationDetailView: View {
 
             ConversationTimelineView(viewModel: vm)
         }
+        .padding(.horizontal)
             .safeAreaInset(edge: .bottom, spacing: 8) {
                 VStack(spacing: 0) {
                     // ── 计划审批拦截栏（Plan Mode）──
@@ -172,7 +175,7 @@ public struct ConversationDetailView: View {
                     }
 
                     WorkspaceChipBar()          // 冻结：只读 chip
-                        .padding(.horizontal, 10)
+                        .padding(.horizontal, 20)
 
                     DraftComposerPanel(
                         placeholder: isPaused
@@ -214,13 +217,13 @@ public struct ConversationDetailView: View {
 
     @ToolbarContentBuilder
     private var toolbarContent: some ToolbarContent {
-        ToolbarItem {
-            Button {
-                store.beginDraft()
-            } label: {
-                Label("新建", systemImage: "square.and.pencil")
-            }
-        }
+//        ToolbarItem {
+//            Button {
+//                store.beginDraft()
+//            } label: {
+//                Label("新建", systemImage: "square.and.pencil")
+//            }
+//        }
         ToolbarItem {
             Button {
                 guard let vm = store.activeConversationViewModel else { return }
@@ -408,6 +411,7 @@ private struct ApprovalBar: View {
                                 .font(.system(.caption, design: .monospaced))
                                 .foregroundStyle(.secondary)
                         }
+                        .frame(maxWidth: .infinity)
                     }
 
                     if let args = request.toolArgs, case .object(let dict) = args, !dict.isEmpty {
@@ -420,6 +424,7 @@ private struct ApprovalBar: View {
                                         value: geo.size.height
                                     )
                                 })
+                                .frame(maxWidth: .infinity)
                         }
                         .onPreferenceChange(TextHeightKey.self) { contentHeight = $0 }
                         .frame(height: contentHeight > 0 ? min(contentHeight, 180) : nil)
@@ -451,15 +456,18 @@ private struct ApprovalBar: View {
                     Button(action: { onAlwaysAllow(scope.rawValue) }) {
                         VStack(alignment: .center, spacing: 1) {
                             Text("Always allow ") + Text("2").foregroundStyle(.tertiary)
-                            if request.isMCP, let server = request.mcpServer {
-                                Text("all from \"\(server)\"")
-                                    .font(.system(size: 9))
-                                    .foregroundStyle(.tertiary)
-                            }
                         }
                     }
                     .buttonStyle(.bordered)
                     .controlSize(.small)
+                    .overlay(alignment: .top) {
+                        if request.isMCP, let server = request.mcpServer {
+                            Text("all from \"\(server)\"")
+                                .font(.system(size: 9))
+                                .foregroundStyle(.tertiary)
+                                .offset(CGSizeMake(0, 20))
+                        }
+                    }
 
                     // Allow once 3 ↩ (高亮主按钮)
                     Button(action: onAllowOnce) {

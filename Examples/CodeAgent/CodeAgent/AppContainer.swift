@@ -88,7 +88,18 @@ final class AppContainer {
         AgentDependencies(
             client: makeAgentClient(),
             toolRegistry: toolRegistry,
-            timelineExtensions: timelineExtensions
+            timelineExtensions: timelineExtensions,
+            onAuthExpired: { [accountManager] in
+                // credential-injection-v1 §5.2：Gateway 401 → 强制刷新 token → Reconfigure Runtime。
+                // Runtime 已确认 token 失效，跳过 lazy 过期检查直接刷新；
+                // 失败（guest / 无 refresh_token）则静默放弃，等用户重新登录。
+                guard (try? await accountManager.refreshGatewayToken()) != nil else { return }
+                #if os(iOS)
+                try? await AgentRuntime.shared.reconfigure(with: KeychainCredentialStore())
+                #endif
+                // macOS：credential 经 KeychainCredentialStore 按请求注入
+                // Authorization header，刷新落 Keychain 后下一次请求自动生效。
+            }
         )
     }
 

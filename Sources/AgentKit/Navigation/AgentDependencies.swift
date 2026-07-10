@@ -21,13 +21,19 @@ public struct AgentDependencies {
     /// Host-owned additions to the generic conversation Timeline.
     public let timelineExtensions: [any TimelineExtension]
 
+    /// auth 恢复钩子。收到 `turn_failed(code: auth_expired)` 时由 ViewModel 调用。
+    /// Host 在此实现「刷新 token → Reconfigure Runtime」（credential-injection-v1 §5.2）。
+    public let onAuthExpired: (@MainActor () async -> Void)?
+
     public init(
         client: RuntimeClient,
         toolRegistry: ToolRegistry = ToolRegistry(),
-        timelineExtensions: [any TimelineExtension] = []
+        timelineExtensions: [any TimelineExtension] = [],
+        onAuthExpired: (@MainActor () async -> Void)? = nil
     ) {
         self.client = client
         self.toolRegistry = toolRegistry
         self.timelineExtensions = timelineExtensions
+        self.onAuthExpired = onAuthExpired
     }
 }

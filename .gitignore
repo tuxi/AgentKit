@@ -1,5 +1,7 @@
 .DS_Store
 /.build
+build/
+/build
 /Packages
 xcuserdata/
 DerivedData/
@@ -40,3 +42,4 @@ fastlane/test_output
 .idea
 /Frameworks
 dist
+/.codeagent

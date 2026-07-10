@@ -92,12 +92,35 @@ final class LifecycleProtocolTests: XCTestCase {
         let failed = try decodeEvent("""
         { "kind": "turn_failed", "turn_id": "turn_1", "err": "permanent" }
         """)
-        guard case .turnFailed(let failedID, _, let err) = failed else {
+        guard case .turnFailed(let failedID, _, let err, let code) = failed else {
             XCTFail("Expected turnFailed")
             return
         }
         XCTAssertEqual(failedID, "turn_1")
         XCTAssertEqual(err, "permanent")
+        XCTAssertNil(code)
+    }
+
+    func testTurnFailedDecodesStructuredError() throws {
+        // runtime-event-contract-v1 §5.1: turn_failed 携带结构化 error {code, message}
+        let failed = try decodeEvent("""
+        {
+          "kind": "turn_failed",
+          "turn_id": "turn_42",
+          "error": {
+            "code": "auth_expired",
+            "message": "Gateway returned 401 — access token may be expired"
+          }
+        }
+        """)
+        guard case .turnFailed(let turnID, _, let err, let code) = failed else {
+            XCTFail("Expected turnFailed")
+            return
+        }
+        XCTAssertEqual(turnID, "turn_42")
+        XCTAssertEqual(code, "auth_expired")
+        // err 缺省时回退到 error.message，UI 仍有可展示文本
+        XCTAssertEqual(err, "Gateway returned 401 — access token may be expired")
     }
 
     private func decodeEvent(_ json: String) throws -> AgentEvent {

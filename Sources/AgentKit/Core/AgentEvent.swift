@@ -25,7 +25,8 @@ public enum AgentEvent: Sendable {
     /// `turn_resumed`：服务端已接受 ResumeSession 并开始续跑。
     case turnResumed(turnID: String?, text: String?)
     /// `turn_failed`：turn 进入不可恢复失败终态。
-    case turnFailed(turnID: String?, text: String?, err: String?)
+    /// `errorCode` 来自结构化 `error.code`（开放集合，如 `auth_expired`），未知 code 按普通失败处理。
+    case turnFailed(turnID: String?, text: String?, err: String?, errorCode: String?)
 
     // ── 模型 ──
     case modelStarted(turnID: String?, invocationID: String?)
@@ -107,7 +108,12 @@ extension AgentEvent {
             return .turnResumed(turnID: turnID, text: wire.text)
 
         case "turn_failed", "turn.failed":
-            return .turnFailed(turnID: turnID, text: wire.text, err: wire.err)
+            return .turnFailed(
+                turnID: turnID,
+                text: wire.text,
+                err: wire.err ?? wire.error?.message,
+                errorCode: wire.error?.code
+            )
 
         case "model_started":
             return .modelStarted(turnID: turnID, invocationID: wire.invocationId)

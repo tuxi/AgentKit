@@ -60,6 +60,13 @@ public final class ConversationViewModel {
     private var streamTask: Task<Void, Never>?
     private var snapshotTask: Task<Void, Never>?
 
+    /// Host 注入的 auth 恢复钩子。收到 `turn_failed(code: auth_expired)` 时调用
+    /// （契约：credential-injection-v1 §5.2 —— 刷新 token → Reconfigure Runtime）。
+    private let onAuthExpired: (@MainActor () async -> Void)?
+
+    /// auth 恢复进行中标记 —— 防止连续 auth_expired 事件触发并发刷新。
+    private var isRecoveringAuth = false
+
     // MARK: - Init
 
     public init(
@@ -67,13 +74,15 @@ public final class ConversationViewModel {
         toolRegistry: ToolRegistry = ToolRegistry(),
         workspace: Workspace? = nil,
         model: String = "",
-        timelineExtensions: [any TimelineExtension] = []
+        timelineExtensions: [any TimelineExtension] = [],
+        onAuthExpired: (@MainActor () async -> Void)? = nil
     ) {
         self.client = client
         self.toolRegistry = toolRegistry
         self.workspace = workspace
         self.selectedModel = model
         self.timelineExtensions = timelineExtensions
+        self.onAuthExpired = onAuthExpired
     }
 
     /// 本会话用于展示的工作区标签。
@@ -261,11 +270,24 @@ public final class ConversationViewModel {
         await engine.ingest(event)
         await forwardToTimelineExtensions(event)
 
+        // auth_expired → Host 恢复流程（刷新 token → Reconfigure Runtime）
+        if case .turnFailed(_, _, _, let errorCode) = event,
+           errorCode == "auth_expired" {
+            await recoverFromAuthExpiry()
+        }
+
         // P1: 拦截客户端工具执行
         if case .toolStarted(_, let callID, let tool) = event,
            tool.executor == .client {
             Task { await executeClientTool(callID: callID, tool: tool) }
         }
+    }
+
+    private func recoverFromAuthExpiry() async {
+        guard let onAuthExpired, !isRecoveringAuth else { return }
+        isRecoveringAuth = true
+        defer { isRecoveringAuth = false }
+        await onAuthExpired()
     }
 
     private func forwardToTimelineExtensions(_ event: AgentEvent) async {

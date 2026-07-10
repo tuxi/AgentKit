@@ -54,6 +54,8 @@ struct WireFrame: Decodable {
     let ratio: Double?
     let chunk: String?
     let err: String?
+    /// v1.2 §5.1：`turn_failed` 结构化错误 `{code, message}`。`code` 是开放集合（如 `auth_expired`）。
+    let error: WireErrorDetail?
     let executor: String?           // v1.1: "server" | "client" (tool_started)
     let capabilities: [String]?     // v1.1: hello 帧声明的能力列表
     let invocationId: String?       // v1.2: 同一个模型调用产生的所有事件共享此 ID
@@ -63,7 +65,7 @@ struct WireFrame: Decodable {
 
     enum CodingKeys: String, CodingKey {
         case type, kind, at, step, id, server, seq
-        case text, observation, output, assets, failure, err, ratio, todos, chunk
+        case text, observation, output, assets, failure, err, error, ratio, todos, chunk
         case textAnnotations = "text_annotations"
         case eventId = "event_id"
         case sessionId = "session_id"
@@ -90,6 +92,14 @@ struct WireFrame: Decodable {
         case executor
         case capabilities
     }
+}
+
+// MARK: - Wire error detail
+
+/// `turn_failed` 携带的结构化错误（runtime-event-contract-v1 §5.1）。
+struct WireErrorDetail: Decodable {
+    let code: String?
+    let message: String?
 }
 
 // MARK: - Wire todo

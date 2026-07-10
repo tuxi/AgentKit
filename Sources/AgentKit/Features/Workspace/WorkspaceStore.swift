@@ -81,6 +81,9 @@ public final class WorkspaceStore {
     /// Host-owned Timeline additions. AgentKit does not interpret their state.
     private let timelineExtensions: [any TimelineExtension]
 
+    /// Host 注入的 auth 恢复钩子，透传给每个 ConversationViewModel。
+    private let onAuthExpired: (@MainActor () async -> Void)?
+
     // MARK: - ViewModels
 
     /// 侧栏会话列表的 ViewModel。
@@ -108,11 +111,13 @@ public final class WorkspaceStore {
     public init(
         client: RuntimeClient = DefaultAgentClient(),
         toolRegistry: ToolRegistry = ToolRegistry(),
-        timelineExtensions: [any TimelineExtension] = []
+        timelineExtensions: [any TimelineExtension] = [],
+        onAuthExpired: (@MainActor () async -> Void)? = nil
     ) {
         self.client = client
         self.toolRegistry = toolRegistry
         self.timelineExtensions = timelineExtensions
+        self.onAuthExpired = onAuthExpired
         self.listViewModel = ConversationListViewModel(client: client)
     }
 
@@ -125,7 +130,8 @@ public final class WorkspaceStore {
         let vm = ConversationViewModel(
             client: client,
             toolRegistry: toolRegistry,
-            timelineExtensions: timelineExtensions
+            timelineExtensions: timelineExtensions,
+            onAuthExpired: onAuthExpired
         )
         await vm.connect(to: conversation)
         activeConversationViewModel = vm
@@ -316,7 +322,8 @@ public final class WorkspaceStore {
                 toolRegistry: toolRegistry,
                 workspace: workspace,
                 model: model,
-                timelineExtensions: timelineExtensions
+                timelineExtensions: timelineExtensions,
+                onAuthExpired: onAuthExpired
             )
             await vm.connect(to: ref)
             await vm.send(input: .text(firstMessage, model: model))

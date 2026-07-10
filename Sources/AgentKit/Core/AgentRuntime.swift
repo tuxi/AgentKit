@@ -238,7 +238,7 @@ public final class AgentRuntime: @unchecked Sendable {
     public func reconfigure(with credentialStore: any CredentialStore) async throws {
         guard let server else { return }
         let map = (try? await credentialStore.all()) ?? CredentialMap()
-        try server.reconfigure(secretsJSON: map.toSecretsJSON(), modelName: "")
+        try server.reconfigure(map.toSecretsJSON(), modelName: "")
     }
 
     // MARK: - Accessors

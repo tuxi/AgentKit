@@ -891,6 +891,8 @@ private struct TranscriptAttributedBuilder {
         let reference: AssetReference
         if destination.hasPrefix("http://") || destination.hasPrefix("https://") {
             reference = assetIndex.reference(forURL: destination)
+        } else if AssetIndex.isRuntimeResourceURI(destination) {
+            reference = assetIndex.reference(forRuntimeResourceURI: destination)
         } else {
             reference = assetIndex.reference(forPath: destination)
         }

@@ -110,8 +110,7 @@ struct TurnView: View, Equatable {
             openAsset(reference)
 
         case .openURL(let raw):
-            guard let url = URL(string: raw) else { return }
-            openURL(url)
+            openExternalURL(raw)
 
         case .openPath(let path):
             if let artifact = artifact(path: path) {
@@ -152,8 +151,9 @@ struct TurnView: View, Equatable {
             openStructuredAsset(asset)
 
         case .url:
-            guard let url = URL(string: reference.target) else { return }
-            openURL(url)
+            if !openExternalURL(reference.target) {
+                openStructuredAsset(runtimeResourceAsset(uri: reference.target, displayName: reference.display))
+            }
 
         case .artifact:
             if let callID = reference.resolvedArtifactCallID,
@@ -178,27 +178,52 @@ struct TurnView: View, Equatable {
 
     private func openStructuredAsset(_ asset: AgentAssetRef) {
         switch asset.kind {
-        case "file", "file_location", "symbol", "search_result":
-            store.showInspector(.asset(AssetPreviewPayload(
-                asset: asset,
-                conversationID: store.activeConversationViewModel?.conversation?.id,
-                workspace: store.activeConversationViewModel?.workspaceAnchor
-            )))
+        case "file", "file_location", "symbol", "search_result",
+             "image", "video", "audio", "pdf", "mcp_resource":
+            showAssetInspector(asset)
 
         case "url":
-            if let uri = asset.uri, let url = URL(string: uri) {
-                openURL(url)
+            if let uri = asset.uri, openExternalURL(uri) {
+                return
+            } else if asset.uri != nil {
+                showAssetInspector(asset)
             } else {
                 Clipboard.copy(asset.displayName ?? asset.id)
             }
 
         default:
-            store.showInspector(.asset(AssetPreviewPayload(
-                asset: asset,
-                conversationID: store.activeConversationViewModel?.conversation?.id,
-                workspace: store.activeConversationViewModel?.workspaceAnchor
-            )))
+            showAssetInspector(asset)
         }
+    }
+
+    private func showAssetInspector(_ asset: AgentAssetRef) {
+        store.showInspector(.asset(AssetPreviewPayload(
+            asset: asset,
+            conversationID: store.activeConversationViewModel?.conversation?.id,
+            workspace: store.activeConversationViewModel?.workspaceAnchor
+        )))
+    }
+
+    private func runtimeResourceAsset(uri: String, displayName: String) -> AgentAssetRef {
+        let safeID = uri.unicodeScalars.map { scalar -> Character in
+            CharacterSet.alphanumerics.contains(scalar) ? Character(scalar) : "_"
+        }
+        return AgentAssetRef(
+            id: "resource_\(turn.id)_\(String(safeID).prefix(96))",
+            kind: "mcp_resource",
+            uri: uri,
+            displayName: displayName
+        )
+    }
+
+    @discardableResult
+    private func openExternalURL(_ raw: String) -> Bool {
+        guard let url = URL(string: raw),
+              ["http", "https", "file"].contains(url.scheme?.lowercased() ?? "") else {
+            return false
+        }
+        openURL(url)
+        return true
     }
 
     private func artifact(callID: String) -> ArtifactNode? {

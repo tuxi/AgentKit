@@ -194,7 +194,8 @@ struct AssetPreviewInspectorView: View {
             MediaImageAssetPreview(
                 asset: displayAsset,
                 mediaURL: mediaURL,
-                thumbnailURL: thumbnailURL
+                thumbnailURL: thumbnailURL,
+                fallbackMediaURL: fallbackMediaURL
             )
                 .padding()
         } else if displayAsset.isVideoAsset {
@@ -274,7 +275,18 @@ struct AssetPreviewInspectorView: View {
     }
 
     private var mediaURL: URL? {
-        displayAsset.mediaURL ?? resolvedPreviewURL(for: "media_url")
+        localWorkspaceMediaURL ?? displayAsset.mediaURL ?? resolvedPreviewURL(for: "media_url")
+    }
+
+    private var fallbackMediaURL: URL? {
+        let candidates = [
+            resolvedPreviewURL(for: "media_url"),
+            displayAsset.mediaURL
+        ]
+        return candidates.first { candidate in
+            guard let candidate else { return false }
+            return candidate != mediaURL
+        } ?? nil
     }
 
     private var thumbnailURL: URL? {
@@ -288,6 +300,19 @@ struct AssetPreviewInspectorView: View {
     private var isDisplayingLoadedContent: Bool {
         guard let loadedContent, !loadedContent.isEmpty else { return false }
         return displayContent == loadedContent
+    }
+
+    private var localWorkspaceMediaURL: URL? {
+        guard displayAsset.isImageAsset || displayAsset.isVideoAsset,
+              let root = payload.workspace?.localRootPath,
+              let relativePath = displayAsset.workspaceRelativePath,
+              !root.isEmpty,
+              !relativePath.isEmpty,
+              !relativePath.hasPrefix("/") else {
+            return nil
+        }
+        let url = URL(fileURLWithPath: root).appendingPathComponent(relativePath)
+        return FileManager.default.fileExists(atPath: url.path) ? url : nil
     }
 
     private var readNotice: some View {
@@ -572,9 +597,14 @@ private struct MediaImageAssetPreview: View {
     let asset: AgentAssetRef
     let mediaURL: URL?
     let thumbnailURL: URL?
+    let fallbackMediaURL: URL?
     @Environment(\.openURL) private var openURL
     @State private var localImage: PlatformImage?
+    @State private var remoteImage: PlatformImage?
+    @State private var loadError: String?
+    @State private var isLoading = false
     @State private var useFullMedia = false
+    @State private var useFallbackMedia = false
 
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
@@ -583,7 +613,7 @@ private struct MediaImageAssetPreview: View {
                 HStack(spacing: 8) {
                     Button {
                         if let mediaURL {
-                            openURL(mediaURL)
+                            handleOpen(url: mediaURL)
                         }
                     } label: {
                         Label("Open", systemImage: "arrow.up.right.square")
@@ -603,11 +633,14 @@ private struct MediaImageAssetPreview: View {
             Spacer()
         }
         .task(id: displayURL) {
-            await loadLocalImage()
+            await loadImage()
         }
     }
 
     private var displayURL: URL? {
+        if useFallbackMedia {
+            return fallbackMediaURL
+        }
         if let thumbnailURL, !useFullMedia {
             return thumbnailURL
         }
@@ -619,31 +652,24 @@ private struct MediaImageAssetPreview: View {
         if url.isFileURL {
             if let localImage {
                 platformImageView(localImage)
+            } else if let loadError {
+                unavailableView(loadError)
             } else {
                 ProgressView()
                     .frame(maxWidth: .infinity, minHeight: 220)
             }
         } else {
-            AsyncImage(url: url) { phase in
-                switch phase {
-                case .success(let image):
-                    image
-                        .resizable()
-                        .scaledToFit()
-                case .failure:
-                    if thumbnailURL != nil, !useFullMedia, mediaURL != nil {
-                        ProgressView()
-                            .task { useFullMedia = true }
-                    } else {
-                        ContentUnavailableView("Image Unavailable", systemImage: "photo")
-                    }
-                case .empty:
-                    ProgressView()
-                @unknown default:
-                    ProgressView()
-                }
+            if let remoteImage {
+                platformImageView(remoteImage)
+            } else if let loadError {
+                unavailableView(loadError)
+            } else if isLoading {
+                ProgressView()
+                    .frame(maxWidth: .infinity, minHeight: 220)
+            } else {
+                ProgressView()
+                    .frame(maxWidth: .infinity, minHeight: 220)
             }
-            .frame(maxWidth: .infinity, minHeight: 220)
         }
     }
 
@@ -653,28 +679,93 @@ private struct MediaImageAssetPreview: View {
         Image(nsImage: image)
             .resizable()
             .scaledToFit()
-            .frame(maxWidth: .infinity, maxHeight: .infinity)
+            .frame(maxWidth: .infinity, minHeight: 260, maxHeight: .infinity)
             .background(Color.secondary.opacity(0.06))
             .clipShape(RoundedRectangle(cornerRadius: 8))
         #elseif os(iOS)
         Image(uiImage: image)
             .resizable()
             .scaledToFit()
-            .frame(maxWidth: .infinity, maxHeight: .infinity)
+            .frame(maxWidth: .infinity, minHeight: 260, maxHeight: .infinity)
             .background(Color.secondary.opacity(0.06))
             .clipShape(RoundedRectangle(cornerRadius: 8))
         #endif
     }
 
     @MainActor
-    private func loadLocalImage() async {
+    private func loadImage() async {
         localImage = nil
-        guard let url = displayURL, url.isFileURL else { return }
-        #if os(macOS)
-        localImage = NSImage(contentsOf: url)
-        #elseif os(iOS)
-        localImage = UIImage(contentsOfFile: url.path)
-        #endif
+        remoteImage = nil
+        loadError = nil
+        guard let url = displayURL else { return }
+
+        if url.isFileURL {
+            do {
+                let data = try Data(contentsOf: url, options: .mappedIfSafe)
+                guard let image = PlatformImage(data: data) else {
+                    throw URLError(.cannotDecodeContentData)
+                }
+                localImage = image
+            } catch {
+                if let fallbackMediaURL, fallbackMediaURL != url {
+                    useFallbackMedia = true
+                } else {
+                    loadError = "Could not read image file at \(url.path): \(error.localizedDescription)"
+                }
+            }
+            return
+        }
+
+        isLoading = true
+        defer { isLoading = false }
+
+        do {
+            let (data, response) = try await URLSession.shared.data(from: url)
+            if let http = response as? HTTPURLResponse,
+               !(200..<300).contains(http.statusCode) {
+                throw URLError(.badServerResponse)
+            }
+            guard let image = PlatformImage(data: data) else {
+                throw URLError(.cannotDecodeContentData)
+            }
+            remoteImage = image
+        } catch {
+            if thumbnailURL != nil, !useFullMedia, mediaURL != nil {
+                useFullMedia = true
+            } else if let fallbackMediaURL, fallbackMediaURL != url {
+                useFallbackMedia = true
+            } else {
+                loadError = error.localizedDescription
+            }
+        }
+    }
+
+    private func unavailableView(_ message: String) -> some View {
+        ContentUnavailableView {
+            Label("Image Unavailable", systemImage: "photo")
+        } description: {
+            Text(message)
+                .font(.caption)
+                .textSelection(.enabled)
+        }
+        .frame(maxWidth: .infinity, minHeight: 220)
+    }
+    
+    // MARK: - URL 处理逻辑
+    private func handleOpen(url: URL) {
+#if os(macOS)
+        // 1. 判断是否是本地文件 URL
+        if url.isFileURL {
+            // 在 Finder 中定位并高亮选中该文件
+            NSWorkspace.shared.selectFile(url.path, inFileViewerRootedAtPath: "")
+        } else {
+            // 2. 如果是 http/https 等通用链接，走系统默认打开
+            openURL(url)
+        }
+#else
+        // iOS 平台直接走系统 openURL
+        openURL(url)
+#endif
     }
 }
 

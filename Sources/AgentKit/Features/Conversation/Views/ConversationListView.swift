@@ -13,7 +13,6 @@ import SwiftUI
 struct ConversationListView: View {
 
     private let viewModel: ConversationListViewModel
-    @Environment(WorkspaceStore.self) private var store
     @Binding var selected: ConversationRef?
 
     /// 搜索过滤文本（由父视图 `.searchable` 驱动）。
@@ -23,6 +22,10 @@ struct ConversationListView: View {
 
     @State private var renameTarget: ConversationRef? = nil
     @State private var renameText: String = ""
+    @State private var expandedWorkspaceIDs: Set<String> = []
+    @State private var knownWorkspaceIDs: Set<String> = []
+    @State private var didInitializeExpansion = false
+    @State private var isProjectsExpanded = true
 
     init(viewModel: ConversationListViewModel,
          selected: Binding<ConversationRef?>,
@@ -42,6 +45,29 @@ struct ConversationListView: View {
             ref.id.localizedCaseInsensitiveContains(searchText)
                 || (ref.name ?? "").localizedCaseInsensitiveContains(searchText)
         }
+    }
+
+    /// 侧边栏仅用的展示分组。每个真实会话固定属于一个 workspace；旧数据或通用会话
+    /// 没有工作区路径时统一归入「聊天」。
+    private var conversationGroups: [ConversationWorkspaceGroup] {
+        var groups: [ConversationWorkspaceGroup] = []
+        var indices: [String: Int] = [:]
+
+        for conversation in filteredConversations {
+            let descriptor = ConversationWorkspaceGroup.Descriptor(conversation: conversation)
+            if let index = indices[descriptor.id] {
+                groups[index].conversations.append(conversation)
+            } else {
+                indices[descriptor.id] = groups.count
+                groups.append(ConversationWorkspaceGroup(
+                    id: descriptor.id,
+                    title: descriptor.title,
+                    systemImage: descriptor.systemImage,
+                    conversations: [conversation]
+                ))
+            }
+        }
+        return groups
     }
 
     #if os(iOS)
@@ -77,7 +103,6 @@ struct ConversationListView: View {
 
     var body: some View {
         let listRevision = viewModel.revision
-
         List(selection: $selected) {
             if viewModel.isLoading {
                 HStack {
@@ -112,33 +137,31 @@ struct ConversationListView: View {
                     .listRowSeparator(.hidden)
             }
 
-            ForEach(filteredConversations, id: \.uiID) { ref in
-                ConversationRow(ref: ref)
-                    .id("\(ref.uiID)-\(listRevision)")
-                    .tag(ref)
-                    #if os(iOS)
-                    .swipeActions(edge: .trailing) {
-                        Button(role: .destructive) {
-                            // TODO: 调用后端删除 API
-                            // await viewModel.deleteConversation(ref)
-                        } label: {
-                            Label("删除", systemImage: "trash")
-                        }
+            if !conversationGroups.isEmpty {
+                projectGroupHeader
+
+                if isProjectsExpanded {
+                    ForEach(conversationGroups) { group in
+                        workspaceGroup(group, listRevision: listRevision)
                     }
-                    #endif
-                    .contextMenu {
-                        Button {
-                            renameTarget = ref
-                            renameText = ref.name ?? ""
-                        } label: {
-                            Label("重命名", systemImage: "pencil")
-                        }
-                    }
+                }
             }
         }
         .listStyle(.sidebar)
         .task {
             await viewModel.refresh()
+        }
+        .onAppear {
+            syncExpandedWorkspaceIDs()
+        }
+        .onChange(of: listRevision) { _, _ in
+            syncExpandedWorkspaceIDs()
+        }
+        .onChange(of: searchText) { _, newValue in
+            guard !newValue.trimmingCharacters(in: .whitespaces).isEmpty else { return }
+            // 搜索结果位于某个收起的项目时，自动展开该项目，避免结果被隐藏。
+            isProjectsExpanded = true
+            expandedWorkspaceIDs.formUnion(conversationGroups.map(\.id))
         }
         .alert("重命名会话", isPresented: Binding(
             get: { renameTarget != nil },
@@ -165,17 +188,140 @@ struct ConversationListView: View {
                 Text("为会话 \(target.id.prefix(8))… 设置新名称")
             }
         }
-        .toolbar {
-            ToolbarItem {
-                Button {
-                    // P5.0：不立即创建会话，只开一个本地草稿，等首条消息再创建。
-                    store.beginDraft()
-                } label: {
-                    Label("新建会话", systemImage: "square.and.pencil")
-                }
+    }
+
+    private var projectGroupHeader: some View {
+        Button {
+            isProjectsExpanded.toggle()
+        } label: {
+            HStack(spacing: 8) {
+                Text("项目")
+                    .font(.headline)
+                Image(systemName: isProjectsExpanded
+                      ? "chevron.down"
+                      : "chevron.right")
+                    .font(.caption.weight(.semibold))
+                    .foregroundStyle(.secondary)
+                Spacer(minLength: 0)
+            }
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .padding(.vertical, 4)
+        .accessibilityLabel(isProjectsExpanded ? "收起项目" : "展开项目")
+    }
+
+    @ViewBuilder
+    private func workspaceGroup(
+        _ group: ConversationWorkspaceGroup,
+        listRevision: Int
+    ) -> some View {
+        let isExpanded = expandedWorkspaceIDs.contains(group.id)
+
+        Button {
+            if isExpanded {
+                expandedWorkspaceIDs.remove(group.id)
+            } else {
+                expandedWorkspaceIDs.insert(group.id)
+            }
+        } label: {
+            HStack(spacing: 8) {
+                Label(group.title, systemImage: group.systemImage)
+                    .textCase(nil)
+                Image(systemName: isExpanded ? "chevron.down" : "chevron.right")
+                    .font(.caption.weight(.semibold))
+                    .foregroundStyle(.secondary)
+                Spacer(minLength: 0)
+            }
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .padding(.leading, 16)
+        .padding(.vertical, 2)
+        .accessibilityLabel(isExpanded ? "收起项目 \(group.title)" : "展开项目 \(group.title)")
+
+        if isExpanded {
+            ForEach(group.conversations, id: \.uiID) { ref in
+                ConversationRow(ref: ref)
+                    .id("\(ref.uiID)-\(listRevision)")
+                    .tag(ref)
+                    .padding(.leading, 34)
+                    #if os(iOS)
+                    .swipeActions(edge: .trailing) {
+                        Button(role: .destructive) {
+                            // TODO: 调用后端删除 API
+                            // await viewModel.deleteConversation(ref)
+                        } label: {
+                            Label("删除", systemImage: "trash")
+                        }
+                    }
+                    #endif
+                    .contextMenu {
+                        Button {
+                            renameTarget = ref
+                            renameText = ref.name ?? ""
+                        } label: {
+                            Label("重命名", systemImage: "pencil")
+                        }
+                    }
             }
         }
     }
+
+    /// 首次加载时默认展开所有项目；之后只为新出现的项目增加默认展开状态，
+    /// 不会因为刷新列表而覆盖用户刚刚收起的项目。
+    private func syncExpandedWorkspaceIDs() {
+        let currentIDs = Set(conversationGroups.map(\.id))
+        guard !currentIDs.isEmpty else { return }
+
+        if !didInitializeExpansion {
+            expandedWorkspaceIDs = currentIDs
+            didInitializeExpansion = true
+        } else {
+            expandedWorkspaceIDs.formUnion(currentIDs.subtracting(knownWorkspaceIDs))
+            expandedWorkspaceIDs.formIntersection(currentIDs)
+        }
+        knownWorkspaceIDs = currentIDs
+    }
+}
+
+// MARK: - Local presentation model
+
+/// 只服务于侧边栏渲染，不参与 Runtime 会话数据的持久化或传输。
+private struct ConversationWorkspaceGroup: Identifiable {
+    struct Descriptor {
+        let id: String
+        let title: String
+        let systemImage: String
+
+        init(conversation: ConversationRef) {
+            // 通用会话没有绑定路径，固定显示在「聊天」分组中。
+            guard !conversation.workspacePath.isEmpty else {
+                id = "chat"
+                title = "聊天"
+                systemImage = "bubble.left.and.bubble.right"
+                return
+            }
+
+            if let workspace = conversation.workspace {
+                id = "workspace:\(workspace.id)"
+                title = workspace.displayName
+                systemImage = "folder"
+                return
+            }
+
+            // 兼容尚未返回结构化 workspace 的旧会话；规范化路径后作为本地分组键。
+            let path = URL(fileURLWithPath: conversation.workspacePath).standardizedFileURL.path
+            id = "path:\(path)"
+            title = URL(fileURLWithPath: path).lastPathComponent
+            systemImage = "folder"
+        }
+    }
+
+    let id: String
+    let title: String
+    let systemImage: String
+    var conversations: [ConversationRef]
 }
 
 // MARK: - ConversationRow
@@ -184,30 +330,21 @@ private struct ConversationRow: View {
     let ref: ConversationRef
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 4) {
+        HStack(spacing: 6) {
             Text(ref.name ?? ref.id)
                 .font(.body)
                 .lineLimit(1)
+            Spacer(minLength: 4)
 
-            HStack(spacing: 6) {
-                Label(ref.workspacePath.isEmpty
-                        ? "通用"
-                        : URL(fileURLWithPath: ref.workspacePath).lastPathComponent,
-                      systemImage: "folder")
-                    .font(.caption)
-                Spacer()
-                if ref.isPaused {
-                    Label("已暂停", systemImage: "pause.circle.fill")
-                        .font(.caption2.weight(.medium))
-                        .foregroundStyle(.orange)
-                }
-                if ref.name != nil {
-                    Text(ref.id.prefix(8) + "…")
-                        .font(.caption2)
-                        .foregroundStyle(.tertiary)
-                }
+            if ref.isPaused {
+                Label("已暂停", systemImage: "pause.circle.fill")
+                    .font(.caption2.weight(.medium))
+                    .foregroundStyle(.orange)
+            } else if ref.name != nil {
+                Text(ref.id.prefix(8) + "…")
+                    .font(.caption2)
+                    .foregroundStyle(.tertiary)
             }
-            .foregroundStyle(.secondary)
         }
         .padding(.vertical, 2)
     }

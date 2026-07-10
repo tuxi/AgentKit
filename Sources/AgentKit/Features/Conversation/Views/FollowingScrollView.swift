@@ -25,8 +25,12 @@
 import SwiftUI
 
 struct FollowingScrollView<Content: View>: View {
-
-    /// When this value changes, unconditionally scroll to the bottom and
+    
+    /// 当前列表最后一个有效元素的 ID（可以是最新消息 ID，或者是 "thinking_timer"）
+    var lastItemId: String? = nil
+    
+    /// 我们把 repinTrigger 的定义明确为：只有当“同一个会话内产生新 Turn”时才传入新 ID
+    // When this value changes, unconditionally scroll to the bottom and
     /// re-pin — pass the last turn's id so sending a message brings it
     /// into view regardless of where the viewport was.
     var repinTrigger: String? = nil
@@ -85,6 +89,7 @@ struct FollowingScrollView<Content: View>: View {
                 containerSize: geometry.containerSize
             )
         } action: { old, new in
+            // 窗口尺寸改变的处理
             if new.containerSize != old.containerSize {
                 // Viewport is being resized (window drag / inspector toggle).
                 // Row heights are re-wrapping every frame, so any animated
@@ -97,12 +102,13 @@ struct FollowingScrollView<Content: View>: View {
                     resizeSettleTask = Task { @MainActor in
                         try? await Task.sleep(nanoseconds: 200_000_000)
                         guard !Task.isCancelled, isPinnedToBottom, !isUserScrolling else { return }
-                        scrollPosition.scrollTo(edge: .bottom)
+                        performScrollToBottom()
                     }
                 }
                 return
             }
 
+            // 核心修复：Stranded 兜底逻辑。如果换聊天导致悬空，这里的 Task 增加微小延迟，等 LazyVStack 坍塌稳定
             if !isUserScrolling,
                new.contentHeight > new.containerSize.height,
                new.overshootBeyondBottom > 1 {
@@ -113,7 +119,11 @@ struct FollowingScrollView<Content: View>: View {
                 // conversation (viewport taller than content) never loops.
                 Task { @MainActor in
                     guard !isUserScrolling else { return }
-                    scrollPosition.scrollTo(edge: .bottom)
+                    // 给 LazyVStack 释放 1~2 帧的测绘时间/
+                    try? await Task.sleep(nanoseconds: 30_00_000)
+                    guard !isUserScrolling else { return }
+                    // 精准收回，拒绝空白
+                    performScrollToBottom()
                 }
                 return
             }
@@ -133,11 +143,12 @@ struct FollowingScrollView<Content: View>: View {
 
             guard isPinnedToBottom else { return }
 
+            // 内容生长时的追随
             if new.bottomInset > old.bottomInset {
                 // Approval / plan bar slid in: keep the conversation glued to
                 // the bottom, animated in step with the bar (0.25s easeOut).
                 withAnimation(.easeOut(duration: 0.25)) {
-                    scrollPosition.scrollTo(edge: .bottom)
+                    performScrollToBottom()
                 }
             } else if new.contentHeight > old.contentHeight,
                       new.distanceFromBottom > 1 {
@@ -149,12 +160,20 @@ struct FollowingScrollView<Content: View>: View {
                 Task { @MainActor in
                     guard isPinnedToBottom, !isUserScrolling else { return }
                     withAnimation(.easeOut(duration: 0.15)) {
-                        scrollPosition.scrollTo(edge: .bottom)
+                        performScrollToBottom()
                     }
                 }
             }
         }
-        .onChange(of: repinTrigger) { oldValue, _ in
+        .onChange(of: repinTrigger) { oldValue, newValue in
+            // 核心修复：如果 oldValue 存在，且 newValue 存在，说明是从旧 Turn 变到新 Turn（同会话内生长）
+            // 如果你是切换会话，建议在外部控制：切换会话时先把 repinTrigger 设为 nil，或者不触发此处的动画
+            guard oldValue != nil, newValue != nil else {
+                // 属于初次载入（比如切换会话首屏），靠 defaultScrollAnchor 自动定位即可，严禁动画滚动！
+                isPinnedToBottom = true
+                return
+            }
+            
             // A new turn appeared — i.e. the user just sent a message. Always
             // bring it into view and resume following.
             isPinnedToBottom = true
@@ -162,15 +181,23 @@ struct FollowingScrollView<Content: View>: View {
             // a send. The initial-offset anchor + overshoot correction handle
             // that; an animated scroll here would chase LazyVStack's height
             // estimates and strand the viewport past the real bottom.
-            guard oldValue != nil else { return }
             withAnimation(.easeOut(duration: 0.25)) {
-                scrollPosition.scrollTo(edge: .bottom)
+                performScrollToBottom()
             }
         }
         .overlay(alignment: .bottomTrailing) {
             if showsJumpButton && !isPinnedToBottom {
                 jumpToLatestButton
             }
+        }
+    }
+    
+    // 通用的滚动方法
+    private func performScrollToBottom() {
+        if let lastItemId {
+            scrollPosition.scrollTo(id: lastItemId, anchor: .bottom)
+        } else {
+            scrollPosition.scrollTo(edge: .bottom)
         }
     }
 

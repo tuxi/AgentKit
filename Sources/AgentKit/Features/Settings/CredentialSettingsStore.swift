@@ -46,24 +46,15 @@ public final class CredentialSettingsStore {
     public var byokProviders: [BYOKProviderConfig]
     public var selectedBYOKName: String?
     public var byokKey: String = ""
-    /// 当前选择的模型 ID（Gateway 原生 ID 或 BYOK alias）
-    public var model: String = ""
-
-    /// Gateway 模型列表（由外部注入，如 AppContainer.modelSettings）。
-    /// 非 nil 时 SettingsView 使用此列表；nil 时回退到 AgentSettings.availableModels。
-    public var gatewayModelIDs: [String]?
-    public var modelDisplayNames: [String: String] = [:]
-
-    /// 当前生效的可用模型列表。
-    public var effectiveModelIDs: [String] {
-        if let ids = gatewayModelIDs, !ids.isEmpty { return ids }
-        return AgentSettings.availableModels
-    }
+    /// BYOK 模式的默认模型别名（config.yaml `models:` 别名，Runtime 启动时读取）。
+    /// Gateway 模式的模型选择在 DraftComposerPanel 中按对话管理，与此无关。
+    public var model: String
 
     private let store: any CredentialStore
 
     public init(store: any CredentialStore = KeychainCredentialStore()) {
         self.store = store
+        self.model = AgentSettings.model
         self.byokProviders = [
             BYOKProviderConfig(namespace: "llm", name: "deepseek", displayName: "DeepSeek"),
             BYOKProviderConfig(namespace: "llm", name: "openai", displayName: "OpenAI"),
@@ -95,6 +86,8 @@ public final class CredentialSettingsStore {
         if let idx = byokProviders.firstIndex(where: { $0.name == name }) {
             byokProviders[idx].isConfigured = true
         }
+
+        await reconfigureRuntime()
     }
 
     /// 删除 BYOK key。
@@ -103,6 +96,16 @@ public final class CredentialSettingsStore {
         if let idx = byokProviders.firstIndex(where: { $0.name == name }) {
             byokProviders[idx].isConfigured = false
         }
+
+        await reconfigureRuntime()
+    }
+
+    /// credential 变更后热更新内嵌 Runtime（credential-injection-v1 §4）。
+    /// macOS 连接远端 server，credential 由启动参数/请求头注入，无需此步。
+    private func reconfigureRuntime() async {
+        #if os(iOS)
+        try? await AgentRuntime.shared.reconfigure(with: store)
+        #endif
     }
 
     /// 保存模型选择。

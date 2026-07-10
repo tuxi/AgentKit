@@ -12,7 +12,6 @@ import SwiftUI
 
 public struct SettingsView: View {
     @Environment(AccountManager.self) private var accountManager
-    @Environment(ModelSettingsStore.self) private var modelSettings
     @Environment(\.dismiss) private var dismiss
     @State private var credentialSettings = CredentialSettingsStore()
     @State private var showLogin = false
@@ -25,7 +24,6 @@ public struct SettingsView: View {
             Form {
                 accountSection
                 providerSection
-                legacySection
                 if accountManager.state.isAuthenticated {
                     usageSection
                 }
@@ -44,15 +42,6 @@ public struct SettingsView: View {
                     .environment(accountManager)
             }
             .task {
-                // 同步 Gateway 模型列表到 UI store
-                credentialSettings.gatewayModelIDs = modelSettings.availableModelIDs
-                for id in modelSettings.availableModelIDs {
-                    credentialSettings.modelDisplayNames[id] = modelSettings.displayName(for: id)
-                }
-                // 初始化模型选择：优先 last_used_model，否则 default_model
-                if credentialSettings.model.isEmpty {
-                    credentialSettings.model = modelSettings.modelForNewConversation
-                }
                 await credentialSettings.refresh()
                 if accountManager.state.isAuthenticated {
                     try? await accountManager.fetchUsage()
@@ -127,23 +116,17 @@ public struct SettingsView: View {
 
             if credentialSettings.selectedProvider == .byok {
                 byokDetail
-            }
 
-            // Model selection — dynamic from Gateway when available
-            Picker("Model", selection: $credentialSettings.model) {
-                if let gatewayIDs = credentialSettings.gatewayModelIDs, !gatewayIDs.isEmpty {
-                    ForEach(gatewayIDs, id: \.self) { modelID in
-                        Text(credentialSettings.modelDisplayNames[modelID] ?? modelID)
-                            .tag(modelID)
-                    }
-                } else {
+                // BYOK 默认模型别名（config.yaml `models:`）。
+                // Gateway 模式的模型选择在输入栏（DraftComposerPanel）按对话管理。
+                Picker("Default Model", selection: $credentialSettings.model) {
                     ForEach(AgentSettings.availableModels, id: \.self) { model in
                         Text(model.isEmpty ? "Default" : model).tag(model)
                     }
                 }
-            }
-            .onChange(of: credentialSettings.model) {
-                credentialSettings.saveModel()
+                .onChange(of: credentialSettings.model) {
+                    credentialSettings.saveModel()
+                }
             }
         }
     }
@@ -204,19 +187,6 @@ public struct SettingsView: View {
                     Task { try? await credentialSettings.saveBYOKKey() }
                 }
                 .disabled(credentialSettings.byokKey.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
-            }
-        }
-    }
-
-    // MARK: - Legacy Section (hidden by default, for backward compat)
-
-    @ViewBuilder
-    private var legacySection: some View {
-        Section {
-            DisclosureGroup("Legacy Settings (DeepSeek API Key)") {
-                Text("This is the legacy key path. Configure BYOK keys above for the recommended experience.")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
             }
         }
     }

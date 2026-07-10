@@ -16,14 +16,6 @@
 
 import SwiftUI
 
-#if os(macOS)
-import AppKit
-private typealias TranscriptPlatformFont = NSFont
-#else
-import UIKit
-private typealias TranscriptPlatformFont = UIFont
-#endif
-
 struct NativeTranscriptView: View {
     let transcript: AttributedTranscript
     let onAction: (TranscriptAction) -> Void
@@ -107,6 +99,18 @@ enum TranscriptTextApplier {
 /// this is layout, not a paragraph alignment trick.
 final class TranscriptTextContainer: NSTextContainer {
 
+    private struct UserPromptLayoutKey: Hashable {
+        let location: Int
+        let length: Int
+    }
+
+    /// TextKit asks for line fragments while it is actively typesetting. A
+    /// user prompt must use one stable lane width for all of its lines; doing
+    /// a fresh "snug" measurement from inside that callback feeds a partial
+    /// line back into the next pass and creates premature wrapping.
+    private var preparedUserPromptLaneWidths: [UserPromptLayoutKey: CGFloat] = [:]
+    private var preparedContainerWidth: CGFloat?
+
     override func lineFragmentRect(
         forProposedRect proposedRect: CGRect,
         at characterIndex: Int,
@@ -121,16 +125,59 @@ final class TranscriptTextContainer: NSTextContainer {
         )
         guard let userPromptRange = userPromptRange(at: characterIndex), rect.width > 0 else { return rect }
 
-        let maxLaneWidth = TranscriptTheme.userBubbleLaneWidth(for: rect.width)
-        let laneWidth = userBubbleLineFragmentWidth(for: userPromptRange, maxWidth: maxLaneWidth)
-        guard laneWidth > 0, laneWidth < rect.width else { return rect }
+        let containerWidth = preparedContainerWidth ?? max(size.width, proposedRect.maxX)
+        let maxLaneWidth = TranscriptTheme.userBubbleLaneWidth(for: containerWidth)
+        let key = UserPromptLayoutKey(
+            location: userPromptRange.location,
+            length: userPromptRange.length
+        )
+        // Before the representable has a concrete width, use the maximum
+        // lane. That is always safe for wrapping; the next sizing pass will
+        // replace it with the prepared snug width for one-line prompts.
+        let laneWidth = preparedUserPromptLaneWidths[key] ?? maxLaneWidth
+        guard laneWidth > 0, laneWidth < containerWidth else { return rect }
         remainingRect?.pointee = .zero
         return CGRect(
-            x: rect.maxX - laneWidth,
+            x: containerWidth - laneWidth,
             y: rect.minY,
             width: laneWidth,
             height: rect.height
         )
+    }
+
+    /// Called by the platform representables after they know the actual
+    /// transcript width and before forcing TextKit layout.
+    func prepareUserPromptLayouts(for containerWidth: CGFloat) {
+        let width = max(0, containerWidth.rounded())
+        guard width > 0, let textStorage = layoutManager?.textStorage else {
+            invalidateUserPromptLayouts()
+            return
+        }
+
+        preparedContainerWidth = width
+        preparedUserPromptLaneWidths.removeAll(keepingCapacity: true)
+
+        let maxLaneWidth = TranscriptTheme.userBubbleLaneWidth(for: width)
+        guard maxLaneWidth > 0, textStorage.length > 0 else { return }
+
+        let fullRange = NSRange(location: 0, length: textStorage.length)
+        textStorage.enumerateAttribute(.transcriptBlock, in: fullRange) { value, range, _ in
+            guard let block = value as? TranscriptBlockValue,
+                  block.kind == .userPrompt else {
+                return
+            }
+            let key = UserPromptLayoutKey(location: range.location, length: range.length)
+            preparedUserPromptLaneWidths[key] = userBubbleLineFragmentWidth(
+                for: range,
+                maxWidth: maxLaneWidth,
+                textStorage: textStorage
+            )
+        }
+    }
+
+    func invalidateUserPromptLayouts() {
+        preparedContainerWidth = nil
+        preparedUserPromptLaneWidths.removeAll(keepingCapacity: true)
     }
 
     private func userPromptRange(at characterIndex: Int) -> NSRange? {
@@ -170,33 +217,49 @@ final class TranscriptTextContainer: NSTextContainer {
         return range.length > 0 ? range : nil
     }
 
-    private func userBubbleLineFragmentWidth(for range: NSRange, maxWidth: CGFloat) -> CGFloat {
-        guard maxWidth > 0,
-              let textStorage = layoutManager?.textStorage else {
+    private func userBubbleLineFragmentWidth(
+        for range: NSRange,
+        maxWidth: CGFloat,
+        textStorage: NSTextStorage
+    ) -> CGFloat {
+        guard maxWidth > 0 else {
             return maxWidth
         }
 
-        let text = (textStorage.string as NSString).substring(with: range)
-        guard !text.contains("\n") else { return maxWidth }
+        // Measure with the same TextKit engine that draws the transcript.
+        // Summing character widths is inaccurate for CJK, font fallback,
+        // ligatures, and link runs, and can make a multi-line prompt choose a
+        // prematurely narrow lane.
+        let measurementStorage = NSTextStorage(
+            attributedString: textStorage.attributedSubstring(from: range)
+        )
+        let measurementLayoutManager = NSLayoutManager()
+        let measurementContainer = NSTextContainer(size: CGSize(
+            width: maxWidth,
+            height: CGFloat.greatestFiniteMagnitude
+        ))
+        measurementContainer.lineFragmentPadding = 0
+        measurementStorage.addLayoutManager(measurementLayoutManager)
+        measurementLayoutManager.addTextContainer(measurementContainer)
+        measurementLayoutManager.ensureLayout(for: measurementContainer)
 
-        let measuredWidth = unwrappedTextWidth(in: range, textStorage: textStorage)
-        guard measuredWidth > 0 else { return maxWidth }
-
-        let paddedWidth = ceil(measuredWidth + TranscriptTheme.userBubbleHorizontalPadding * 2)
-        return min(maxWidth, max(TranscriptTheme.userBubbleMinimumWidth, paddedWidth))
-    }
-
-    private func unwrappedTextWidth(in range: NSRange, textStorage: NSTextStorage) -> CGFloat {
-        var width: CGFloat = 0
-        textStorage.enumerateAttributes(in: range) { attributes, subrange, _ in
-            let text = (textStorage.string as NSString).substring(with: subrange)
-            if let font = attributes[.font] as? TranscriptPlatformFont {
-                width += ceil((text as NSString).size(withAttributes: [.font: font]).width)
-            } else {
-                width += ceil((text as NSString).size(withAttributes: nil).width)
-            }
+        let glyphRange = measurementLayoutManager.glyphRange(for: measurementContainer)
+        guard glyphRange.length > 0 else {
+            return TranscriptTheme.userBubbleMinimumWidth
         }
-        return width
+
+        var lineCount = 0
+        var usedRect = CGRect.null
+        measurementLayoutManager.enumerateLineFragments(forGlyphRange: glyphRange) { _, used, _, _, _ in
+            lineCount += 1
+            usedRect = usedRect.union(used)
+        }
+        guard lineCount == 1, !usedRect.isNull else { return maxWidth }
+
+        // The paragraph contributes the leading inset. Add the matching
+        // trailing inset to obtain the painted bubble width.
+        let snugWidth = ceil(usedRect.maxX + TranscriptTheme.userBubbleHorizontalPadding)
+        return min(maxWidth, max(TranscriptTheme.userBubbleMinimumWidth, snugWidth))
     }
 }
 
@@ -419,6 +482,7 @@ private struct PlatformTranscriptTextView: NSViewRepresentable {
         let result = TranscriptTextApplier.apply(attributedText, to: storage)
         if result != .noChange {
             context.coordinator.textVersion += 1
+            (textView.textContainer as? TranscriptTextContainer)?.invalidateUserPromptLayouts()
         }
         if result == .attributesOnly {
             // Same characters, new attributes — the full replace dropped the
@@ -453,7 +517,7 @@ private struct PlatformTranscriptTextView: NSViewRepresentable {
         }
 
         guard let layoutManager = textView.layoutManager,
-              let textContainer = textView.textContainer else {
+              let textContainer = textView.textContainer as? TranscriptTextContainer else {
             return nil
         }
         if textContainer.containerSize.width != width {
@@ -462,6 +526,7 @@ private struct PlatformTranscriptTextView: NSViewRepresentable {
                 height: CGFloat.greatestFiniteMagnitude
             )
         }
+        textContainer.prepareUserPromptLayouts(for: width)
         layoutManager.ensureLayout(for: textContainer)
         let used = layoutManager.usedRect(for: textContainer)
         let height = max(1, ceil(used.height + textView.textContainerInset.height * 2))
@@ -565,6 +630,7 @@ private struct PlatformTranscriptTextView: UIViewRepresentable {
         let result = TranscriptTextApplier.apply(attributedText, to: textView.textStorage)
         if result != .noChange {
             context.coordinator.textVersion += 1
+            (textView.textContainer as? TranscriptTextContainer)?.invalidateUserPromptLayouts()
         }
         if result == .attributesOnly {
             textView.selectedRange = savedSelection
@@ -592,6 +658,7 @@ private struct PlatformTranscriptTextView: UIViewRepresentable {
             width: width,
             height: CGFloat.greatestFiniteMagnitude
         )
+        (textView.textContainer as? TranscriptTextContainer)?.prepareUserPromptLayouts(for: width)
         let fitting = textView.sizeThatFits(CGSize(
             width: width,
             height: CGFloat.greatestFiniteMagnitude

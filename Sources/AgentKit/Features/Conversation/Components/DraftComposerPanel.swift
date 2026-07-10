@@ -25,6 +25,10 @@ struct DraftComposerPanel: View {
     let onSend: (_ text: String, _ model: String) async -> Bool
 
     let viewModel: ConversationViewModel?
+    /// 草稿代次（WorkspaceStore.draftNavigationRevision）。草稿模式下 viewModel 为 nil，
+    /// `.task(id:)` 靠它区分「新一次草稿」—— 否则取消草稿再新建时 id 恒为 nil，
+    /// selectedModel 残留上一次的选择。活跃会话场景不需要传。
+    var draftRevision: Int = 0
     /// 当前对话的模型 ID（binding，每个对话独立）。
     @State var selectedModel: String?
     /// 模型切换回调。
@@ -137,7 +141,7 @@ struct DraftComposerPanel: View {
 //                .stroke(Color.draftPanelStroke, lineWidth: 1)
 //        }
         .shadow(color: .black.opacity(0.10), radius: 20, y: 10)
-        .task(id: viewModel?.conversation?.id) {
+        .task(id: viewModel?.conversation?.id ?? "draft-\(draftRevision)") {
             await modelSettings.fetchFromGateway()
             selectedModel = modelSettings.getModel(with: viewModel?.conversation?.id)
         }

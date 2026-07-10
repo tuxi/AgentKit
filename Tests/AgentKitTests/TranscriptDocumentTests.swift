@@ -6,6 +6,12 @@
 import XCTest
 @testable import AgentKit
 
+#if os(macOS)
+import AppKit
+#else
+import UIKit
+#endif
+
 final class TranscriptDocumentTests: XCTestCase {
 
     func testListFilesCompilesToDirectoryArtifact() {
@@ -390,6 +396,80 @@ final class TranscriptDocumentTests: XCTestCase {
         XCTAssertTrue(transcript.actions.values.contains {
             guard case .openAsset(let reference) = $0 else { return false }
             return reference.kind == .url && reference.target == "https://example.com/docs"
+        })
+    }
+
+    func testBodyTextDetectsRuntimeResourceURIAsStructuredAsset() {
+        let uri = "desktop-control://artifacts/artifact_16bb7f04-cb05-41b8-90ad-64d10f854c2a"
+        let turn = ConversationTurn(
+            id: "turn",
+            userPrompt: nil,
+            blocks: [
+                .text(id: "t1", MessageNodePayload(
+                    role: .assistant,
+                    text: "Screenshot saved at \(uri)."
+                ))
+            ],
+            footer: nil,
+            isLive: false
+        )
+
+        let transcript = TurnTranscriptBuilder.build(
+            turn: turn,
+            state: TranscriptDocumentState()
+        )
+
+        XCTAssertTrue(transcript.actions.values.contains {
+            guard case .openAsset(let reference) = $0 else { return false }
+            return reference.kind == .structured
+                && reference.target == uri
+                && reference.structuredAsset?.kind == "mcp_resource"
+                && reference.structuredAsset?.uri == uri
+        })
+    }
+
+    func testRuntimeResourceURIReusesExistingStructuredAsset() {
+        let uri = "desktop-control://artifacts/artifact_16bb7f04-cb05-41b8-90ad-64d10f854c2a"
+        let asset = AgentAssetRef(
+            id: "asset_screenshot",
+            kind: "image",
+            uri: uri,
+            displayName: "artifact_16bb7f04.png",
+            mimeType: "image/png",
+            sourceCallID: "c1"
+        )
+        let tool = ToolNodePayload(
+            callID: "c1",
+            toolName: "screenshot_capture",
+            args: .object([:]),
+            status: .completed,
+            output: uri,
+            assets: [asset]
+        )
+        let turn = ConversationTurn(
+            id: "turn",
+            userPrompt: nil,
+            blocks: [
+                .toolGroup(ToolGroup(id: "c1", tools: [tool])),
+                .text(id: "t1", MessageNodePayload(
+                    role: .assistant,
+                    text: "Open [the screenshot](\(uri))."
+                ))
+            ],
+            footer: nil,
+            isLive: false
+        )
+
+        let transcript = TurnTranscriptBuilder.build(
+            turn: turn,
+            state: TranscriptDocumentState()
+        )
+
+        XCTAssertTrue(transcript.actions.values.contains {
+            guard case .openAsset(let reference) = $0 else { return false }
+            return reference.kind == .structured
+                && reference.structuredAsset?.id == asset.id
+                && reference.display == uri
         })
     }
 
@@ -1115,6 +1195,54 @@ final class TranscriptDocumentTests: XCTestCase {
         XCTAssertEqual(paragraphStyle?.alignment, .left)
         XCTAssertEqual(paragraphStyle?.headIndent, TranscriptTheme.userBubbleHorizontalPadding)
         XCTAssertEqual(paragraphStyle?.tailIndent, -TranscriptTheme.userBubbleHorizontalPadding)
+    }
+
+    func testUserPromptUsesAvailableLaneBeforeWrapping() {
+        let prompt = "已经加好了，刚才你写了 bug，导致我发送有问题，现在改好了，你看下"
+        let turn = ConversationTurn(
+            id: "turn",
+            userPrompt: MessageNodePayload(role: .user, text: prompt),
+            blocks: [],
+            footer: nil,
+            isLive: false
+        )
+        let transcript = TurnTranscriptBuilder.build(
+            turn: turn,
+            state: TranscriptDocumentState()
+        )
+
+        let storage = NSTextStorage(attributedString: transcript.attributedString)
+        let layoutManager = NSLayoutManager()
+        storage.addLayoutManager(layoutManager)
+        #if os(macOS)
+        let container = TranscriptTextContainer(
+            containerSize: NSSize(width: 900, height: CGFloat.greatestFiniteMagnitude)
+        )
+        #else
+        let container = TranscriptTextContainer(
+            size: CGSize(width: 900, height: CGFloat.greatestFiniteMagnitude)
+        )
+        #endif
+        container.lineFragmentPadding = 0
+        layoutManager.addTextContainer(container)
+        container.prepareUserPromptLayouts(for: 900)
+        layoutManager.ensureLayout(for: container)
+
+        let promptRange = (storage.string as NSString).range(of: prompt)
+        var blockRuns: [NSRange] = []
+        storage.enumerateAttribute(.transcriptBlock, in: promptRange) { _, range, _ in
+            blockRuns.append(range)
+        }
+        let glyphRange = layoutManager.glyphRange(
+            forCharacterRange: promptRange,
+            actualCharacterRange: nil
+        )
+        var lineCount = 0
+        layoutManager.enumerateLineFragments(forGlyphRange: glyphRange) { _, _, _, _, _ in
+            lineCount += 1
+        }
+        XCTAssertEqual(blockRuns, [promptRange])
+        XCTAssertEqual(lineCount, 1)
     }
 
     func testExpandedDiffOutputHasLineColors() {
