@@ -31,11 +31,14 @@ public final class ModelSettingsStore {
 
     // MARK: - Private
 
-    // 每一个对话选择的模型：[对话id：model]
+    private static let lastModelKey = "code_agent.model.last_selected"
+    private static let usedModelsKey = "code_agent.model.used_models"
+
+    /// 每一个对话选择的模型：[conversationID: modelID]
     private var usedModels: [String: String] = [:]
-    // 最后一次选择模型
+    /// 最后一次选择模型（跨对话，用于新对话默认值）
     public private(set) var lastSelectedModel: String?
-    
+
     private let authClient: any AuthClientProtocol
     private let credentialStore: any CredentialStore
 
@@ -47,6 +50,21 @@ public final class ModelSettingsStore {
     ) {
         self.authClient = authClient
         self.credentialStore = credentialStore
+        // 从本地缓存恢复
+        self.lastSelectedModel = UserDefaults.standard.string(forKey: Self.lastModelKey)
+        self.usedModels = UserDefaults.standard.dictionary(forKey: Self.usedModelsKey) as? [String: String] ?? [:]
+    }
+
+    // MARK: - Persistence
+
+    private func persistLastSelected() {
+        if let model = lastSelectedModel {
+            UserDefaults.standard.set(model, forKey: Self.lastModelKey)
+        }
+    }
+
+    private func persistUsedModels() {
+        UserDefaults.standard.set(usedModels, forKey: Self.usedModelsKey)
     }
 
     // MARK: - Public
@@ -64,16 +82,18 @@ public final class ModelSettingsStore {
         }
     }
 
-    /// 用户选择模型时调用。持久化为全局 "last used"（用于新对话默认值）。
+    /// 用户选择模型时调用。持久化到本地缓存。
     public func didUseModel(_ modelID: String, conversation: String) {
         setUserModel(modelID, for: conversation)
         self.lastSelectedModel = modelID
+        persistLastSelected()
     }
-    
+
     public func setUserModel(_ modelID: String, for conversation: String) {
         guard !conversation.isEmpty else { return }
         guard !modelID.isEmpty else { return }
         self.usedModels[conversation] = modelID
+        persistUsedModels()
     }
     
     public func getModel(with conversation: String?) -> String? {
