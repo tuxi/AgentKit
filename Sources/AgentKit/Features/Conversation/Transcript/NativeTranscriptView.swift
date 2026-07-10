@@ -438,11 +438,40 @@ private struct PlatformTranscriptTextView: NSViewRepresentable {
     let actions: [String: TranscriptAction]
     let onAction: (TranscriptAction) -> Void
 
-    func makeCoordinator() -> Coordinator {
-        Coordinator(onAction: onAction)
+    func makeNSView(context: Context) -> NativeTranscriptTextView {
+        NativeTranscriptTextView(onAction: onAction)
     }
 
-    func makeNSView(context: Context) -> NSTextView {
+    func updateNSView(_ textView: NativeTranscriptTextView, context: Context) {
+        textView.apply(
+            attributedText: attributedText,
+            actions: actions,
+            onAction: onAction
+        )
+    }
+
+    func sizeThatFits(
+        _ proposal: ProposedViewSize,
+        nsView textView: NativeTranscriptTextView,
+        context: Context
+    ) -> CGSize? {
+        textView.sizeThatFits(width: proposal.width)
+    }
+}
+
+/// The AppKit transcript renderer shared by the SwiftUI wrapper and the
+/// native macOS timeline. It owns TextKit state directly, so callers can
+/// synchronously apply a transcript and ask for its exact height.
+final class NativeTranscriptTextView: NSTextView, NSTextViewDelegate {
+    private var actions: [String: TranscriptAction] = [:]
+    private var onAction: (TranscriptAction) -> Void
+    private var lastApplied: NSAttributedString?
+    private var textVersion = 0
+    private var measuredTextVersion = -1
+    private var lastMeasuredWidth: CGFloat = 0
+    private var lastMeasuredSize = CGSize.zero
+
+    init(onAction: @escaping (TranscriptAction) -> Void) {
         let textStorage = NSTextStorage()
         let layoutManager = TranscriptLayoutManager()
         textStorage.addLayoutManager(layoutManager)
@@ -451,43 +480,49 @@ private struct PlatformTranscriptTextView: NSViewRepresentable {
         )
         layoutManager.addTextContainer(textContainer)
 
-        let textView = NSTextView(frame: .zero, textContainer: textContainer)
-        textView.isEditable = false
-        textView.isSelectable = true
-        textView.drawsBackground = false
+        self.onAction = onAction
+        super.init(frame: .zero, textContainer: textContainer)
+        isEditable = false
+        isSelectable = true
+        drawsBackground = false
         // Small vertical inset so block chrome that outsets beyond the first/
         // last line is not clipped.
-        textView.textContainerInset = NSSize(width: 0, height: TranscriptTheme.userBubbleVerticalPadding)
-        textView.textContainer?.lineFragmentPadding = 0
-        textView.textContainer?.widthTracksTextView = false
-        textView.textContainer?.heightTracksTextView = false
-        textView.isHorizontallyResizable = false
-        textView.isVerticallyResizable = true
-        textView.autoresizingMask = [.width]
-        textView.linkTextAttributes = [:]
-        textView.delegate = context.coordinator
-        return textView
+        textContainerInset = NSSize(width: 0, height: TranscriptTheme.userBubbleVerticalPadding)
+        textContainer.lineFragmentPadding = 0
+        textContainer.widthTracksTextView = false
+        textContainer.heightTracksTextView = false
+        isHorizontallyResizable = false
+        isVerticallyResizable = true
+        autoresizingMask = [.width]
+        linkTextAttributes = [:]
+        delegate = self
     }
 
-    func updateNSView(_ textView: NSTextView, context: Context) {
-        context.coordinator.actions = actions
-        context.coordinator.onAction = onAction
+    required init?(coder: NSCoder) { nil }
+
+    func apply(
+        attributedText: NSAttributedString,
+        actions: [String: TranscriptAction],
+        onAction: @escaping (TranscriptAction) -> Void
+    ) {
+        self.actions = actions
+        self.onAction = onAction
 
         // Fast path: unchanged transcript instance (cache hit upstream).
-        guard context.coordinator.lastApplied !== attributedText else { return }
-        context.coordinator.lastApplied = attributedText
+        guard lastApplied !== attributedText else { return }
+        lastApplied = attributedText
 
-        guard let storage = textView.textStorage else { return }
-        let savedSelection = textView.selectedRanges
+        guard let storage = textStorage else { return }
+        let savedSelection = selectedRanges
         let result = TranscriptTextApplier.apply(attributedText, to: storage)
         if result != .noChange {
-            context.coordinator.textVersion += 1
-            (textView.textContainer as? TranscriptTextContainer)?.invalidateUserPromptLayouts()
+            textVersion += 1
+            (textContainer as? TranscriptTextContainer)?.invalidateUserPromptLayouts()
         }
         if result == .attributesOnly {
             // Same characters, new attributes — the full replace dropped the
             // selection, but every saved range is still valid. Put it back.
-            textView.selectedRanges = savedSelection
+            selectedRanges = savedSelection
         }
     }
 
@@ -500,24 +535,19 @@ private struct PlatformTranscriptTextView: NSViewRepresentable {
     /// full TextKit layout each time dropped frames and flashed white.
     /// Width-less probes (mid-resize) return the last size instead of nil —
     /// returning nil let rows collapse to their intrinsic (near-zero) height.
-    func sizeThatFits(
-        _ proposal: ProposedViewSize,
-        nsView textView: NSTextView,
-        context: Context
-    ) -> CGSize? {
-        let coordinator = context.coordinator
-        guard let proposedWidth = proposal.width, proposedWidth.isFinite, proposedWidth > 0 else {
-            return coordinator.lastMeasuredSize == .zero ? nil : coordinator.lastMeasuredSize
+    func sizeThatFits(width proposedWidth: CGFloat?) -> CGSize? {
+        guard let proposedWidth, proposedWidth.isFinite, proposedWidth > 0 else {
+            return lastMeasuredSize == .zero ? nil : lastMeasuredSize
         }
         let width = max(1, proposedWidth.rounded())
-        if width == coordinator.lastMeasuredWidth,
-           coordinator.measuredTextVersion == coordinator.textVersion,
-           coordinator.lastMeasuredSize != .zero {
-            return coordinator.lastMeasuredSize
+        if width == lastMeasuredWidth,
+           measuredTextVersion == textVersion,
+           lastMeasuredSize != .zero {
+            return lastMeasuredSize
         }
 
-        guard let layoutManager = textView.layoutManager,
-              let textContainer = textView.textContainer as? TranscriptTextContainer else {
+        guard let layoutManager,
+              let textContainer = textContainer as? TranscriptTextContainer else {
             return nil
         }
         if textContainer.containerSize.width != width {
@@ -529,45 +559,23 @@ private struct PlatformTranscriptTextView: NSViewRepresentable {
         textContainer.prepareUserPromptLayouts(for: width)
         layoutManager.ensureLayout(for: textContainer)
         let used = layoutManager.usedRect(for: textContainer)
-        let height = max(1, ceil(used.height + textView.textContainerInset.height * 2))
+        let height = max(1, ceil(used.height + textContainerInset.height * 2))
 
-        coordinator.lastMeasuredWidth = width
-        coordinator.measuredTextVersion = coordinator.textVersion
-        coordinator.lastMeasuredSize = CGSize(width: width, height: height)
-        return coordinator.lastMeasuredSize
+        lastMeasuredWidth = width
+        measuredTextVersion = textVersion
+        lastMeasuredSize = CGSize(width: width, height: height)
+        return lastMeasuredSize
     }
 
-    final class Coordinator: NSObject, NSTextViewDelegate {
-        var actions: [String: TranscriptAction] = [:]
-        var onAction: (TranscriptAction) -> Void
-        /// Identity of the last applied transcript — skips diffing entirely
-        /// when the upstream cache hands back the same instance.
-        var lastApplied: NSAttributedString?
-
-        /// Measurement memo — see sizeThatFits.
-        var textVersion = 0
-        var measuredTextVersion = -1
-        var lastMeasuredWidth: CGFloat = 0
-        var lastMeasuredSize: CGSize = .zero
-
-        init(onAction: @escaping (TranscriptAction) -> Void) {
-            self.onAction = onAction
+    func textView(_ textView: NSTextView, clickedOnLink link: Any, at charIndex: Int) -> Bool {
+        guard let url = link as? URL,
+              url.scheme == "agentkit-transcript",
+              let id = url.host,
+              let action = actions[id] else {
+            return false
         }
-
-        func textView(
-            _ textView: NSTextView,
-            clickedOnLink link: Any,
-            at charIndex: Int
-        ) -> Bool {
-            guard let url = link as? URL,
-                  url.scheme == "agentkit-transcript",
-                  let id = url.host,
-                  let action = actions[id] else {
-                return false
-            }
-            onAction(action)
-            return true
-        }
+        onAction(action)
+        return true
     }
 }
 

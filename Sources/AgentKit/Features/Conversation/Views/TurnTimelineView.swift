@@ -15,10 +15,18 @@ import SwiftUI
 public struct TurnTimelineView: View {
     let snapshot: RuntimeSnapshot
     let timelineExtensions: [any TimelineExtension]
+    /// Stable conversation identity. The native macOS timeline uses this to
+    /// distinguish a newly opened conversation from a streaming update.
+    let conversationID: String?
 
-    public init(snapshot: RuntimeSnapshot, timelineExtensions: [any TimelineExtension] = []) {
+    public init(
+        snapshot: RuntimeSnapshot,
+        timelineExtensions: [any TimelineExtension] = [],
+        conversationID: String? = nil
+    ) {
         self.snapshot = snapshot
         self.timelineExtensions = timelineExtensions
+        self.conversationID = conversationID
     }
     
     // 获取当前排在最底部的view的id
@@ -30,6 +38,16 @@ public struct TurnTimelineView: View {
     }
 
     public var body: some View {
+        #if os(macOS)
+        // AppKit owns the scroll container on macOS.  TurnView itself remains
+        // unchanged, so its TextKit-backed NativeTranscriptView is still the
+        // renderer for every transcript row.
+        MacNativeChatTimeline(
+            snapshot: snapshot,
+            timelineExtensions: timelineExtensions,
+            conversationID: conversationID
+        )
+        #else
         FollowingScrollView(
             lastItemId: actualLastItemId,
             repinTrigger: snapshot.turns.last?.id
@@ -69,6 +87,7 @@ public struct TurnTimelineView: View {
             .padding()
         }
         .background(timelineBackground.ignoresSafeArea())
+        #endif
     }
 
     private var timelineBackground: Color {
