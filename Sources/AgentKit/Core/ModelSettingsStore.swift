@@ -29,33 +29,13 @@ public final class ModelSettingsStore {
     /// Gateway 的默认模型（首次使用提示）。
     public private(set) var gatewayDefaultModel: String?
 
-    /// 新对话时使用的模型 ID。
-    /// 优先 UserDefaults 持久化值 → 回退 Gateway default_model → 回退列表第一个。
-    public var modelForNewConversation: String {
-        let stored = lastUsedModel
-        if let models = gatewayModels, models.contains(where: { $0.id == stored }) {
-            return stored
-        }
-        if let def = gatewayDefaultModel, let models = gatewayModels,
-           models.contains(where: { $0.id == def }) {
-            return def
-        }
-        if let first = gatewayModels?.first(where: { $0.available != false }) {
-            return first.id
-        }
-        return ""
-    }
-
     // MARK: - Private
 
-    private static let lastModelKey = "code_agent.last_model"
-
-    /// 全局记忆：用户最近一次在任意对话中使用的模型。
-    private var lastUsedModel: String {
-        get { UserDefaults.standard.string(forKey: Self.lastModelKey) ?? "" }
-        set { UserDefaults.standard.set(newValue, forKey: Self.lastModelKey) }
-    }
-
+    // 每一个对话选择的模型：[对话id：model]
+    private var usedModels: [String: String] = [:]
+    // 最后一次选择模型
+    public private(set) var lastSelectedModel: String?
+    
     private let authClient: any AuthClientProtocol
     private let credentialStore: any CredentialStore
 
@@ -85,9 +65,22 @@ public final class ModelSettingsStore {
     }
 
     /// 用户选择模型时调用。持久化为全局 "last used"（用于新对话默认值）。
-    public func didUseModel(_ modelID: String) {
+    public func didUseModel(_ modelID: String, conversation: String) {
+        setUserModel(modelID, for: conversation)
+        self.lastSelectedModel = modelID
+    }
+    
+    public func setUserModel(_ modelID: String, for conversation: String) {
+        guard !conversation.isEmpty else { return }
         guard !modelID.isEmpty else { return }
-        lastUsedModel = modelID
+        self.usedModels[conversation] = modelID
+    }
+    
+    public func getModel(with conversation: String?) -> String? {
+        guard let conversation, !conversation.isEmpty else {
+            return modelForNewConversation
+        }
+        return usedModels[conversation] ?? modelForNewConversation
     }
 
     /// 模型的 display name（用于 UI）。
@@ -98,5 +91,22 @@ public final class ModelSettingsStore {
     /// 从 Gateway 获取的可用模型 ID 列表。
     public var availableModelIDs: [String] {
         gatewayModels?.filter { $0.available != false }.map(\.id) ?? []
+    }
+    
+    /// 新对话时使用的模型 ID。
+    /// 优先 UserDefaults 持久化值 → 回退 Gateway default_model → 回退列表第一个。
+    public var modelForNewConversation: String {
+        if let stored = lastSelectedModel,
+            let models = gatewayModels, models.contains(where: { $0.id == stored }) {
+            return stored
+        }
+        if let def = gatewayDefaultModel, let models = gatewayModels,
+           models.contains(where: { $0.id == def }) {
+            return def
+        }
+        if let first = gatewayModels?.first(where: { $0.available != false }) {
+            return first.id
+        }
+        return ""
     }
 }
