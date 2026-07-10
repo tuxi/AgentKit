@@ -62,7 +62,7 @@ It is **not** a chat UI kit. It is a **multi-runtime execution graph system** â€
 import AgentKit
 
 // 1. Create transport for your backend
-let transport = CodeAgentTransport(host: "127.0.0.1", port: 8787)
+let transport = CodeAgentTransport(host: "127.0.0.1", port: 8797)
 
 // 2. Create client (thin facade)
 let client = DefaultAgentClient(transport: transport)

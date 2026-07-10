@@ -80,6 +80,7 @@ public final class ModelSettingsStore {
             gatewayDefaultModel = response.defaultModel
         } catch {
             // 网络错误不覆盖已有数据
+            print("fetchFromGateway: ", error)
         }
     }
 

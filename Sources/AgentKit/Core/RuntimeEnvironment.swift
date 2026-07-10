@@ -3,7 +3,7 @@
 //  AgentKit
 //
 //  内嵌 CodeAgent Runtime 的连接目标。
-//  替代传输层硬编码的 127.0.0.1:8787 — 端口由 OS 动态分配。
+//  替代传输层硬编码的 127.0.0.1:8797 — 端口由 OS 动态分配。
 //
 
 import Foundation
