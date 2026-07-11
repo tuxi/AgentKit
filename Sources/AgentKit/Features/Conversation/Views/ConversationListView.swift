@@ -10,7 +10,7 @@
 
 import SwiftUI
 
-struct ConversationListView: View {
+public struct ConversationListView: View {
 
     private let viewModel: ConversationListViewModel
     @Binding var selected: ConversationRef?
@@ -27,9 +27,9 @@ struct ConversationListView: View {
     @State private var didInitializeExpansion = false
     @State private var isProjectsExpanded = true
 
-    init(viewModel: ConversationListViewModel,
-         selected: Binding<ConversationRef?>,
-         searchText: String = "") {
+    public init(viewModel: ConversationListViewModel,
+                selected: Binding<ConversationRef?>,
+                searchText: String = "") {
         self.viewModel = viewModel
         self._selected = selected
         self.searchText = searchText
@@ -101,7 +101,7 @@ struct ConversationListView: View {
     }
     #endif
 
-    var body: some View {
+    public var body: some View {
         let listRevision = viewModel.revision
         List(selection: $selected) {
             if viewModel.isLoading {

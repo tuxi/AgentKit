@@ -142,7 +142,8 @@ struct DraftComposerPanel: View {
 //        }
         .shadow(color: .black.opacity(0.10), radius: 20, y: 10)
         .task(id: viewModel?.conversation?.id ?? "draft-\(draftRevision)") {
-            await modelSettings.fetchFromGateway()
+            // 模型列表由宿主 App（如 CodeAgentApp）在启动时注入。
+            // ModelSettingsStore.setAvailableModels(_:defaultModel:) 应在 App 初始化时调用。
             selectedModel = modelSettings.getModel(with: viewModel?.conversation?.id)
         }
     }

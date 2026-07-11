@@ -17,7 +17,7 @@ public enum AgentSettings {
     public static let keychainService = "com.codeagent.runtime"
     public static let apiKeyAccount = "deepseek_api_key"
     public static let tavilyApiKeyAccount = "tavily_api_key"
-    static let modelDefaultsKey = "code_agent.runtime.model"
+    public static let modelDefaultsKey = "code_agent.runtime.model"
 
     static let keychain = KeychainStore(service: keychainService)
 
