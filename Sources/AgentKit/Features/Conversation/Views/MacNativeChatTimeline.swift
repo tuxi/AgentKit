@@ -2,8 +2,8 @@
 //  MacNativeChatTimeline.swift
 //  AgentKit
 //
-//  The macOS chat scroll container.  SwiftUI remains responsible for each
-//  timeline item, while AppKit owns row reuse, measurement and scrolling.
+//  The macOS chat scroll container. AppKit owns scrolling plus native Turn and
+//  Thinking rows; SwiftUI remains only for compatibility extension rows.
 //
 
 #if os(macOS)
@@ -35,6 +35,9 @@ struct MacNativeChatTimeline: NSViewRepresentable {
         scrollView.onUserScroll = { [weak coordinator = context.coordinator] in
             coordinator?.willHandleUserScroll()
         }
+        scrollView.onUserScrollEnded = { [weak coordinator = context.coordinator] in
+            coordinator?.didHandleUserScroll()
+        }
         scrollView.onLayout = { [weak coordinator = context.coordinator] in
             coordinator?.scrollViewDidLayout()
         }
@@ -53,6 +56,7 @@ struct MacNativeChatTimeline: NSViewRepresentable {
         // Turn rows never ask NSHostingView/SwiftUI for an ideal size.
         tableView.usesAutomaticRowHeights = false
         tableView.rowHeight = 44
+        tableView.autoresizingMask = [.width]
 
         let column = NSTableColumn(identifier: .chatTimelineColumn)
         column.resizingMask = .autoresizingMask
@@ -76,31 +80,16 @@ struct MacNativeChatTimeline: NSViewRepresentable {
         let wasPinnedToBottom = coordinator.isPinnedToBottom
         let change = coordinator.replaceRows(with: makeRows())
 
-        guard let tableView = coordinator.tableView else { return }
-        if change.requiresFullReload {
-            tableView.reloadData()
-
-            // Re-query every explicit height after a structural change so the
-            // document frame is complete before the initial bottom pin.
-            if tableView.numberOfRows > 0 {
-                let allRows = IndexSet(integersIn: 0..<tableView.numberOfRows)
-                tableView.noteHeightOfRows(withIndexesChanged: allRows)
-            }
-            tableView.tile() // 强迫 AppKit 重新刷新文档视图树的总物理高度
-
-        } else if !change.changedRows.isEmpty {
-            coordinator.applyChangedRows(change.changedRows)
-        }
-
         if change.isNewConversation {
             coordinator.isPinnedToBottom = true
-            // 非 ignoresSafeArea 状态下，首帧需要推迟到下个循环，
-            // 确保安全边距与新会话清空后的高度已经被系统接受，然后坚决探底
-            DispatchQueue.main.async {
-                coordinator.requestInitialBottomPin()
-            }
-        } else if wasPinnedToBottom, change.hasVisibleUpdate {
-            coordinator.scrollToBottomImmediately()
+            coordinator.reloadForNewConversation()
+        } else if change.requiresFullReload {
+            coordinator.reloadAllRows(followBottom: wasPinnedToBottom)
+        } else if !change.changedRows.isEmpty {
+            coordinator.applyChangedRows(
+                change.changedRows,
+                followBottom: wasPinnedToBottom
+            )
         }
     }
 
@@ -249,14 +238,16 @@ struct MacNativeChatTimeline: NSViewRepresentable {
         private var rows: [TimelineRow] = []
         private var conversationID: String?
         private var isPerformingProgrammaticScroll = false
+        private var isHandlingUserScroll = false
         private var awaitingInitialBottomPin = false
         private var isAligningInitialBottomPin = false
+        private var geometryReconciliationScheduled = false
+        private var initialGeometryRetryCount = 0
         private var heightCache: [String: CGFloat] = [:]
         private var heightCacheWidth: CGFloat = 0
         private var lastLaidOutWidth: CGFloat = 0
         private var isInvalidatingHeightsForWidth = false
         private var documentStates: [String: TranscriptDocumentState] = [:]
-        private lazy var transcriptMeasurer = NativeTranscriptTextView(onAction: { _ in })
         var isPinnedToBottom = true
 
         init(parent: MacNativeChatTimeline) {
@@ -271,6 +262,18 @@ struct MacNativeChatTimeline: NSViewRepresentable {
                 selector: #selector(boundsDidChange),
                 name: NSView.boundsDidChangeNotification,
                 object: scrollView.contentView
+            )
+            NotificationCenter.default.addObserver(
+                self,
+                selector: #selector(liveScrollWillBegin),
+                name: NSScrollView.willStartLiveScrollNotification,
+                object: scrollView
+            )
+            NotificationCenter.default.addObserver(
+                self,
+                selector: #selector(liveScrollDidEnd),
+                name: NSScrollView.didEndLiveScrollNotification,
+                object: scrollView
             )
         }
 
@@ -305,6 +308,24 @@ struct MacNativeChatTimeline: NSViewRepresentable {
                 return cell
             }
 
+            if case .thinking(let startedAt, let isThinking, let modelStats) = targetRow {
+                let cell: NativeThinkingTableCellView
+                if let reusable = tableView.makeView(
+                    withIdentifier: .nativeThinkingTimelineCell,
+                    owner: self
+                ) as? NativeThinkingTableCellView {
+                    cell = reusable
+                } else {
+                    cell = NativeThinkingTableCellView(identifier: .nativeThinkingTimelineCell)
+                }
+                cell.configure(
+                    startedAt: startedAt,
+                    isThinking: isThinking,
+                    modelStats: modelStats
+                )
+                return cell
+            }
+
             let cell: TimelineTableCellView
             if let reusable = tableView.makeView(
                 withIdentifier: .chatTimelineCell,
@@ -327,35 +348,97 @@ struct MacNativeChatTimeline: NSViewRepresentable {
             return cell
         }
 
+        func tableView(
+            _ tableView: NSTableView,
+            didAdd rowView: NSTableRowView,
+            forRow row: Int
+        ) {
+            // A large wheel/trackpad delta can make a reusable cell visible
+            // without an intervening layout pass. Complete its layout now that
+            // NSTableView has assigned the final row frame, otherwise a tall
+            // transcript can momentarily draw the previous row's small frame.
+            rowView.needsLayout = true
+            rowView.layoutSubtreeIfNeeded()
+            if let cell = tableView.view(
+                atColumn: 0,
+                row: row,
+                makeIfNecessary: false
+            ) as? NativeTurnTableCellView {
+                cell.prepareForDisplay()
+            }
+        }
+
         /// Turn rows are updated in place instead of going through
         /// reloadData(forRowIndexes:). This keeps the same NSTextView alive,
         /// preserving selection and limiting TextKit relayout to the changed
         /// suffix. Compatibility rows still use normal AppKit reloads.
-        func applyChangedRows(_ changedRows: [Int]) {
+        func applyChangedRows(_ changedRows: [Int], followBottom: Bool) {
             guard let tableView else { return }
-            var compatibilityRows = IndexSet()
+            performViewportMutation(followBottom: followBottom) {
+                var compatibilityRows = IndexSet()
 
-            for row in changedRows where rows.indices.contains(row) {
-                if case .turn(let turn) = rows[row] {
-                    if let cell = tableView.view(
-                        atColumn: 0,
-                        row: row,
-                        makeIfNecessary: false
-                    ) as? NativeTurnTableCellView {
-                        configure(cell, with: turn, rowIdentity: rows[row].identity)
+                for row in changedRows where rows.indices.contains(row) {
+                    switch rows[row] {
+                    case .turn(let turn):
+                        if let cell = tableView.view(
+                            atColumn: 0,
+                            row: row,
+                            makeIfNecessary: false
+                        ) as? NativeTurnTableCellView {
+                            configure(cell, with: turn, rowIdentity: rows[row].identity)
+                        }
+                    case .thinking(let startedAt, let isThinking, let modelStats):
+                        if let cell = tableView.view(
+                            atColumn: 0,
+                            row: row,
+                            makeIfNecessary: false
+                        ) as? NativeThinkingTableCellView {
+                            cell.configure(
+                                startedAt: startedAt,
+                                isThinking: isThinking,
+                                modelStats: modelStats
+                            )
+                        }
+                    default:
+                        compatibilityRows.insert(row)
                     }
-                } else {
-                    compatibilityRows.insert(row)
+                }
+
+                if !compatibilityRows.isEmpty {
+                    tableView.reloadData(
+                        forRowIndexes: compatibilityRows,
+                        columnIndexes: IndexSet(integersIn: 0..<tableView.numberOfColumns)
+                    )
+                }
+                tableView.noteHeightOfRows(withIndexesChanged: IndexSet(changedRows))
+            }
+        }
+
+        func reloadForNewConversation() {
+            guard let tableView else { return }
+            awaitingInitialBottomPin = true
+            // Keep the reset position out of the rendered frame. The table is
+            // revealed only after the final viewport width, every explicit row
+            // height and the bottom origin have been applied together.
+            tableView.alphaValue = 0
+            lastLaidOutWidth = 0
+            initialGeometryRetryCount = 0
+            performViewportMutation(followBottom: false) {
+                tableView.reloadData()
+            }
+            scheduleGeometryReconciliation()
+        }
+
+        func reloadAllRows(followBottom: Bool) {
+            guard let tableView else { return }
+            performViewportMutation(followBottom: followBottom) {
+                tableView.reloadData()
+                if tableView.numberOfRows > 0, stableTableWidth() != nil {
+                    tableView.noteHeightOfRows(withIndexesChanged: IndexSet(
+                        integersIn: 0..<tableView.numberOfRows
+                    ))
                 }
             }
-
-            if !compatibilityRows.isEmpty {
-                tableView.reloadData(
-                    forRowIndexes: compatibilityRows,
-                    columnIndexes: IndexSet(integersIn: 0..<tableView.numberOfColumns)
-                )
-            }
-            tableView.noteHeightOfRows(withIndexesChanged: IndexSet(changedRows))
         }
 
         private func configure(
@@ -379,16 +462,20 @@ struct MacNativeChatTimeline: NSViewRepresentable {
                     guard let currentRow = self.rows.firstIndex(where: {
                         $0.identity == rowIdentity
                     }) else { return }
-                    let wasPinned = self.isPinnedToBottom
-                    tableView.noteHeightOfRows(withIndexesChanged: IndexSet(integer: currentRow))
-                    if wasPinned { self.scrollToBottomImmediately() }
+                    self.performViewportMutation(followBottom: self.isPinnedToBottom) {
+                        tableView.noteHeightOfRows(
+                            withIndexesChanged: IndexSet(integer: currentRow)
+                        )
+                    }
                 }
             )
         }
 
         func tableView(_ tableView: NSTableView, heightOfRow row: Int) -> CGFloat {
             guard rows.indices.contains(row) else { return tableView.rowHeight }
-            let width = max(1, tableView.tableColumns.first?.width ?? tableView.bounds.width)
+            guard let width = stableTableWidth() else {
+                return heightCache[rows[row].identity] ?? tableView.rowHeight
+            }
             if abs(width - heightCacheWidth) > 0.5 {
                 heightCacheWidth = width
                 heightCache.removeAll(keepingCapacity: true)
@@ -402,54 +489,72 @@ struct MacNativeChatTimeline: NSViewRepresentable {
         }
 
         func willHandleUserScroll() {
-            // This is called before NSScrollView changes the clip-view bounds;
-            // the notification then samples the user's resulting position.
-            isPerformingProgrammaticScroll = false
+            isHandlingUserScroll = true
         }
 
-        /// The representable's first update can occur before the scroll view
-        /// is attached to a window. In that phase its clip view has a zero
-        /// height, so a bottom offset is indistinguishable from the top. Keep
-        /// the request pending until AppKit has performed a real layout.
-        func requestInitialBottomPin() {
-            awaitingInitialBottomPin = true
-            alignInitialBottomIfPossible()
-
-            // Automatic row heights can settle one main-loop layout after the
-            // scroll view is installed. This is not a timed delay or animated
-            // scroll; it is a single post-layout reconciliation using AppKit's
-            // measured document frame.
-            DispatchQueue.main.async { [weak self] in
-                self?.finishInitialBottomPinIfPossible()
-            }
+        func didHandleUserScroll() {
+            guard !isPerformingProgrammaticScroll else { return }
+            isPinnedToBottom = checkIfAtBottom()
+            isHandlingUserScroll = false
         }
 
         func scrollViewDidLayout() {
-            refreshHeightsForCurrentWidthIfNeeded()
-            alignInitialBottomIfPossible()
+            // `NSScrollView.layout()` can be reached while NSTableView is
+            // inside a delegate callback. Mutating columns or row heights from
+            // there is reentrant and can leave the reusable-row map empty for
+            // a valid scroll range (the observed white screen). Reconcile on
+            // the next main-queue turn, outside the table's layout transaction.
+            scheduleGeometryReconciliation()
         }
 
         private func refreshHeightsForCurrentWidthIfNeeded() {
             guard !isInvalidatingHeightsForWidth,
                   let tableView,
-                  tableView.numberOfRows > 0 else { return }
-            let width = max(1, tableView.tableColumns.first?.width ?? tableView.bounds.width)
+                  tableView.numberOfRows > 0,
+                  let width = stableTableWidth() else { return }
             guard abs(width - lastLaidOutWidth) > 0.5 else { return }
             lastLaidOutWidth = width
             heightCacheWidth = width
             heightCache.removeAll(keepingCapacity: true)
 
             isInvalidatingHeightsForWidth = true
-            tableView.noteHeightOfRows(withIndexesChanged: IndexSet(
-                integersIn: 0..<tableView.numberOfRows
-            ))
+            performViewportMutation(
+                followBottom: isPinnedToBottom && !awaitingInitialBottomPin
+            ) {
+                tableView.noteHeightOfRows(withIndexesChanged: IndexSet(
+                    integersIn: 0..<tableView.numberOfRows
+                ))
+            }
             isInvalidatingHeightsForWidth = false
-            if isPinnedToBottom { scrollToBottomImmediately() }
         }
 
         @objc private func boundsDidChange() {
-            guard !isPerformingProgrammaticScroll else { return }
+            redrawVisibleTranscriptRows()
+            guard isHandlingUserScroll, !isPerformingProgrammaticScroll else { return }
             isPinnedToBottom = checkIfAtBottom()
+        }
+
+        private func redrawVisibleTranscriptRows() {
+            guard let tableView else { return }
+            let visibleRows = tableView.rows(in: tableView.visibleRect)
+            guard visibleRows.location != NSNotFound else { return }
+            for row in visibleRows.location..<NSMaxRange(visibleRows) {
+                (tableView.view(
+                    atColumn: 0,
+                    row: row,
+                    makeIfNecessary: false
+                ) as? NativeTurnTableCellView)?.redrawVisibleTranscript()
+            }
+            tableView.setNeedsDisplay(tableView.visibleRect)
+            tableView.displayIfNeeded()
+        }
+
+        @objc private func liveScrollWillBegin() {
+            isHandlingUserScroll = true
+        }
+
+        @objc private func liveScrollDidEnd() {
+            didHandleUserScroll()
         }
 
         fileprivate func replaceRows(with newRows: [TimelineRow]) -> TimelineChange {
@@ -491,6 +596,11 @@ struct MacNativeChatTimeline: NSViewRepresentable {
             if case .turn(let turn) = row {
                 let state = documentStates[turn.id] ?? TranscriptDocumentState()
                 let transcript = TranscriptCache.shared.transcript(for: turn, state: state)
+                // Do not reuse one TextKit layout manager across unrelated
+                // turns. Its fragment cache can briefly retain the previous
+                // document's geometry, producing a height that disagrees with
+                // the actual cell and leaving a blank scroll range.
+                let transcriptMeasurer = NativeTranscriptTextView(onAction: { _ in })
                 transcriptMeasurer.apply(
                     attributedText: transcript.attributedString,
                     actions: transcript.actions,
@@ -507,7 +617,11 @@ struct MacNativeChatTimeline: NSViewRepresentable {
                     + controlsHeight)
             }
 
-            // Todo/thinking/host extensions remain compatibility rows for the
+            if case .thinking = row {
+                return NativeThinkingTableCellView.rowHeight
+            }
+
+            // Todo/host extensions remain compatibility rows for the
             // moment. Their height is frozen synchronously here, so NSTableView
             // still never enters automatic-row-height mode.
             let host = NSHostingView(rootView: row.hostedView(
@@ -527,49 +641,91 @@ struct MacNativeChatTimeline: NSViewRepresentable {
             return abs(currentY - maxY) <= tolerance
         }
 
-        func scrollToLastRowImmediately() {
+        @discardableResult
+        func scrollToLastRowImmediately() -> Bool {
             guard let tableView,
                   let scrollView,
                   scrollView.window != nil,
-                  scrollView.contentView.bounds.height > 0 else { return }
-            layoutTableBeforeScrolling()
+                  scrollView.contentView.bounds.height > 0,
+                  stableTableWidth() != nil else { return false }
             let lastRow = tableView.numberOfRows - 1
             guard lastRow >= 0 else {
                 scrollToBottomImmediately()
-                return
+                return true
             }
-            performWithoutScrollAnimation {
-                tableView.scrollRowToVisible(lastRow)
-                // `scrollRowToVisible` is intentionally used for the first
-                // population: it lets AppKit include the final row's measured
-                // height before the clip view is positioned.
-                scrollToBottom()
+            performViewportMutation(followBottom: true) {
+                tableView.noteHeightOfRows(withIndexesChanged: IndexSet(
+                    integersIn: 0..<tableView.numberOfRows
+                ))
+                tableView.tile()
             }
+            return true
         }
 
         private func alignInitialBottomIfPossible() {
             guard awaitingInitialBottomPin, !isAligningInitialBottomPin else { return }
             isAligningInitialBottomPin = true
             defer { isAligningInitialBottomPin = false }
-            scrollToLastRowImmediately()
+            if scrollToLastRowImmediately() {
+                awaitingInitialBottomPin = false
+                initialGeometryRetryCount = 0
+                tableView?.alphaValue = 1
+            }
         }
 
-        private func finishInitialBottomPinIfPossible() {
-            guard awaitingInitialBottomPin,
-                  !isAligningInitialBottomPin,
-                  let scrollView,
-                  scrollView.window != nil,
-                  scrollView.contentView.bounds.height > 0 else { return }
-            isAligningInitialBottomPin = true
-            defer { isAligningInitialBottomPin = false }
-            scrollToLastRowImmediately()
-            awaitingInitialBottomPin = false
+        /// SwiftUI and AppKit can finish their outer and inner layout passes in
+        /// either order. One coalesced main-queue reconciliation gives the
+        /// table final viewport geometry without introducing a timed delay.
+        private func scheduleGeometryReconciliation() {
+            guard !geometryReconciliationScheduled else { return }
+            geometryReconciliationScheduled = true
+            DispatchQueue.main.async { [weak self] in
+                guard let self else { return }
+                self.geometryReconciliationScheduled = false
+                self.synchronizeTableWidthToViewport()
+                self.refreshHeightsForCurrentWidthIfNeeded()
+                self.alignInitialBottomIfPossible()
+                if self.awaitingInitialBottomPin,
+                   self.scrollView?.window != nil,
+                   self.initialGeometryRetryCount < 3 {
+                    self.initialGeometryRetryCount += 1
+                    self.scheduleGeometryReconciliation()
+                }
+            }
         }
 
         func scrollToBottomImmediately() {
-            layoutTableBeforeScrolling()
-            performWithoutScrollAnimation {
-                scrollToBottom()
+            performViewportMutation(followBottom: true) {}
+        }
+
+        private func stableTableWidth() -> CGFloat? {
+            guard let tableView,
+                  let scrollView,
+                  scrollView.window != nil else { return nil }
+            let columnWidth = tableView.tableColumns.first?.width ?? 0
+            let viewportWidth = scrollView.contentView.bounds.width
+            // The document view can retain its old bounds for one extra layout
+            // turn while the column and clip view already have final geometry.
+            // Measuring against the visible column is deterministic; requiring
+            // all three widths to match can strand the initial pin forever.
+            guard viewportWidth > 100,
+                  columnWidth > 100 else { return nil }
+            return min(columnWidth, viewportWidth)
+        }
+
+        private func synchronizeTableWidthToViewport() {
+            guard let tableView,
+                  let scrollView,
+                  scrollView.window != nil else { return }
+            let width = scrollView.contentView.bounds.width
+            guard width > 100 else { return }
+
+            if abs(tableView.frame.width - width) > 0.5 {
+                tableView.setFrameSize(NSSize(width: width, height: tableView.frame.height))
+            }
+            if let column = tableView.tableColumns.first,
+               abs(column.width - width) > 0.5 {
+                column.width = width
             }
         }
 
@@ -583,21 +739,36 @@ struct MacNativeChatTimeline: NSViewRepresentable {
             guard let scrollView,
                   let documentView = scrollView.documentView else { return }
             let clipView = scrollView.contentView
-            let maxY = max(0, documentView.frame.height - clipView.bounds.height)
+            let lastRowBottom: CGFloat
+            if let tableView, tableView.numberOfRows > 0 {
+                lastRowBottom = tableView.rect(ofRow: tableView.numberOfRows - 1).maxY
+            } else {
+                lastRowBottom = 0
+            }
+            let contentHeight = max(documentView.frame.height, lastRowBottom)
+            let maxY = max(0, contentHeight - clipView.bounds.height)
             clipView.scroll(to: NSPoint(x: 0, y: maxY))
             scrollView.reflectScrolledClipView(clipView)
             isPinnedToBottom = true
         }
 
-        private func performWithoutScrollAnimation(_ work: () -> Void) {
+        private func performViewportMutation(
+            followBottom: Bool,
+            _ changes: () -> Void
+        ) {
+            guard let tableView else { return }
+            let wasProgrammatic = isPerformingProgrammaticScroll
             isPerformingProgrammaticScroll = true
             NSAnimationContext.runAnimationGroup { context in
                 context.duration = 0
                 context.allowsImplicitAnimation = false
-                work()
+                changes()
+                tableView.layoutSubtreeIfNeeded()
+                if followBottom { scrollToBottom() }
             }
-            isPerformingProgrammaticScroll = false
+            isPerformingProgrammaticScroll = wasProgrammatic
         }
+
     }
 }
 
@@ -607,6 +778,7 @@ private extension NSUserInterfaceItemIdentifier {
     static let chatTimelineColumn = NSUserInterfaceItemIdentifier("AgentKit.ChatTimeline.Column")
     static let chatTimelineCell = NSUserInterfaceItemIdentifier("AgentKit.ChatTimeline.Cell")
     static let nativeTurnTimelineCell = NSUserInterfaceItemIdentifier("AgentKit.ChatTimeline.NativeTurnCell")
+    static let nativeThinkingTimelineCell = NSUserInterfaceItemIdentifier("AgentKit.ChatTimeline.NativeThinkingCell")
 }
 
 /// A fully native Turn row. Its TextKit view is updated incrementally and its
@@ -620,8 +792,8 @@ private final class NativeTurnTableCellView: NSTableCellView {
     override var isFlipped: Bool { true }
 
     private let transcriptView = NativeTranscriptTextView(onAction: { _ in })
-    private let copyButton = NSButton(frame: .zero)
-    private let assetsButton = NSButton(frame: .zero)
+    private lazy var copyButton = NSButton(frame: .zero)
+    private lazy var assetsButton = NSButton(frame: .zero)
     private var representedTurnID: String?
     private var turn: ConversationTurn?
     private var state = TranscriptDocumentState()
@@ -640,6 +812,7 @@ private final class NativeTurnTableCellView: NSTableCellView {
         copyButton.target = self
         copyButton.action = #selector(copyReply)
         addSubview(copyButton)
+        copyButton.title = ""
 
         configureButton(assetsButton, imageName: "tray.full", toolTip: "查看本轮资产")
         assetsButton.target = self
@@ -656,7 +829,7 @@ private final class NativeTurnTableCellView: NSTableCellView {
         onStateChange: @escaping (TranscriptDocumentState) -> Void
     ) {
         if representedTurnID != turn.id {
-            transcriptView.string = ""
+            transcriptView.resetForReuse()
             self.state = state
         } else {
             self.state = state
@@ -690,6 +863,19 @@ private final class NativeTurnTableCellView: NSTableCellView {
         if !assetsButton.isHidden {
             assetsButton.frame = NSRect(x: x, y: controlsY, width: 46, height: 20)
         }
+    }
+
+    func prepareForDisplay() {
+        needsLayout = true
+        layoutSubtreeIfNeeded()
+        redrawVisibleTranscript()
+    }
+
+    func redrawVisibleTranscript() {
+        let dirtyRect = transcriptView.visibleRect.intersection(transcriptView.bounds)
+        guard !dirtyRect.isEmpty else { return }
+        transcriptView.setNeedsDisplay(dirtyRect)
+        transcriptView.displayIfNeeded()
     }
 
     static func showsControls(turn: ConversationTurn, copyText: String) -> Bool {
@@ -765,6 +951,87 @@ private final class NativeTurnTableCellView: NSTableCellView {
     }
 }
 
+/// Fixed-height native working indicator. Only its label string changes on the
+/// timer; it never participates in row-height invalidation while tokens stream.
+private final class NativeThinkingTableCellView: NSTableCellView {
+    static let rowHeight: CGFloat = 38
+
+    override var isFlipped: Bool { true }
+
+    private lazy var iconView = NSImageView(frame: .zero)
+    private lazy var label = NSTextField(labelWithString: "")
+    private var startedAt: Date?
+    private var isThinking = false
+    private var modelStats: ModelStats?
+    private var timer: Timer?
+
+    init(identifier: NSUserInterfaceItemIdentifier) {
+        super.init(frame: .zero)
+        self.identifier = identifier
+        iconView.image = NSImage(systemSymbolName: "sparkles", accessibilityDescription: nil)
+        iconView.contentTintColor = .secondaryLabelColor
+        label.font = .systemFont(ofSize: NSFont.smallSystemFontSize)
+        label.textColor = .secondaryLabelColor
+        label.lineBreakMode = .byClipping
+        addSubview(iconView)
+        addSubview(label)
+    }
+
+    required init?(coder: NSCoder) { nil }
+
+    func configure(startedAt: Date?, isThinking: Bool, modelStats: ModelStats?) {
+        let startChanged = self.startedAt != startedAt
+        self.startedAt = startedAt
+        self.isThinking = isThinking
+        self.modelStats = modelStats
+        updateLabel()
+
+        if startChanged || timer == nil {
+            timer?.invalidate()
+            if startedAt != nil {
+                timer = Timer.scheduledTimer(withTimeInterval: 0.5, repeats: true) {
+                    [weak self] timer in
+                    guard self != nil else {
+                        timer.invalidate()
+                        return
+                    }
+                    MainActor.assumeIsolated {
+                        self?.updateLabel()
+                    }
+                }
+            }
+        }
+    }
+
+    override func layout() {
+        super.layout()
+        iconView.frame = NSRect(x: 16, y: 11, width: 13, height: 13)
+        label.frame = NSRect(x: 35, y: 8, width: max(1, bounds.width - 51), height: 18)
+    }
+
+    private func updateLabel() {
+        guard let startedAt else {
+            label.stringValue = ""
+            return
+        }
+        let elapsed = Date().timeIntervalSince(startedAt)
+        var parts = ["Code Agent", formatSeconds(elapsed)]
+        if let tokens = modelStats?.promptTokens, tokens > 0 {
+            parts.append("\(modelStats!.formattedTokens) tokens")
+        }
+        if isThinking { parts.append("thinkig…") }
+        label.stringValue = parts.joined(separator: " · ")
+    }
+
+    private func formatSeconds(_ seconds: TimeInterval) -> String {
+        switch seconds {
+        case ..<10: return String(format: "%.1fs", seconds)
+        case 10..<60: return String(format: "%.0fs", seconds)
+        default: return "\(Int(seconds) / 60)m \(Int(seconds) % 60)s"
+        }
+    }
+}
+
 private final class TimelineTableCellView: NSTableCellView {
     /// NSHostingView retains its SwiftUI state tree even when rootView is
     /// reassigned. Keep that tree for streaming changes to the same row, but
@@ -793,10 +1060,12 @@ private final class TimelineTableCellView: NSTableCellView {
 
         NSLayoutConstraint.deactivate(hostingConstraints)
         hostingConstraints.removeAll()
+        
         hostingView?.removeFromSuperview()
-
+        
         let newHostingView = NSHostingView(rootView: rootView)
         newHostingView.translatesAutoresizingMaskIntoConstraints = false
+
         addSubview(newHostingView)
         hostingConstraints = [
             newHostingView.leadingAnchor.constraint(equalTo: leadingAnchor),
@@ -813,6 +1082,7 @@ private final class TimelineTableCellView: NSTableCellView {
 
 private final class ChatScrollView: NSScrollView {
     var onUserScroll: (() -> Void)?
+    var onUserScrollEnded: (() -> Void)?
     var onLayout: (() -> Void)?
 
     override func layout() {
@@ -823,6 +1093,7 @@ private final class ChatScrollView: NSScrollView {
     override func scrollWheel(with event: NSEvent) {
         onUserScroll?()
         super.scrollWheel(with: event)
+        onUserScrollEnded?()
     }
 }
 
@@ -830,9 +1101,5 @@ private struct TimelineChange {
     let requiresFullReload: Bool
     let changedRows: [Int]
     let isNewConversation: Bool
-
-    var hasVisibleUpdate: Bool {
-        requiresFullReload || !changedRows.isEmpty
-    }
 }
 #endif

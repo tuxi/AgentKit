@@ -494,6 +494,7 @@ private struct ApprovalBar: View {
 
     private func argsText(_ dict: [String: JSONValue]) -> some View {
         Text(argsSummary(dict))
+//            .textSelection(.enabled)
             .font(.system(.caption, design: .monospaced))
             .foregroundStyle(.secondary)
             .frame(maxWidth: .infinity, alignment: .leading)

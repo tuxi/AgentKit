@@ -526,6 +526,24 @@ final class NativeTranscriptTextView: NSTextView, NSTextViewDelegate {
         }
     }
 
+    /// Clears both the visible document and the identity-sensitive TextKit
+    /// caches before an AppKit cell is assigned to another conversation turn.
+    /// Assigning `string = ""` alone is insufficient: `lastApplied` and the
+    /// layout manager can still describe a transcript rendered by this view in
+    /// an earlier reuse cycle.
+    func resetForReuse() {
+        actions.removeAll(keepingCapacity: true)
+        lastApplied = nil
+        textStorage?.setAttributedString(NSAttributedString())
+        textVersion += 1
+        measuredTextVersion = -1
+        lastMeasuredWidth = 0
+        lastMeasuredSize = .zero
+        (textContainer as? TranscriptTextContainer)?.invalidateUserPromptLayouts()
+        setSelectedRange(NSRange(location: 0, length: 0))
+        needsDisplay = true
+    }
+
     /// Synchronous self-sizing — replaces the old GeometryReader +
     /// measuredHeight @State round-trip, which forced a second layout pass
     /// (and a visible stutter) on every streaming update.
