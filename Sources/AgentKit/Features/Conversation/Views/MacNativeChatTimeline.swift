@@ -243,6 +243,7 @@ struct MacNativeChatTimeline: NSViewRepresentable {
         private var isAligningInitialBottomPin = false
         private var geometryReconciliationScheduled = false
         private var initialGeometryRetryCount = 0
+        private var visibleRowRedrawScheduled = false
         private var heightCache: [String: CGFloat] = [:]
         private var heightCacheWidth: CGFloat = 0
         private var lastLaidOutWidth: CGFloat = 0
@@ -365,6 +366,10 @@ struct MacNativeChatTimeline: NSViewRepresentable {
                 makeIfNecessary: false
             ) as? NativeTurnTableCellView {
                 cell.prepareForDisplay()
+                cell.redrawTranscript(
+                    intersecting: tableView.visibleRect,
+                    from: tableView
+                )
             }
         }
 
@@ -496,6 +501,8 @@ struct MacNativeChatTimeline: NSViewRepresentable {
             guard !isPerformingProgrammaticScroll else { return }
             isPinnedToBottom = checkIfAtBottom()
             isHandlingUserScroll = false
+            redrawVisibleTranscriptRows()
+            scheduleVisibleRowRedraw()
         }
 
         func scrollViewDidLayout() {
@@ -530,6 +537,7 @@ struct MacNativeChatTimeline: NSViewRepresentable {
 
         @objc private func boundsDidChange() {
             redrawVisibleTranscriptRows()
+            scheduleVisibleRowRedraw()
             guard isHandlingUserScroll, !isPerformingProgrammaticScroll else { return }
             isPinnedToBottom = checkIfAtBottom()
         }
@@ -538,15 +546,37 @@ struct MacNativeChatTimeline: NSViewRepresentable {
             guard let tableView else { return }
             let visibleRows = tableView.rows(in: tableView.visibleRect)
             guard visibleRows.location != NSNotFound else { return }
-            for row in visibleRows.location..<NSMaxRange(visibleRows) {
-                (tableView.view(
+            let firstRow = max(0, visibleRows.location - 1)
+            let rowLimit = min(tableView.numberOfRows, NSMaxRange(visibleRows) + 1)
+            let prefetchRect = tableView.visibleRect.insetBy(dx: 0, dy: -128)
+            for row in firstRow..<rowLimit {
+                guard let cell = tableView.view(
                     atColumn: 0,
                     row: row,
-                    makeIfNecessary: false
-                ) as? NativeTurnTableCellView)?.redrawVisibleTranscript()
+                    makeIfNecessary: true
+                ) as? NativeTurnTableCellView else { continue }
+                cell.prepareForDisplay()
+                cell.redrawTranscript(
+                    intersecting: prefetchRect,
+                    from: tableView
+                )
             }
             tableView.setNeedsDisplay(tableView.visibleRect)
             tableView.displayIfNeeded()
+        }
+
+        /// NSTableView updates its reusable-row map near the end of the scroll
+        /// transaction. The immediate pass above covers the current frame;
+        /// this coalesced pass runs after that transaction and prevents AppKit
+        /// from committing an empty backing-store slice over the rendered row.
+        private func scheduleVisibleRowRedraw() {
+            guard !visibleRowRedrawScheduled else { return }
+            visibleRowRedrawScheduled = true
+            DispatchQueue.main.async { [weak self] in
+                guard let self else { return }
+                self.visibleRowRedrawScheduled = false
+                self.redrawVisibleTranscriptRows()
+            }
         }
 
         @objc private func liveScrollWillBegin() {
@@ -868,12 +898,19 @@ private final class NativeTurnTableCellView: NSTableCellView {
     func prepareForDisplay() {
         needsLayout = true
         layoutSubtreeIfNeeded()
-        redrawVisibleTranscript()
     }
 
-    func redrawVisibleTranscript() {
-        let dirtyRect = transcriptView.visibleRect.intersection(transcriptView.bounds)
+    func redrawTranscript(intersecting visibleRect: NSRect, from ancestor: NSView) {
+        var dirtyRect = transcriptView.convert(visibleRect, from: ancestor)
+        dirtyRect = dirtyRect.insetBy(
+            dx: -2,
+            dy: -TranscriptTheme.userBubbleVerticalPadding
+        ).intersection(transcriptView.bounds)
         guard !dirtyRect.isEmpty else { return }
+        if let layoutManager = transcriptView.layoutManager,
+           let textContainer = transcriptView.textContainer {
+            layoutManager.ensureLayout(forBoundingRect: dirtyRect, in: textContainer)
+        }
         transcriptView.setNeedsDisplay(dirtyRect)
         transcriptView.displayIfNeeded()
     }

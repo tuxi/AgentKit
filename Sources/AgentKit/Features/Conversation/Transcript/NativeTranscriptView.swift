@@ -154,23 +154,47 @@ final class TranscriptTextContainer: NSTextContainer {
             return
         }
 
-        preparedContainerWidth = width
-        preparedUserPromptLaneWidths.removeAll(keepingCapacity: true)
-
         let maxLaneWidth = TranscriptTheme.userBubbleLaneWidth(for: width)
-        guard maxLaneWidth > 0, textStorage.length > 0 else { return }
+        guard maxLaneWidth > 0, textStorage.length > 0 else {
+            invalidateUserPromptLayouts()
+            return
+        }
 
         let fullRange = NSRange(location: 0, length: textStorage.length)
+        var preparedWidths: [UserPromptLayoutKey: CGFloat] = [:]
+        var firstPromptLocation: Int?
         textStorage.enumerateAttribute(.transcriptBlock, in: fullRange) { value, range, _ in
             guard let block = value as? TranscriptBlockValue,
                   block.kind == .userPrompt else {
                 return
             }
             let key = UserPromptLayoutKey(location: range.location, length: range.length)
-            preparedUserPromptLaneWidths[key] = userBubbleLineFragmentWidth(
+            preparedWidths[key] = userBubbleLineFragmentWidth(
                 for: range,
                 maxWidth: maxLaneWidth,
                 textStorage: textStorage
+            )
+            firstPromptLocation = min(firstPromptLocation ?? range.location, range.location)
+        }
+
+        guard preparedContainerWidth != width
+                || preparedUserPromptLaneWidths != preparedWidths else { return }
+
+        preparedContainerWidth = width
+        preparedUserPromptLaneWidths = preparedWidths
+
+        // TextKit may already have produced line fragments using the fallback
+        // width before the view received its real table-column width. Updating
+        // this cache alone does not invalidate those fragments, leaving only
+        // the UserPrompt lane positioned outside the visible bounds. Its height
+        // can also shift every following block, so invalidate through EOF.
+        if let firstPromptLocation {
+            layoutManager?.invalidateLayout(
+                forCharacterRange: NSRange(
+                    location: firstPromptLocation,
+                    length: textStorage.length - firstPromptLocation
+                ),
+                actualCharacterRange: nil
             )
         }
     }
@@ -274,14 +298,15 @@ final class TranscriptTextContainer: NSTextContainer {
 final class TranscriptLayoutManager: NSLayoutManager {
 
     override func drawBackground(forGlyphRange glyphsToShow: NSRange, at origin: CGPoint) {
-        drawBlockDecorations(at: origin)
+        drawBlockDecorations(forGlyphRange: glyphsToShow, at: origin)
         super.drawBackground(forGlyphRange: glyphsToShow, at: origin)
     }
 
-    private func drawBlockDecorations(at origin: CGPoint) {
+    private func drawBlockDecorations(forGlyphRange glyphsToShow: NSRange, at origin: CGPoint) {
         guard let textStorage,
               let textContainer = textContainers.first,
-              textStorage.length > 0 else {
+              textStorage.length > 0,
+              glyphsToShow.length > 0 else {
             return
         }
         let fullRange = NSRange(location: 0, length: textStorage.length)
@@ -290,7 +315,8 @@ final class TranscriptLayoutManager: NSLayoutManager {
         textStorage.enumerateAttribute(.transcriptBlock, in: fullRange) { value, range, _ in
             guard let block = value as? TranscriptBlockValue else { return }
             let glyphRange = self.glyphRange(forCharacterRange: range, actualCharacterRange: nil)
-            guard glyphRange.length > 0 else { return }
+            guard glyphRange.length > 0,
+                  NSIntersectionRange(glyphRange, glyphsToShow).length > 0 else { return }
 
             var union = CGRect.null
             self.enumerateLineFragments(forGlyphRange: glyphRange) { rect, _, _, _, _ in
@@ -338,7 +364,11 @@ final class TranscriptLayoutManager: NSLayoutManager {
                     width: lane.width,
                     height: contentHeight + verticalPadding * 2
                 )
-                Self.fillUnclipped(
+                // Never reset the graphics context's dirty-region clip here.
+                // A tall transcript is repainted in visible slices; escaping
+                // that clip lets this background overwrite cached glyphs in a
+                // different slice without redrawing the text above it.
+                Self.fill(
                     bubble,
                     color: fill,
                     radius: TranscriptTheme.blockCornerRadius(for: .userPrompt)
@@ -368,7 +398,8 @@ final class TranscriptLayoutManager: NSLayoutManager {
         textStorage.enumerateAttribute(.transcriptTableHeader, in: fullRange) { value, range, _ in
             guard value != nil else { return }
             let glyphRange = self.glyphRange(forCharacterRange: range, actualCharacterRange: nil)
-            guard glyphRange.length > 0 else { return }
+            guard glyphRange.length > 0,
+                  NSIntersectionRange(glyphRange, glyphsToShow).length > 0 else { return }
             var union = CGRect.null
             self.enumerateLineFragments(forGlyphRange: glyphRange) { rect, _, _, _, _ in
                 union = union.union(rect)
@@ -387,7 +418,8 @@ final class TranscriptLayoutManager: NSLayoutManager {
         textStorage.enumerateAttribute(.transcriptChip, in: fullRange) { value, range, _ in
             guard let chip = value as? TranscriptChipValue else { return }
             let glyphRange = self.glyphRange(forCharacterRange: range, actualCharacterRange: nil)
-            guard glyphRange.length > 0 else { return }
+            guard glyphRange.length > 0,
+                  NSIntersectionRange(glyphRange, glyphsToShow).length > 0 else { return }
             let color = TranscriptTheme.chipFill(for: chip.kind)
 
             self.enumerateLineFragments(forGlyphRange: glyphRange) { _, _, container, lineGlyphRange, _ in
@@ -410,24 +442,6 @@ final class TranscriptLayoutManager: NSLayoutManager {
         #endif
     }
 
-    private static func fillUnclipped(_ rect: CGRect, color: TranscriptPlatformColor, radius: CGFloat) {
-        guard rect.width > 0, rect.height > 0 else { return }
-        #if os(macOS)
-        NSGraphicsContext.saveGraphicsState()
-        NSGraphicsContext.current?.cgContext.resetClip()
-        fill(rect, color: color, radius: radius)
-        NSGraphicsContext.restoreGraphicsState()
-        #else
-        guard let context = UIGraphicsGetCurrentContext() else {
-            fill(rect, color: color, radius: radius)
-            return
-        }
-        context.saveGState()
-        context.resetClip()
-        fill(rect, color: color, radius: radius)
-        context.restoreGState()
-        #endif
-    }
 }
 
 #if os(macOS)

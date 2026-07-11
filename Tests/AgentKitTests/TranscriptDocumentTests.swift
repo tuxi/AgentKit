@@ -1245,6 +1245,61 @@ final class TranscriptDocumentTests: XCTestCase {
         XCTAssertEqual(lineCount, 1)
     }
 
+    func testPreparingUserPromptLaneInvalidatesFallbackLineFragments() {
+        let prompt = "提交代码"
+        let turn = ConversationTurn(
+            id: "turn",
+            userPrompt: MessageNodePayload(role: .user, text: prompt),
+            blocks: [],
+            footer: nil,
+            isLive: false
+        )
+        let transcript = TurnTranscriptBuilder.build(
+            turn: turn,
+            state: TranscriptDocumentState()
+        )
+
+        let storage = NSTextStorage(attributedString: transcript.attributedString)
+        let layoutManager = NSLayoutManager()
+        storage.addLayoutManager(layoutManager)
+        let width: CGFloat = 488
+        #if os(macOS)
+        let container = TranscriptTextContainer(
+            containerSize: NSSize(width: width, height: CGFloat.greatestFiniteMagnitude)
+        )
+        #else
+        let container = TranscriptTextContainer(
+            size: CGSize(width: width, height: CGFloat.greatestFiniteMagnitude)
+        )
+        #endif
+        container.lineFragmentPadding = 0
+        layoutManager.addTextContainer(container)
+
+        // Force TextKit to create the fallback max-width lane first, matching
+        // a reusable cell that is queried before its final table width arrives.
+        layoutManager.ensureLayout(for: container)
+        let promptRange = (storage.string as NSString).range(of: prompt)
+        let glyphRange = layoutManager.glyphRange(
+            forCharacterRange: promptRange,
+            actualCharacterRange: nil
+        )
+        let fallbackRect = layoutManager.lineFragmentRect(
+            forGlyphAt: glyphRange.location,
+            effectiveRange: nil
+        )
+
+        container.prepareUserPromptLayouts(for: width)
+        layoutManager.ensureLayout(for: container)
+        let preparedRect = layoutManager.lineFragmentRect(
+            forGlyphAt: glyphRange.location,
+            effectiveRange: nil
+        )
+
+        XCTAssertGreaterThan(fallbackRect.minX, width)
+        XCTAssertGreaterThanOrEqual(preparedRect.minX, 0)
+        XCTAssertLessThanOrEqual(preparedRect.maxX, width)
+    }
+
     func testExpandedDiffOutputHasLineColors() {
         let diff = """
         @@ -1,2 +1,2 @@
