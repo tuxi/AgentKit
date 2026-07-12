@@ -69,4 +69,10 @@ public struct LastLoginContext: Codable, Sendable {
         self.phoneNumber = phoneNumber
         self.lastLoginAt = lastLoginAt
     }
+    
+    enum CodingKeys: String, CodingKey {
+        case method
+        case phoneNumber = "phone_number"
+        case lastLoginAt = "last_login_at"
+    }
 }

@@ -27,10 +27,26 @@ public struct GatewayModel: Codable, Sendable, Identifiable {
     public let category: String?
     /// 当前用户是否可用
     public let available: Bool?
+    
+    enum CodingKeys: String, CodingKey {
+        case id
+        case displayName = "display_name"
+        case provider
+        case contextWindow = "context_window"
+        case supportsStreaming = "supports_streaming"
+        case supportsToolCalls = "supports_toolCalls"
+        case category
+        case available
+    }
 }
 
 /// Gateway `GET /agent/models` 的响应 data 部分。
 public struct ModelsResponse: Codable, Sendable {
     public let models: [GatewayModel]
     public let defaultModel: String
+    
+    enum CodingKeys: String, CodingKey {
+        case models
+        case defaultModel = "default_model"
+    }
 }

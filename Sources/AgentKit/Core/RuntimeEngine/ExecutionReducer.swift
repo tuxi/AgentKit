@@ -41,8 +41,18 @@ public struct ExecutionReducer: Sendable {
                 graph: &graph
             )
 
-        case .turnPaused, .turnResumed, .turnFailed:
+        case .turnPaused, .turnResumed:
             return []
+
+        case .turnFailed(let turnID, let text, let err, let errorCode):
+            return handleTurnFailed(
+                turnID: turnID,
+                text: text,
+                err: err,
+                errorCode: errorCode,
+                ts: ts,
+                graph: &graph
+            )
 
         // ── Streaming text ──
         case .tokenDelta(let turnID, let text):
@@ -270,6 +280,72 @@ public struct ExecutionReducer: Sendable {
         }
         internalState.currentTurnID = nil
         return []
+    }
+
+    /// A failed turn is terminal just like a finished turn.  In particular,
+    /// every outstanding node must leave `.running`, otherwise the timeline
+    /// keeps showing a spinner after the composer has already recovered.
+    private mutating func handleTurnFailed(
+        turnID: String?,
+        text: String?,
+        err: String?,
+        errorCode: String?,
+        ts: TimeInterval,
+        graph: inout ExecutionGraph
+    ) -> [NodeID] {
+        let resolvedTurnID = turnID ?? internalState.currentTurnID ?? ""
+        var changed: [NodeID] = []
+
+        for (nodeID, var node) in graph.nodes where node.turnID == resolvedTurnID && node.status == .running {
+            node.status = .failed
+            node.timestamp = ts
+            graph.upsertNode(node)
+            changed.append(nodeID)
+        }
+
+        // Surface the terminal error in the transcript as well as ending the
+        // animation. `err` is the canonical display message; `text` remains a
+        // compatibility fallback for older runtimes.
+        let message = err ?? text
+        if let message, !message.isEmpty {
+            let nodeID = "\(resolvedTurnID)_error_\(internalState.nextSystemSeq)"
+            internalState.nextSystemSeq += 1
+            let metadata = errorCode.map { ["code": $0] } ?? [:]
+            let node = GraphNode(
+                id: nodeID,
+                kind: .system,
+                payload: .system(SystemPayload(kind: .error, text: message, metadata: metadata)),
+                status: .failed,
+                timestamp: ts,
+                turnID: resolvedTurnID
+            )
+            appendNode(node, to: &graph)
+            changed.append(nodeID)
+        }
+
+        internalState.streamingAssistant = ""
+        internalState.streamingThinking = ""
+        internalState.lastNodeOfKind[.assistantMessage] = nil
+        internalState.lastNodeOfKind[.thinking] = nil
+        internalState.activeToolCallIDs = []
+        internalState.currentTurnID = nil
+        return changed
+    }
+
+    /// Locally cancelling a turn has no guaranteed terminal server event.
+    /// Stop all current nodes immediately so UI state does not depend on a
+    /// best-effort `cancel_turn` acknowledgement.
+    public mutating func cancelActiveTurn(turnID: String, graph: inout ExecutionGraph) {
+        for (_, var node) in graph.nodes where node.turnID == turnID && node.status == .running {
+            node.status = .cancelled
+            graph.upsertNode(node)
+        }
+        internalState.streamingAssistant = ""
+        internalState.streamingThinking = ""
+        internalState.lastNodeOfKind[.assistantMessage] = nil
+        internalState.lastNodeOfKind[.thinking] = nil
+        internalState.activeToolCallIDs = []
+        internalState.currentTurnID = nil
     }
 
     // MARK: - Streaming handlers
@@ -739,4 +815,5 @@ struct ReducerInternal: Sendable {
     var currentInvocationID: String? = nil
     var nextThinkingSeq: Int = 0
     var nextAssistantSeq: Int = 0
+    var nextSystemSeq: Int = 0
 }

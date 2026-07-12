@@ -29,6 +29,13 @@ public struct AccountInfo: Codable, Sendable, Equatable {
         self.displayName = displayName
         self.subscriptionTier = subscriptionTier
     }
+    
+    enum CodingKeys: String, CodingKey {
+        case userId = "user_id"
+        case email
+        case displayName = "display_name"
+        case subscriptionTier = "subscription_tier"
+    }
 }
 
 /// 订阅等级。

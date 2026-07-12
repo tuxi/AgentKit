@@ -206,10 +206,13 @@ public final class ConversationViewModel {
 
     /// 取消当前 turn。
     public func cancelTurn() async {
+        // cancel_turn has no guaranteed terminal event, so end the local graph
+        // before waiting for transport. This also closes any running tool card.
+        await engine?.cancelActiveTurn()
         await client.cancelTurn()
         currentTurnID = nil
         lifecycleStatus = nil
-        
+        pausedAt = nil
     }
 
     /// Optimistically reflect that ResumeSession was accepted by the host wrapper.

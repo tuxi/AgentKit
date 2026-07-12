@@ -23,6 +23,60 @@ final class ExecutionReducerTests: XCTestCase {
         nodes.firstIndex(where: predicate)
     }
 
+    func testTurnFailedFinalizesRunningNodesAndAppendsError() {
+        var reducer = ExecutionReducer()
+        var graph = ExecutionGraph()
+        let turn = "t1"
+        let events: [AgentEvent] = [
+            .turnStarted(turnID: turn, text: "check commit"),
+            .toolStarted(turnID: turn, callID: "c1",
+                         tool: ToolCall(callID: "c1", toolName: "git_status", toolArgs: nil)),
+            .turnFailed(turnID: turn, text: nil, err: "model api error: status=401", errorCode: "auth_expired"),
+        ]
+
+        for event in events { _ = reducer.reduce(event, into: &graph) }
+
+        XCTAssertFalse(graph.nodes.values.contains { $0.turnID == turn && $0.status == .running })
+        XCTAssertEqual(graph.nodes["c1"]?.status, .failed)
+        XCTAssertTrue(graph.nodes.values.contains { node in
+            guard case .system(let payload) = node.payload else { return false }
+            return payload.kind == .error && payload.text.contains("status=401")
+        })
+    }
+
+    func testLocalCancelFinalizesRunningNodes() {
+        var reducer = ExecutionReducer()
+        var graph = ExecutionGraph()
+        let turn = "t1"
+        _ = reducer.reduce(.turnStarted(turnID: turn, text: "check commit"), into: &graph)
+        _ = reducer.reduce(.toolStarted(turnID: turn, callID: "c1",
+                                        tool: ToolCall(callID: "c1", toolName: "git_status", toolArgs: nil)), into: &graph)
+
+        reducer.cancelActiveTurn(turnID: turn, graph: &graph)
+
+        XCTAssertFalse(graph.nodes.values.contains { $0.turnID == turn && $0.status == .running })
+        XCTAssertEqual(graph.nodes["c1"]?.status, .cancelled)
+    }
+
+    func testRuntimeEngineCancelClearsWorkingIndicatorAndToolSpinner() async {
+        let engine = RuntimeEngine(sessionID: "session_1")
+        await engine.ingest(.turnStarted(turnID: "t1", text: "check commit"))
+        await engine.ingest(.toolStarted(
+            turnID: "t1",
+            callID: "c1",
+            tool: ToolCall(callID: "c1", toolName: "git_status", toolArgs: nil)
+        ))
+
+        await engine.cancelActiveTurn()
+        let snapshot = await engine.currentSnapshot()
+
+        XCTAssertNil(snapshot.turnStartedAt)
+        XCTAssertFalse(snapshot.timeline.contains { node in
+            guard case .tool(let tool) = node.kind else { return false }
+            return tool.status == .running
+        })
+    }
+
     // Live: text → tool → text across two invocations → two segments, interleaved.
     func testAssistantTextSegmentsAcrossToolAndInvocation() {
         var reducer = ExecutionReducer()

@@ -14,6 +14,7 @@ import Foundation
 /// - SwiftUI Preview（不触发 Keychain 权限弹窗）
 /// - CI 环境
 public actor MemoryCredentialStore: CredentialStore {
+    
     private var entries: [CredentialTarget: Credential] = [:]
 
     public init() {}
@@ -21,7 +22,7 @@ public actor MemoryCredentialStore: CredentialStore {
     public func resolve(_ target: CredentialTarget) async throws -> Credential? {
         entries[target]
     }
-
+    
     public func all() async throws -> CredentialMap {
         CredentialMap(entries: entries)
     }

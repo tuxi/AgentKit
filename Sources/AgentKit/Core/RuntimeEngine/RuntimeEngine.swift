@@ -125,6 +125,9 @@ public actor RuntimeEngine {
     private var _modelStartedAt: Date?
     /// Set on turn_started, cleared on turn_finished — drives the live working indicator.
     private var _turnStartedAt: Date?
+    /// Identity of the in-flight turn. Needed because cancel_turn is allowed
+    /// to finish without a corresponding terminal event.
+    private var activeTurnID: String?
 
     /// Whether the live WebSocket is connected.
     private var isLive: Bool = false
@@ -180,15 +183,17 @@ public actor RuntimeEngine {
         }
         // Turn lifecycle: a turn is "active" from turn_started to turn_finished.
         // Drives the live working indicator (and its turn-level timer).
-        if case .turnStarted = event {
+        if case .turnStarted(let turnID, _) = event {
             _pendingApproval = nil
             _modelStats = nil
             _modelStartedAt = nil
             _turnStartedAt = Date()
+            activeTurnID = turnID
         }
         if case .turnFinished = event {
             _turnStartedAt = nil
             _modelStartedAt = nil
+            activeTurnID = nil
         }
         if case .turnPaused = event {
             _turnStartedAt = nil
@@ -197,6 +202,7 @@ public actor RuntimeEngine {
         if case .turnFailed = event {
             _turnStartedAt = nil
             _modelStartedAt = nil
+            activeTurnID = nil
         }
         if case .turnResumed = event {
             _modelStats = nil
@@ -336,6 +342,19 @@ public actor RuntimeEngine {
     /// Get current snapshot (for initial UI read).
     public func currentSnapshot() -> RuntimeSnapshot {
         buildSnapshot()
+    }
+
+    /// Apply the local terminal side of cancel_turn. The wire contract permits
+    /// the server to stop streaming without emitting turn_finished/turn_failed.
+    public func cancelActiveTurn() {
+        guard let activeTurnID else { return }
+        reducer.cancelActiveTurn(turnID: activeTurnID, graph: &graph)
+        self.activeTurnID = nil
+        _turnStartedAt = nil
+        _modelStartedAt = nil
+        _pendingApproval = nil
+        _pendingPlanApproval = nil
+        yieldSnapshot()
     }
 
     // MARK: - Private
