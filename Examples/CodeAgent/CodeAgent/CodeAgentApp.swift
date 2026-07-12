@@ -2,7 +2,7 @@
 //  CodeAgentApp.swift
 //  CodeAgent
 //
-//  Created by xiaoyuan on 2026/6/24.
+//  轻量示例入口。完整功能版见独立 CodeAgent 仓库。
 //
 
 import SwiftUI
@@ -12,19 +12,15 @@ import AgentKit
 struct CodeAgentApp: App {
 
     private var container: AppContainer
-    private var wsClient: WebSocketClient
 
     init() {
-        let wsClient = WebSocketClient(identifier: "com.objc.dreamlog.workflow.ws")
-        self.wsClient = wsClient
-        self.container = AppContainer(wsClient: wsClient)
+        self.container = AppContainer()
     }
 
     var body: some Scene {
         WindowGroup {
             CodeAgentRootView()
                 .environment(container)
-                .environment(container.accountManager)
                 .environment(container.modelSettings)
         }
     }

@@ -14,8 +14,10 @@ import Foundation
 /// - `CredentialSettings` — 新路径（CredentialStore），推荐使用
 public enum CredentialSettings {
 
-    /// 默认的 credential store（Keychain 实现）。
-    public static let store: any CredentialStore = KeychainCredentialStore()
+    /// 全局 credential store。
+    /// 默认使用内存实现（测试/预览安全）。宿主 App 应在启动时注入自己的实现，
+    /// 如 KeychainCredentialStore 或基于 AuthManager 的凭证提供者。
+    nonisolated(unsafe) public static var store: any CredentialStore = MemoryCredentialStore()
 
     private static let migrationKey = "credential.migrated_v1"
 

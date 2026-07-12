@@ -6,6 +6,7 @@
 //
 
 import Foundation
+import AgentKit
 
 /// AuthClientProtocol 的 URLSession 实现。
 ///

@@ -8,6 +8,7 @@
 
 import Foundation
 import os
+import AgentKit
 
 /// Keychain 实现的 CredentialStore。
 ///

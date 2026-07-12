@@ -14,7 +14,7 @@ import Foundation
 ///   - method: 默认参数，获取调用处的方法名
 ///   - line: 默认参数，获取调用处的行号
 /// -  DLLog("开始检测主体", image.size, "其他信息")
-public func DLLog(_ items: Any...,
+func DLLog(_ items: Any...,
            file: String = #file,
            method: String = #function,
            line: Int = #line) {

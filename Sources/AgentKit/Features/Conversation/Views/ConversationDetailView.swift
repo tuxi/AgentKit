@@ -44,7 +44,10 @@ public struct ConversationDetailView: View {
                 draftView
             }
         }
+        .frame(maxWidth: 760)
+        .frame(minWidth: 230)
         .toolbar { toolbarContent }
+        .navigationTitle(store.activeConversationViewModel?.conversation?.name ?? "")
     }
 
     // MARK: - Draft (no session yet)
@@ -73,21 +76,18 @@ public struct ConversationDetailView: View {
                     viewModel: viewModel,
                     draftRevision: store.draftNavigationRevision,
                 )
-                .frame(maxWidth: 760)
                 .environment(modelSettings)
 
                 if case .failed(let message) = store.draft?.state {
                     failureBanner(message)
-                        .frame(maxWidth: 760)
+//                        .frame(maxWidth: 760)
                 }
 
                 Spacer(minLength: 180)
             }
             .frame(maxWidth: .infinity)
-//            .padding(.horizontal, 32)
         }
         .scrollDismissesKeyboard(.interactively)
-//        .background(Color.draftPageBackground.ignoresSafeArea())
         .background(.bar)
         .task {
             if store.draft == nil

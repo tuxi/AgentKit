@@ -2,9 +2,8 @@
 //  AppContainer.swift
 //  CodeAgent
 //
-//  Example app dependency container.
-//  Demonstrates: credential migration, AccountManager wiring,
-//  client tool registration for P1 client tool execution.
+//  轻量示例：演示 AgentKit 最小集成模式。
+//  完整功能版（含账号/用户/订阅）见独立 CodeAgent 仓库。
 //
 
 import Foundation
@@ -14,47 +13,30 @@ import AgentKit
 @Observable
 final class AppContainer {
 
-    let wsClient: WebSocketClient
-
-    /// 用户身份管理 —— 登录 / Token 刷新 / 登出。
-    let accountManager: AccountManager
-
-    /// 模型管理 —— 从 Gateway 获取模型列表 + 本地偏好。
+    /// 模型管理 —— 本地偏好，模型列表由宿主 App 注入。
     let modelSettings: ModelSettingsStore
 
-    /// 客户端工具注册表 — 注册本地可执行工具。
+    /// 客户端工具注册表。
     let toolRegistry: ToolRegistry
 
-    /// Product-specific additions to AgentKit's otherwise generic Timeline.
+    /// Product-specific Timeline extensions.
     let timelineExtensions: [any TimelineExtension]
 
-    init(wsClient: WebSocketClient) {
-        self.wsClient = wsClient
-
-        // 创建 AccountManager（默认指向本地 Gateway）
-        let authClient = URLSessionAuthClient()
-        self.accountManager = AccountManager(authClient: authClient)
-        self.modelSettings = ModelSettingsStore(authClient: authClient)
-
+    init() {
+        self.modelSettings = ModelSettingsStore()
         self.toolRegistry = ToolRegistry()
 
-        #if os(macOS)
+        // 注入凭证存储：启动时将 KeychainCredentialStore 设置为全局 store。
+        // 完整 App 可替换为基于 AuthManager 的实现，不依赖 Keychain。
+        CredentialSettings.store = KeychainCredentialStore()
+
+#if os(macOS)
         self.timelineExtensions = [DesktopControlEvidenceTimeline()]
-        #else
+#else
         self.timelineExtensions = []
-        #endif
+#endif
 
-        // 从旧 AgentSettings 迁移到新 CredentialStore（仅一次）
-        CredentialSettings.migrateFromLegacyIfNeeded()
-
-        // P1: 注册客户端工具（Go 服务端无法执行的本地工具）
         registerClientTools()
-
-        // 从 Keychain 恢复登录态
-        Task { await accountManager.restore() }
-
-        // 从 Gateway 获取模型列表
-        Task { await modelSettings.fetchFromGateway() }
     }
 
     private func registerClientTools() {
@@ -68,20 +50,16 @@ final class AppContainer {
         }
     }
 
+    /// 创建 Runtime 客户端。
+    /// - macOS: 连接本地 CodeAgent server (127.0.0.1:8797)
+    /// - iOS: 内嵌 Runtime
     func makeAgentClient() -> RuntimeClient {
-        #if os(iOS)
-        // iOS: 内嵌 CodeAgent Runtime。
-        // 启动前先注入 credential（AccountManager → CredentialStore → secretsJSON → Runtime）。
-        injectCredentialsIntoRuntime()
+#if os(iOS)
         return DefaultAgentClient.fromRuntime()
-        #else
-        // macOS: 连接独立运行的 CodeAgent server（127.0.0.1:8797）。
-        // Gateway credential 通过 CredentialStore → Authorization header 注入
-        // 每个 HTTP 请求和 WebSocket 握手。BYOK credential 由远端 server 的启动参数传入。
+#else
         let env = RuntimeEnvironment(host: "127.0.0.1", port: 8797)
-        let credentialStore = KeychainCredentialStore()
-        return DefaultAgentClient(environment: env, credentialStore: credentialStore)
-        #endif
+        return DefaultAgentClient(environment: env)
+#endif
     }
 
     func makeAgentDependencies() -> AgentDependencies {
@@ -89,42 +67,7 @@ final class AppContainer {
             client: makeAgentClient(),
             toolRegistry: toolRegistry,
             timelineExtensions: timelineExtensions,
-            onAuthExpired: { [accountManager] in
-                // credential-injection-v1 §5.2：Gateway 401 → 强制刷新 token → Reconfigure Runtime。
-                // Runtime 已确认 token 失效，跳过 lazy 过期检查直接刷新；
-                // 失败（guest / 无 refresh_token）则静默放弃，等用户重新登录。
-                guard (try? await accountManager.refreshGatewayToken()) != nil else { return }
-                #if os(iOS)
-                try? await AgentRuntime.shared.reconfigure(with: KeychainCredentialStore())
-                #endif
-                // macOS：credential 经 KeychainCredentialStore 按请求注入
-                // Authorization header，刷新落 Keychain 后下一次请求自动生效。
-            }
+            onAuthExpired: nil
         )
-    }
-
-    // MARK: - Credential Injection (iOS)
-
-    /// 在 Runtime 启动前注入 credential。
-    /// 如果用户已登录 → 注入 Gateway JWT + BYOK keys。
-    /// 如果未登录 → 回退到旧 AgentSettings.secretsJSON()。
-    private func injectCredentialsIntoRuntime() {
-        #if os(iOS)
-        Task {
-            // 启动前先尝试恢复（如果 Task init 中的 restore 还没完成）
-            if case .anonymous = accountManager.state {
-                await accountManager.restore()
-            }
-
-            // 获取最新的 credential（含 lazy refresh）
-            if let _ = try? await accountManager.gatewayCredential() {
-                // 用户已登录 → 用 CredentialStore 启动
-                try? await AgentRuntime.shared.launch(with: KeychainCredentialStore())
-            } else {
-                // 未登录 → 回退旧路径（AgentSettings.secretsJSON()）
-                try? AgentRuntime.shared.ensureStarted()
-            }
-        }
-        #endif
     }
 }

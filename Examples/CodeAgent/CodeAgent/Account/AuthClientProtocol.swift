@@ -6,6 +6,7 @@
 //
 
 import Foundation
+import AgentKit
 
 // MARK: - AuthClientProtocol
 
@@ -91,33 +92,4 @@ public enum AuthError: Error, LocalizedError {
         case .serverError(let c, let m): return "[\(c)] \(m)"
         }
     }
-}
-
-// MARK: - Gateway Model Types
-
-/// 单个模型的信息。对应 Gateway `GET /agent/models` 的 `models[]` 元素。
-public struct GatewayModel: Codable, Sendable, Identifiable {
-    /// 模型 ID，用于 `POST /chat/completions` 的 `model` 字段。如 `"deepseek-v4-pro"`
-    public let id: String
-    /// UI 展示名称。如 `"DeepSeek V4 Pro"`
-    public let displayName: String
-    /// 提供商
-    public let provider: String
-    /// 上下文窗口
-    public let contextWindow: Int?
-    /// 是否支持流式
-    public let supportsStreaming: Bool?
-    /// 是否支持 tool calling
-    public let supportsToolCalls: Bool?
-    /// 模型分类
-    public let category: String?
-    /// 当前用户是否可用
-    public let available: Bool?
-}
-
-/// Gateway `GET /agent/models` 的响应 data 部分。
-/// 字段使用 camelCase，依赖 decoder 的 `.convertFromSnakeCase` 自动映射。
-public struct ModelsResponse: Codable, Sendable {
-    public let models: [GatewayModel]
-    public let defaultModel: String
 }

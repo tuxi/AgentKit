@@ -837,7 +837,7 @@ private final class NativeTurnTableCellView: NSTableCellView {
 
         transcriptView.autoresizingMask = []
         addSubview(transcriptView)
-
+        
         configureButton(copyButton, imageName: "doc.on.doc", toolTip: "复制回复")
         copyButton.target = self
         copyButton.action = #selector(copyReply)

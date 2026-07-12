@@ -6,6 +6,7 @@
 //
 
 import SwiftUI
+import AgentKit
 
 #if canImport(AuthenticationServices)
 import AuthenticationServices

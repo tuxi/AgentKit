@@ -15,6 +15,7 @@
 //
 
 import Foundation
+import AgentKit
 
 #if canImport(CryptoKit)
 import CryptoKit
