@@ -14,6 +14,22 @@ import UIKit
 
 final class TranscriptDocumentTests: XCTestCase {
 
+    func testTurnFooterPlacesContextOnItsOwnLine() {
+        let turn = ConversationTurn(
+            id: "turn", userPrompt: nil, blocks: [],
+            footer: TurnStats(contextTokens: 58_300, totalTokens: 473_100,
+                              usageUnits: 211_600, hasUsageUnits: true,
+                              elapsedMs: 117_600, invocationCount: 15),
+            isLive: false
+        )
+        let rendered = TurnTranscriptBuilder.build(
+            turn: turn, state: TranscriptDocumentState()
+        ).attributedString.string
+
+        XCTAssertTrue(rendered.contains("473.1K tokens | 211.6K units | 117.6s | 15x\nctx 58.3K"))
+        XCTAssertFalse(rendered.contains("15xctx"))
+    }
+
     func testListFilesCompilesToDirectoryArtifact() {
         var tool = ToolCallItem(
             callID: "call_list",
@@ -1345,7 +1361,7 @@ final class TranscriptDocumentTests: XCTestCase {
                 .toolGroup(ToolGroup(id: "c1", tools: [tool])),
                 .text(id: "t2", MessageNodePayload(role: .assistant, text: "Done."))
             ],
-            footer: TurnStats(promptTokens: 1200, elapsedMs: 30, invocationCount: 1),
+            footer: TurnStats(contextTokens: 1200, totalTokens: 1200, elapsedMs: 30, invocationCount: 1),
             isLive: false
         )
     }

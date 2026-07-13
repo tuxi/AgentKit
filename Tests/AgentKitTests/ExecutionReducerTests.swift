@@ -77,6 +77,35 @@ final class ExecutionReducerTests: XCTestCase {
         })
     }
 
+    func testRuntimeModelStatsAccumulateAndDeduplicateInvocationReplay() async {
+        let engine = RuntimeEngine(sessionID: "session_1")
+        await engine.ingest(.turnStarted(turnID: "t1", text: "measure"))
+        let first = AgentEvent.modelFinished(
+            turnID: "t1", promptTokens: 100, completionTokens: 20,
+            totalTokens: 120, billingUnits: 125, elapsedMs: 30,
+            invocationID: "inv_1", err: nil
+        )
+        await engine.ingest(first)
+        await engine.ingest(first) // SSE/WebSocket replay
+        await engine.ingest(.modelFinished(
+            turnID: "t1", promptTokens: 200, completionTokens: 30,
+            totalTokens: nil, billingUnits: nil, elapsedMs: 40,
+            invocationID: "inv_2", err: nil
+        ))
+
+        let stats = await engine.currentSnapshot().modelStats
+        XCTAssertEqual(stats?.contextTokens, 200)
+        XCTAssertEqual(stats?.totalTokens, 350) // 120 + legacy fallback (200 + 30)
+        XCTAssertEqual(stats?.usageUnits, 125)
+        XCTAssertTrue(stats?.hasUsageUnits == true)
+        XCTAssertEqual(stats?.elapsedMs, 70)
+        XCTAssertEqual(stats?.invocationCount, 2)
+
+        await engine.ingest(.turnStarted(turnID: "t2", text: "new turn"))
+        let nextStats = await engine.currentSnapshot().modelStats
+        XCTAssertNil(nextStats)
+    }
+
     // Live: text → tool → text across two invocations → two segments, interleaved.
     func testAssistantTextSegmentsAcrossToolAndInvocation() {
         var reducer = ExecutionReducer()
@@ -92,7 +121,7 @@ final class ExecutionReducerTests: XCTestCase {
             .toolFinished(turnID: turn, callID: "c1",
                           result: ToolResult(callID: "c1", toolName: "grep",
                                              observation: "ok", error: nil)),
-            .modelFinished(turnID: turn, promptTokens: 100, elapsedMs: 10, err: nil),
+            .modelFinished(turnID: turn, promptTokens: 100, completionTokens: 0, totalTokens: nil, billingUnits: nil, elapsedMs: 10, invocationID: "inv1", err: nil),
             .modelStarted(turnID: turn, invocationID: "inv2"),
             .tokenDelta(turnID: turn, text: "B"),
             .turnFinished(turnID: turn, text: "B", textAnnotations: []),
@@ -149,7 +178,7 @@ final class ExecutionReducerTests: XCTestCase {
             .toolFinished(turnID: turn, callID: "c1",
                           result: ToolResult(callID: "c1", toolName: "grep",
                                              observation: "ok", error: nil)),
-            .modelFinished(turnID: turn, promptTokens: 1, elapsedMs: 1, err: nil),
+            .modelFinished(turnID: turn, promptTokens: 1, completionTokens: 0, totalTokens: nil, billingUnits: nil, elapsedMs: 1, invocationID: nil, err: nil),
             .turnFinished(turnID: turn, text: "Here is the answer", textAnnotations: []),
         ]
         for e in events { _ = reducer.reduce(e, into: &graph) }

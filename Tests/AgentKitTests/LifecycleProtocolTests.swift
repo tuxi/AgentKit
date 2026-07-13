@@ -10,6 +10,23 @@ import XCTest
 
 final class LifecycleProtocolTests: XCTestCase {
 
+    func testModelFinishedDecodesCompleteInvocationUsage() throws {
+        let event = try decodeEvent("""
+        {"kind":"model_finished","turn_id":"t1","prompt_tokens":52444,"completion_tokens":199,"total_tokens":52643,"billing_units":53112,"elapsed_ms":7500,"invocation_id":"inv_15"}
+        """)
+        guard case let .modelFinished(turnID, prompt, completion, total, units, elapsed, invocationID, err) = event else {
+            return XCTFail("expected model_finished")
+        }
+        XCTAssertEqual(turnID, "t1")
+        XCTAssertEqual(prompt, 52_444)
+        XCTAssertEqual(completion, 199)
+        XCTAssertEqual(total, 52_643)
+        XCTAssertEqual(units, 53_112)
+        XCTAssertEqual(elapsed, 7_500)
+        XCTAssertEqual(invocationID, "inv_15")
+        XCTAssertNil(err)
+    }
+
     func testConversationRefDecodesLifecycleFields() throws {
         let json = """
         {

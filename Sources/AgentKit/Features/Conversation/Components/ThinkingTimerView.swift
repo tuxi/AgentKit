@@ -28,14 +28,22 @@ struct ThinkingTimerView: View {
                         .font(.caption2)
                         .foregroundStyle(.secondary)
 
-                    HStack(spacing: 4) {
-                        Text("Code Agent")
-                        Text("· \(formatSeconds(elapsed))")
-                        if let tokens = modelStats?.promptTokens, tokens > 0 {
-                            Text("· \(modelStats!.formattedTokens) tokens")
+                    VStack(alignment: .leading, spacing: 2) {
+                        HStack(spacing: 4) {
+                            Text("Code Agent")
+                            Text("· \(formatSeconds(elapsed))")
+                            if let stats = modelStats {
+                                // Compact-line priority: units → calls → total → context.
+                                if stats.hasUsageUnits { Text("· \(stats.formattedUsageUnits) units") }
+                                if stats.invocationCount > 0 { Text("· \(stats.invocationCount)x") }
+                            }
+                            if isThinking {
+                                Text("· 思考中…")
+                            }
                         }
-                        if isThinking {
-                            Text("· 思考中…")
+                        if let stats = modelStats, stats.invocationCount > 0 {
+                            Text("累计 \(stats.formattedTotalTokens) tokens · 当前上下文 \(stats.formattedContextTokens)")
+                                .font(.caption2)
                         }
                     }
                     .shimmering(active: isThinking)

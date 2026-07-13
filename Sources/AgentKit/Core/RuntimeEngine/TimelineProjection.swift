@@ -86,7 +86,9 @@ public struct TimelineProjection: Sendable {
         var userPrompt: MessageNodePayload?
         var blocks: [TurnBlock] = []
         var pendingTools: [ToolNodePayload] = []
-        var footerTokens = 0, footerElapsed = 0, footerCount = 0
+        var contextTokens = 0, totalTokens = 0, usageUnits: Int64 = 0, footerElapsed = 0, footerCount = 0
+        var hasUsageUnits = false
+        var seenInvocationIDs: Set<String> = []
         var sawFinished = false
 
         // P8.7 ①：同一次委派/启动会同时出现工具卡和 childStream 入口卡——
@@ -145,9 +147,20 @@ public struct TimelineProjection: Sendable {
                 if p.kind == .modelActivity, let phase = p.metadata["phase"] {
                     // Model lifecycle → footer / spinner, never a block.
                     if phase == "finished" {
+                        if let invocationID = p.metadata["invocationID"],
+                           !seenInvocationIDs.insert(invocationID).inserted {
+                            continue
+                        }
                         sawFinished = true
                         footerCount += 1
-                        if let t = p.metadata["promptTokens"], let v = Int(t) { footerTokens = v }
+                        let prompt = p.metadata["promptTokens"].flatMap(Int.init)
+                        let completion = p.metadata["completionTokens"].flatMap(Int.init) ?? 0
+                        contextTokens = prompt ?? contextTokens
+                        totalTokens += p.metadata["totalTokens"].flatMap(Int.init) ?? ((prompt ?? 0) + completion)
+                        if let units = p.metadata["billingUnits"].flatMap(Int64.init) {
+                            usageUnits += units
+                            hasUsageUnits = true
+                        }
                         if let e = p.metadata["elapsedMs"], let v = Int(e) { footerElapsed += v }
                     }
                 } else if p.kind == .contextCompact || p.kind == .skillLoaded {
@@ -164,7 +177,8 @@ public struct TimelineProjection: Sendable {
         blocks = mergeAdjacentNarration(blocks)
 
         let footer = sawFinished
-            ? TurnStats(promptTokens: footerTokens, elapsedMs: footerElapsed, invocationCount: footerCount)
+            ? TurnStats(contextTokens: contextTokens, totalTokens: totalTokens, usageUnits: usageUnits,
+                        hasUsageUnits: hasUsageUnits, elapsedMs: footerElapsed, invocationCount: footerCount)
             : nil
         return ConversationTurn(id: turnUID, userPrompt: userPrompt,
                                 blocks: blocks, footer: footer, isLive: isLive)

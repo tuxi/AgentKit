@@ -105,8 +105,15 @@ enum TurnTranscriptBuilder {
 
         if let footer = turn.footer {
             builder.appendBlankLine()
-            let invocations = footer.invocationCount > 1 ? " | \(footer.invocationCount)x" : ""
-            builder.appendMeta("\(footer.formattedTokens) tokens | \(footer.formattedElapsed)\(invocations)")
+            var parts = ["\(footer.formattedTotalTokens) tokens"]
+            if footer.hasUsageUnits { parts.append("\(footer.formattedUsageUnits) units") }
+            parts.append(footer.formattedElapsed)
+            if footer.invocationCount > 0 { parts.append("\(footer.invocationCount)x") }
+            builder.appendMeta(parts.joined(separator: " | "))
+            if footer.contextTokens > 0 {
+                builder.appendBlockGap()
+                builder.appendMeta("ctx \(footer.formattedContextTokens)")
+            }
         }
 
         return builder.finish()

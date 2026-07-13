@@ -112,7 +112,8 @@ private enum TranscriptPreviewData {
                     elapsedMs: 12400
                 ))
             ],
-            footer: TurnStats(promptTokens: 24900, elapsedMs: 14300, invocationCount: 3),
+            footer: TurnStats(contextTokens: 24900, totalTokens: 72100, usageUnits: 73500,
+                              hasUsageUnits: true, elapsedMs: 14300, invocationCount: 3),
             isLive: false
         )
     }

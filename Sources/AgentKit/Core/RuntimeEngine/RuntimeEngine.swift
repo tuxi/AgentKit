@@ -23,7 +23,7 @@ public struct RuntimeSnapshot: Sendable {
     public let pendingApproval: ApprovalRequest?
     public let pendingPlanApproval: PlanApprovalRequest?
     public let latestTodos: [TodoItem]
-    /// Token & timing from the most recent model_finished event.
+    /// Aggregated token, billing, and timing statistics for the active turn.
     public let modelStats: ModelStats?
     public let isLive: Bool
     /// Monotonic counter — increments on every snapshot yield.
@@ -63,16 +63,38 @@ public struct RuntimeSnapshot: Sendable {
     }
 }
 
-/// Token & timing statistics from a model invocation.
-public struct ModelStats: Sendable {
-    public let promptTokens: Int
-    public let elapsedMs: Int
+/// Aggregated token, billing, and timing statistics for one turn.
+public struct ModelStats: Sendable, Equatable {
+    /// Prompt size of the most recent invocation — the current context scale.
+    public var contextTokens: Int
+    /// Provider tokens summed across all invocations in this turn.
+    public var totalTokens: Int
+    /// Usage units summed across all invocations when the provider supplies them.
+    public var usageUnits: Int64
+    /// Whether at least one invocation supplied billing units.
+    public var hasUsageUnits: Bool
+    public var invocationCount: Int
+    public var elapsedMs: Int
 
-    public var formattedTokens: String {
-        if promptTokens >= 1000 {
-            String(format: "%.1fK", Double(promptTokens) / 1000.0)
+    public init(contextTokens: Int = 0, totalTokens: Int = 0, usageUnits: Int64 = 0,
+                hasUsageUnits: Bool = false, invocationCount: Int = 0, elapsedMs: Int = 0) {
+        self.contextTokens = contextTokens
+        self.totalTokens = totalTokens
+        self.usageUnits = usageUnits
+        self.hasUsageUnits = hasUsageUnits
+        self.invocationCount = invocationCount
+        self.elapsedMs = elapsedMs
+    }
+
+    public var formattedContextTokens: String { Self.format(contextTokens) }
+    public var formattedTotalTokens: String { Self.format(totalTokens) }
+    public var formattedUsageUnits: String { Self.format(usageUnits) }
+
+    private static func format<T: BinaryInteger>(_ value: T) -> String {
+        if value >= 1000 {
+            String(format: "%.1fK", Double(value) / 1000.0)
         } else {
-            "\(promptTokens)"
+            "\(value)"
         }
     }
 
@@ -118,8 +140,11 @@ public actor RuntimeEngine {
     /// Latest todo list from the agent.
     private var _latestTodos: [TodoItem] = []
 
-    /// Stats from the most recent model_finished event.
+    /// Stats aggregated across the active turn's model invocations.
     private var _modelStats: ModelStats?
+    /// `model_finished` IDs already included in the current turn. Reconnect
+    /// replay may resend persisted events, so IDs must not be counted twice.
+    private var countedInvocationIDs: Set<String> = []
 
     /// When the current model invocation started. Non-nil = model is thinking.
     private var _modelStartedAt: Date?
@@ -175,10 +200,21 @@ public actor RuntimeEngine {
             _modelStartedAt = Date()
         }
         // Track model stats from model_finished + clear thinking timer
-        if case .modelFinished(_, let promptTokens, let elapsedMs, _) = event {
+        if case .modelFinished(_, let promptTokens, let completionTokens, let totalTokens,
+                               let billingUnits, let elapsedMs, let invocationID, _) = event {
             _modelStartedAt = nil
-            if let tokens = promptTokens, let ms = elapsedMs, tokens > 0 || ms > 0 {
-                _modelStats = ModelStats(promptTokens: tokens, elapsedMs: ms)
+            if invocationID == nil || countedInvocationIDs.insert(invocationID!).inserted {
+                let invocationTokens = totalTokens ?? ((promptTokens ?? 0) + (completionTokens ?? 0))
+                var stats = _modelStats ?? ModelStats()
+                stats.contextTokens = promptTokens ?? stats.contextTokens
+                stats.totalTokens += invocationTokens
+                if let billingUnits {
+                    stats.usageUnits += billingUnits
+                    stats.hasUsageUnits = true
+                }
+                stats.invocationCount += 1
+                stats.elapsedMs += elapsedMs ?? 0
+                _modelStats = stats
             }
         }
         // Turn lifecycle: a turn is "active" from turn_started to turn_finished.
@@ -186,6 +222,7 @@ public actor RuntimeEngine {
         if case .turnStarted(let turnID, _) = event {
             _pendingApproval = nil
             _modelStats = nil
+            countedInvocationIDs.removeAll()
             _modelStartedAt = nil
             _turnStartedAt = Date()
             activeTurnID = turnID
@@ -206,6 +243,7 @@ public actor RuntimeEngine {
         }
         if case .turnResumed = event {
             _modelStats = nil
+            countedInvocationIDs.removeAll()
             _modelStartedAt = nil
             _turnStartedAt = Date()
         }

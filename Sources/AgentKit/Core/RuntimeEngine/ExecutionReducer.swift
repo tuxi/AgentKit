@@ -105,9 +105,13 @@ public struct ExecutionReducer: Sendable {
             return handleModelStarted(turnID: turnID ?? internalState.currentTurnID ?? "",
                                       ts: ts, graph: &graph)
 
-        case .modelFinished(let turnID, let promptTokens, let elapsedMs, let err):
+        case .modelFinished(let turnID, let promptTokens, let completionTokens, let totalTokens,
+                            let billingUnits, let elapsedMs, let invocationID, let err):
             return handleModelFinished(turnID: turnID ?? internalState.currentTurnID ?? "",
-                                       promptTokens: promptTokens, elapsedMs: elapsedMs,
+                                       promptTokens: promptTokens, completionTokens: completionTokens,
+                                       totalTokens: totalTokens, billingUnits: billingUnits,
+                                       invocationID: invocationID ?? internalState.currentInvocationID,
+                                       elapsedMs: elapsedMs,
                                        err: err, ts: ts, graph: &graph)
 
         // ── Context compaction (previously ignored!) ──
@@ -582,7 +586,8 @@ public struct ExecutionReducer: Sendable {
     }
 
     private mutating func handleModelFinished(turnID: String, promptTokens: Int?,
-                                               elapsedMs: Int?, err: String?,
+                                               completionTokens: Int?, totalTokens: Int?,
+                                               billingUnits: Int64?, invocationID: String?, elapsedMs: Int?, err: String?,
                                                ts: TimeInterval,
                                                graph: inout ExecutionGraph) -> [NodeID] {
         // Finalize the thinking block from this model invocation.
@@ -613,12 +618,20 @@ public struct ExecutionReducer: Sendable {
         }
 
         var parts: [String] = []
-        if let tokens = promptTokens { parts.append("\(tokens) prompt tokens") }
+        if let tokens = promptTokens { parts.append("ctx \(tokens) tokens") }
+        if let tokens = totalTokens ?? promptTokens.map({ $0 + (completionTokens ?? 0) }) {
+            parts.append("\(tokens) total tokens")
+        }
+        if let units = billingUnits { parts.append("\(units) units") }
         if let ms = elapsedMs { parts.append("\(ms)ms") }
         let text = parts.isEmpty ? "Model finished" : "Model finished: \(parts.joined(separator: ", "))"
 
         var metadata: [String: String] = ["phase": "finished"]
         if let tokens = promptTokens { metadata["promptTokens"] = String(tokens) }
+        if let tokens = completionTokens { metadata["completionTokens"] = String(tokens) }
+        if let tokens = totalTokens { metadata["totalTokens"] = String(tokens) }
+        if let units = billingUnits { metadata["billingUnits"] = String(units) }
+        if let invocationID { metadata["invocationID"] = invocationID }
         if let ms = elapsedMs { metadata["elapsedMs"] = String(ms) }
 
         let payload = SystemPayload(kind: .modelActivity, text: text, metadata: metadata)

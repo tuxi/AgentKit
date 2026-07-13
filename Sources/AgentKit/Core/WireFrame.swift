@@ -46,6 +46,9 @@ struct WireFrame: Decodable {
     let todos: [WireTodo]?
     let text: String?
     let promptTokens: Int?
+    let completionTokens: Int?
+    let totalTokens: Int?
+    let billingUnits: Int64?
     let elapsedMs: Int?
     let beforeTokens: Int?
     let afterTokens: Int?
@@ -82,6 +85,9 @@ struct WireFrame: Decodable {
         case title, content
         case skillVersion = "skill_version"
         case promptTokens = "prompt_tokens"
+        case completionTokens = "completion_tokens"
+        case totalTokens = "total_tokens"
+        case billingUnits = "billing_units"
         case elapsedMs = "elapsed_ms"
         case beforeTokens = "before_tokens"
         case afterTokens = "after_tokens"

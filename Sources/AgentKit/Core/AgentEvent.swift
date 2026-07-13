@@ -30,7 +30,9 @@ public enum AgentEvent: Sendable {
 
     // ── 模型 ──
     case modelStarted(turnID: String?, invocationID: String?)
-    case modelFinished(turnID: String?, promptTokens: Int?, elapsedMs: Int?, err: String?)
+    case modelFinished(turnID: String?, promptTokens: Int?, completionTokens: Int?,
+                       totalTokens: Int?, billingUnits: Int64?, elapsedMs: Int?,
+                       invocationID: String?, err: String?)
 
     // ── 流式文本 ──
     case tokenDelta(turnID: String?, text: String)
@@ -122,7 +124,11 @@ extension AgentEvent {
             return .modelFinished(
                 turnID: turnID,
                 promptTokens: wire.promptTokens,
+                completionTokens: wire.completionTokens,
+                totalTokens: wire.totalTokens,
+                billingUnits: wire.billingUnits,
                 elapsedMs: wire.elapsedMs,
+                invocationID: wire.invocationId,
                 err: wire.err
             )
 

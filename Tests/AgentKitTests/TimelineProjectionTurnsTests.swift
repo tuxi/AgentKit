@@ -48,10 +48,10 @@ final class TimelineProjectionTurnsTests: XCTestCase {
             .tokenDelta(turnID: turn, text: "Checking"),
             .toolStarted(turnID: turn, callID: "c1", tool: tool("c1", "grep")),
             .toolFinished(turnID: turn, callID: "c1", result: result("c1", "grep")),
-            .modelFinished(turnID: turn, promptTokens: 1200, elapsedMs: 30, err: nil),
+            .modelFinished(turnID: turn, promptTokens: 1200, completionTokens: 0, totalTokens: nil, billingUnits: nil, elapsedMs: 30, invocationID: "inv1", err: nil),
             .modelStarted(turnID: turn, invocationID: "inv2"),
             .tokenDelta(turnID: turn, text: "Done"),
-            .modelFinished(turnID: turn, promptTokens: 1500, elapsedMs: 20, err: nil),
+            .modelFinished(turnID: turn, promptTokens: 1500, completionTokens: 0, totalTokens: nil, billingUnits: nil, elapsedMs: 20, invocationID: "inv2", err: nil),
             .turnFinished(turnID: turn, text: "Done", textAnnotations: []),
         ])
 
@@ -68,13 +68,38 @@ final class TimelineProjectionTurnsTests: XCTestCase {
         XCTAssertNotNil(t.footer)
         XCTAssertEqual(t.footer?.invocationCount, 2)
         XCTAssertEqual(t.footer?.elapsedMs, 50)      // 30 + 20
-        XCTAssertEqual(t.footer?.promptTokens, 1500) // last invocation
+        XCTAssertEqual(t.footer?.contextTokens, 1500) // last invocation context
+        XCTAssertEqual(t.footer?.totalTokens, 2700)
 
         // Narration ("let me look") + replies, in arrival order.
         let texts: [String] = t.blocks.compactMap {
             if case .text(_, let p) = $0 { return p.text }; return nil
         }
         XCTAssertEqual(texts, ["let me look", "Checking", "Done"])
+    }
+
+    func testFooterAccumulatesUsageAndDeduplicatesReplayedInvocation() {
+        let turn = "t1"
+        let finished = AgentEvent.modelFinished(
+            turnID: turn, promptTokens: 52_444, completionTokens: 199,
+            totalTokens: 52_643, billingUnits: 53_112, elapsedMs: 7_500,
+            invocationID: "inv_15", err: nil
+        )
+        let graph = reduce([
+            .turnStarted(turnID: turn, text: "do it"),
+            finished,
+            finished, // persisted-event replay
+            .modelFinished(turnID: turn, promptTokens: 51_000, completionTokens: 100,
+                           totalTokens: 51_100, billingUnits: 51_500, elapsedMs: 1_000,
+                           invocationID: "inv_16", err: nil),
+        ])
+        let footer = TimelineProjection().projectTurns(graph).first?.footer
+        XCTAssertEqual(footer?.contextTokens, 51_000)
+        XCTAssertEqual(footer?.totalTokens, 103_743)
+        XCTAssertEqual(footer?.usageUnits, 104_612)
+        XCTAssertTrue(footer?.hasUsageUnits == true)
+        XCTAssertEqual(footer?.invocationCount, 2)
+        XCTAssertEqual(footer?.elapsedMs, 8_500)
     }
 
     // Same narration on both `thinking` and `token_delta` shows once, not twice.
@@ -106,7 +131,7 @@ final class TimelineProjectionTurnsTests: XCTestCase {
             .tokenDelta(turnID: turn, text: "first"),
             .toolStarted(turnID: turn, callID: "c1", tool: tool("c1", "grep")),
             .toolFinished(turnID: turn, callID: "c1", result: result("c1", "grep")),
-            .modelFinished(turnID: turn, promptTokens: 10, elapsedMs: 1, err: nil),
+            .modelFinished(turnID: turn, promptTokens: 10, completionTokens: 0, totalTokens: nil, billingUnits: nil, elapsedMs: 1, invocationID: nil, err: nil),
         ])
         let turns = TimelineProjection().projectTurns(graph, isLive: true)
         // text BEFORE tools — not sunk below them.
@@ -189,7 +214,7 @@ final class TimelineProjectionTurnsTests: XCTestCase {
             .tokenDelta(turnID: turn, text: "Answer"),
             .toolStarted(turnID: turn, callID: "c1", tool: tool("c1", "grep")),
             .toolFinished(turnID: turn, callID: "c1", result: result("c1", "grep")),
-            .modelFinished(turnID: turn, promptTokens: 10, elapsedMs: 1, err: nil),
+            .modelFinished(turnID: turn, promptTokens: 10, completionTokens: 0, totalTokens: nil, billingUnits: nil, elapsedMs: 1, invocationID: nil, err: nil),
         ])
         // History-style: same shape, text delivered as a single delta run.
         let history = reduce([
@@ -198,7 +223,7 @@ final class TimelineProjectionTurnsTests: XCTestCase {
             .tokenDelta(turnID: turn, text: "Answer"),
             .toolStarted(turnID: turn, callID: "c1", tool: tool("c1", "grep")),
             .toolFinished(turnID: turn, callID: "c1", result: result("c1", "grep")),
-            .modelFinished(turnID: turn, promptTokens: 10, elapsedMs: 1, err: nil),
+            .modelFinished(turnID: turn, promptTokens: 10, completionTokens: 0, totalTokens: nil, billingUnits: nil, elapsedMs: 1, invocationID: nil, err: nil),
             .turnFinished(turnID: turn, text: "Answer", textAnnotations: []),
         ])
         let lt = TimelineProjection().projectTurns(live, isLive: true)[0]

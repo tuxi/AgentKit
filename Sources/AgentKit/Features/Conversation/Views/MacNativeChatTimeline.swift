@@ -161,8 +161,7 @@ struct MacNativeChatTimeline: NSViewRepresentable {
                   .thinking(let rhsStart, let rhsThinking, let rhsStats)):
                 return lhsStart == rhsStart
                     && lhsThinking == rhsThinking
-                    && lhsStats?.promptTokens == rhsStats?.promptTokens
-                    && lhsStats?.elapsedMs == rhsStats?.elapsedMs
+                    && lhsStats == rhsStats
             default:
                 return false
             }
@@ -1053,8 +1052,11 @@ private final class NativeThinkingTableCellView: NSTableCellView {
         }
         let elapsed = Date().timeIntervalSince(startedAt)
         var parts = ["Code Agent", formatSeconds(elapsed)]
-        if let tokens = modelStats?.promptTokens, tokens > 0 {
-            parts.append("\(modelStats!.formattedTokens) tokens")
+        if let stats = modelStats {
+            if stats.hasUsageUnits { parts.append("\(stats.formattedUsageUnits) units") }
+            if stats.invocationCount > 0 { parts.append("\(stats.invocationCount)x") }
+            if stats.totalTokens > 0 { parts.append("累计 \(stats.formattedTotalTokens) tokens") }
+            if stats.contextTokens > 0 { parts.append("ctx \(stats.formattedContextTokens)") }
         }
         if isThinking { parts.append("thinkig…") }
         label.stringValue = parts.joined(separator: " · ")

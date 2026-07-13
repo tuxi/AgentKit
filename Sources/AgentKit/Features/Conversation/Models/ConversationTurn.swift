@@ -85,20 +85,29 @@ public struct ToolGroup: Identifiable, Sendable, Equatable {
 
 /// Turn footer: aggregated from the turn's model_finished events.
 public struct TurnStats: Sendable, Equatable {
-    public let promptTokens: Int           // last invocation's prompt size
+    public let contextTokens: Int          // last invocation's prompt size
+    public let totalTokens: Int            // accumulated provider tokens
+    public let usageUnits: Int64           // accumulated billed units
+    public let hasUsageUnits: Bool
     public let elapsedMs: Int              // summed across invocations
     public let invocationCount: Int
 
-    public init(promptTokens: Int, elapsedMs: Int, invocationCount: Int) {
-        self.promptTokens = promptTokens
+    public init(contextTokens: Int, totalTokens: Int, usageUnits: Int64 = 0,
+                hasUsageUnits: Bool = false, elapsedMs: Int, invocationCount: Int) {
+        self.contextTokens = contextTokens
+        self.totalTokens = totalTokens
+        self.usageUnits = usageUnits
+        self.hasUsageUnits = hasUsageUnits
         self.elapsedMs = elapsedMs
         self.invocationCount = invocationCount
     }
 
-    public var formattedTokens: String {
-        promptTokens >= 1000
-            ? String(format: "%.1fK", Double(promptTokens) / 1000.0)
-            : "\(promptTokens)"
+    public var formattedContextTokens: String { format(contextTokens) }
+    public var formattedTotalTokens: String { format(totalTokens) }
+    public var formattedUsageUnits: String { format(usageUnits) }
+
+    private func format<T: BinaryInteger>(_ value: T) -> String {
+        value >= 1000 ? String(format: "%.1fK", Double(value) / 1000.0) : "\(value)"
     }
 
     public var formattedElapsed: String {
