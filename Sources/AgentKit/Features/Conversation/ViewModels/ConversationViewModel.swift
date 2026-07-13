@@ -54,6 +54,23 @@ public final class ConversationViewModel {
 
     /// v1.2 lifecycle status for the currently selected session.
     public private(set) var lifecycleStatus: String?
+    public private(set) var queueReason: String?
+    public private(set) var queuePosition: Int?
+
+    /// Runtime-owned queue copy. This is intentionally distinct from the local
+    /// compatibility FIFO used when multi-session capability is unavailable.
+    public var runtimeQueueDescription: String {
+        let waitReason: String
+        switch queueReason {
+        case "workspace_lease": waitReason = "等待工作区可用"
+        case "capacity": waitReason = "等待执行槽位"
+        default: waitReason = "等待 Runtime 调度"
+        }
+        if let queuePosition, queuePosition > 0 {
+            return "已排队（第 \(queuePosition) 位）— \(waitReason)"
+        }
+        return "已排队 — \(waitReason)"
+    }
 
     /// When the current session was marked paused.
     public private(set) var pausedAt: Date?
@@ -150,6 +167,8 @@ public final class ConversationViewModel {
         currentTurnID = nil
         detail = nil
         lifecycleStatus = conversation.turnStatus
+        queueReason = nil
+        queuePosition = nil
         pausedAt = conversation.pausedDate
         messages = []
 
@@ -394,13 +413,19 @@ public final class ConversationViewModel {
         case .turnAccepted:
             isAwaitingTurnAcceptance = false
             lifecycleStatus = "accepted"
-        case .turnQueued:
+            queueReason = nil
+            queuePosition = nil
+        case .turnQueued(_, let reason, let position):
             isAwaitingTurnAcceptance = false
             lifecycleStatus = "queued"
+            queueReason = reason
+            queuePosition = position
         case .turnStarted(let turnID, _):
             isAwaitingTurnAcceptance = false
             currentTurnID = turnID
             lifecycleStatus = "running"
+            queueReason = nil
+            queuePosition = nil
             pausedAt = nil
             if let sessionID = conversation?.id {
                 Task { await turnCoordinator?.markActive(sessionID: sessionID) }
@@ -408,11 +433,15 @@ public final class ConversationViewModel {
         case .turnFinished:
             isAwaitingTurnAcceptance = false
             lifecycleStatus = "done"
+            queueReason = nil
+            queuePosition = nil
             pausedAt = nil
             releaseTurnPermit()
         case .turnPaused:
             isAwaitingTurnAcceptance = false
             lifecycleStatus = "paused"
+            queueReason = nil
+            queuePosition = nil
             pausedAt = Date()
             releaseTurnPermit()
         case .turnResumed:
@@ -421,11 +450,15 @@ public final class ConversationViewModel {
         case .turnFailed:
             isAwaitingTurnAcceptance = false
             lifecycleStatus = "failed"
+            queueReason = nil
+            queuePosition = nil
             pausedAt = nil
             releaseTurnPermit()
         case .turnCancelled:
             isAwaitingTurnAcceptance = false
             lifecycleStatus = "cancelled"
+            queueReason = nil
+            queuePosition = nil
             pausedAt = nil
             currentTurnID = nil
             releaseTurnPermit()

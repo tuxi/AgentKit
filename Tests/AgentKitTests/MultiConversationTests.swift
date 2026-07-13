@@ -164,6 +164,29 @@ final class MultiConversationTests: XCTestCase {
     }
 
     @MainActor
+    func testRuntimeQueueIsNotReportedAsUnsupportedParallelism() async throws {
+        let client = MultiSessionRuntimeClient()
+        let store = WorkspaceStore(client: client)
+        let conversation = ConversationRef(id: "queued", workspacePath: "/tmp/shared")
+
+        store.selectedConversation = conversation
+        try await Task.sleep(for: .milliseconds(25))
+        let controller = try XCTUnwrap(store.activeConversationViewModel)
+        client.channel(for: "queued").yield(.turnQueued(
+            turnID: "turn_queued",
+            reason: "workspace_lease",
+            position: 2
+        ))
+        try await Task.sleep(for: .milliseconds(25))
+
+        XCTAssertEqual(controller.lifecycleStatus, "queued")
+        XCTAssertEqual(controller.queueReason, "workspace_lease")
+        XCTAssertEqual(controller.queuePosition, 2)
+        XCTAssertEqual(controller.runtimeQueueDescription, "已排队（第 2 位）— 等待工作区可用")
+        XCTAssertFalse(controller.runtimeQueueDescription.contains("不支持跨会话并行"))
+    }
+
+    @MainActor
     func testActivitySnapshotReattachesBackgroundRunningSession() async {
         let capabilities = RuntimeCapabilitySnapshot(capabilities: [
             "multi_session_execution_v1": true,
@@ -260,6 +283,7 @@ private final class MultiSessionChannelDouble: RuntimeSessionChannel, @unchecked
         continuation?.finish()
     }
     func capabilities() async -> AgentCapabilityFlags { capabilitiesValue }
+    func yield(_ event: AgentEvent) { continuation?.yield(event) }
 }
 
 private final class MultiSessionRuntimeClient: RuntimeClient, @unchecked Sendable {

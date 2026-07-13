@@ -180,8 +180,12 @@ public struct ConversationDetailView: View {
                     DraftComposerPanel(
                         placeholder: vm.isAwaitingTurnAcceptance
                             ? "正在提交任务…"
-                            : vm.isLocallyQueued || vm.lifecycleStatus == "queued" || vm.lifecycleStatus == "accepted"
+                            : vm.isLocallyQueued
                             ? "已排队 — 当前 Runtime 暂不支持跨会话并行"
+                            : vm.lifecycleStatus == "queued"
+                            ? vm.runtimeQueueDescription
+                            : vm.lifecycleStatus == "accepted"
+                            ? "Runtime 已接收 — 等待调度"
                             : isPaused
                             ? "会话已暂停 — 点击继续"
                             : (vm.snapshot.pendingApproval != nil || vm.snapshot.pendingPlanApproval != nil)
