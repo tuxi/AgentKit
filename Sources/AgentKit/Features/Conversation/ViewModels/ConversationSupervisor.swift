@@ -54,8 +54,14 @@ public final class ConversationSupervisor {
     private var selectedSessionID: String?
     private var knownConversations: [String: ConversationRef] = [:]
     private var isRefreshingActivity = false
+    private var activityCursor: Int64?
+    private var controllerAccessSequence: UInt64 = 0
+    private var controllerLastAccess: [String: UInt64] = [:]
     @ObservationIgnored private var activityRefreshTask: Task<Void, Never>?
     @ObservationIgnored private var activityMonitoringTask: Task<Void, Never>?
+    @ObservationIgnored private var resourceReconciliationTask: Task<Void, Never>?
+
+    private static let defaultMaxRetainedControllers = 8
 
     public init(
         client: RuntimeClient,
@@ -80,6 +86,7 @@ public final class ConversationSupervisor {
         model: String = ""
     ) -> ConversationViewModel {
         if let existing = controllers[conversation.id] {
+            touchController(sessionID: conversation.id)
             return existing
         }
 
@@ -97,6 +104,8 @@ public final class ConversationSupervisor {
             }
         )
         controllers[conversation.id] = controller
+        touchController(sessionID: conversation.id)
+        scheduleControllerLimitEnforcement()
         return controller
     }
 
@@ -187,6 +196,8 @@ public final class ConversationSupervisor {
     public func setSelectedSessionID(_ sessionID: String?) {
         selectedSessionID = sessionID
         guard let sessionID else { return }
+        touchController(sessionID: sessionID)
+        scheduleControllerLimitEnforcement()
         markTerminalSeen(sessionID: sessionID)
     }
 
@@ -208,10 +219,18 @@ public final class ConversationSupervisor {
         } catch {
             runtimeCapabilities = .legacy
             runtimeActivities = [:]
+            activityCursor = nil
             await capabilityRegistry.update(.legacy)
             return
         }
+        let supportedDeltaBefore = runtimeCapabilities.flags.contains(.sessionAttentionSnapshot)
+            && runtimeCapabilities.flags.contains(.sessionAttentionDelta)
         runtimeCapabilities = capabilitySnapshot
+        let supportsDeltaNow = capabilitySnapshot.flags.contains(.sessionAttentionSnapshot)
+            && capabilitySnapshot.flags.contains(.sessionAttentionDelta)
+        if !supportsDeltaNow || !supportedDeltaBefore {
+            activityCursor = nil
+        }
         await capabilityRegistry.update(capabilitySnapshot)
         await refreshActivitySnapshot()
         startActivityMonitoring()
@@ -227,8 +246,29 @@ public final class ConversationSupervisor {
         isRefreshingActivity = true
         defer { isRefreshingActivity = false }
 
-        guard let activity = try? await client.activitySnapshot() else { return }
-        runtimeActivities = Dictionary(uniqueKeysWithValues: activity.sessions.map { ($0.sessionID, $0) })
+        let supportsDelta = runtimeCapabilities.flags.contains(.sessionAttentionSnapshot)
+            && runtimeCapabilities.flags.contains(.sessionAttentionDelta)
+        let requestedCursor = supportsDelta ? activityCursor : nil
+        guard var activity = try? await client.activitySnapshot(sinceSequence: requestedCursor) else { return }
+
+        // A replaced/reset event store can move the cursor backwards. Retry once
+        // with a full baseline rather than merging unrelated sequence spaces.
+        if let requestedCursor,
+           let returnedCursor = activity.cursor,
+           returnedCursor < requestedCursor {
+            activityCursor = nil
+            guard let full = try? await client.activitySnapshot(sinceSequence: nil) else { return }
+            activity = full
+        }
+
+        if activity.isDelta {
+            for session in activity.sessions {
+                runtimeActivities[session.sessionID] = session
+            }
+        } else {
+            runtimeActivities = Dictionary(uniqueKeysWithValues: activity.sessions.map { ($0.sessionID, $0) })
+        }
+        activityCursor = supportsDelta ? activity.cursor : nil
         reconcileAttention(with: activity)
 
         // Reattach every live session, not only the selected one, so background
@@ -237,6 +277,7 @@ public final class ConversationSupervisor {
             let controller = controller(for: conversation)
             await controller.connect(to: conversation)
         }
+        await enforceControllerLimit()
     }
 
     private func scheduleActivityRefresh() {
@@ -252,15 +293,23 @@ public final class ConversationSupervisor {
         guard activityMonitoringTask == nil else { return }
         activityMonitoringTask = Task { [weak self] in
             while !Task.isCancelled {
-                guard let self else { return }
-                let hasLiveWork = self.runtimeActivities.values.contains {
+                guard let hasLiveWork = self?.runtimeActivities.values.contains(where: {
                     ["accepted", "queued", "running", "resuming", "waiting_approval", "waiting_client_tool", "paused"].contains($0.state)
-                }
+                }) else { return }
                 try? await Task.sleep(for: hasLiveWork ? .seconds(3) : .seconds(20))
-                guard !Task.isCancelled else { return }
+                guard !Task.isCancelled, let self else { return }
                 await self.refreshActivitySnapshot()
             }
         }
+    }
+
+    public func stopActivityMonitoring() {
+        activityRefreshTask?.cancel()
+        activityRefreshTask = nil
+        activityMonitoringTask?.cancel()
+        activityMonitoringTask = nil
+        resourceReconciliationTask?.cancel()
+        resourceReconciliationTask = nil
     }
 
     private func reconcileAttention(with snapshot: RuntimeActivitySnapshot) {
@@ -399,6 +448,55 @@ public final class ConversationSupervisor {
         for (id, controller) in candidates {
             await controller.disconnect()
             controllers.removeValue(forKey: id)
+            controllerLastAccess.removeValue(forKey: id)
+        }
+    }
+
+    /// Enforce the Runtime connection limit as an LRU soft cap. Selected and
+    /// non-idle controllers are never evicted; if live work itself exceeds the
+    /// cap, correctness wins and the temporary excess is retained.
+    public func enforceControllerLimit() async {
+        let advertised = runtimeCapabilities.limits?.maxConnectedSessions ?? 0
+        let limit = advertised > 0 ? advertised : Self.defaultMaxRetainedControllers
+        guard controllers.count > limit else { return }
+
+        let excess = controllers.count - limit
+        let candidates = controllers.compactMap { id, controller -> (String, ConversationViewModel, UInt64)? in
+            guard id != selectedSessionID, activity(for: id) == .idle else { return nil }
+            return (id, controller, controllerLastAccess[id] ?? 0)
+        }
+        .sorted { $0.2 < $1.2 }
+
+        for (id, controller, _) in candidates.prefix(excess) {
+            await controller.disconnect()
+            controllers.removeValue(forKey: id)
+            controllerLastAccess.removeValue(forKey: id)
+        }
+    }
+
+    public func disconnectAll() async {
+        stopActivityMonitoring()
+        let retained = controllers.values
+        for controller in retained {
+            await controller.disconnect()
+        }
+        controllers.removeAll()
+        controllerLastAccess.removeAll()
+        runtimeActivities.removeAll()
+        activityCursor = nil
+    }
+
+    private func touchController(sessionID: String) {
+        controllerAccessSequence &+= 1
+        controllerLastAccess[sessionID] = controllerAccessSequence
+    }
+
+    private func scheduleControllerLimitEnforcement() {
+        resourceReconciliationTask?.cancel()
+        resourceReconciliationTask = Task { [weak self] in
+            await Task.yield()
+            guard !Task.isCancelled, let self else { return }
+            await self.enforceControllerLimit()
         }
     }
 }

@@ -180,6 +180,10 @@ public final class CodeAgentTransport: AgentTransport, @unchecked Sendable {
         try await http.activitySnapshot()
     }
 
+    public func activitySnapshot(sinceSequence: Int64?) async throws -> RuntimeActivitySnapshot {
+        try await http.activitySnapshot(sinceSequence: sinceSequence)
+    }
+
     public func createConversation(workspacePath: String = "") async throws -> ConversationRef {
         try await http.createConversation(workspacePath: workspacePath)
     }
@@ -413,6 +417,10 @@ public final class DefaultAgentClient: RuntimeClient, @unchecked Sendable {
 
     public func activitySnapshot() async throws -> RuntimeActivitySnapshot {
         try await transport.activitySnapshot()
+    }
+
+    public func activitySnapshot(sinceSequence: Int64?) async throws -> RuntimeActivitySnapshot {
+        try await transport.activitySnapshot(sinceSequence: sinceSequence)
     }
 
     public func createConversation(workspacePath: String = "") async throws -> ConversationRef {

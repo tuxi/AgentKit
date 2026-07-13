@@ -188,6 +188,7 @@ final class LifecycleProtocolTests: XCTestCase {
             "session_scoped_client_tools_v1": true,
             "activity_snapshot_v1": true,
             "session_attention_snapshot_v1": true,
+            "session_attention_delta_v1": true,
             "workspace_execution_policy_v1": true
           },
           "limits": { "max_concurrent_turns": 4, "max_connected_sessions": 16 }
@@ -199,11 +200,14 @@ final class LifecycleProtocolTests: XCTestCase {
         )
         XCTAssertTrue(capabilities.allowsMultiSessionExecution)
         XCTAssertTrue(capabilities.flags.contains(.sessionAttentionSnapshot))
+        XCTAssertTrue(capabilities.flags.contains(.sessionAttentionDelta))
         XCTAssertEqual(capabilities.limits?.maxConcurrentTurns, 4)
 
         let activityJSON = """
         {
           "generated_at": "2026-07-13T06:00:01Z",
+          "cursor": 183,
+          "is_delta": true,
           "sessions": [{
             "session_id": "session_a",
             "turn_id": "turn_3",
@@ -226,6 +230,8 @@ final class LifecycleProtocolTests: XCTestCase {
         let activity = try JSONDecoder().decode(RuntimeActivitySnapshot.self, from: Data(activityJSON.utf8))
         XCTAssertEqual(activity.sessions.first?.sessionID, "session_a")
         XCTAssertEqual(activity.generatedAt, "2026-07-13T06:00:01Z")
+        XCTAssertEqual(activity.cursor, 183)
+        XCTAssertTrue(activity.isDelta)
         XCTAssertEqual(activity.sessions.first?.effectiveActiveTurnID, "turn_3")
         XCTAssertEqual(activity.sessions.first?.pendingApprovalCount, 1)
         XCTAssertEqual(activity.sessions.first?.latestTerminal?.sequence, 170)

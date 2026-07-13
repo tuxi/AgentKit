@@ -99,6 +99,7 @@ public struct RuntimeCapabilitySnapshot: Codable, Sendable, Equatable {
         if capabilities["activity_snapshot_v1"] == true { flags.insert(.activitySnapshot) }
         if capabilities["workspace_execution_policy_v1"] == true { flags.insert(.workspaceExecutionPolicy) }
         if capabilities["session_attention_snapshot_v1"] == true { flags.insert(.sessionAttentionSnapshot) }
+        if capabilities["session_attention_delta_v1"] == true { flags.insert(.sessionAttentionDelta) }
         return flags
     }
 
@@ -189,16 +190,34 @@ public struct RuntimeSessionActivity: Codable, Sendable, Equatable, Identifiable
 
 public struct RuntimeActivitySnapshot: Codable, Sendable, Equatable {
     public let generatedAt: String?
+    public let cursor: Int64?
+    public let isDelta: Bool
     public let sessions: [RuntimeSessionActivity]
 
     enum CodingKeys: String, CodingKey {
-        case sessions
+        case sessions, cursor
+        case isDelta = "is_delta"
         case generatedAt = "generated_at"
     }
 
-    public init(generatedAt: String? = nil, sessions: [RuntimeSessionActivity]) {
+    public init(
+        generatedAt: String? = nil,
+        cursor: Int64? = nil,
+        isDelta: Bool = false,
+        sessions: [RuntimeSessionActivity]
+    ) {
         self.generatedAt = generatedAt
+        self.cursor = cursor
+        self.isDelta = isDelta
         self.sessions = sessions
+    }
+
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        generatedAt = try container.decodeIfPresent(String.self, forKey: .generatedAt)
+        cursor = try container.decodeIfPresent(Int64.self, forKey: .cursor)
+        isDelta = try container.decodeIfPresent(Bool.self, forKey: .isDelta) ?? false
+        sessions = try container.decode([RuntimeSessionActivity].self, forKey: .sessions)
     }
 }
 

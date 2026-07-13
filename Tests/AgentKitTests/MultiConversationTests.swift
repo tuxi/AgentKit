@@ -378,6 +378,124 @@ final class MultiConversationTests: XCTestCase {
             sequence: 42
         )])
     }
+
+    @MainActor
+    func testIncrementalAttentionMergesWithoutDroppingUnchangedRunningSession() async {
+        let capabilities = attentionCapabilities()
+        let client = MultiSessionRuntimeClient(
+            capabilitySnapshot: capabilities,
+            activity: RuntimeActivitySnapshot(
+                cursor: 10,
+                sessions: [RuntimeSessionActivity(sessionID: "running", turnID: "turn_a", state: "running")]
+            )
+        )
+        let store = WorkspaceStore(
+            client: client,
+            attentionReadStore: InMemoryAttentionReadStore()
+        )
+        let running = ConversationRef(id: "running", workspacePath: "/tmp/a")
+        let completed = ConversationRef(id: "completed", workspacePath: "/tmp/b")
+
+        await store.supervisor.refreshRuntimeState(conversations: [running, completed])
+        client.setActivity(RuntimeActivitySnapshot(
+            cursor: 12,
+            isDelta: true,
+            sessions: [terminalActivity(sessionID: "completed", turnID: "turn_b", sequence: 12)]
+        ))
+        await store.supervisor.refreshRuntimeState(conversations: [running, completed])
+
+        XCTAssertEqual(client.activitySnapshotCursors.count, 2)
+        XCTAssertNil(client.activitySnapshotCursors[0])
+        XCTAssertEqual(client.activitySnapshotCursors[1], 10)
+        XCTAssertEqual(store.supervisor.runtimeActivities["running"]?.state, "running")
+        XCTAssertEqual(store.supervisor.runtimeActivities["completed"]?.latestTerminal?.sequence, 12)
+        store.supervisor.stopActivityMonitoring()
+    }
+
+    @MainActor
+    func testAttentionCursorRollbackForcesFullBaseline() async {
+        let client = MultiSessionRuntimeClient(
+            capabilitySnapshot: attentionCapabilities(),
+            activity: RuntimeActivitySnapshot(
+                cursor: 10,
+                sessions: [RuntimeSessionActivity(sessionID: "old", state: "running")]
+            )
+        )
+        let store = WorkspaceStore(
+            client: client,
+            attentionReadStore: InMemoryAttentionReadStore()
+        )
+        let old = ConversationRef(id: "old", workspacePath: "")
+        let reset = ConversationRef(id: "reset", workspacePath: "")
+        await store.supervisor.refreshRuntimeState(conversations: [old, reset])
+
+        client.enqueueActivities([
+            RuntimeActivitySnapshot(cursor: 2, isDelta: true, sessions: []),
+            RuntimeActivitySnapshot(
+                cursor: 2,
+                sessions: [RuntimeSessionActivity(sessionID: "reset", state: "paused")]
+            ),
+        ])
+        await store.supervisor.refreshRuntimeState(conversations: [old, reset])
+
+        XCTAssertEqual(client.activitySnapshotCursors.count, 3)
+        XCTAssertEqual(client.activitySnapshotCursors[1], 10)
+        XCTAssertNil(client.activitySnapshotCursors[2])
+        XCTAssertNil(store.supervisor.runtimeActivities["old"])
+        XCTAssertEqual(store.supervisor.runtimeActivities["reset"]?.state, "paused")
+        store.supervisor.stopActivityMonitoring()
+    }
+
+    @MainActor
+    func testControllerLimitEvictsLeastRecentlyUsedIdleController() async {
+        let capabilities = RuntimeCapabilitySnapshot(
+            capabilities: ["activity_snapshot_v1": true],
+            limits: RuntimeLimits(maxConcurrentTurns: 1, maxConnectedSessions: 2)
+        )
+        let client = MultiSessionRuntimeClient(
+            capabilitySnapshot: capabilities,
+            activity: RuntimeActivitySnapshot(sessions: [])
+        )
+        let store = WorkspaceStore(client: client)
+        await store.supervisor.refreshRuntimeState(conversations: [])
+
+        _ = store.supervisor.controller(for: ConversationRef(id: "oldest", workspacePath: ""))
+        _ = store.supervisor.controller(for: ConversationRef(id: "middle", workspacePath: ""))
+        _ = store.supervisor.controller(for: ConversationRef(id: "newest", workspacePath: ""))
+        await store.supervisor.enforceControllerLimit()
+
+        XCTAssertNil(store.supervisor.controller(sessionID: "oldest"))
+        XCTAssertNotNil(store.supervisor.controller(sessionID: "middle"))
+        XCTAssertNotNil(store.supervisor.controller(sessionID: "newest"))
+        store.supervisor.stopActivityMonitoring()
+    }
+
+    @MainActor
+    func testControllerLimitNeverEvictsLiveOrSelectedSession() async {
+        let capabilities = RuntimeCapabilitySnapshot(
+            capabilities: ["activity_snapshot_v1": true],
+            limits: RuntimeLimits(maxConcurrentTurns: 2, maxConnectedSessions: 1)
+        )
+        let client = MultiSessionRuntimeClient(
+            capabilitySnapshot: capabilities,
+            activity: RuntimeActivitySnapshot(sessions: [
+                RuntimeSessionActivity(sessionID: "live", turnID: "turn_live", state: "running")
+            ])
+        )
+        let store = WorkspaceStore(client: client)
+        let live = ConversationRef(id: "live", workspacePath: "/tmp/live")
+        await store.supervisor.refreshRuntimeState(conversations: [live])
+
+        store.supervisor.setSelectedSessionID("selected")
+        _ = store.supervisor.controller(for: ConversationRef(id: "idle", workspacePath: ""))
+        _ = store.supervisor.controller(for: ConversationRef(id: "selected", workspacePath: ""))
+        await store.supervisor.enforceControllerLimit()
+
+        XCTAssertNotNil(store.supervisor.controller(sessionID: "live"))
+        XCTAssertNotNil(store.supervisor.controller(sessionID: "selected"))
+        XCTAssertNil(store.supervisor.controller(sessionID: "idle"))
+        store.supervisor.stopActivityMonitoring()
+    }
 }
 
 private func attentionCapabilities() -> RuntimeCapabilitySnapshot {
@@ -386,6 +504,7 @@ private func attentionCapabilities() -> RuntimeCapabilitySnapshot {
         "session_scoped_client_tools_v1": true,
         "activity_snapshot_v1": true,
         "session_attention_snapshot_v1": true,
+        "session_attention_delta_v1": true,
         "workspace_execution_policy_v1": true,
     ])
 }
@@ -454,8 +573,10 @@ private final class MultiSessionRuntimeClient: RuntimeClient, @unchecked Sendabl
     private let connectDelays: [String: Duration]
     private let capabilitySnapshot: RuntimeCapabilitySnapshot?
     private var activity: RuntimeActivitySnapshot?
+    private var queuedActivities: [RuntimeActivitySnapshot] = []
     private(set) var capabilitySnapshotRequestCount = 0
     private(set) var activitySnapshotRequestCount = 0
+    private(set) var activitySnapshotCursors: [Int64?] = []
 
     init(
         connectDelays: [String: Duration] = [:],
@@ -489,12 +610,24 @@ private final class MultiSessionRuntimeClient: RuntimeClient, @unchecked Sendabl
 
     func activitySnapshot() async throws -> RuntimeActivitySnapshot {
         activitySnapshotRequestCount += 1
+        if !queuedActivities.isEmpty {
+            return queuedActivities.removeFirst()
+        }
         guard let activity else { throw TestError.unavailable }
         return activity
     }
 
+    func activitySnapshot(sinceSequence: Int64?) async throws -> RuntimeActivitySnapshot {
+        activitySnapshotCursors.append(sinceSequence)
+        return try await activitySnapshot()
+    }
+
     func setActivity(_ activity: RuntimeActivitySnapshot) {
         self.activity = activity
+    }
+
+    func enqueueActivities(_ activities: [RuntimeActivitySnapshot]) {
+        queuedActivities.append(contentsOf: activities)
     }
 
     func createConversation(workspacePath: String) async throws -> ConversationRef {

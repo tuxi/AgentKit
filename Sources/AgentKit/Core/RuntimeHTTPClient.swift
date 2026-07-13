@@ -108,7 +108,18 @@ struct RuntimeHTTPClient: Sendable {
 
     /// `GET /v1/activity` — sessions owned by the authenticated principal/device.
     func activitySnapshot() async throws -> RuntimeActivitySnapshot {
-        let request = try await buildRequest("GET", pathComponents: "v1/activity")
+        try await activitySnapshot(sinceSequence: nil)
+    }
+
+    func activitySnapshot(sinceSequence: Int64?) async throws -> RuntimeActivitySnapshot {
+        let queryItems = sinceSequence.map {
+            [URLQueryItem(name: "since_sequence", value: String($0))]
+        }
+        let request = try await buildRequest(
+            "GET",
+            pathComponents: "v1/activity",
+            queryItems: queryItems
+        )
         let (data, response) = try await session.data(for: request)
         try validateHTTP(response, data: data)
         return try decodeEnvelope(RuntimeActivitySnapshot.self, from: data)

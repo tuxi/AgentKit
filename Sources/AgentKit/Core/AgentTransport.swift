@@ -43,6 +43,7 @@ public protocol AgentTransport: Sendable {
     func makeSessionChannel(sessionID: String) -> any RuntimeSessionChannel
     func runtimeCapabilities() async throws -> RuntimeCapabilitySnapshot
     func activitySnapshot() async throws -> RuntimeActivitySnapshot
+    func activitySnapshot(sinceSequence: Int64?) async throws -> RuntimeActivitySnapshot
 
     /// 在 backend 创建新的 runtime session。
     /// - Returns: server-assigned `ConversationRef`（含 `id`）。
@@ -172,6 +173,10 @@ extension AgentTransport {
 
     public func activitySnapshot() async throws -> RuntimeActivitySnapshot {
         throw RuntimeHTTPError.unsupported
+    }
+
+    public func activitySnapshot(sinceSequence: Int64?) async throws -> RuntimeActivitySnapshot {
+        try await activitySnapshot()
     }
 
     public func createConversation(request: CreateConversationRequest) async throws -> ConversationRef {

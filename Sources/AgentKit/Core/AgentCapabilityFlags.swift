@@ -56,6 +56,8 @@ public struct AgentCapabilityFlags: OptionSet, Sendable {
     public static let workspaceExecutionPolicy = AgentCapabilityFlags(rawValue: 1 << 11)
     /// Runtime activity includes durable terminal sequence and broker attention.
     public static let sessionAttentionSnapshot = AgentCapabilityFlags(rawValue: 1 << 12)
+    /// Runtime supports cursor-based incremental session attention snapshots.
+    public static let sessionAttentionDelta = AgentCapabilityFlags(rawValue: 1 << 13)
 
     // MARK: - Presets
 

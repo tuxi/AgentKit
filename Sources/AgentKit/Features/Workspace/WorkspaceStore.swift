@@ -261,8 +261,16 @@ public final class WorkspaceStore {
     /// 后台进入：请求 runtime 做有界 suspend/checkpoint，不销毁 server。
     public func handleAppEnteredBackground() {
         #if os(iOS)
+        supervisor.stopActivityMonitoring()
         AgentRuntime.shared.suspendRuntime()
         #endif
+    }
+
+    /// Release workspace-scoped polling and sockets when the host removes the
+    /// workspace root view. Runtime sessions remain server-owned and resumable.
+    public func handleWorkspaceDisappeared() {
+        supervisor.stopActivityMonitoring()
+        Task { await supervisor.disconnectAll() }
     }
 
     /// 用户点击「继续」时调用，显式续跑当前 selected/active session。

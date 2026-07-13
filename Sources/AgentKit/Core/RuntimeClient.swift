@@ -28,6 +28,10 @@ public protocol RuntimeClient: Sendable {
     /// Ownership-filtered snapshot of sessions with live work.
     func activitySnapshot() async throws -> RuntimeActivitySnapshot
 
+    /// Cursor-based incremental attention snapshot. Backends without delta
+    /// support may ignore the cursor and return a full snapshot.
+    func activitySnapshot(sinceSequence: Int64?) async throws -> RuntimeActivitySnapshot
+
     /// 在 backend 创建新的 runtime session。
     /// - Parameter workspacePath: 工作区路径。
     /// - Returns: 包含 server-assigned `id` 的 `ConversationRef`。
@@ -145,6 +149,10 @@ extension RuntimeClient {
 
     public func activitySnapshot() async throws -> RuntimeActivitySnapshot {
         throw RuntimeHTTPError.unsupported
+    }
+
+    public func activitySnapshot(sinceSequence: Int64?) async throws -> RuntimeActivitySnapshot {
+        try await activitySnapshot()
     }
 
     /// Source-compatible fallback for backends that have not adopted execution
