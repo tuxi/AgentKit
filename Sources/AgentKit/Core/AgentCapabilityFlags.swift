@@ -46,6 +46,14 @@ public struct AgentCapabilityFlags: OptionSet, Sendable {
     public static let sessionResume = AgentCapabilityFlags(rawValue: 1 << 6)
     /// 支持客户端工具执行（tool_started executor: "client" + tool_result 回传）。
     public static let clientToolExecution = AgentCapabilityFlags(rawValue: 1 << 7)
+    /// Runtime guarantees safe execution of turns from multiple sessions.
+    public static let multiSessionExecution = AgentCapabilityFlags(rawValue: 1 << 8)
+    /// Pending client-tool requests survive socket replacement and are session scoped.
+    public static let sessionScopedClientTools = AgentCapabilityFlags(rawValue: 1 << 9)
+    /// Runtime exposes an ownership-filtered activity snapshot.
+    public static let activitySnapshot = AgentCapabilityFlags(rawValue: 1 << 10)
+    /// Runtime enforces a declared workspace/worktree execution policy.
+    public static let workspaceExecutionPolicy = AgentCapabilityFlags(rawValue: 1 << 11)
 
     // MARK: - Presets
 

@@ -241,6 +241,13 @@ public actor RuntimeEngine {
             _modelStartedAt = nil
             activeTurnID = nil
         }
+        if case .turnCancelled = event {
+            _turnStartedAt = nil
+            _modelStartedAt = nil
+            _pendingApproval = nil
+            _pendingPlanApproval = nil
+            activeTurnID = nil
+        }
         if case .turnResumed = event {
             _modelStats = nil
             countedInvocationIDs.removeAll()
@@ -281,6 +288,13 @@ public actor RuntimeEngine {
             if case .turnFailed = event {
                 _turnStartedAt = nil
                 _modelStartedAt = nil
+            }
+            if case .turnCancelled = event {
+                _turnStartedAt = nil
+                _modelStartedAt = nil
+                _pendingApproval = nil
+                _pendingPlanApproval = nil
+                activeTurnID = nil
             }
             if case .turnResumed = event {
                 _modelStats = nil

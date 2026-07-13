@@ -140,6 +140,83 @@ final class LifecycleProtocolTests: XCTestCase {
         XCTAssertEqual(err, "Gateway returned 401 — access token may be expired")
     }
 
+    func testSchedulerLifecycleEventsDecodeFromWire() throws {
+        let accepted = try decodeEvent("""
+        { "kind": "turn_accepted", "turn_id": "turn_7" }
+        """)
+        guard case .turnAccepted(let acceptedID, _, _) = accepted else {
+            return XCTFail("Expected turnAccepted")
+        }
+        XCTAssertEqual(acceptedID, "turn_7")
+
+        let queued = try decodeEvent("""
+        { "kind": "turn_queued", "turn_id": "turn_7", "reason": "workspace_lease", "position": 2 }
+        """)
+        guard case .turnQueued(let queuedID, let reason, let position) = queued else {
+            return XCTFail("Expected turnQueued")
+        }
+        XCTAssertEqual(queuedID, "turn_7")
+        XCTAssertEqual(reason, "workspace_lease")
+        XCTAssertEqual(position, 2)
+
+        let cancelled = try decodeEvent("""
+        { "kind": "turn_cancelled", "turn_id": "turn_7", "reason": "user_requested" }
+        """)
+        guard case .turnCancelled(let cancelledID, let reason) = cancelled else {
+            return XCTFail("Expected turnCancelled")
+        }
+        XCTAssertEqual(cancelledID, "turn_7")
+        XCTAssertEqual(reason, "user_requested")
+
+        let legacyCancelled = try decodeEvent("""
+        { "kind": "turn_failed", "turn_id": "turn_8", "error": { "code": "cancelled", "message": "cancelled by user" } }
+        """)
+        guard case .turnCancelled(let legacyID, _) = legacyCancelled else {
+            return XCTFail("Expected legacy cancelled failure to map to turnCancelled")
+        }
+        XCTAssertEqual(legacyID, "turn_8")
+    }
+
+    func testRuntimeCapabilityAndActivitySnapshotsDecode() throws {
+        let capabilityJSON = """
+        {
+          "schema": "runtime-capabilities/v1",
+          "protocol_version": 1,
+          "capabilities": {
+            "multi_session_execution_v1": true,
+            "session_scoped_client_tools_v1": true,
+            "activity_snapshot_v1": true,
+            "workspace_execution_policy_v1": true
+          },
+          "limits": { "max_concurrent_turns": 4, "max_connected_sessions": 16 }
+        }
+        """
+        let capabilities = try JSONDecoder().decode(
+            RuntimeCapabilitySnapshot.self,
+            from: Data(capabilityJSON.utf8)
+        )
+        XCTAssertTrue(capabilities.allowsMultiSessionExecution)
+        XCTAssertEqual(capabilities.limits?.maxConcurrentTurns, 4)
+
+        let activityJSON = """
+        {
+          "sessions": [{
+            "session_id": "session_a",
+            "turn_id": "turn_3",
+            "state": "waiting_approval",
+            "last_sequence": 183,
+            "pending_approval_count": 1,
+            "pending_client_tool_count": 0,
+            "queue_position": null,
+            "updated_at": "2026-07-13T06:00:00Z"
+          }]
+        }
+        """
+        let activity = try JSONDecoder().decode(RuntimeActivitySnapshot.self, from: Data(activityJSON.utf8))
+        XCTAssertEqual(activity.sessions.first?.sessionID, "session_a")
+        XCTAssertEqual(activity.sessions.first?.pendingApprovalCount, 1)
+    }
+
     private func decodeEvent(_ json: String) throws -> AgentEvent {
         let wire = try JSONDecoder().decode(WireFrame.self, from: Data(json.utf8))
         guard let event = AgentEvent.from(wire: wire) else {

@@ -58,6 +58,27 @@ final class ExecutionReducerTests: XCTestCase {
         XCTAssertEqual(graph.nodes["c1"]?.status, .cancelled)
     }
 
+    func testPersistedTurnCancelledReplaysAsCancelled() {
+        var reducer = ExecutionReducer()
+        var graph = ExecutionGraph()
+        let turn = "t1"
+        _ = reducer.reduce(.turnStarted(turnID: turn, text: "check commit"), into: &graph)
+        _ = reducer.reduce(.toolStarted(
+            turnID: turn,
+            callID: "c1",
+            tool: ToolCall(callID: "c1", toolName: "git_status", toolArgs: nil)
+        ), into: &graph)
+
+        _ = reducer.reduce(.turnCancelled(turnID: turn, reason: "user_requested"), into: &graph)
+
+        XCTAssertFalse(graph.nodes.values.contains { $0.turnID == turn && $0.status == .running })
+        XCTAssertEqual(graph.nodes["c1"]?.status, .cancelled)
+        XCTAssertFalse(graph.nodes.values.contains { node in
+            if case .system(let payload) = node.payload { return payload.kind == .error }
+            return false
+        })
+    }
+
     func testRuntimeEngineCancelClearsWorkingIndicatorAndToolSpinner() async {
         let engine = RuntimeEngine(sessionID: "session_1")
         await engine.ingest(.turnStarted(turnID: "t1", text: "check commit"))

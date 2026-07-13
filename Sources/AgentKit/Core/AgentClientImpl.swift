@@ -14,6 +14,117 @@
 
 import Foundation
 
+// MARK: - CodeAgentSessionChannel
+
+/// A real session-bound Code-Agent channel. Each instance owns its own socket, event
+/// cursor and tool registration state, so switching the selected conversation cannot
+/// disconnect or retarget another conversation.
+public final class CodeAgentSessionChannel: RuntimeSessionChannel, @unchecked Sendable {
+    public let sessionID: String
+
+    private let environment: RuntimeEnvironment
+    private let http: RuntimeHTTPClient
+    private let credentialStore: (any CredentialStore)?
+    private let credentialTarget: CredentialTarget
+    private var socket: AgentWireSocket?
+    private var pendingTools: [ClientToolInfo] = []
+
+    init(
+        sessionID: String,
+        environment: RuntimeEnvironment,
+        http: RuntimeHTTPClient,
+        credentialStore: (any CredentialStore)?,
+        credentialTarget: CredentialTarget
+    ) {
+        self.sessionID = sessionID
+        self.environment = environment
+        self.http = http
+        self.credentialStore = credentialStore
+        self.credentialTarget = credentialTarget
+    }
+
+    public var isConnected: Bool { socket?.isConnected ?? false }
+
+    public func connect(since: Int) async throws -> AsyncStream<AgentEvent> {
+        socket?.disconnect()
+
+        let newSocket = AgentWireSocket(
+            environment: environment,
+            conversationID: sessionID,
+            since: since,
+            credentialStore: credentialStore,
+            credentialTarget: credentialTarget
+        )
+        let http = self.http
+        let sessionID = self.sessionID
+        newSocket.gapFetch = { since in
+            try await http.getEvents(conversationID: sessionID, since: since)
+        }
+        newSocket.onHandshake = { [weak self, weak newSocket] in
+            guard let self else { return }
+            let tools = self.pendingTools
+            guard !tools.isEmpty else { return }
+            newSocket?.sendRegisterTools(tools)
+        }
+
+        socket = newSocket
+        return newSocket.connect()
+    }
+
+    public func send(input: AgentInput) async { socket?.send(input: input) }
+
+    public func registerTools(_ tools: [ClientToolInfo]) async {
+        pendingTools = tools
+        if let socket, socket.isConnected {
+            socket.sendRegisterTools(tools)
+        }
+    }
+
+    public func sendApproval(id: String, approved: Bool) async {
+        socket?.sendApproval(id: id, approved: approved)
+    }
+
+    public func sendApproval(id: String, decision: String, scope: String?) async {
+        socket?.sendApproval(id: id, decision: decision, scope: scope)
+    }
+
+    public func sendPlanApproval(id: String, approved: Bool) async {
+        socket?.sendPlanApproval(id: id, approved: approved)
+    }
+
+    public func cancelTurn() async { socket?.cancelTurn() }
+
+    public func disconnect() async {
+        socket?.disconnect()
+        socket = nil
+    }
+
+    public func capabilities() async -> AgentCapabilityFlags {
+        Self.flags(from: socket?.serverCapabilities ?? [])
+    }
+
+    fileprivate static func flags(from capabilities: [String]) -> AgentCapabilityFlags {
+        let values = Set(capabilities)
+        var flags = AgentCapabilityFlags.default
+        if values.contains("client_tool_execution") {
+            flags.insert(.clientToolExecution)
+        }
+        if values.contains("multi_session_execution_v1") {
+            flags.insert(.multiSessionExecution)
+        }
+        if values.contains("session_scoped_client_tools_v1") {
+            flags.insert(.sessionScopedClientTools)
+        }
+        if values.contains("activity_snapshot_v1") {
+            flags.insert(.activitySnapshot)
+        }
+        if values.contains("workspace_execution_policy_v1") {
+            flags.insert(.workspaceExecutionPolicy)
+        }
+        return flags
+    }
+}
+
 // MARK: - CodeAgentTransport
 
 /// CodeAgent backend 的 `AgentTransport` 实现。
@@ -50,6 +161,24 @@ public final class CodeAgentTransport: AgentTransport, @unchecked Sendable {
     }
 
     // MARK: - AgentTransport: Session lifecycle
+
+    public func makeSessionChannel(sessionID: String) -> any RuntimeSessionChannel {
+        CodeAgentSessionChannel(
+            sessionID: sessionID,
+            environment: environment,
+            http: http,
+            credentialStore: credentialStore,
+            credentialTarget: credentialTarget
+        )
+    }
+
+    public func runtimeCapabilities() async throws -> RuntimeCapabilitySnapshot {
+        try await http.runtimeCapabilities()
+    }
+
+    public func activitySnapshot() async throws -> RuntimeActivitySnapshot {
+        try await http.activitySnapshot()
+    }
 
     public func createConversation(workspacePath: String = "") async throws -> ConversationRef {
         try await http.createConversation(workspacePath: workspacePath)
@@ -225,15 +354,7 @@ public final class CodeAgentTransport: AgentTransport, @unchecked Sendable {
     // MARK: - AgentTransport: Capability discovery
 
     public func capabilities() async -> AgentCapabilityFlags {
-        let serverCaps = Set(socket?.serverCapabilities ?? [])
-        var flags = AgentCapabilityFlags.default
-
-        if serverCaps.contains("client_tool_execution") {
-            // 服务端支持将工具委托给客户端执行
-            flags.insert(.clientToolExecution)
-        }
-
-        return flags
+        CodeAgentSessionChannel.flags(from: socket?.serverCapabilities ?? [])
     }
 }
 
@@ -277,6 +398,18 @@ public final class DefaultAgentClient: RuntimeClient, @unchecked Sendable {
     #endif
 
     // MARK: - RuntimeClient conformance
+
+    public func makeSessionChannel(conversationID: String) -> any RuntimeSessionChannel {
+        transport.makeSessionChannel(sessionID: conversationID)
+    }
+
+    public func runtimeCapabilities() async throws -> RuntimeCapabilitySnapshot {
+        try await transport.runtimeCapabilities()
+    }
+
+    public func activitySnapshot() async throws -> RuntimeActivitySnapshot {
+        try await transport.activitySnapshot()
+    }
 
     public func createConversation(workspacePath: String = "") async throws -> ConversationRef {
         try await transport.createConversation(workspacePath: workspacePath)

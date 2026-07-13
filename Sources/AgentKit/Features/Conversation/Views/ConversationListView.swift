@@ -12,6 +12,7 @@ import SwiftUI
 
 public struct ConversationListView: View {
 
+    @Environment(WorkspaceStore.self) private var store
     private let viewModel: ConversationListViewModel
     @Binding var selected: ConversationRef?
 
@@ -150,6 +151,7 @@ public struct ConversationListView: View {
         .listStyle(.sidebar)
         .task {
             await viewModel.refresh()
+            await store.refreshRuntimeState()
         }
         .onAppear {
             syncExpandedWorkspaceIDs()
@@ -242,7 +244,10 @@ public struct ConversationListView: View {
 
         if isExpanded {
             ForEach(group.conversations, id: \.uiID) { ref in
-                ConversationRow(ref: ref)
+                ConversationRow(
+                    ref: ref,
+                    activity: store.supervisor.activity(for: ref.id)
+                )
                     .id("\(ref.uiID)-\(listRevision)")
                     .tag(ref)
                     .padding(.leading, 34)
@@ -328,6 +333,7 @@ private struct ConversationWorkspaceGroup: Identifiable {
 
 private struct ConversationRow: View {
     let ref: ConversationRef
+    let activity: ConversationActivityState
 
     var body: some View {
         HStack(spacing: 6) {
@@ -336,16 +342,41 @@ private struct ConversationRow: View {
                 .lineLimit(1)
             Spacer(minLength: 4)
 
-            if ref.isPaused {
+            switch activity {
+            case .connecting:
+                ProgressView()
+                    .controlSize(.mini)
+                    .accessibilityLabel("正在连接")
+            case .queued:
+                statusLabel("排队中", systemImage: "clock.fill", color: .secondary)
+            case .running:
+                statusLabel("运行中", systemImage: "circle.fill", color: .green)
+            case .waitingForApproval:
+                statusLabel("待审批", systemImage: "hand.raised.fill", color: .orange)
+            case .paused:
                 Label("已暂停", systemImage: "pause.circle.fill")
                     .font(.caption2.weight(.medium))
                     .foregroundStyle(.orange)
-            } else if ref.name != nil {
+            case .failed:
+                statusLabel("失败", systemImage: "exclamationmark.circle.fill", color: .red)
+            case .idle where ref.isPaused:
+                Label("已暂停", systemImage: "pause.circle.fill")
+                    .font(.caption2.weight(.medium))
+                    .foregroundStyle(.orange)
+            case .idle where ref.name != nil:
                 Text(ref.id.prefix(8) + "…")
                     .font(.caption2)
                     .foregroundStyle(.tertiary)
+            case .idle:
+                EmptyView()
             }
         }
         .padding(.vertical, 2)
+    }
+
+    private func statusLabel(_ title: String, systemImage: String, color: Color) -> some View {
+        Label(title, systemImage: systemImage)
+            .font(.caption2.weight(.medium))
+            .foregroundStyle(color)
     }
 }

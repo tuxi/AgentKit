@@ -64,6 +64,15 @@ final class AgentInputEncodingTests: XCTestCase {
         XCTAssertEqual(result.assets.first?.workspaceRelativePath, "Sources/App.swift")
         XCTAssertEqual(bridgedText, result.content)
     }
+
+    func testTextTurnCarriesStableClientRequestID() throws {
+        let input = AgentInput.text("hello", model: "test-model")
+        let data = try JSONEncoder().encode(OutgoingAgentInput.from(input: input))
+        let object = try XCTUnwrap(JSONSerialization.jsonObject(with: data) as? [String: Any])
+
+        XCTAssertNotNil(input.requestID)
+        XCTAssertEqual(object["request_id"] as? String, input.requestID)
+    }
 }
 
 private struct LocalFileTool: StructuredClientTool {

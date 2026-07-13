@@ -27,9 +27,12 @@ struct WireFrame: Decodable {
     /// 增量续传游标 = 已收到帧里最大的 seq。`token_delta` 不带 seq（瞬态不持久化）。
     let seq: Int?
     let eventId: String?
+    let requestId: String?
     let sessionId: String?
     let parentSessionId: String?
     let turnId: String?
+    let reason: String?
+    let position: Int?
     let callId: String?
     let step: Int?
     let toolName: String?
@@ -69,8 +72,10 @@ struct WireFrame: Decodable {
     enum CodingKeys: String, CodingKey {
         case type, kind, at, step, id, server, seq
         case text, observation, output, assets, failure, err, error, ratio, todos, chunk
+        case reason, position
         case textAnnotations = "text_annotations"
         case eventId = "event_id"
+        case requestId = "request_id"
         case sessionId = "session_id"
         case parentSessionId = "parent_session_id"
         case turnId = "turn_id"
@@ -132,6 +137,7 @@ struct OutgoingAgentInput: Encodable {
     let toolResult: OutgoingToolResult?
     let model: String?              // per-message model selection (v1.4)
     let metadata: [String: String]?
+    let requestID: String?
     // system command fields
     let command: String?            // system command name
     let commandKey: String?
@@ -139,6 +145,7 @@ struct OutgoingAgentInput: Encodable {
 
     enum CodingKeys: String, CodingKey {
         case type, kind, text, metadata, command, model
+        case requestID = "request_id"
         case toolResult = "tool_result"
         case commandKey = "command_key"
         case commandValue = "command_value"
@@ -150,7 +157,8 @@ struct OutgoingAgentInput: Encodable {
         case .text:
             return OutgoingAgentInput(
                 kind: "text", text: input.text, toolResult: nil, model: input.model,
-                metadata: input.metadata, command: nil, commandKey: nil, commandValue: nil
+                metadata: input.metadata, requestID: input.requestID,
+                command: nil, commandKey: nil, commandValue: nil
             )
         case .toolResult:
             let tr = input.toolResult.map {
@@ -164,31 +172,33 @@ struct OutgoingAgentInput: Encodable {
             }
             return OutgoingAgentInput(
                 kind: "tool_result", text: nil, toolResult: tr, model: input.model,
-                metadata: input.metadata, command: nil, commandKey: nil, commandValue: nil
+                metadata: input.metadata, requestID: input.requestID,
+                command: nil, commandKey: nil, commandValue: nil
             )
         case .command:
             return OutgoingAgentInput(
                 kind: "command", text: input.text, toolResult: nil, model: input.model,
-                metadata: input.metadata, command: nil, commandKey: nil, commandValue: nil
+                metadata: input.metadata, requestID: input.requestID,
+                command: nil, commandKey: nil, commandValue: nil
             )
         case .system(let cmd):
             switch cmd {
             case .patchContext(let key, let value):
                 return OutgoingAgentInput(
                     kind: "system", text: nil, toolResult: nil, model: input.model,
-                    metadata: input.metadata,
+                    metadata: input.metadata, requestID: input.requestID,
                     command: "patch_context", commandKey: key, commandValue: value
                 )
             case .updateMemory(let key, let value):
                 return OutgoingAgentInput(
                     kind: "system", text: nil, toolResult: nil, model: input.model,
-                    metadata: input.metadata,
+                    metadata: input.metadata, requestID: input.requestID,
                     command: "update_memory", commandKey: key, commandValue: value
                 )
             case .overridePlan(let planID):
                 return OutgoingAgentInput(
                     kind: "system", text: nil, toolResult: nil, model: input.model,
-                    metadata: input.metadata,
+                    metadata: input.metadata, requestID: input.requestID,
                     command: "override_plan", commandKey: nil, commandValue: planID
                 )
             }

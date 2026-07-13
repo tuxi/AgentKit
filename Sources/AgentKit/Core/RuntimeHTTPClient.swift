@@ -98,6 +98,22 @@ struct RuntimeHTTPClient: Sendable {
 
     // MARK: - Endpoints
 
+    /// `GET /v1/runtime/capabilities` — versioned runtime-wide guarantees and limits.
+    func runtimeCapabilities() async throws -> RuntimeCapabilitySnapshot {
+        let request = try await buildRequest("GET", pathComponents: "v1/runtime/capabilities")
+        let (data, response) = try await session.data(for: request)
+        try validateHTTP(response, data: data)
+        return try decodeEnvelope(RuntimeCapabilitySnapshot.self, from: data)
+    }
+
+    /// `GET /v1/activity` — sessions owned by the authenticated principal/device.
+    func activitySnapshot() async throws -> RuntimeActivitySnapshot {
+        let request = try await buildRequest("GET", pathComponents: "v1/activity")
+        let (data, response) = try await session.data(for: request)
+        try validateHTTP(response, data: data)
+        return try decodeEnvelope(RuntimeActivitySnapshot.self, from: data)
+    }
+
     /// `POST /v1/conversations`
     func createConversation(workspacePath: String) async throws -> ConversationRef {
         var wp = workspacePath

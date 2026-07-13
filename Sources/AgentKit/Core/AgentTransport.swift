@@ -39,6 +39,11 @@ public protocol AgentTransport: Sendable {
 
     // MARK: - Session lifecycle
 
+    /// Create an independently retained control channel for one session.
+    func makeSessionChannel(sessionID: String) -> any RuntimeSessionChannel
+    func runtimeCapabilities() async throws -> RuntimeCapabilitySnapshot
+    func activitySnapshot() async throws -> RuntimeActivitySnapshot
+
     /// 在 backend 创建新的 runtime session。
     /// - Returns: server-assigned `ConversationRef`（含 `id`）。
     func createConversation(workspacePath: String) async throws -> ConversationRef
@@ -154,6 +159,20 @@ public protocol AgentTransport: Sendable {
 // MARK: - Default impls
 
 extension AgentTransport {
+    /// Compatibility adapter for transports that still expose only a current-session
+    /// binding. It is intentionally not used by `CodeAgentTransport`.
+    public func makeSessionChannel(sessionID: String) -> any RuntimeSessionChannel {
+        LegacyAgentTransportSessionChannel(sessionID: sessionID, transport: self)
+    }
+
+    public func runtimeCapabilities() async throws -> RuntimeCapabilitySnapshot {
+        throw RuntimeHTTPError.unsupported
+    }
+
+    public func activitySnapshot() async throws -> RuntimeActivitySnapshot {
+        throw RuntimeHTTPError.unsupported
+    }
+
     /// 便捷入口：不带续传游标的 attach（等价 `since: 0`，即无已回放历史）。
     public func attach(sessionID: String) async throws -> AsyncStream<AgentEvent> {
         try await attach(sessionID: sessionID, since: 0)
@@ -193,4 +212,37 @@ extension AgentTransport {
     public func openJobStream(jobID: String) -> AsyncStream<AgentEvent> {
         AsyncStream { $0.finish() }
     }
+}
+
+/// Source-compatible fallback for third-party transports.
+private final class LegacyAgentTransportSessionChannel: RuntimeSessionChannel, @unchecked Sendable {
+    let sessionID: String
+    private let transport: any AgentTransport
+
+    init(sessionID: String, transport: any AgentTransport) {
+        self.sessionID = sessionID
+        self.transport = transport
+    }
+
+    var isConnected: Bool {
+        transport.activeSessionID == sessionID && transport.isConnected
+    }
+
+    func connect(since: Int) async throws -> AsyncStream<AgentEvent> {
+        try await transport.attach(sessionID: sessionID, since: since)
+    }
+    func send(input: AgentInput) async { await transport.send(input: input) }
+    func registerTools(_ tools: [ClientToolInfo]) async { await transport.registerTools(tools) }
+    func sendApproval(id: String, approved: Bool) async {
+        await transport.approve(id: id, value: approved)
+    }
+    func sendApproval(id: String, decision: String, scope: String?) async {
+        await transport.approve(id: id, decision: decision, scope: scope)
+    }
+    func sendPlanApproval(id: String, approved: Bool) async {
+        await transport.approvePlan(id: id, value: approved)
+    }
+    func cancelTurn() async { await transport.cancelTurn() }
+    func disconnect() async { await transport.disconnect() }
+    func capabilities() async -> AgentCapabilityFlags { await transport.capabilities() }
 }

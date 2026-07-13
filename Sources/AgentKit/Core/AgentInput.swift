@@ -47,11 +47,13 @@ public struct AgentInput: Sendable {
     public var model: String?
     /// 扩展元数据。P1 收敛 schema，P0 仅保留扩展点。
     public var metadata: [String: String]?
+    /// Stable client identity for accepted/queued acknowledgement and idempotent retry.
+    public var requestID: String?
 
     // MARK: - Convenience factories
 
     public static func text(_ text: String, model: String? = nil) -> AgentInput {
-        AgentInput(kind: .text, text: text, model: model)
+        AgentInput(kind: .text, text: text, model: model, requestID: UUID().uuidString)
     }
 
     public static func toolResult(_ result: ToolResultContent) -> AgentInput {
@@ -63,7 +65,7 @@ public struct AgentInput: Sendable {
     }
 
     public static func system(_ cmd: SystemCommand, metadata: [String: String]? = nil) -> AgentInput {
-        AgentInput(kind: .system(cmd), metadata: metadata)
+        AgentInput(kind: .system(cmd), metadata: metadata, requestID: UUID().uuidString)
     }
 
     // MARK: - Init
@@ -73,13 +75,15 @@ public struct AgentInput: Sendable {
         text: String? = nil,
         toolResult: ToolResultContent? = nil,
         model: String? = nil,
-        metadata: [String: String]? = nil
+        metadata: [String: String]? = nil,
+        requestID: String? = nil
     ) {
         self.kind = kind
         self.text = text
         self.toolResult = toolResult
         self.model = model
         self.metadata = metadata
+        self.requestID = requestID
     }
 }
 

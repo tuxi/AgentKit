@@ -178,14 +178,18 @@ public struct ConversationDetailView: View {
                         .padding(.horizontal, 20)
 
                     DraftComposerPanel(
-                        placeholder: isPaused
+                        placeholder: vm.isAwaitingTurnAcceptance
+                            ? "正在提交任务…"
+                            : vm.isLocallyQueued || vm.lifecycleStatus == "queued" || vm.lifecycleStatus == "accepted"
+                            ? "已排队 — 当前 Runtime 暂不支持跨会话并行"
+                            : isPaused
                             ? "会话已暂停 — 点击继续"
                             : (vm.snapshot.pendingApproval != nil || vm.snapshot.pendingPlanApproval != nil)
                             ? "审批中 — 请选择「允许」或「拒绝」"
                             : "输入消息…",
-                        isEnabled: !isPaused && vm.snapshot.pendingApproval == nil && vm.snapshot.pendingPlanApproval == nil,
+                        isEnabled: !isPaused && !vm.isTurnActive && vm.snapshot.pendingApproval == nil && vm.snapshot.pendingPlanApproval == nil,
                         isDraft: false,
-                        isTurnRunning: vm.lifecycleStatus == "running",
+                        isTurnRunning: vm.isTurnActive,
                         onStop: { Task { await vm.cancelTurn() } },
                         onSend: { text, model in
                             let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -217,6 +221,28 @@ public struct ConversationDetailView: View {
 
     @ToolbarContentBuilder
     private var toolbarContent: some ToolbarContent {
+        if !store.supervisor.pendingApprovals.isEmpty {
+            ToolbarItem {
+                Menu {
+                    ForEach(store.supervisor.pendingApprovals) { approval in
+                        Button {
+                            store.selectConversation(sessionID: approval.sessionID)
+                        } label: {
+                            Label(
+                                approval.conversationName,
+                                systemImage: approval.kind == .plan ? "list.clipboard" : "hand.raised"
+                            )
+                        }
+                    }
+                } label: {
+                    Label(
+                        "待审批 \(store.supervisor.pendingApprovals.count)",
+                        systemImage: "hand.raised.fill"
+                    )
+                }
+                .help("查看所有会话的待审批请求")
+            }
+        }
 //        ToolbarItem {
 //            Button {
 //                store.beginDraft()

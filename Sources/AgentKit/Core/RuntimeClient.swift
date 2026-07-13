@@ -18,6 +18,16 @@ import Foundation
 // MARK: - RuntimeClient protocol
 
 public protocol RuntimeClient: Sendable {
+    /// Create a control channel whose complete lifetime is bound to `conversationID`.
+    /// New UI code must prefer this over the legacy current-session methods below.
+    func makeSessionChannel(conversationID: String) -> any RuntimeSessionChannel
+
+    /// Runtime-wide, versioned capabilities. 404/unsupported must safely degrade.
+    func runtimeCapabilities() async throws -> RuntimeCapabilitySnapshot
+
+    /// Ownership-filtered snapshot of sessions with live work.
+    func activitySnapshot() async throws -> RuntimeActivitySnapshot
+
     /// 在 backend 创建新的 runtime session。
     /// - Parameter workspacePath: 工作区路径。
     /// - Returns: 包含 server-assigned `id` 的 `ConversationRef`。
@@ -120,6 +130,20 @@ public protocol RuntimeClient: Sendable {
 // MARK: - Backward compatibility
 
 extension RuntimeClient {
+    /// Source-compatible fallback for existing backends. This adapter remains
+    /// single-session and therefore never advertises multi-session execution.
+    public func makeSessionChannel(conversationID: String) -> any RuntimeSessionChannel {
+        LegacyRuntimeSessionChannel(sessionID: conversationID, client: self)
+    }
+
+    public func runtimeCapabilities() async throws -> RuntimeCapabilitySnapshot {
+        throw RuntimeHTTPError.unsupported
+    }
+
+    public func activitySnapshot() async throws -> RuntimeActivitySnapshot {
+        throw RuntimeHTTPError.unsupported
+    }
+
     /// 便捷入口：不带续传游标的 connect（等价 `since: 0`，即无已回放历史）。
     public func connect(conversationID: String) async throws -> AsyncStream<AgentEvent> {
         try await connect(conversationID: conversationID, since: 0)

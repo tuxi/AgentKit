@@ -13,12 +13,12 @@ import Foundation
 /// - `id` 是 server-assigned execution context UUID，不是客户端生成的
 /// - `connect(conversationID:)` = attach 到已存在的 server session，不是创建新 session
 /// - session 的生命周期由 backend 管理（内存态 / 持久化）
-/// - 一个 client 同时只 attach 一个 session（一个 WebSocket 连接）
+/// - 一个 RuntimeClient 可创建多个 session-bound channel；每个 channel 独立 attach
 ///
 /// ## 三者关系
 /// ```
 /// ConversationRef         = server state identity
-/// AgentTransport.attach() = transport binding (WebSocket)
+/// RuntimeSessionChannel   = session-bound transport binding (WebSocket)
 /// RuntimeEngine           = UI-side state projection
 /// ```
 public struct ConversationRef: Identifiable, Hashable, Sendable, Codable {

@@ -33,12 +33,13 @@ public final class WorkspaceStore {
     public var selectedConversation: ConversationRef? {
         didSet {
             guard oldValue != selectedConversation else { return }
-            if let conversation  = selectedConversation {
+            if let conversation = selectedConversation {
                 // 选中一个真实会话即丢弃未提交的草稿。
                 draft = nil
-                Task { await connectToConversation(conversation) }
-            } else {
-                activeConversationViewModel = nil
+                let controller = supervisor.controller(for: conversation)
+                // Controller installation is synchronous; history/socket loading cannot
+                // later overwrite selection because it only mutates this session.
+                Task { await controller.connect(to: conversation) }
             }
         }
     }
@@ -89,8 +90,14 @@ public final class WorkspaceStore {
     /// 侧栏会话列表的 ViewModel。
     public let listViewModel: ConversationListViewModel
 
-    /// 当前选中会话的 ViewModel（nil 表示未选中或 mock 模式）。
-    public private(set) var activeConversationViewModel: ConversationViewModel?
+    /// Retains one independent controller/channel per active conversation.
+    public let supervisor: ConversationSupervisor
+
+    /// 当前展示的 ViewModel。Changing selection never destroys other controllers.
+    public var activeConversationViewModel: ConversationViewModel? {
+        guard let id = selectedConversation?.id else { return nil }
+        return supervisor.controller(sessionID: id)
+    }
 
     /// 手动续跑 paused 会话时的短暂状态。
     public private(set) var isResumingPausedConversation = false
@@ -119,25 +126,31 @@ public final class WorkspaceStore {
         self.timelineExtensions = timelineExtensions
         self.onAuthExpired = onAuthExpired
         self.listViewModel = ConversationListViewModel(client: client)
-    }
-
-    // MARK: - Conversation Management
-
-    /// 连接指定会话并开始消费事件流。
-    private func connectToConversation(_ conversation: ConversationRef) async {
-        // 已由 commitDraft 构建并连接好（首条消息路径）→ 不重复连接。
-        if activeConversationViewModel?.conversation?.id == conversation.id { return }
-        let vm = ConversationViewModel(
+        self.supervisor = ConversationSupervisor(
             client: client,
             toolRegistry: toolRegistry,
             timelineExtensions: timelineExtensions,
             onAuthExpired: onAuthExpired
         )
-        await vm.connect(to: conversation)
-        activeConversationViewModel = vm
+    }
+
+    // MARK: - Conversation Management
+
+    /// Select a retained/background conversation without changing any other session's
+    /// execution. Used by the global approval inbox and notifications.
+    public func selectConversation(sessionID: String) {
+        if let ref = listViewModel.conversations.first(where: { $0.id == sessionID })
+            ?? supervisor.controller(sessionID: sessionID)?.conversation {
+            selectedConversation = ref
+        }
     }
 
     // MARK: - Runtime lifecycle
+
+    /// Refresh capability/activity snapshots and reconnect every live background session.
+    public func refreshRuntimeState() async {
+        await supervisor.refreshRuntimeState(conversations: listViewModel.conversations)
+    }
 
     /// 启动 host 侧网络恢复监听。用于修复静默 resume transient 失败后卡在 paused 的情况。
     public func startLifecycleNetworkMonitor() {
@@ -164,11 +177,13 @@ public final class WorkspaceStore {
         // ensureHealthy() 探 /healthz，死则重启 runtime（新端口，会话从 DB 重载），杜绝「回来后恒 -1004」。
         let healthy = await RuntimeConnectionMonitor.shared.ensureHealthy()
         await listViewModel.refresh()
+        await refreshRuntimeState()
 
         guard wasAlive, healthy else { return }
-        await resumeCurrentConversation(silent: true)
+        await resumePausedConversationsAfterThaw()
         #else
         await listViewModel.refresh()
+        await refreshRuntimeState()
         #endif
     }
 
@@ -187,7 +202,10 @@ public final class WorkspaceStore {
     }
 
     private func retryPausedConversationAfterNetworkRecovery() async {
-        guard isCurrentConversationPaused else { return }
+        let hasPausedConversation = isCurrentConversationPaused
+            || !pausedRetainedSessionIDs.isEmpty
+            || listViewModel.conversations.contains(where: \.isPaused)
+        guard hasPausedConversation else { return }
 
         let now = Date()
         if let lastNetworkResumeAttempt,
@@ -196,7 +214,29 @@ public final class WorkspaceStore {
         }
         lastNetworkResumeAttempt = now
 
-        await resumeCurrentConversation(silent: true)
+        await resumePausedConversationsAfterThaw()
+    }
+
+    private var pausedRetainedSessionIDs: [String] {
+        supervisor.controllers.compactMap { id, controller in
+            controller.lifecycleStatus == "paused" ? id : nil
+        }
+    }
+
+    /// Embedded iOS Runtime suspends all active sessions together. Resume every paused
+    /// session after a same-process thaw; selection only controls which one is visible.
+    private func resumePausedConversationsAfterThaw() async {
+        let ids = Set(pausedRetainedSessionIDs + listViewModel.conversations.filter(\.isPaused).map(\.id))
+        for sessionID in ids {
+            do {
+                try AgentRuntime.shared.resumeRuntime(sessionID: sessionID)
+                supervisor.controller(sessionID: sessionID)?.markResumeRequested()
+            } catch {
+                // Silent lifecycle recovery is best-effort. A selected paused session
+                // keeps its explicit Resume button for user-visible retry.
+            }
+        }
+        await listViewModel.refresh()
     }
 
     /// 当前 active/selected 会话是否真处于 `paused`。所有**静默自动续跑**（thaw、网络恢复重试）
@@ -265,7 +305,7 @@ public final class WorkspaceStore {
 
     /// 点击「+」：不调用任何 API，仅创建本地草稿。预选最近使用的工作区。
     public func beginDraft() {
-        selectedConversation = nil          // 经 didSet 清掉活跃 VM
+        selectedConversation = nil          // only clears presentation selection
         projects.reload()                   // 项目目录可能被「文件」App 改动，开草稿时刷新
         draft = SessionDraft(workspace: recentWorkspaces.mostRecent)
         draftNavigationRevision += 1
@@ -317,21 +357,17 @@ public final class WorkspaceStore {
         draft?.state = .committing
         do {
             let ref = try await client.createConversation(workspacePath: workspace.url.path)
-            let vm = ConversationViewModel(
-                client: client,
-                toolRegistry: toolRegistry,
+            let vm = supervisor.controller(
+                for: ref,
                 workspace: workspace,
-                model: model,
-                timelineExtensions: timelineExtensions,
-                onAuthExpired: onAuthExpired
+                model: model
             )
             await vm.connect(to: ref)
             await vm.send(input: .text(firstMessage, model: model))
 
             // 草稿 → 真实会话
-            activeConversationViewModel = vm
             listViewModel.prepend(ref)
-            selectedConversation = ref  // connectToConversation 守卫避免二次连接
+            selectedConversation = ref  // supervisor reuses the connected controller
             draft = nil
         } catch {
             draft?.state = .failed(error.localizedDescription)

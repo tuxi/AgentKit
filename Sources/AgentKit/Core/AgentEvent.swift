@@ -16,6 +16,10 @@ import Foundation
 /// `turnID` 和 `callID` 来自协议层，是 ConversationState reducer 的唯一 key。
 public enum AgentEvent: Sendable {
     // ── Turn 生命周期 ──
+    /// Request validation completed and a stable turn identity was persisted.
+    case turnAccepted(turnID: String, requestID: String?, text: String?)
+    /// Accepted turn is waiting for a scheduler/workspace slot.
+    case turnQueued(turnID: String, reason: String?, position: Int?)
     /// `turn_started`：新 turn 开始。`turnID` 是 grouping key。
     case turnStarted(turnID: String, text: String)
     /// `turn_finished`：当前 turn 结束。
@@ -27,6 +31,8 @@ public enum AgentEvent: Sendable {
     /// `turn_failed`：turn 进入不可恢复失败终态。
     /// `errorCode` 来自结构化 `error.code`（开放集合，如 `auth_expired`），未知 code 按普通失败处理。
     case turnFailed(turnID: String?, text: String?, err: String?, errorCode: String?)
+    /// Third authoritative terminal state; mutually exclusive with finished/failed.
+    case turnCancelled(turnID: String?, reason: String?)
 
     // ── 模型 ──
     case modelStarted(turnID: String?, invocationID: String?)
@@ -93,6 +99,12 @@ extension AgentEvent {
         let callID = wire.callId ?? wire.step.map { "call_\($0)" }
 
         switch kind {
+        case "turn_accepted":
+            return .turnAccepted(turnID: turnID ?? "", requestID: wire.requestId, text: wire.text)
+
+        case "turn_queued":
+            return .turnQueued(turnID: turnID ?? "", reason: wire.reason, position: wire.position)
+
         case "turn_started":
             return .turnStarted(turnID: turnID ?? "", text: wire.text ?? "")
 
@@ -110,12 +122,21 @@ extension AgentEvent {
             return .turnResumed(turnID: turnID, text: wire.text)
 
         case "turn_failed", "turn.failed":
+            if wire.error?.code == "cancelled" {
+                return .turnCancelled(
+                    turnID: turnID,
+                    reason: wire.error?.message ?? wire.err ?? wire.text
+                )
+            }
             return .turnFailed(
                 turnID: turnID,
                 text: wire.text,
                 err: wire.err ?? wire.error?.message,
                 errorCode: wire.error?.code
             )
+
+        case "turn_cancelled", "turn.cancelled":
+            return .turnCancelled(turnID: turnID, reason: wire.reason ?? wire.text)
 
         case "model_started":
             return .modelStarted(turnID: turnID, invocationID: wire.invocationId)

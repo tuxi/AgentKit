@@ -29,6 +29,9 @@ public struct ExecutionReducer: Sendable {
 
         switch event {
         // ── Turn lifecycle ──
+        case .turnAccepted, .turnQueued:
+            return []
+
         case .turnStarted(let turnID, let text):
             return handleTurnStarted(turnID: turnID, text: text, ts: ts, graph: &graph)
 
@@ -50,6 +53,13 @@ public struct ExecutionReducer: Sendable {
                 text: text,
                 err: err,
                 errorCode: errorCode,
+                ts: ts,
+                graph: &graph
+            )
+
+        case .turnCancelled(let turnID, _):
+            return handleTurnCancelled(
+                turnID: turnID ?? internalState.currentTurnID ?? "",
                 ts: ts,
                 graph: &graph
             )
@@ -350,6 +360,27 @@ public struct ExecutionReducer: Sendable {
         internalState.lastNodeOfKind[.thinking] = nil
         internalState.activeToolCallIDs = []
         internalState.currentTurnID = nil
+    }
+
+    private mutating func handleTurnCancelled(
+        turnID: String,
+        ts: TimeInterval,
+        graph: inout ExecutionGraph
+    ) -> [NodeID] {
+        var changed: [NodeID] = []
+        for (nodeID, var node) in graph.nodes where node.turnID == turnID && node.status == .running {
+            node.status = .cancelled
+            node.timestamp = ts
+            graph.upsertNode(node)
+            changed.append(nodeID)
+        }
+        internalState.streamingAssistant = ""
+        internalState.streamingThinking = ""
+        internalState.lastNodeOfKind[.assistantMessage] = nil
+        internalState.lastNodeOfKind[.thinking] = nil
+        internalState.activeToolCallIDs = []
+        internalState.currentTurnID = nil
+        return changed
     }
 
     // MARK: - Streaming handlers
