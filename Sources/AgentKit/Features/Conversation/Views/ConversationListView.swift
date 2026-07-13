@@ -106,13 +106,11 @@ public struct ConversationListView: View {
         let listRevision = viewModel.revision
         List(selection: $selected) {
             if viewModel.isLoading {
-                HStack {
-                    Spacer()
-                    ProgressView()
-                        .controlSize(.small)
-                    Spacer()
-                }
-                .listRowSeparator(.hidden)
+                ProgressView()
+                    .controlSize(.small)
+                    .frame(maxWidth: .infinity)
+                    .listRowSeparator(.hidden)
+                    .listRowBackground(Color.clear)
             }
 
             #if os(iOS)
@@ -124,18 +122,21 @@ public struct ConversationListView: View {
                 Label(error, systemImage: "exclamationmark.triangle")
                     .foregroundStyle(.secondary)
                     .font(.caption)
+                    .listRowSeparator(.hidden)
             }
             #else
             if let error = viewModel.errorMessage {
                 Label(error, systemImage: "exclamationmark.triangle")
                     .foregroundStyle(.secondary)
                     .font(.caption)
+                    .listRowSeparator(.hidden)
             }
             #endif
 
             if !viewModel.isLoading && filteredConversations.isEmpty && !searchText.isEmpty {
                 ContentUnavailableView.search(text: searchText)
                     .listRowSeparator(.hidden)
+                    .listRowBackground(Color.clear)
             }
 
             if !conversationGroups.isEmpty {
@@ -149,6 +150,7 @@ public struct ConversationListView: View {
             }
         }
         .listStyle(.sidebar)
+        .scrollContentBackground(.hidden)
         .task {
             await viewModel.refresh()
             await store.refreshRuntimeState()
@@ -165,11 +167,11 @@ public struct ConversationListView: View {
             isProjectsExpanded = true
             expandedWorkspaceIDs.formUnion(conversationGroups.map(\.id))
         }
-        .alert("重命名会话", isPresented: Binding(
+        .alert("重命名任务", isPresented: Binding(
             get: { renameTarget != nil },
             set: { if !$0 { renameTarget = nil } }
         )) {
-            TextField("名称", text: $renameText)
+            TextField("任务名称", text: $renameText)
             Button("取消", role: .cancel) {
                 renameTarget = nil
             }
@@ -185,10 +187,6 @@ public struct ConversationListView: View {
                 }
                 renameTarget = nil
             }
-        } message: {
-            if let target = renameTarget {
-                Text("为会话 \(target.id.prefix(8))… 设置新名称")
-            }
         }
     }
 
@@ -196,20 +194,26 @@ public struct ConversationListView: View {
         Button {
             isProjectsExpanded.toggle()
         } label: {
-            HStack(spacing: 8) {
+            HStack(spacing: 7) {
                 Text("项目")
-                    .font(.headline)
+                    .font(.system(size: 13, weight: .semibold))
+                    .foregroundStyle(.secondary)
                 Image(systemName: isProjectsExpanded
                       ? "chevron.down"
                       : "chevron.right")
-                    .font(.caption.weight(.semibold))
-                    .foregroundStyle(.secondary)
+                    .font(.system(size: 10, weight: .bold))
+                    .foregroundStyle(.tertiary)
                 Spacer(minLength: 0)
             }
+            .padding(.horizontal, 6)
+            .padding(.top, 13)
+            .padding(.bottom, 7)
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
-        .padding(.vertical, 4)
+        .listRowInsets(.init())
+        .listRowSeparator(.hidden)
+        .listRowBackground(Color.clear)
         .accessibilityLabel(isProjectsExpanded ? "收起项目" : "展开项目")
     }
 
@@ -227,19 +231,28 @@ public struct ConversationListView: View {
                 expandedWorkspaceIDs.insert(group.id)
             }
         } label: {
-            HStack(spacing: 8) {
-                Label(group.title, systemImage: group.systemImage)
-                    .textCase(nil)
-                Image(systemName: isExpanded ? "chevron.down" : "chevron.right")
-                    .font(.caption.weight(.semibold))
+            HStack(spacing: 9) {
+                Image(systemName: group.systemImage)
+                    .font(.system(size: 15, weight: .medium))
                     .foregroundStyle(.secondary)
+                    .frame(width: 18)
+                Text(group.title)
+                    .font(.system(size: 15, weight: .medium))
+                    .foregroundStyle(.primary)
+                    .lineLimit(1)
                 Spacer(minLength: 0)
+                Image(systemName: isExpanded ? "chevron.down" : "chevron.right")
+                    .font(.system(size: 10, weight: .bold))
+                    .foregroundStyle(.tertiary)
             }
+            .padding(.horizontal, 8)
+            .padding(.vertical, 6)
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
-        .padding(.leading, 16)
-        .padding(.vertical, 2)
+        .listRowInsets(.init())
+        .listRowSeparator(.hidden)
+        .listRowBackground(Color.clear)
         .accessibilityLabel(isExpanded ? "收起项目 \(group.title)" : "展开项目 \(group.title)")
 
         if isExpanded {
@@ -250,7 +263,9 @@ public struct ConversationListView: View {
                 )
                     .id("\(ref.uiID)-\(listRevision)")
                     .tag(ref)
-                    .padding(.leading, 34)
+                    .listRowInsets(.init(top: 0, leading: 12, bottom: 0, trailing: 12))
+                    .listRowSeparator(.hidden)
+                    .listRowBackground(Color.clear)
                     #if os(iOS)
                     .swipeActions(edge: .trailing) {
                         Button(role: .destructive) {
@@ -280,7 +295,8 @@ public struct ConversationListView: View {
         guard !currentIDs.isEmpty else { return }
 
         if !didInitializeExpansion {
-            expandedWorkspaceIDs = currentIDs
+            // 与宿主应用原有侧栏一致：启动时先显示紧凑的项目概览。
+            expandedWorkspaceIDs = []
             didInitializeExpansion = true
         } else {
             expandedWorkspaceIDs.formUnion(currentIDs.subtracting(knownWorkspaceIDs))
@@ -336,11 +352,12 @@ private struct ConversationRow: View {
     let activity: ConversationActivityState
 
     var body: some View {
-        HStack(spacing: 6) {
+        HStack(spacing: 8) {
             Text(ref.name ?? ref.id)
-                .font(.body)
+                .font(.system(size: 14, weight: .medium))
+                .foregroundStyle(.primary)
                 .lineLimit(1)
-            Spacer(minLength: 4)
+            Spacer(minLength: 6)
 
             switch activity {
             case .connecting:
@@ -371,7 +388,8 @@ private struct ConversationRow: View {
                 EmptyView()
             }
         }
-        .padding(.vertical, 2)
+        .padding(.horizontal, 11)
+        .padding(.vertical, 7)
     }
 
     private func statusLabel(_ title: String, systemImage: String, color: Color) -> some View {
