@@ -96,6 +96,7 @@ public final class ConversationViewModel {
     /// Host 注入的 auth 恢复钩子。收到 `turn_failed(code: auth_expired)` 时调用
     /// （契约：credential-injection-v1 §5.2 —— 刷新 token → Reconfigure Runtime）。
     private let onAuthExpired: (@MainActor () async -> Void)?
+    private let onActivityInvalidated: (@MainActor () -> Void)?
 
     /// auth 恢复进行中标记 —— 防止连续 auth_expired 事件触发并发刷新。
     private var isRecoveringAuth = false
@@ -110,7 +111,8 @@ public final class ConversationViewModel {
         timelineExtensions: [any TimelineExtension] = [],
         turnCoordinator: ConversationTurnCoordinator? = nil,
         capabilityRegistry: RuntimeCapabilityRegistry? = nil,
-        onAuthExpired: (@MainActor () async -> Void)? = nil
+        onAuthExpired: (@MainActor () async -> Void)? = nil,
+        onActivityInvalidated: (@MainActor () -> Void)? = nil
     ) {
         self.client = client
         self.toolRegistry = toolRegistry
@@ -120,6 +122,7 @@ public final class ConversationViewModel {
         self.turnCoordinator = turnCoordinator
         self.capabilityRegistry = capabilityRegistry
         self.onAuthExpired = onAuthExpired
+        self.onActivityInvalidated = onActivityInvalidated
     }
 
     /// 本会话用于展示的工作区标签。
@@ -274,6 +277,7 @@ public final class ConversationViewModel {
     public func approve(id: String, approved: Bool) async {
         await channel?.sendApproval(id: id, approved: approved)
         await engine?.resolveApproval(requestID: id, approved: approved)
+        onActivityInvalidated?()
     }
 
     /// 回复审批请求（v1.2 三态）。
@@ -283,12 +287,14 @@ public final class ConversationViewModel {
     public func approve(id: String, decision: String, scope: String? = nil) async {
         await channel?.sendApproval(id: id, decision: decision, scope: scope)
         await engine?.resolveApproval(requestID: id, approved: decision != "deny")
+        onActivityInvalidated?()
     }
 
     /// 回复计划审批请求。
     public func approvePlan(id: String, approved: Bool) async {
         await channel?.sendPlanApproval(id: id, approved: approved)
         await engine?.resolvePlanApproval(requestID: id, approved: approved)
+        onActivityInvalidated?()
     }
 
     /// 取消当前 turn。
@@ -409,6 +415,7 @@ public final class ConversationViewModel {
     }
 
     private func updateLifecycle(from event: AgentEvent) {
+        var shouldRefreshActivity = false
         switch event {
         case .turnAccepted:
             isAwaitingTurnAcceptance = false
@@ -437,6 +444,7 @@ public final class ConversationViewModel {
             queuePosition = nil
             pausedAt = nil
             releaseTurnPermit()
+            shouldRefreshActivity = true
         case .turnPaused:
             isAwaitingTurnAcceptance = false
             lifecycleStatus = "paused"
@@ -454,6 +462,7 @@ public final class ConversationViewModel {
             queuePosition = nil
             pausedAt = nil
             releaseTurnPermit()
+            shouldRefreshActivity = true
         case .turnCancelled:
             isAwaitingTurnAcceptance = false
             lifecycleStatus = "cancelled"
@@ -462,8 +471,12 @@ public final class ConversationViewModel {
             pausedAt = nil
             currentTurnID = nil
             releaseTurnPermit()
+            shouldRefreshActivity = true
         default:
             break
+        }
+        if shouldRefreshActivity {
+            onActivityInvalidated?()
         }
     }
 

@@ -33,6 +33,7 @@ public final class WorkspaceStore {
     public var selectedConversation: ConversationRef? {
         didSet {
             guard oldValue != selectedConversation else { return }
+            supervisor.setSelectedSessionID(selectedConversation?.id)
             if let conversation = selectedConversation {
                 // 选中一个真实会话即丢弃未提交的草稿。
                 draft = nil
@@ -119,7 +120,9 @@ public final class WorkspaceStore {
         client: RuntimeClient = DefaultAgentClient(),
         toolRegistry: ToolRegistry = ToolRegistry(),
         timelineExtensions: [any TimelineExtension] = [],
-        onAuthExpired: (@MainActor () async -> Void)? = nil
+        onAuthExpired: (@MainActor () async -> Void)? = nil,
+        attentionReadStore: any ConversationAttentionReadStore = UserDefaultsConversationAttentionReadStore.shared,
+        onAttentionEvent: (@MainActor (ConversationAttentionEvent) -> Void)? = nil
     ) {
         self.client = client
         self.toolRegistry = toolRegistry
@@ -130,7 +133,9 @@ public final class WorkspaceStore {
             client: client,
             toolRegistry: toolRegistry,
             timelineExtensions: timelineExtensions,
-            onAuthExpired: onAuthExpired
+            onAuthExpired: onAuthExpired,
+            attentionReadStore: attentionReadStore,
+            onAttentionEvent: onAttentionEvent
         )
     }
 

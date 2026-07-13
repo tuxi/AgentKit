@@ -54,6 +54,8 @@ public struct AgentCapabilityFlags: OptionSet, Sendable {
     public static let activitySnapshot = AgentCapabilityFlags(rawValue: 1 << 10)
     /// Runtime enforces a declared workspace/worktree execution policy.
     public static let workspaceExecutionPolicy = AgentCapabilityFlags(rawValue: 1 << 11)
+    /// Runtime activity includes durable terminal sequence and broker attention.
+    public static let sessionAttentionSnapshot = AgentCapabilityFlags(rawValue: 1 << 12)
 
     // MARK: - Presets
 

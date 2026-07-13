@@ -98,6 +98,7 @@ public struct RuntimeCapabilitySnapshot: Codable, Sendable, Equatable {
         if capabilities["session_scoped_client_tools_v1"] == true { flags.insert(.sessionScopedClientTools) }
         if capabilities["activity_snapshot_v1"] == true { flags.insert(.activitySnapshot) }
         if capabilities["workspace_execution_policy_v1"] == true { flags.insert(.workspaceExecutionPolicy) }
+        if capabilities["session_attention_snapshot_v1"] == true { flags.insert(.sessionAttentionSnapshot) }
         return flags
     }
 
@@ -111,56 +112,92 @@ public struct RuntimeCapabilitySnapshot: Codable, Sendable, Equatable {
     public static let legacy = RuntimeCapabilitySnapshot(schema: "legacy", protocolVersion: 0)
 }
 
+public struct RuntimeTerminalActivity: Codable, Sendable, Equatable {
+    public let turnID: String
+    public let kind: String
+    public let sequence: Int64
+    public let at: String?
+
+    enum CodingKeys: String, CodingKey {
+        case kind, sequence, at
+        case turnID = "turn_id"
+    }
+
+    public init(turnID: String, kind: String, sequence: Int64, at: String? = nil) {
+        self.turnID = turnID
+        self.kind = kind
+        self.sequence = sequence
+        self.at = at
+    }
+
+}
+
 public struct RuntimeSessionActivity: Codable, Sendable, Equatable, Identifiable {
     public let sessionID: String
     public let turnID: String?
+    public let activeTurnID: String?
     public let state: String
-    public let lastSequence: Int?
+    public let lastSequence: Int64?
     /// Nil means the Runtime did not publish this broker detail. It must not be
     /// interpreted as a known zero while the broker contract is still disabled.
     public let pendingApprovalCount: Int?
     public let pendingClientToolCount: Int?
     public let queuePosition: Int?
+    public let latestTerminal: RuntimeTerminalActivity?
     public let updatedAt: String?
 
     public var id: String { sessionID }
+    public var effectiveActiveTurnID: String? { activeTurnID ?? turnID }
 
     enum CodingKeys: String, CodingKey {
         case state
         case sessionID = "session_id"
         case turnID = "turn_id"
+        case activeTurnID = "active_turn_id"
         case lastSequence = "last_sequence"
         case pendingApprovalCount = "pending_approval_count"
         case pendingClientToolCount = "pending_client_tool_count"
         case queuePosition = "queue_position"
+        case latestTerminal = "latest_terminal"
         case updatedAt = "updated_at"
     }
 
     public init(
         sessionID: String,
         turnID: String? = nil,
+        activeTurnID: String? = nil,
         state: String,
-        lastSequence: Int? = nil,
+        lastSequence: Int64? = nil,
         pendingApprovalCount: Int? = nil,
         pendingClientToolCount: Int? = nil,
         queuePosition: Int? = nil,
+        latestTerminal: RuntimeTerminalActivity? = nil,
         updatedAt: String? = nil
     ) {
         self.sessionID = sessionID
         self.turnID = turnID
+        self.activeTurnID = activeTurnID ?? turnID
         self.state = state
         self.lastSequence = lastSequence
         self.pendingApprovalCount = pendingApprovalCount
         self.pendingClientToolCount = pendingClientToolCount
         self.queuePosition = queuePosition
+        self.latestTerminal = latestTerminal
         self.updatedAt = updatedAt
     }
 }
 
 public struct RuntimeActivitySnapshot: Codable, Sendable, Equatable {
+    public let generatedAt: String?
     public let sessions: [RuntimeSessionActivity]
 
-    public init(sessions: [RuntimeSessionActivity]) {
+    enum CodingKeys: String, CodingKey {
+        case sessions
+        case generatedAt = "generated_at"
+    }
+
+    public init(generatedAt: String? = nil, sessions: [RuntimeSessionActivity]) {
+        self.generatedAt = generatedAt
         self.sessions = sessions
     }
 }

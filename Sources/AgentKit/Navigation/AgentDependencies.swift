@@ -25,15 +25,25 @@ public struct AgentDependencies {
     /// Host 在此实现「刷新 token → Reconfigure Runtime」（credential-injection-v1 §5.2）。
     public let onAuthExpired: (@MainActor () async -> Void)?
 
+    /// GUI-owned persistence for terminal read/notified cursors.
+    public let attentionReadStore: any ConversationAttentionReadStore
+
+    /// Host hook for local notifications or other out-of-conversation alerts.
+    public let onAttentionEvent: (@MainActor (ConversationAttentionEvent) -> Void)?
+
     public init(
         client: RuntimeClient,
         toolRegistry: ToolRegistry = ToolRegistry(),
         timelineExtensions: [any TimelineExtension] = [],
-        onAuthExpired: (@MainActor () async -> Void)? = nil
+        onAuthExpired: (@MainActor () async -> Void)? = nil,
+        attentionReadStore: any ConversationAttentionReadStore = UserDefaultsConversationAttentionReadStore.shared,
+        onAttentionEvent: (@MainActor (ConversationAttentionEvent) -> Void)? = nil
     ) {
         self.client = client
         self.toolRegistry = toolRegistry
         self.timelineExtensions = timelineExtensions
         self.onAuthExpired = onAuthExpired
+        self.attentionReadStore = attentionReadStore
+        self.onAttentionEvent = onAttentionEvent
     }
 }

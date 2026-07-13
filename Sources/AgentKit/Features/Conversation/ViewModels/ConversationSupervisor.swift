@@ -12,8 +12,11 @@ public enum ConversationActivityState: String, Sendable, Equatable {
     case queued
     case running
     case waitingForApproval
+    case waitingForClientTool
     case paused
+    case succeeded
     case failed
+    case cancelled
     case idle
 }
 
@@ -38,24 +41,36 @@ public final class ConversationSupervisor {
     public private(set) var controllers: [String: ConversationViewModel] = [:]
     public private(set) var runtimeCapabilities: RuntimeCapabilitySnapshot = .legacy
     public private(set) var runtimeActivities: [String: RuntimeSessionActivity] = [:]
+    public private(set) var unreadTerminals: [String: ConversationTerminalAttention] = [:]
 
     private let client: RuntimeClient
     private let toolRegistry: ToolRegistry
     private let timelineExtensions: [any TimelineExtension]
     private let onAuthExpired: (@MainActor () async -> Void)?
+    private let attentionReadStore: any ConversationAttentionReadStore
+    private let onAttentionEvent: (@MainActor (ConversationAttentionEvent) -> Void)?
     private let turnCoordinator = ConversationTurnCoordinator()
     private let capabilityRegistry = RuntimeCapabilityRegistry()
+    private var selectedSessionID: String?
+    private var knownConversations: [String: ConversationRef] = [:]
+    private var isRefreshingActivity = false
+    @ObservationIgnored private var activityRefreshTask: Task<Void, Never>?
+    @ObservationIgnored private var activityMonitoringTask: Task<Void, Never>?
 
     public init(
         client: RuntimeClient,
         toolRegistry: ToolRegistry,
         timelineExtensions: [any TimelineExtension],
-        onAuthExpired: (@MainActor () async -> Void)?
+        onAuthExpired: (@MainActor () async -> Void)?,
+        attentionReadStore: any ConversationAttentionReadStore = UserDefaultsConversationAttentionReadStore.shared,
+        onAttentionEvent: (@MainActor (ConversationAttentionEvent) -> Void)? = nil
     ) {
         self.client = client
         self.toolRegistry = toolRegistry
         self.timelineExtensions = timelineExtensions
         self.onAuthExpired = onAuthExpired
+        self.attentionReadStore = attentionReadStore
+        self.onAttentionEvent = onAttentionEvent
     }
 
     @discardableResult
@@ -76,7 +91,10 @@ public final class ConversationSupervisor {
             timelineExtensions: timelineExtensions,
             turnCoordinator: turnCoordinator,
             capabilityRegistry: capabilityRegistry,
-            onAuthExpired: onAuthExpired
+            onAuthExpired: onAuthExpired,
+            onActivityInvalidated: { [weak self] in
+                self?.scheduleActivityRefresh()
+            }
         )
         controllers[conversation.id] = controller
         return controller
@@ -87,34 +105,103 @@ public final class ConversationSupervisor {
     }
 
     public func activity(for sessionID: String) -> ConversationActivityState {
+        activity(for: knownConversations[sessionID] ?? controllers[sessionID]?.conversation)
+    }
+
+    /// One presentation state merged from live controller, Runtime attention, and
+    /// finally the persisted ConversationRef lifecycle used during cold start.
+    public func activity(for conversation: ConversationRef?) -> ConversationActivityState {
+        guard let conversation else { return .idle }
+        let sessionID = conversation.id
+
         if let controller = controllers[sessionID] {
             if controller.isLocallyQueued { return .queued }
             if controller.isAwaitingTurnAcceptance { return .connecting }
             if controller.snapshot.pendingApproval != nil || controller.snapshot.pendingPlanApproval != nil {
                 return .waitingForApproval
             }
-            if controller.isConnecting { return .connecting }
+            if controller.isConnecting {
+                if let terminal = unreadTerminals[sessionID],
+                   !isActiveState(runtimeActivities[sessionID]?.state) {
+                    return activity(for: terminal.outcome)
+                }
+                return .connecting
+            }
             switch controller.lifecycleStatus {
             case "accepted", "queued": return .queued
             case "running", "resuming": return .running
             case "paused": return .paused
-            case "failed": return .failed
+            case "done", "failed", "cancelled":
+                guard selectedSessionID != sessionID else { return .idle }
+                if let terminal = unreadTerminals[sessionID] {
+                    return activity(for: terminal.outcome)
+                }
+                if runtimeCapabilities.flags.contains(.sessionAttentionSnapshot),
+                   runtimeActivities[sessionID]?.latestTerminal != nil {
+                    return .idle
+                }
+                switch controller.lifecycleStatus {
+                case "done": return .succeeded
+                case "failed": return .failed
+                default: return .cancelled
+                }
             default: break
             }
         }
-        guard let remote = runtimeActivities[sessionID] else { return .idle }
-        switch remote.state {
-        case "queued": return .queued
+
+        if let remote = runtimeActivities[sessionID] {
+            switch remote.state {
+            case "waiting_approval": return .waitingForApproval
+            case "waiting_client_tool": return .waitingForClientTool
+            case "queued", "accepted": return .queued
+            case "running", "resuming": return .running
+            case "paused": return .paused
+            default: break
+            }
+        }
+
+        if let terminal = unreadTerminals[sessionID] {
+            return activity(for: terminal.outcome)
+        }
+
+        // A retained controller is newer than the list reference. Returning idle
+        // here prevents a stale ConversationRef.failed from reappearing after the
+        // user has viewed a newer terminal result.
+        if controllers[sessionID] != nil { return .idle }
+
+        // With the durable attention contract, a terminal that is not present in
+        // unreadTerminals has already been viewed or was migration baseline data.
+        if runtimeCapabilities.flags.contains(.sessionAttentionSnapshot),
+           runtimeActivities[sessionID] != nil {
+            return .idle
+        }
+
+        switch conversation.turnStatus {
         case "running", "resuming": return .running
-        case "waiting_approval", "waiting_client_tool": return .waitingForApproval
         case "paused": return .paused
         case "failed": return .failed
         default: return .idle
         }
     }
 
+    public func setSelectedSessionID(_ sessionID: String?) {
+        selectedSessionID = sessionID
+        guard let sessionID else { return }
+        markTerminalSeen(sessionID: sessionID)
+    }
+
+    public func markTerminalSeen(sessionID: String) {
+        guard let terminal = runtimeActivities[sessionID]?.latestTerminal else {
+            unreadTerminals.removeValue(forKey: sessionID)
+            return
+        }
+        attentionReadStore.setLastSeenTerminalSequence(terminal.sequence, for: sessionID)
+        unreadTerminals.removeValue(forKey: sessionID)
+    }
+
     /// Refresh runtime-wide truth. Unsupported/404 is an intentional legacy downgrade.
     public func refreshRuntimeState(conversations: [ConversationRef]) async {
+        knownConversations = Dictionary(uniqueKeysWithValues: conversations.map { ($0.id, $0) })
         let capabilitySnapshot: RuntimeCapabilitySnapshot
         do {
             capabilitySnapshot = try await client.runtimeCapabilities()
@@ -126,27 +213,155 @@ public final class ConversationSupervisor {
         }
         runtimeCapabilities = capabilitySnapshot
         await capabilityRegistry.update(capabilitySnapshot)
-
-        // Code-Agent introduced the snapshot endpoint before enabling the richer
-        // activity_snapshot_v1 guarantee. Probe it whenever capability discovery
-        // itself succeeds; a missing endpoint remains an empty legacy downgrade.
-        if let activity = try? await client.activitySnapshot() {
-            runtimeActivities = Dictionary(uniqueKeysWithValues: activity.sessions.map { ($0.sessionID, $0) })
-        } else {
-            runtimeActivities = [:]
-        }
-
-        // Reattach every live session, not only the selected one, so background status,
-        // approvals and terminal events continue to flow after app restoration.
-        for conversation in conversations where shouldRetainLiveChannel(sessionID: conversation.id) {
-            let controller = controller(for: conversation)
-            await controller.connect(to: conversation)
-        }
+        await refreshActivitySnapshot()
+        startActivityMonitoring()
     }
 
     private func shouldRetainLiveChannel(sessionID: String) -> Bool {
         guard let state = runtimeActivities[sessionID]?.state else { return false }
         return ["queued", "running", "resuming", "waiting_approval", "waiting_client_tool", "paused"].contains(state)
+    }
+
+    private func refreshActivitySnapshot() async {
+        guard !isRefreshingActivity else { return }
+        isRefreshingActivity = true
+        defer { isRefreshingActivity = false }
+
+        guard let activity = try? await client.activitySnapshot() else { return }
+        runtimeActivities = Dictionary(uniqueKeysWithValues: activity.sessions.map { ($0.sessionID, $0) })
+        reconcileAttention(with: activity)
+
+        // Reattach every live session, not only the selected one, so background
+        // approvals and terminal events continue to flow after app restoration.
+        for conversation in knownConversations.values where shouldRetainLiveChannel(sessionID: conversation.id) {
+            let controller = controller(for: conversation)
+            await controller.connect(to: conversation)
+        }
+    }
+
+    private func scheduleActivityRefresh() {
+        activityRefreshTask?.cancel()
+        activityRefreshTask = Task { [weak self] in
+            try? await Task.sleep(for: .milliseconds(100))
+            guard !Task.isCancelled, let self else { return }
+            await self.refreshActivitySnapshot()
+        }
+    }
+
+    private func startActivityMonitoring() {
+        guard activityMonitoringTask == nil else { return }
+        activityMonitoringTask = Task { [weak self] in
+            while !Task.isCancelled {
+                guard let self else { return }
+                let hasLiveWork = self.runtimeActivities.values.contains {
+                    ["accepted", "queued", "running", "resuming", "waiting_approval", "waiting_client_tool", "paused"].contains($0.state)
+                }
+                try? await Task.sleep(for: hasLiveWork ? .seconds(3) : .seconds(20))
+                guard !Task.isCancelled else { return }
+                await self.refreshActivitySnapshot()
+            }
+        }
+    }
+
+    private func reconcileAttention(with snapshot: RuntimeActivitySnapshot) {
+        guard runtimeCapabilities.flags.contains(.sessionAttentionSnapshot) else {
+            unreadTerminals = [:]
+            return
+        }
+
+        if !attentionReadStore.hasEstablishedBaseline {
+            // Upgrade safety: existing historical terminals become the initial
+            // read baseline instead of turning every old conversation red.
+            for conversation in knownConversations.values {
+                let terminalSequence = runtimeActivities[conversation.id]?.latestTerminal?.sequence ?? 0
+                attentionReadStore.setLastSeenTerminalSequence(terminalSequence, for: conversation.id)
+                attentionReadStore.setLastNotifiedTerminalSequence(terminalSequence, for: conversation.id)
+            }
+            attentionReadStore.establishBaseline()
+            unreadTerminals = [:]
+        }
+
+        let knownIDs = Set(knownConversations.keys)
+        unreadTerminals = unreadTerminals.filter { knownIDs.contains($0.key) }
+
+        for activity in snapshot.sessions {
+            guard knownIDs.contains(activity.sessionID) else { continue }
+            let sessionID = activity.sessionID
+
+            // A session first observed after the migration baseline is new work.
+            if attentionReadStore.lastSeenTerminalSequence(for: sessionID) == nil {
+                attentionReadStore.setLastSeenTerminalSequence(0, for: sessionID)
+                attentionReadStore.setLastNotifiedTerminalSequence(0, for: sessionID)
+            }
+
+            if activity.pendingApprovalCount ?? 0 > 0, activity.lastSequence ?? 0 > 0 {
+                let sequence = activity.lastSequence ?? 0
+                let notified = attentionReadStore.lastNotifiedApprovalSequence(for: sessionID) ?? 0
+                if sequence > notified {
+                    attentionReadStore.setLastNotifiedApprovalSequence(sequence, for: sessionID)
+                    if selectedSessionID != sessionID {
+                        onAttentionEvent?(.approvalRequired(
+                            sessionID: sessionID,
+                            turnID: activity.effectiveActiveTurnID,
+                            pendingCount: activity.pendingApprovalCount ?? 0,
+                            sequence: sequence
+                        ))
+                    }
+                }
+            }
+
+            guard let terminal = activity.latestTerminal,
+                  terminal.sequence > 0,
+                  let outcome = terminalOutcome(for: terminal.kind)
+            else { continue }
+
+            let attention = ConversationTerminalAttention(
+                sessionID: sessionID,
+                turnID: terminal.turnID,
+                outcome: outcome,
+                sequence: terminal.sequence,
+                occurredAt: terminal.at
+            )
+
+            if selectedSessionID == sessionID {
+                attentionReadStore.setLastSeenTerminalSequence(terminal.sequence, for: sessionID)
+                unreadTerminals.removeValue(forKey: sessionID)
+            } else if terminal.sequence > (attentionReadStore.lastSeenTerminalSequence(for: sessionID) ?? 0) {
+                unreadTerminals[sessionID] = attention
+            } else {
+                unreadTerminals.removeValue(forKey: sessionID)
+            }
+
+            let notified = attentionReadStore.lastNotifiedTerminalSequence(for: sessionID) ?? 0
+            if terminal.sequence > notified {
+                attentionReadStore.setLastNotifiedTerminalSequence(terminal.sequence, for: sessionID)
+                if selectedSessionID != sessionID {
+                    onAttentionEvent?(.turnCompleted(attention))
+                }
+            }
+        }
+    }
+
+    private func terminalOutcome(for kind: String) -> ConversationTerminalOutcome? {
+        switch kind {
+        case "turn_finished": return .succeeded
+        case "turn_failed": return .failed
+        case "turn_cancelled": return .cancelled
+        default: return nil
+        }
+    }
+
+    private func activity(for outcome: ConversationTerminalOutcome) -> ConversationActivityState {
+        switch outcome {
+        case .succeeded: return .succeeded
+        case .failed: return .failed
+        case .cancelled: return .cancelled
+        }
+    }
+
+    private func isActiveState(_ state: String?) -> Bool {
+        guard let state else { return false }
+        return ["accepted", "queued", "running", "resuming", "waiting_approval", "waiting_client_tool", "paused"].contains(state)
     }
 
     public var pendingApprovals: [PendingConversationApproval] {

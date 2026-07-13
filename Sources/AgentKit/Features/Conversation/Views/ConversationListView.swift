@@ -259,7 +259,7 @@ public struct ConversationListView: View {
             ForEach(group.conversations, id: \.uiID) { ref in
                 ConversationRow(
                     ref: ref,
-                    activity: store.supervisor.activity(for: ref.id)
+                    activity: store.supervisor.activity(for: ref)
                 )
                     .id("\(ref.uiID)-\(listRevision)")
                     .tag(ref)
@@ -288,8 +288,8 @@ public struct ConversationListView: View {
         }
     }
 
-    /// 首次加载时默认展开所有项目；之后只为新出现的项目增加默认展开状态，
-    /// 不会因为刷新列表而覆盖用户刚刚收起的项目。
+    /// 首次加载保持紧凑折叠；之后只为新出现的项目增加默认展开状态，
+    /// 不会因为刷新列表而覆盖用户手动控制的项目。
     private func syncExpandedWorkspaceIDs() {
         let currentIDs = Set(conversationGroups.map(\.id))
         guard !currentIDs.isEmpty else { return }
@@ -370,12 +370,18 @@ private struct ConversationRow: View {
                 statusLabel("运行中", systemImage: "circle.fill", color: .green)
             case .waitingForApproval:
                 statusLabel("待审批", systemImage: "hand.raised.fill", color: .orange)
+            case .waitingForClientTool:
+                statusLabel("等待客户端", systemImage: "desktopcomputer", color: .secondary)
             case .paused:
                 Label("已暂停", systemImage: "pause.circle.fill")
                     .font(.caption2.weight(.medium))
                     .foregroundStyle(.orange)
+            case .succeeded:
+                statusLabel("已完成", systemImage: "checkmark.circle.fill", color: .green)
             case .failed:
                 statusLabel("失败", systemImage: "exclamationmark.circle.fill", color: .red)
+            case .cancelled:
+                statusLabel("已取消", systemImage: "xmark.circle.fill", color: .secondary)
             case .idle where ref.isPaused:
                 Label("已暂停", systemImage: "pause.circle.fill")
                     .font(.caption2.weight(.medium))

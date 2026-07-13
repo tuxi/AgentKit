@@ -187,6 +187,7 @@ final class LifecycleProtocolTests: XCTestCase {
             "multi_session_execution_v1": true,
             "session_scoped_client_tools_v1": true,
             "activity_snapshot_v1": true,
+            "session_attention_snapshot_v1": true,
             "workspace_execution_policy_v1": true
           },
           "limits": { "max_concurrent_turns": 4, "max_connected_sessions": 16 }
@@ -197,25 +198,37 @@ final class LifecycleProtocolTests: XCTestCase {
             from: Data(capabilityJSON.utf8)
         )
         XCTAssertTrue(capabilities.allowsMultiSessionExecution)
+        XCTAssertTrue(capabilities.flags.contains(.sessionAttentionSnapshot))
         XCTAssertEqual(capabilities.limits?.maxConcurrentTurns, 4)
 
         let activityJSON = """
         {
+          "generated_at": "2026-07-13T06:00:01Z",
           "sessions": [{
             "session_id": "session_a",
             "turn_id": "turn_3",
+            "active_turn_id": "turn_3",
             "state": "waiting_approval",
             "last_sequence": 183,
             "pending_approval_count": 1,
             "pending_client_tool_count": 0,
-            "queue_position": null,
+            "queue_position": 0,
+            "latest_terminal": {
+              "turn_id": "turn_2",
+              "kind": "turn_finished",
+              "sequence": 170,
+              "at": "2026-07-13T05:59:00Z"
+            },
             "updated_at": "2026-07-13T06:00:00Z"
           }]
         }
         """
         let activity = try JSONDecoder().decode(RuntimeActivitySnapshot.self, from: Data(activityJSON.utf8))
         XCTAssertEqual(activity.sessions.first?.sessionID, "session_a")
+        XCTAssertEqual(activity.generatedAt, "2026-07-13T06:00:01Z")
+        XCTAssertEqual(activity.sessions.first?.effectiveActiveTurnID, "turn_3")
         XCTAssertEqual(activity.sessions.first?.pendingApprovalCount, 1)
+        XCTAssertEqual(activity.sessions.first?.latestTerminal?.sequence, 170)
     }
 
     func testCurrentCodeAgentRuntimeCapabilityAndActivityFixturesDecode() throws {

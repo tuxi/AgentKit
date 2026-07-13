@@ -244,6 +244,169 @@ final class MultiConversationTests: XCTestCase {
         XCTAssertFalse(client.channel(for: "done").isConnected)
         XCTAssertFalse(store.supervisor.runtimeCapabilities.allowsMultiSessionExecution)
     }
+
+    @MainActor
+    func testConversationRefLifecycleIsUsedBeforeControllerAttachment() {
+        let store = WorkspaceStore(
+            client: MultiSessionRuntimeClient(),
+            attentionReadStore: InMemoryAttentionReadStore()
+        )
+
+        XCTAssertEqual(
+            store.supervisor.activity(for: ConversationRef(
+                id: "failed",
+                workspacePath: "",
+                turnStatus: "failed"
+            )),
+            .failed
+        )
+        XCTAssertEqual(
+            store.supervisor.activity(for: ConversationRef(
+                id: "running",
+                workspacePath: "",
+                turnStatus: "running"
+            )),
+            .running
+        )
+    }
+
+    @MainActor
+    func testAttentionSnapshotBaselinesHistoryThenSurfacesAndReadsNewTerminal() async {
+        let capabilities = attentionCapabilities()
+        let readStore = InMemoryAttentionReadStore()
+        let client = MultiSessionRuntimeClient(
+            capabilitySnapshot: capabilities,
+            activity: RuntimeActivitySnapshot(sessions: [
+                terminalActivity(sessionID: "background", turnID: "old", sequence: 10)
+            ])
+        )
+        var events: [ConversationAttentionEvent] = []
+        let store = WorkspaceStore(
+            client: client,
+            attentionReadStore: readStore,
+            onAttentionEvent: { events.append($0) }
+        )
+        let conversation = ConversationRef(
+            id: "background",
+            workspacePath: "/tmp/background",
+            turnStatus: "failed"
+        )
+
+        await store.supervisor.refreshRuntimeState(conversations: [conversation])
+        XCTAssertEqual(store.supervisor.activity(for: conversation), .idle)
+        XCTAssertTrue(store.supervisor.unreadTerminals.isEmpty)
+        XCTAssertTrue(events.isEmpty)
+        XCTAssertEqual(readStore.lastSeenTerminalSequence(for: "background"), 10)
+
+        client.setActivity(RuntimeActivitySnapshot(sessions: [
+            terminalActivity(sessionID: "background", turnID: "new", sequence: 20)
+        ]))
+        await store.supervisor.refreshRuntimeState(conversations: [conversation])
+
+        XCTAssertEqual(store.supervisor.activity(for: conversation), .succeeded)
+        XCTAssertEqual(store.supervisor.unreadTerminals["background"]?.turnID, "new")
+        XCTAssertEqual(events, [.turnCompleted(ConversationTerminalAttention(
+            sessionID: "background",
+            turnID: "new",
+            outcome: .succeeded,
+            sequence: 20,
+            occurredAt: "2026-07-13T12:00:00Z"
+        ))])
+
+        store.selectedConversation = conversation
+        XCTAssertEqual(store.supervisor.activity(for: conversation), .idle)
+        XCTAssertNil(store.supervisor.unreadTerminals["background"])
+        XCTAssertEqual(readStore.lastSeenTerminalSequence(for: "background"), 20)
+
+        store.selectedConversation = nil
+        XCTAssertEqual(store.supervisor.activity(for: conversation), .idle)
+
+        client.setActivity(RuntimeActivitySnapshot(sessions: [
+            terminalActivity(
+                sessionID: "background",
+                turnID: "failed-turn",
+                sequence: 30,
+                kind: "turn_failed"
+            )
+        ]))
+        await store.supervisor.refreshRuntimeState(conversations: [conversation])
+        XCTAssertEqual(store.supervisor.activity(for: conversation), .failed)
+        XCTAssertEqual(store.supervisor.unreadTerminals["background"]?.outcome, .failed)
+        XCTAssertEqual(events.last, .turnCompleted(ConversationTerminalAttention(
+            sessionID: "background",
+            turnID: "failed-turn",
+            outcome: .failed,
+            sequence: 30,
+            occurredAt: "2026-07-13T12:00:00Z"
+        )))
+    }
+
+    @MainActor
+    func testApprovalAttentionReattachesAndNotifiesOnlyOnce() async {
+        let readStore = InMemoryAttentionReadStore()
+        readStore.establishBaseline()
+        let client = MultiSessionRuntimeClient(
+            capabilitySnapshot: attentionCapabilities(),
+            activity: RuntimeActivitySnapshot(sessions: [
+                RuntimeSessionActivity(
+                    sessionID: "approval",
+                    turnID: "turn_approval",
+                    activeTurnID: "turn_approval",
+                    state: "waiting_approval",
+                    lastSequence: 42,
+                    pendingApprovalCount: 1
+                )
+            ])
+        )
+        var events: [ConversationAttentionEvent] = []
+        let store = WorkspaceStore(
+            client: client,
+            attentionReadStore: readStore,
+            onAttentionEvent: { events.append($0) }
+        )
+        let conversation = ConversationRef(id: "approval", workspacePath: "/tmp/approval")
+
+        await store.supervisor.refreshRuntimeState(conversations: [conversation])
+        await store.supervisor.refreshRuntimeState(conversations: [conversation])
+
+        XCTAssertEqual(store.supervisor.activity(for: conversation), .waitingForApproval)
+        XCTAssertTrue(client.channel(for: "approval").isConnected)
+        XCTAssertEqual(events, [.approvalRequired(
+            sessionID: "approval",
+            turnID: "turn_approval",
+            pendingCount: 1,
+            sequence: 42
+        )])
+    }
+}
+
+private func attentionCapabilities() -> RuntimeCapabilitySnapshot {
+    RuntimeCapabilitySnapshot(capabilities: [
+        "multi_session_execution_v1": true,
+        "session_scoped_client_tools_v1": true,
+        "activity_snapshot_v1": true,
+        "session_attention_snapshot_v1": true,
+        "workspace_execution_policy_v1": true,
+    ])
+}
+
+private func terminalActivity(
+    sessionID: String,
+    turnID: String,
+    sequence: Int64,
+    kind: String = "turn_finished"
+) -> RuntimeSessionActivity {
+    RuntimeSessionActivity(
+        sessionID: sessionID,
+        state: "idle",
+        lastSequence: sequence,
+        latestTerminal: RuntimeTerminalActivity(
+            turnID: turnID,
+            kind: kind,
+            sequence: sequence,
+            at: "2026-07-13T12:00:00Z"
+        )
+    )
 }
 
 private final class MultiSessionChannelDouble: RuntimeSessionChannel, @unchecked Sendable {
@@ -290,7 +453,7 @@ private final class MultiSessionRuntimeClient: RuntimeClient, @unchecked Sendabl
     private var channels: [String: MultiSessionChannelDouble] = [:]
     private let connectDelays: [String: Duration]
     private let capabilitySnapshot: RuntimeCapabilitySnapshot?
-    private let activity: RuntimeActivitySnapshot?
+    private var activity: RuntimeActivitySnapshot?
     private(set) var capabilitySnapshotRequestCount = 0
     private(set) var activitySnapshotRequestCount = 0
 
@@ -330,6 +493,10 @@ private final class MultiSessionRuntimeClient: RuntimeClient, @unchecked Sendabl
         return activity
     }
 
+    func setActivity(_ activity: RuntimeActivitySnapshot) {
+        self.activity = activity
+    }
+
     func createConversation(workspacePath: String) async throws -> ConversationRef {
         ConversationRef(id: UUID().uuidString, workspacePath: workspacePath)
     }
@@ -358,4 +525,19 @@ private final class MultiSessionRuntimeClient: RuntimeClient, @unchecked Sendabl
 
 private enum TestError: Error {
     case unavailable
+}
+
+private final class InMemoryAttentionReadStore: ConversationAttentionReadStore, @unchecked Sendable {
+    private(set) var hasEstablishedBaseline = false
+    private var seen: [String: Int64] = [:]
+    private var notifiedTerminal: [String: Int64] = [:]
+    private var notifiedApproval: [String: Int64] = [:]
+
+    func establishBaseline() { hasEstablishedBaseline = true }
+    func lastSeenTerminalSequence(for sessionID: String) -> Int64? { seen[sessionID] }
+    func setLastSeenTerminalSequence(_ sequence: Int64, for sessionID: String) { seen[sessionID] = sequence }
+    func lastNotifiedTerminalSequence(for sessionID: String) -> Int64? { notifiedTerminal[sessionID] }
+    func setLastNotifiedTerminalSequence(_ sequence: Int64, for sessionID: String) { notifiedTerminal[sessionID] = sequence }
+    func lastNotifiedApprovalSequence(for sessionID: String) -> Int64? { notifiedApproval[sessionID] }
+    func setLastNotifiedApprovalSequence(_ sequence: Int64, for sessionID: String) { notifiedApproval[sessionID] = sequence }
 }
