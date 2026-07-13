@@ -217,6 +217,47 @@ final class LifecycleProtocolTests: XCTestCase {
         XCTAssertEqual(activity.sessions.first?.pendingApprovalCount, 1)
     }
 
+    func testCurrentCodeAgentRuntimeCapabilityAndActivityFixturesDecode() throws {
+        let capabilityJSON = """
+        {
+          "capabilities": {
+            "multi_session_execution_v1": false,
+            "session_scoped_client_tools_v1": false,
+            "activity_snapshot_v1": false,
+            "workspace_execution_policy_v1": false,
+            "max_concurrent_turns": 0,
+            "max_connected_sessions": 0
+          }
+        }
+        """
+        let capabilities = try JSONDecoder().decode(
+            RuntimeCapabilitySnapshot.self,
+            from: Data(capabilityJSON.utf8)
+        )
+        XCTAssertFalse(capabilities.allowsMultiSessionExecution)
+        XCTAssertEqual(capabilities.schema, "runtime-capabilities/v1")
+        XCTAssertEqual(capabilities.protocolVersion, 1)
+        XCTAssertEqual(capabilities.limits?.maxConcurrentTurns, 0)
+
+        let activityJSON = """
+        {
+          "sessions": [{
+            "session_id": "session_a",
+            "state": "running",
+            "updated_at": "2026-07-13T08:00:00Z"
+          }]
+        }
+        """
+        let activity = try JSONDecoder().decode(
+            RuntimeActivitySnapshot.self,
+            from: Data(activityJSON.utf8)
+        )
+        XCTAssertEqual(activity.sessions.first?.state, "running")
+        XCTAssertNil(activity.sessions.first?.turnID)
+        XCTAssertNil(activity.sessions.first?.pendingApprovalCount)
+        XCTAssertNil(activity.sessions.first?.pendingClientToolCount)
+    }
+
     private func decodeEvent(_ json: String) throws -> AgentEvent {
         let wire = try JSONDecoder().decode(WireFrame.self, from: Data(json.utf8))
         guard let event = AgentEvent.from(wire: wire) else {

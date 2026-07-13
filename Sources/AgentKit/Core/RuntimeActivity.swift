@@ -33,6 +33,14 @@ public struct RuntimeCapabilitySnapshot: Codable, Sendable, Equatable {
         case protocolVersion = "protocol_version"
     }
 
+    private struct CapabilityKey: CodingKey {
+        let stringValue: String
+        let intValue: Int? = nil
+
+        init?(stringValue: String) { self.stringValue = stringValue }
+        init?(intValue: Int) { return nil }
+    }
+
     public init(
         schema: String = "runtime-capabilities/v1",
         protocolVersion: Int = 1,
@@ -43,6 +51,44 @@ public struct RuntimeCapabilitySnapshot: Codable, Sendable, Equatable {
         self.protocolVersion = protocolVersion
         self.capabilities = capabilities
         self.limits = limits
+    }
+
+    /// Accept both the versioned design shape and Code-Agent's initial compact
+    /// shape, where schema metadata is omitted and limits live beside flags.
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        schema = try container.decodeIfPresent(String.self, forKey: .schema)
+            ?? "runtime-capabilities/v1"
+        protocolVersion = try container.decodeIfPresent(Int.self, forKey: .protocolVersion) ?? 1
+
+        let values = try container.nestedContainer(
+            keyedBy: CapabilityKey.self,
+            forKey: .capabilities
+        )
+        var decodedCapabilities: [String: Bool] = [:]
+        for key in values.allKeys {
+            if let value = try? values.decode(Bool.self, forKey: key) {
+                decodedCapabilities[key.stringValue] = value
+            }
+        }
+        capabilities = decodedCapabilities
+
+        if let explicitLimits = try container.decodeIfPresent(RuntimeLimits.self, forKey: .limits) {
+            limits = explicitLimits
+        } else {
+            let concurrentKey = CapabilityKey(stringValue: "max_concurrent_turns")!
+            let connectedKey = CapabilityKey(stringValue: "max_connected_sessions")!
+            let maxConcurrentTurns = try values.decodeIfPresent(Int.self, forKey: concurrentKey)
+            let maxConnectedSessions = try values.decodeIfPresent(Int.self, forKey: connectedKey)
+            if maxConcurrentTurns != nil || maxConnectedSessions != nil {
+                limits = RuntimeLimits(
+                    maxConcurrentTurns: maxConcurrentTurns,
+                    maxConnectedSessions: maxConnectedSessions
+                )
+            } else {
+                limits = nil
+            }
+        }
     }
 
     public var flags: AgentCapabilityFlags {
@@ -70,8 +116,10 @@ public struct RuntimeSessionActivity: Codable, Sendable, Equatable, Identifiable
     public let turnID: String?
     public let state: String
     public let lastSequence: Int?
-    public let pendingApprovalCount: Int
-    public let pendingClientToolCount: Int
+    /// Nil means the Runtime did not publish this broker detail. It must not be
+    /// interpreted as a known zero while the broker contract is still disabled.
+    public let pendingApprovalCount: Int?
+    public let pendingClientToolCount: Int?
     public let queuePosition: Int?
     public let updatedAt: String?
 
@@ -93,8 +141,8 @@ public struct RuntimeSessionActivity: Codable, Sendable, Equatable, Identifiable
         turnID: String? = nil,
         state: String,
         lastSequence: Int? = nil,
-        pendingApprovalCount: Int = 0,
-        pendingClientToolCount: Int = 0,
+        pendingApprovalCount: Int? = nil,
+        pendingClientToolCount: Int? = nil,
         queuePosition: Int? = nil,
         updatedAt: String? = nil
     ) {
@@ -126,4 +174,3 @@ public actor RuntimeCapabilityRegistry {
     public func update(_ snapshot: RuntimeCapabilitySnapshot) { self.snapshot = snapshot }
     public func current() -> RuntimeCapabilitySnapshot { snapshot }
 }
-

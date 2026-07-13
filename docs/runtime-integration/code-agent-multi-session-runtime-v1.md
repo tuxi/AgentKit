@@ -297,34 +297,32 @@ remote approver 已接近目标，但需纳入统一 activity/control 契约：
 
 ## 13. 能力发现
 
-能力的权威 wire 形态固定为：
+能力的权威入口固定为：
 
 ```text
 GET /v1/runtime/capabilities
 ```
 
-返回 Runtime 标准 envelope，`data` 为：
+Code-Agent R0 返回 Runtime 标准 envelope，当前 `data` 的稳定形态为：
 
 ```json
 {
-  "schema": "runtime-capabilities/v1",
-  "protocol_version": 1,
   "capabilities": {
-    "multi_session_execution_v1": true,
-    "session_scoped_client_tools_v1": true,
-    "activity_snapshot_v1": true,
-    "workspace_execution_policy_v1": true
-  },
-  "limits": {
-    "max_concurrent_turns": 4,
-    "max_connected_sessions": 16
+    "multi_session_execution_v1": false,
+    "session_scoped_client_tools_v1": false,
+    "activity_snapshot_v1": false,
+    "workspace_execution_policy_v1": false,
+    "max_concurrent_turns": 0,
+    "max_connected_sessions": 0
   }
 }
 ```
 
 现有 WebSocket `hello.capabilities: [String]` 继续保留，作为该连接可用的 transport feature 列表；它不是 Runtime 全局调度能力的权威来源。AgentKit 只有在 HTTP capability snapshot 声明并发能力，且 session hello 没有否定所需传输能力时才开放并行。旧 Runtime 返回 404 时，客户端降级为单执行模式。
 
-`limits` 缺失表示使用客户端保守值，不代表无限制。`schema` 未识别时必须降级，不能按字段猜测。
+AgentKit 解码器也接受后续版本化扩展：顶层增加 `schema/protocol_version`，并把限制移入 `limits`。限制缺失表示使用客户端保守值，不代表无限制；显式 `schema` 未识别时必须降级，不能按字段猜测。
+
+`GET /v1/activity` 在 R0 已提供可靠的最小活动集合，即使 `activity_snapshot_v1=false`，AgentKit 也会在 capability endpoint 成功后尝试读取它。当前每项只保证 `session_id/state/updated_at`；未返回的 pending 数量、turn、sequence 和 queue position 表示未知。`activity_snapshot_v1` 仅在 Runtime 能保证完整 broker/scheduler 快照后开启。
 
 声明 `multi_session_execution_v1=true` 前必须完成：
 

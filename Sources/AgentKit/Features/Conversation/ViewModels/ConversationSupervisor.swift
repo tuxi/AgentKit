@@ -115,12 +115,22 @@ public final class ConversationSupervisor {
 
     /// Refresh runtime-wide truth. Unsupported/404 is an intentional legacy downgrade.
     public func refreshRuntimeState(conversations: [ConversationRef]) async {
-        let capabilitySnapshot = (try? await client.runtimeCapabilities()) ?? .legacy
+        let capabilitySnapshot: RuntimeCapabilitySnapshot
+        do {
+            capabilitySnapshot = try await client.runtimeCapabilities()
+        } catch {
+            runtimeCapabilities = .legacy
+            runtimeActivities = [:]
+            await capabilityRegistry.update(.legacy)
+            return
+        }
         runtimeCapabilities = capabilitySnapshot
         await capabilityRegistry.update(capabilitySnapshot)
 
-        if capabilitySnapshot.flags.contains(.activitySnapshot),
-           let activity = try? await client.activitySnapshot() {
+        // Code-Agent introduced the snapshot endpoint before enabling the richer
+        // activity_snapshot_v1 guarantee. Probe it whenever capability discovery
+        // itself succeeds; a missing endpoint remains an empty legacy downgrade.
+        if let activity = try? await client.activitySnapshot() {
             runtimeActivities = Dictionary(uniqueKeysWithValues: activity.sessions.map { ($0.sessionID, $0) })
         } else {
             runtimeActivities = [:]

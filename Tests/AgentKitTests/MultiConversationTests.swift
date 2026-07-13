@@ -160,6 +160,38 @@ final class MultiConversationTests: XCTestCase {
         XCTAssertEqual(store.supervisor.activity(for: "b"), .running)
         XCTAssertTrue(store.supervisor.runtimeCapabilities.allowsMultiSessionExecution)
     }
+
+    @MainActor
+    func testConservativeRuntimeStillRestoresMinimalActivitySnapshot() async {
+        let capabilities = RuntimeCapabilitySnapshot(capabilities: [
+            "multi_session_execution_v1": false,
+            "session_scoped_client_tools_v1": false,
+            "activity_snapshot_v1": false,
+            "workspace_execution_policy_v1": false,
+        ])
+        let client = MultiSessionRuntimeClient(
+            capabilitySnapshot: capabilities,
+            activity: RuntimeActivitySnapshot(sessions: [
+                RuntimeSessionActivity(sessionID: "running", state: "running"),
+                RuntimeSessionActivity(sessionID: "resuming", state: "resuming"),
+                RuntimeSessionActivity(sessionID: "paused", state: "paused"),
+                RuntimeSessionActivity(sessionID: "done", state: "done"),
+            ])
+        )
+        let store = WorkspaceStore(client: client)
+        let conversations = ["running", "resuming", "paused", "done"].map {
+            ConversationRef(id: $0, workspacePath: "")
+        }
+
+        await store.supervisor.refreshRuntimeState(conversations: conversations)
+
+        XCTAssertEqual(client.activitySnapshotRequestCount, 1)
+        XCTAssertTrue(client.channel(for: "running").isConnected)
+        XCTAssertTrue(client.channel(for: "resuming").isConnected)
+        XCTAssertTrue(client.channel(for: "paused").isConnected)
+        XCTAssertFalse(client.channel(for: "done").isConnected)
+        XCTAssertFalse(store.supervisor.runtimeCapabilities.allowsMultiSessionExecution)
+    }
 }
 
 private final class MultiSessionChannelDouble: RuntimeSessionChannel, @unchecked Sendable {
@@ -205,6 +237,7 @@ private final class MultiSessionRuntimeClient: RuntimeClient, @unchecked Sendabl
     private let connectDelays: [String: Duration]
     private let capabilitySnapshot: RuntimeCapabilitySnapshot?
     private let activity: RuntimeActivitySnapshot?
+    private(set) var activitySnapshotRequestCount = 0
 
     init(
         connectDelays: [String: Duration] = [:],
@@ -236,6 +269,7 @@ private final class MultiSessionRuntimeClient: RuntimeClient, @unchecked Sendabl
     }
 
     func activitySnapshot() async throws -> RuntimeActivitySnapshot {
+        activitySnapshotRequestCount += 1
         guard let activity else { throw TestError.unavailable }
         return activity
     }

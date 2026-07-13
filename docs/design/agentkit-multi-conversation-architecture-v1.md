@@ -268,22 +268,26 @@ sessionID + turnID + requestID + requestKind + summary + createdAt
 
 ## 11. Runtime 能力握手
 
-AgentKit 不应仅根据版本号猜测并发安全性。全局能力通过已定稿的 `GET /v1/runtime/capabilities` 获取；WebSocket hello 的字符串列表只描述当前连接的 transport feature。Runtime 应返回明确能力：
+AgentKit 不应仅根据版本号猜测并发安全性。全局能力通过 `GET /v1/runtime/capabilities` 获取；WebSocket hello 的字符串列表只描述当前连接的 transport feature。
+
+Code-Agent R0 已上线的标准 envelope 中，`data` 使用紧凑结构，布尔能力和限制同处 `capabilities`：
 
 ```json
 {
-  "schema": "runtime-capabilities/v1",
-  "protocol_version": 1,
   "capabilities": {
-    "multi_session_execution_v1": true,
-    "session_scoped_client_tools_v1": true,
-    "activity_snapshot_v1": true,
-    "workspace_execution_policy_v1": true
+    "multi_session_execution_v1": false,
+    "session_scoped_client_tools_v1": false,
+    "activity_snapshot_v1": false,
+    "workspace_execution_policy_v1": false,
+    "max_concurrent_turns": 0,
+    "max_connected_sessions": 0
   }
 }
 ```
 
-endpoint 返回 404、schema 不识别、所需字段缺失或 HTTP/hello 互相冲突时，一律降级为单执行模式。
+AgentKit 同时兼容后续增加 `schema/protocol_version`、把限制移入 `limits` 的版本化扩展。endpoint 返回 404、所需字段缺失、未知显式 schema 或 HTTP/hello 互相冲突时，一律降级为单执行模式。不能因为 endpoint 存在就推断并发安全。
+
+R0 的 `/v1/activity` 已能可靠返回 `running/resuming/paused` 的最小快照，因此 capability endpoint 可用时 AgentKit 会探测 activity endpoint，即使 `activity_snapshot_v1` 尚未开启。该 flag 开启前，缺失的 `turn_id`、序号、pending 数量和队列位置都表示“未知”，不得解释为零。
 
 启用跨会话同时运行的最低门槛：
 
