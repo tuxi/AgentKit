@@ -135,6 +135,35 @@ final class MultiConversationTests: XCTestCase {
     }
 
     @MainActor
+    func testTurnDispatchRefreshesCapabilitiesAfterRuntimeRestart() async throws {
+        let capabilities = RuntimeCapabilitySnapshot(capabilities: [
+            "multi_session_execution_v1": true,
+            "session_scoped_client_tools_v1": true,
+            "activity_snapshot_v1": true,
+            "workspace_execution_policy_v1": true,
+        ])
+        let client = MultiSessionRuntimeClient(capabilitySnapshot: capabilities)
+        let store = WorkspaceStore(client: client)
+        let a = ConversationRef(id: "a", workspacePath: "/tmp/a")
+        let b = ConversationRef(id: "b", workspacePath: "/tmp/b")
+
+        store.selectedConversation = a
+        try await Task.sleep(for: .milliseconds(25))
+        let controllerA = try XCTUnwrap(store.activeConversationViewModel)
+        await controllerA.send(input: .text("a"))
+
+        store.selectedConversation = b
+        try await Task.sleep(for: .milliseconds(25))
+        let controllerB = try XCTUnwrap(store.activeConversationViewModel)
+        await controllerB.send(input: .text("b"))
+        try await Task.sleep(for: .milliseconds(100))
+
+        XCTAssertEqual(client.channel(for: "a").sentInputs.count, 1)
+        XCTAssertEqual(client.channel(for: "b").sentInputs.count, 1)
+        XCTAssertGreaterThanOrEqual(client.capabilitySnapshotRequestCount, 2)
+    }
+
+    @MainActor
     func testActivitySnapshotReattachesBackgroundRunningSession() async {
         let capabilities = RuntimeCapabilitySnapshot(capabilities: [
             "multi_session_execution_v1": true,
@@ -200,6 +229,7 @@ private final class MultiSessionChannelDouble: RuntimeSessionChannel, @unchecked
     var isConnected = false
     var disconnectCount = 0
     var cancelCount = 0
+    var sentInputs: [AgentInput] = []
     var capabilitiesValue: AgentCapabilityFlags = .default
     private var continuation: AsyncStream<AgentEvent>.Continuation?
 
@@ -218,7 +248,7 @@ private final class MultiSessionChannelDouble: RuntimeSessionChannel, @unchecked
         }
     }
 
-    func send(input: AgentInput) async {}
+    func send(input: AgentInput) async { sentInputs.append(input) }
     func registerTools(_ tools: [ClientToolInfo]) async {}
     func sendApproval(id: String, approved: Bool) async {}
     func sendApproval(id: String, decision: String, scope: String?) async {}
@@ -237,6 +267,7 @@ private final class MultiSessionRuntimeClient: RuntimeClient, @unchecked Sendabl
     private let connectDelays: [String: Duration]
     private let capabilitySnapshot: RuntimeCapabilitySnapshot?
     private let activity: RuntimeActivitySnapshot?
+    private(set) var capabilitySnapshotRequestCount = 0
     private(set) var activitySnapshotRequestCount = 0
 
     init(
@@ -264,6 +295,7 @@ private final class MultiSessionRuntimeClient: RuntimeClient, @unchecked Sendabl
     }
 
     func runtimeCapabilities() async throws -> RuntimeCapabilitySnapshot {
+        capabilitySnapshotRequestCount += 1
         guard let capabilitySnapshot else { throw TestError.unavailable }
         return capabilitySnapshot
     }

@@ -215,6 +215,11 @@ public final class ConversationViewModel {
 
         // Runtime-wide HTTP capabilities are authoritative. A legacy Runtime that only
         // has hello strings remains serialized even if an individual socket is healthy.
+        // Refresh at the turn boundary as well as app activation: a local daemon can be
+        // restarted with a different max_concurrent_turns while the GUI stays open.
+        if let refreshedCapabilities = try? await client.runtimeCapabilities() {
+            await capabilityRegistry?.update(refreshedCapabilities)
+        }
         let allowsConcurrent = await capabilityRegistry?.current().allowsMultiSessionExecution ?? false
 
         turnDispatchTask = Task { [weak self, channel, turnCoordinator] in
