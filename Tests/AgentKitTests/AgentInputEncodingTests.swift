@@ -73,6 +73,24 @@ final class AgentInputEncodingTests: XCTestCase {
         XCTAssertNotNil(input.requestID)
         XCTAssertEqual(object["request_id"] as? String, input.requestID)
     }
+
+    func testConversationCreationEncodesExecutionPolicyIdentity() throws {
+        let request = CreateConversationRequest(
+            workspacePath: "/worktrees/task-42",
+            workspaceExtID: "bookmark-1",
+            executionPolicy: .isolatedWorktree,
+            workspaceID: "worktree-42",
+            baseWorkspaceID: "repo-main"
+        )
+        let data = try JSONEncoder().encode(request)
+        let object = try XCTUnwrap(JSONSerialization.jsonObject(with: data) as? [String: Any])
+
+        XCTAssertEqual(object["workspace_path"] as? String, "/worktrees/task-42")
+        XCTAssertEqual(object["workspace_ext_id"] as? String, "bookmark-1")
+        XCTAssertEqual(object["execution_policy"] as? String, "isolated_worktree")
+        XCTAssertEqual(object["workspace_id"] as? String, "worktree-42")
+        XCTAssertEqual(object["base_workspace_id"] as? String, "repo-main")
+    }
 }
 
 private struct LocalFileTool: StructuredClientTool {

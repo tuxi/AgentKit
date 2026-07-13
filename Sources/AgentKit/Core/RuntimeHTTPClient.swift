@@ -116,9 +116,19 @@ struct RuntimeHTTPClient: Sendable {
 
     /// `POST /v1/conversations`
     func createConversation(workspacePath: String) async throws -> ConversationRef {
-        var wp = workspacePath
-        if wp.isEmpty { wp = "." }
-        let request = try await buildRequest("POST", pathComponents: "v1/conversations", body: ["workspace_path": wp])
+        try await createConversation(request: CreateConversationRequest(workspacePath: workspacePath))
+    }
+
+    /// `POST /v1/conversations` with workspace lease identity and policy.
+    func createConversation(request value: CreateConversationRequest) async throws -> ConversationRef {
+        let payload = CreateConversationRequest(
+            workspacePath: value.workspacePath.isEmpty ? "." : value.workspacePath,
+            workspaceExtID: value.workspaceExtID,
+            executionPolicy: value.executionPolicy,
+            workspaceID: value.workspaceID,
+            baseWorkspaceID: value.baseWorkspaceID
+        )
+        let request = try await buildRequest("POST", pathComponents: "v1/conversations", body: payload)
         let (data, response) = try await session.data(for: request)
         try validateHTTP(response, data: data)
         return try decodeEnvelope(ConversationRef.self, from: data)

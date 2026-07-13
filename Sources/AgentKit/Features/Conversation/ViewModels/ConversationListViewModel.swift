@@ -108,10 +108,17 @@ public final class ConversationListViewModel {
     /// - Returns: 新会话引用。
     @discardableResult
     public func createConversation(workspacePath: String = "") async -> ConversationRef? {
+        await createConversation(request: CreateConversationRequest(workspacePath: workspacePath))
+    }
+
+    /// Create a conversation with explicit workspace lease semantics. Existing
+    /// callers continue to use the shared-workspace-compatible path overload.
+    @discardableResult
+    public func createConversation(request: CreateConversationRequest) async -> ConversationRef? {
         isLoading = true
         errorMessage = nil
         do {
-            let ref = try await client.createConversation(workspacePath: workspacePath)
+            let ref = try await client.createConversation(request: request)
             conversations.insert(ref, at: 0)
             revision += 1
             isLoading = false

@@ -142,12 +142,13 @@ final class LifecycleProtocolTests: XCTestCase {
 
     func testSchedulerLifecycleEventsDecodeFromWire() throws {
         let accepted = try decodeEvent("""
-        { "kind": "turn_accepted", "turn_id": "turn_7" }
+        { "kind": "turn_accepted", "turn_id": "turn_7", "request_id": "request_7" }
         """)
-        guard case .turnAccepted(let acceptedID, _, _) = accepted else {
+        guard case .turnAccepted(let acceptedID, let requestID, _) = accepted else {
             return XCTFail("Expected turnAccepted")
         }
         XCTAssertEqual(acceptedID, "turn_7")
+        XCTAssertEqual(requestID, "request_7")
 
         let queued = try decodeEvent("""
         { "kind": "turn_queued", "turn_id": "turn_7", "reason": "workspace_lease", "position": 2 }
@@ -222,10 +223,10 @@ final class LifecycleProtocolTests: XCTestCase {
         {
           "capabilities": {
             "multi_session_execution_v1": false,
-            "session_scoped_client_tools_v1": false,
-            "activity_snapshot_v1": false,
-            "workspace_execution_policy_v1": false,
-            "max_concurrent_turns": 0,
+            "session_scoped_client_tools_v1": true,
+            "activity_snapshot_v1": true,
+            "workspace_execution_policy_v1": true,
+            "max_concurrent_turns": 2,
             "max_connected_sessions": 0
           }
         }
@@ -237,25 +238,39 @@ final class LifecycleProtocolTests: XCTestCase {
         XCTAssertFalse(capabilities.allowsMultiSessionExecution)
         XCTAssertEqual(capabilities.schema, "runtime-capabilities/v1")
         XCTAssertEqual(capabilities.protocolVersion, 1)
-        XCTAssertEqual(capabilities.limits?.maxConcurrentTurns, 0)
+        XCTAssertTrue(capabilities.flags.contains(.sessionScopedClientTools))
+        XCTAssertTrue(capabilities.flags.contains(.activitySnapshot))
+        XCTAssertTrue(capabilities.flags.contains(.workspaceExecutionPolicy))
+        XCTAssertEqual(capabilities.limits?.maxConcurrentTurns, 2)
 
         let activityJSON = """
         {
-          "sessions": [{
-            "session_id": "session_a",
-            "state": "running",
-            "updated_at": "2026-07-13T08:00:00Z"
-          }]
+          "sessions": [
+            {
+              "session_id": "session_a",
+              "turn_id": "turn_a",
+              "state": "queued",
+              "queue_position": 2,
+              "updated_at": "2026-07-13T08:00:00Z"
+            },
+            {
+              "session_id": "session_b",
+              "state": "running",
+              "updated_at": "2026-07-13T08:00:01Z"
+            }
+          ]
         }
         """
         let activity = try JSONDecoder().decode(
             RuntimeActivitySnapshot.self,
             from: Data(activityJSON.utf8)
         )
-        XCTAssertEqual(activity.sessions.first?.state, "running")
-        XCTAssertNil(activity.sessions.first?.turnID)
-        XCTAssertNil(activity.sessions.first?.pendingApprovalCount)
-        XCTAssertNil(activity.sessions.first?.pendingClientToolCount)
+        XCTAssertEqual(activity.sessions.first?.state, "queued")
+        XCTAssertEqual(activity.sessions.first?.turnID, "turn_a")
+        XCTAssertEqual(activity.sessions.first?.queuePosition, 2)
+        XCTAssertNil(activity.sessions.last?.turnID)
+        XCTAssertNil(activity.sessions.last?.pendingApprovalCount)
+        XCTAssertNil(activity.sessions.last?.pendingClientToolCount)
     }
 
     private func decodeEvent(_ json: String) throws -> AgentEvent {

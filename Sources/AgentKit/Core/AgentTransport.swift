@@ -47,6 +47,7 @@ public protocol AgentTransport: Sendable {
     /// 在 backend 创建新的 runtime session。
     /// - Returns: server-assigned `ConversationRef`（含 `id`）。
     func createConversation(workspacePath: String) async throws -> ConversationRef
+    func createConversation(request: CreateConversationRequest) async throws -> ConversationRef
 
     /// 列出 backend 内存中的活跃 session。
     func listConversations() async throws -> [ConversationRef]
@@ -171,6 +172,10 @@ extension AgentTransport {
 
     public func activitySnapshot() async throws -> RuntimeActivitySnapshot {
         throw RuntimeHTTPError.unsupported
+    }
+
+    public func createConversation(request: CreateConversationRequest) async throws -> ConversationRef {
+        try await createConversation(workspacePath: request.workspacePath)
     }
 
     /// 便捷入口：不带续传游标的 attach（等价 `since: 0`，即无已回放历史）。

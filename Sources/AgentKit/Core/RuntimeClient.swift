@@ -33,6 +33,9 @@ public protocol RuntimeClient: Sendable {
     /// - Returns: 包含 server-assigned `id` 的 `ConversationRef`。
     func createConversation(workspacePath: String) async throws -> ConversationRef
 
+    /// Create a session with an explicit Runtime workspace execution policy.
+    func createConversation(request: CreateConversationRequest) async throws -> ConversationRef
+
     /// 列出 backend 内存中的活跃 session。
     func listConversations() async throws -> [ConversationRef]
 
@@ -142,6 +145,12 @@ extension RuntimeClient {
 
     public func activitySnapshot() async throws -> RuntimeActivitySnapshot {
         throw RuntimeHTTPError.unsupported
+    }
+
+    /// Source-compatible fallback for backends that have not adopted execution
+    /// policy metadata. Code-Agent overrides this and transmits the full request.
+    public func createConversation(request: CreateConversationRequest) async throws -> ConversationRef {
+        try await createConversation(workspacePath: request.workspacePath)
     }
 
     /// 便捷入口：不带续传游标的 connect（等价 `since: 0`，即无已回放历史）。

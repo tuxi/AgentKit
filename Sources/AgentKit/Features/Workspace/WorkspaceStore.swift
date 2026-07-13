@@ -356,7 +356,11 @@ public final class WorkspaceStore {
         guard let current = draft, let workspace = current.workspace else { return }
         draft?.state = .committing
         do {
-            let ref = try await client.createConversation(workspacePath: workspace.url.path)
+            let ref = try await client.createConversation(request: CreateConversationRequest(
+                workspacePath: workspace.url.path,
+                executionPolicy: .sharedWorkspace,
+                workspaceID: workspace.id
+            ))
             let vm = supervisor.controller(
                 for: ref,
                 workspace: workspace,

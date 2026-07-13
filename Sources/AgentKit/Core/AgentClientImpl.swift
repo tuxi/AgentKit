@@ -184,6 +184,10 @@ public final class CodeAgentTransport: AgentTransport, @unchecked Sendable {
         try await http.createConversation(workspacePath: workspacePath)
     }
 
+    public func createConversation(request: CreateConversationRequest) async throws -> ConversationRef {
+        try await http.createConversation(request: request)
+    }
+
     public func listConversations() async throws -> [ConversationRef] {
         try await http.listConversations()
     }
@@ -413,6 +417,10 @@ public final class DefaultAgentClient: RuntimeClient, @unchecked Sendable {
 
     public func createConversation(workspacePath: String = "") async throws -> ConversationRef {
         try await transport.createConversation(workspacePath: workspacePath)
+    }
+
+    public func createConversation(request: CreateConversationRequest) async throws -> ConversationRef {
+        try await transport.createConversation(request: request)
     }
 
     public func listConversations() async throws -> [ConversationRef] {
