@@ -5,6 +5,8 @@
 > 适用端：macOS、iOS
 >
 > 配套 Runtime 设计：[Code-Agent Runtime 多会话执行要求 v1](../runtime-integration/code-agent-multi-session-runtime-v1.md)
+>
+> Workspace/Worktree 与客户端本地状态：[AgentKit Workspace、Worktree 与会话本地状态设计 v1](agentkit-workspace-worktree-local-state-v1.md)
 
 ## 1. 背景
 
@@ -351,6 +353,16 @@ AgentKit 创建会话时应携带或保存执行隔离信息：
 
 最终仲裁必须由 Runtime 执行，客户端只负责展示策略、队列原因和冲突提示。
 
+`isolatedWorktree` 分为两种能力，不能混用：
+
+- 外部已供给：`workspace_path` 已经是独立 worktree，Runtime 只负责校验和调度；
+- Runtime 托管：用户显式选择后由 Runtime 创建、恢复和清理，要求 `managed_worktree_v1=true`。
+
+创建会话默认仍为 `sharedWorkspace`，不得因为 Runtime 支持 managed worktree 就自动执行
+`git worktree add`。Managed worktree 是来源 Workspace 下的独立 checkout，不创建新的顶层
+Workspace；UI 以 `baseWorkspaceID` 分组，以 `workspaceID` 标识实际 checkout，branch 只作为
+可变展示属性。完整约束见配套的 Workspace/Worktree 设计。
+
 ## 13. macOS 与 iOS
 
 ### macOS
@@ -405,6 +417,20 @@ AgentKit 创建会话时应携带或保存执行隔离信息：
 
 - 评估全局 activity stream 或单连接多会话协议；
 - 仅优化资源，不改变显式 session 路由语义。
+
+### Phase 6：显式 Managed Worktree
+
+- 新会话提供 opt-in 的独立 Worktree 选项，默认不创建；
+- Runtime 实现 provisioning、幂等、重启恢复、工具路径排除和 dirty-safe 清理；
+- AgentKit 按 `baseWorkspaceID` 分组，并展示 checkout/branch/provisioning 状态；
+- 全部验收后才启用 `managed_worktree_v1`。
+
+### 后续：ConversationLocalStateStore
+
+- 将 per-conversation 模型、recent models、输入/附件草稿和已读游标收敛到客户端持久化 Store；
+- 使用稳定 `draftID` 保存尚未创建 session 的 Composer，并在创建成功后原子迁移到 `sessionID`；
+- App 退出、view 回收和会话切换不得丢失输入草稿；
+- 该 Store 是客户端本地真相，不进入 Runtime activity，且不阻塞 Managed Worktree v1。
 
 ## 15. 测试与验收
 
@@ -470,3 +496,6 @@ AgentKit 创建会话时应携带或保存执行隔离信息：
 3. selection revision 只保护页面选择结果，不管理执行生命周期。
 4. AgentKit 只有在 Runtime 声明并发安全能力后才开放跨会话同时执行。
 5. 共享工作区安全由 Runtime 强制；UI 提示不能替代隔离和调度。
+6. Managed worktree 必须由用户显式选择，支持能力不等于默认创建。
+7. Worktree 是同一 Workspace 下的 checkout；branch、目录名和 session title 都不是 Workspace 身份。
+8. 会话模型偏好、Composer 草稿和已读游标属于客户端持久化状态，不属于 Runtime lifecycle。
