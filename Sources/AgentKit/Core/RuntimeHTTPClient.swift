@@ -215,6 +215,13 @@ struct RuntimeHTTPClient: Sendable {
             throw RuntimeHTTPError.invalidResponse
         }
         guard http.statusCode == 204 else {
+            if let envelope = try? decoder.decode(
+                RuntimeEnvelope<ConversationOperationErrorPayload>.self,
+                from: data
+            ), let payload = envelope.data,
+               let deletionError = ConversationDeletionError(operationPayload: payload) {
+                throw deletionError
+            }
             try validateHTTP(response, data: data)
             throw RuntimeHTTPError.invalidResponse
         }

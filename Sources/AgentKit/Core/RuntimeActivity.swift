@@ -7,6 +7,30 @@
 
 import Foundation
 
+/// Stable Runtime scheduler explanations. Unknown future values remain decodable
+/// because wire/activity models continue storing their raw String.
+public enum RuntimeQueueReason: String, Codable, Sendable, Equatable, CaseIterable {
+    case globalCapacity = "global_capacity"
+    case workspaceLease = "workspace_lease"
+    case sessionSerialization = "session_serialization"
+
+    public var detailDescription: String {
+        switch self {
+        case .globalCapacity: return "等待 Runtime 执行槽位"
+        case .workspaceLease: return "等待主工作区释放"
+        case .sessionSerialization: return "等待当前会话的上一轮完成"
+        }
+    }
+
+    public var compactDescription: String {
+        switch self {
+        case .globalCapacity: return "等待执行槽"
+        case .workspaceLease: return "等待工作区"
+        case .sessionSerialization: return "等待上一轮"
+        }
+    }
+}
+
 public struct RuntimeLimits: Codable, Sendable, Equatable {
     public let maxConcurrentTurns: Int?
     public let maxConnectedSessions: Int?
@@ -149,6 +173,7 @@ public struct RuntimeSessionActivity: Codable, Sendable, Equatable, Identifiable
     public let pendingApprovalCount: Int?
     public let pendingClientToolCount: Int?
     public let queuePosition: Int?
+    public let queueReason: String?
     public let latestTerminal: RuntimeTerminalActivity?
     public let updatedAt: String?
     public let executionPolicy: String?
@@ -168,6 +193,7 @@ public struct RuntimeSessionActivity: Codable, Sendable, Equatable, Identifiable
         case pendingApprovalCount = "pending_approval_count"
         case pendingClientToolCount = "pending_client_tool_count"
         case queuePosition = "queue_position"
+        case queueReason = "queue_reason"
         case latestTerminal = "latest_terminal"
         case updatedAt = "updated_at"
         case executionPolicy = "execution_policy"
@@ -185,6 +211,7 @@ public struct RuntimeSessionActivity: Codable, Sendable, Equatable, Identifiable
         pendingApprovalCount: Int? = nil,
         pendingClientToolCount: Int? = nil,
         queuePosition: Int? = nil,
+        queueReason: String? = nil,
         latestTerminal: RuntimeTerminalActivity? = nil,
         updatedAt: String? = nil,
         executionPolicy: String? = nil,
@@ -200,6 +227,7 @@ public struct RuntimeSessionActivity: Codable, Sendable, Equatable, Identifiable
         self.pendingApprovalCount = pendingApprovalCount
         self.pendingClientToolCount = pendingClientToolCount
         self.queuePosition = queuePosition
+        self.queueReason = queueReason
         self.latestTerminal = latestTerminal
         self.updatedAt = updatedAt
         self.executionPolicy = executionPolicy

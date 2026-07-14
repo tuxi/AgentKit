@@ -242,7 +242,7 @@ final class LifecycleProtocolTests: XCTestCase {
         XCTAssertEqual(requestID, "request_7")
 
         let queued = try decodeEvent("""
-        { "kind": "turn_queued", "turn_id": "turn_7", "reason": "workspace_lease", "position": 2 }
+        { "kind": "turn_queued", "turn_id": "turn_7", "reason": "workspace_lease", "queue_position": 2 }
         """)
         guard case .turnQueued(let queuedID, let reason, let position) = queued else {
             return XCTFail("Expected turnQueued")
@@ -250,6 +250,14 @@ final class LifecycleProtocolTests: XCTestCase {
         XCTAssertEqual(queuedID, "turn_7")
         XCTAssertEqual(reason, "workspace_lease")
         XCTAssertEqual(position, 2)
+
+        let legacyQueued = try decodeEvent("""
+        { "kind": "turn_queued", "turn_id": "turn_legacy", "reason": "capacity", "position": 4 }
+        """)
+        guard case .turnQueued(_, _, let legacyPosition) = legacyQueued else {
+            return XCTFail("Expected legacy turnQueued")
+        }
+        XCTAssertEqual(legacyPosition, 4)
 
         let cancelled = try decodeEvent("""
         { "kind": "turn_cancelled", "turn_id": "turn_7", "reason": "user_requested" }
@@ -267,6 +275,47 @@ final class LifecycleProtocolTests: XCTestCase {
             return XCTFail("Expected legacy cancelled failure to map to turnCancelled")
         }
         XCTAssertEqual(legacyID, "turn_8")
+    }
+
+    func testRuntimeActivityDecodesQueueReason() throws {
+        let json = """
+        {
+          "sessions": [{
+            "session_id": "session_queued",
+            "active_turn_id": "turn_queued",
+            "state": "queued",
+            "queue_position": 3,
+            "queue_reason": "global_capacity"
+          }]
+        }
+        """
+
+        let snapshot = try JSONDecoder().decode(
+            RuntimeActivitySnapshot.self,
+            from: Data(json.utf8)
+        )
+        XCTAssertEqual(snapshot.sessions.first?.queuePosition, 3)
+        XCTAssertEqual(snapshot.sessions.first?.queueReason, "global_capacity")
+    }
+
+    func testConversationInUseErrorPayloadMapsToDeletionError() throws {
+        let json = """
+        {
+          "code": "conversation_in_use",
+          "message": "conversation has an active or resumable turn",
+          "session_id": "session_a",
+          "state": "waiting_approval"
+        }
+        """
+        let payload = try JSONDecoder().decode(
+            ConversationOperationErrorPayload.self,
+            from: Data(json.utf8)
+        )
+        let error: ConversationDeletionError = try XCTUnwrap(
+            ConversationDeletionError(operationPayload: payload)
+        )
+        XCTAssertEqual(error, ConversationDeletionError.inUse(state: "waiting_approval"))
+        XCTAssertTrue(error.localizedDescription.contains("waiting_approval"))
     }
 
     func testRuntimeCapabilityAndActivitySnapshotsDecode() throws {

@@ -77,6 +77,10 @@ final class ManagedWorktreeRuntimeE2ETests: XCTestCase {
         let sharedB = try await createSharedConversation(client: client, root: root)
         let sharedTraces = try await runPair(client: client, first: sharedA, second: sharedB)
         XCTAssertGreaterThan(sharedTraces.0.queuedCount + sharedTraces.1.queuedCount, 0)
+        XCTAssertTrue(
+            (sharedTraces.0.queuedReasons + sharedTraces.1.queuedReasons)
+                .contains(RuntimeQueueReason.workspaceLease.rawValue)
+        )
         assertSerialized(sharedTraces.0, sharedTraces.1)
         print("[W3] shared workspace lease verified")
 

@@ -32,6 +32,8 @@ struct WireFrame: Decodable {
     let parentSessionId: String?
     let turnId: String?
     let reason: String?
+    let queuePosition: Int?
+    /// Legacy fixture/client spelling retained for replay compatibility.
     let position: Int?
     let callId: String?
     let step: Int?
@@ -73,6 +75,7 @@ struct WireFrame: Decodable {
         case type, kind, at, step, id, server, seq
         case text, observation, output, assets, failure, err, error, ratio, todos, chunk
         case reason, position
+        case queuePosition = "queue_position"
         case textAnnotations = "text_annotations"
         case eventId = "event_id"
         case requestId = "request_id"

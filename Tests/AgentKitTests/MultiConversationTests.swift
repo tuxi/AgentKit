@@ -388,8 +388,104 @@ final class MultiConversationTests: XCTestCase {
         XCTAssertEqual(controller.lifecycleStatus, "queued")
         XCTAssertEqual(controller.queueReason, "workspace_lease")
         XCTAssertEqual(controller.queuePosition, 2)
-        XCTAssertEqual(controller.runtimeQueueDescription, "已排队（第 2 位）— 等待工作区可用")
+        XCTAssertEqual(store.supervisor.queueReason(for: conversation.id), "workspace_lease")
+        XCTAssertEqual(controller.runtimeQueueDescription, "已排队（第 2 位）— 等待主工作区释放")
         XCTAssertFalse(controller.runtimeQueueDescription.contains("不支持跨会话并行"))
+
+        client.channel(for: "queued").yield(.turnQueued(
+            turnID: "turn_queued",
+            reason: "global_capacity",
+            position: 1
+        ))
+        try await Task.sleep(for: .milliseconds(25))
+        XCTAssertEqual(controller.runtimeQueueDescription, "已排队（第 1 位）— 等待 Runtime 执行槽位")
+
+        client.channel(for: "queued").yield(.turnQueued(
+            turnID: "turn_queued",
+            reason: "session_serialization",
+            position: 1
+        ))
+        try await Task.sleep(for: .milliseconds(25))
+        XCTAssertEqual(controller.runtimeQueueDescription, "已排队（第 1 位）— 等待当前会话的上一轮完成")
+    }
+
+    @MainActor
+    func testQueuedActivityRestoresReasonAndPositionIntoBackgroundController() async throws {
+        let capabilities = RuntimeCapabilitySnapshot(capabilities: [
+            "multi_session_execution_v1": true,
+            "session_scoped_client_tools_v1": true,
+            "activity_snapshot_v1": true,
+            "session_attention_snapshot_v1": true,
+            "workspace_execution_policy_v1": true,
+        ])
+        let conversation = ConversationRef(id: "queued-background", workspacePath: "/tmp/shared")
+        let client = MultiSessionRuntimeClient(
+            capabilitySnapshot: capabilities,
+            activity: RuntimeActivitySnapshot(sessions: [
+                RuntimeSessionActivity(
+                    sessionID: conversation.id,
+                    turnID: "turn_queued",
+                    state: "queued",
+                    queuePosition: 2,
+                    queueReason: "workspace_lease"
+                )
+            ])
+        )
+        let store = WorkspaceStore(client: client)
+        store.listViewModel.prepend(conversation)
+
+        await store.refreshRuntimeState()
+
+        let controller = try XCTUnwrap(store.supervisor.controller(sessionID: conversation.id))
+        XCTAssertEqual(controller.lifecycleStatus, "queued")
+        XCTAssertEqual(controller.queuePosition, 2)
+        XCTAssertEqual(controller.queueReason, "workspace_lease")
+        XCTAssertEqual(controller.runtimeQueueDescription, "已排队（第 2 位）— 等待主工作区释放")
+    }
+
+    @MainActor
+    func testStaleQueuedActivityCannotOverrideLiveTerminalEvent() async throws {
+        let capabilities = RuntimeCapabilitySnapshot(capabilities: [
+            "multi_session_execution_v1": true,
+            "session_scoped_client_tools_v1": true,
+            "activity_snapshot_v1": true,
+            "session_attention_snapshot_v1": true,
+            "workspace_execution_policy_v1": true,
+        ])
+        let conversation = ConversationRef(id: "terminal-wins", workspacePath: "/tmp/shared")
+        let client = MultiSessionRuntimeClient(
+            capabilitySnapshot: capabilities,
+            activity: RuntimeActivitySnapshot(sessions: [])
+        )
+        let store = WorkspaceStore(client: client)
+
+        store.selectedConversation = conversation
+        try await Task.sleep(for: .milliseconds(25))
+        let controller = try XCTUnwrap(store.activeConversationViewModel)
+        client.channel(for: conversation.id).yield(.turnFinished(
+            turnID: "turn_live",
+            text: "done",
+            textAnnotations: []
+        ))
+        try await Task.sleep(for: .milliseconds(25))
+        XCTAssertEqual(controller.lifecycleStatus, "done")
+
+        client.setActivity(RuntimeActivitySnapshot(sessions: [
+            RuntimeSessionActivity(
+                sessionID: conversation.id,
+                turnID: "turn_live",
+                state: "queued",
+                lastSequence: 1,
+                queuePosition: 1,
+                queueReason: "global_capacity"
+            )
+        ]))
+        await store.supervisor.refreshRuntimeState(conversations: [conversation])
+
+        XCTAssertEqual(controller.lifecycleStatus, "done")
+        XCTAssertNil(controller.queueReason)
+        XCTAssertNil(controller.queuePosition)
+        store.supervisor.stopActivityMonitoring()
     }
 
     @MainActor

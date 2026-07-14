@@ -322,7 +322,8 @@ public struct ConversationListView: View {
             ForEach(group.conversations, id: \.uiID) { ref in
                 ConversationRow(
                     ref: ref,
-                    activity: store.supervisor.activity(for: ref)
+                    activity: store.supervisor.activity(for: ref),
+                    queueReason: store.supervisor.queueReason(for: ref.id)
                 )
                     .id("\(ref.uiID)-\(listRevision)")
                     .tag(ref)
@@ -456,6 +457,7 @@ private struct ConversationWorkspaceGroup: Identifiable {
 private struct ConversationRow: View {
     let ref: ConversationRef
     let activity: ConversationActivityState
+    let queueReason: String?
 
     var body: some View {
         HStack(spacing: 8) {
@@ -476,7 +478,7 @@ private struct ConversationRow: View {
                     .controlSize(.mini)
                     .accessibilityLabel("正在连接")
             case .queued:
-                statusLabel("排队中", systemImage: "clock.fill", color: .secondary)
+                statusLabel(queueStatusTitle, systemImage: "clock.fill", color: .secondary)
             case .running:
                 statusLabel("运行中", systemImage: "circle.fill", color: .green)
             case .waitingForApproval:
@@ -507,6 +509,10 @@ private struct ConversationRow: View {
         }
         .padding(.horizontal, 11)
         .padding(.vertical, 7)
+    }
+
+    private var queueStatusTitle: String {
+        RuntimeQueueReason(rawValue: queueReason ?? "")?.compactDescription ?? "排队中"
     }
 
     private func statusLabel(_ title: String, systemImage: String, color: Color) -> some View {

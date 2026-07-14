@@ -126,6 +126,17 @@ public final class ConversationSupervisor {
         controllers[sessionID]
     }
 
+    /// Prefer the live per-session channel over the sampled scheduler projection.
+    /// This keeps the sidebar reason current between `/v1/activity` polls.
+    public func queueReason(for sessionID: String) -> String? {
+        if let controller = controllers[sessionID],
+           controller.lifecycleStatus == "queued",
+           let reason = controller.queueReason {
+            return reason
+        }
+        return runtimeActivities[sessionID]?.queueReason
+    }
+
     public func activity(for sessionID: String) -> ConversationActivityState {
         activity(for: knownConversations[sessionID] ?? controllers[sessionID]?.conversation)
     }
@@ -293,10 +304,22 @@ public final class ConversationSupervisor {
         activityCursor = supportsDelta ? activity.cursor : nil
         reconcileAttention(with: activity)
 
+        // Record a reconnect baseline for every controller. Connected sockets remain
+        // authoritative, preventing an older polling response from undoing a live
+        // terminal event that arrived while this request was in flight.
+        for (sessionID, controller) in controllers {
+            if let remote = runtimeActivities[sessionID] {
+                controller.applyRuntimeActivity(remote)
+            }
+        }
+
         // Reattach every live session, not only the selected one, so background
         // approvals and terminal events continue to flow after app restoration.
         for conversation in knownConversations.values where shouldRetainLiveChannel(sessionID: conversation.id) {
             let controller = controller(for: conversation)
+            if let remote = runtimeActivities[conversation.id] {
+                controller.applyRuntimeActivity(remote)
+            }
             await controller.connect(to: conversation)
         }
         await enforceControllerLimit()

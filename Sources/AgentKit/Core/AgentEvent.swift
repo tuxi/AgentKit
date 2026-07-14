@@ -103,7 +103,11 @@ extension AgentEvent {
             return .turnAccepted(turnID: turnID ?? "", requestID: wire.requestId, text: wire.text)
 
         case "turn_queued":
-            return .turnQueued(turnID: turnID ?? "", reason: wire.reason, position: wire.position)
+            return .turnQueued(
+                turnID: turnID ?? "",
+                reason: wire.reason,
+                position: wire.queuePosition ?? wire.position
+            )
 
         case "turn_started":
             return .turnStarted(turnID: turnID ?? "", text: wire.text ?? "")

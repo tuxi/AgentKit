@@ -56,20 +56,54 @@ public final class ConversationViewModel {
     public private(set) var lifecycleStatus: String?
     public private(set) var queueReason: String?
     public private(set) var queuePosition: Int?
+    private var runtimeActivityBaseline: RuntimeSessionActivity?
 
     /// Runtime-owned queue copy. This is intentionally distinct from the local
     /// compatibility FIFO used when multi-session capability is unavailable.
     public var runtimeQueueDescription: String {
-        let waitReason: String
-        switch queueReason {
-        case "workspace_lease": waitReason = "等待工作区可用"
-        case "capacity": waitReason = "等待执行槽位"
-        default: waitReason = "等待 Runtime 调度"
-        }
+        let waitReason = RuntimeQueueReason(rawValue: queueReason ?? "")?.detailDescription
+            ?? "等待 Runtime 调度"
         if let queuePosition, queuePosition > 0 {
             return "已排队（第 \(queuePosition) 位）— \(waitReason)"
         }
         return "已排队 — \(waitReason)"
+    }
+
+    /// Records Runtime-wide truth for cold start/reconnect. A connected session's
+    /// WebSocket is authoritative, so a polling response can never move its local
+    /// lifecycle backwards after a newer live event has already arrived.
+    public func applyRuntimeActivity(_ activity: RuntimeSessionActivity) {
+        guard conversation == nil || conversation?.id == activity.sessionID else { return }
+        runtimeActivityBaseline = activity
+        guard !isConnected else { return }
+        projectRuntimeActivity(activity)
+    }
+
+    private func projectRuntimeActivity(_ activity: RuntimeSessionActivity) {
+        switch activity.state {
+        case "accepted":
+            lifecycleStatus = "accepted"
+            queueReason = nil
+            queuePosition = nil
+        case "queued":
+            lifecycleStatus = "queued"
+            queueReason = activity.queueReason
+            queuePosition = activity.queuePosition
+        case "running", "resuming":
+            lifecycleStatus = activity.state
+            queueReason = nil
+            queuePosition = nil
+        case "paused":
+            lifecycleStatus = "paused"
+            queueReason = nil
+            queuePosition = nil
+        case "done", "failed", "cancelled":
+            lifecycleStatus = activity.state
+            queueReason = nil
+            queuePosition = nil
+        default:
+            break
+        }
     }
 
     /// When the current session was marked paused.
@@ -201,6 +235,7 @@ public final class ConversationViewModel {
         // Phase 1: 拉取历史数据 → import into engine。
         // 返回值 = 历史批最大 seq（v1.2 §4 续传游标）。
         let sinceCursor = await fetchHistory(conversationID: conversation.id, engine: eng)
+        reconcileRuntimeActivityBaseline(historyCursor: sinceCursor)
 
         // Phase 2: 连接实时流 → feed to engine
         do {
@@ -385,6 +420,19 @@ public final class ConversationViewModel {
             }
         }
         return sinceCursor
+    }
+
+    /// Activity is sampled before the history request. Prefer persisted history
+    /// when it contains a later sequence or already reports a terminal lifecycle.
+    private func reconcileRuntimeActivityBaseline(historyCursor: Int) {
+        guard let activity = runtimeActivityBaseline,
+              activity.sessionID == conversation?.id
+        else { return }
+
+        let historyIsTerminal = ["done", "failed", "cancelled"].contains(lifecycleStatus)
+        let historyIsNewer = activity.lastSequence.map { Int64(historyCursor) > $0 } ?? false
+        guard !historyIsTerminal, !historyIsNewer else { return }
+        projectRuntimeActivity(activity)
     }
 
     // MARK: - Event handling

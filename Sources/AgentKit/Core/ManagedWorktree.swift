@@ -214,11 +214,36 @@ public enum ConversationWorktreeDisposition: Sendable, Equatable {
 
 public enum ConversationDeletionError: Error, Sendable, Equatable, LocalizedError {
     case active(String)
+    case inUse(state: String?)
 
     public var errorDescription: String? {
         switch self {
         case .active(let state):
             return "任务当前处于\(state)状态，请先等待结束或取消后再删除。"
+        case .inUse(let state):
+            if let state, !state.isEmpty {
+                return "Runtime 拒绝删除：任务当前处于 \(state) 状态。请先等待结束、完成审批或取消任务。"
+            }
+            return "Runtime 拒绝删除正在活动或可恢复的任务。请先等待结束或取消任务。"
         }
+    }
+}
+
+struct ConversationOperationErrorPayload: Codable, Sendable, Equatable {
+    let code: String
+    let message: String
+    let sessionID: String?
+    let state: String?
+
+    enum CodingKeys: String, CodingKey {
+        case code, message, state
+        case sessionID = "session_id"
+    }
+}
+
+extension ConversationDeletionError {
+    init?(operationPayload payload: ConversationOperationErrorPayload) {
+        guard payload.code == "conversation_in_use" else { return nil }
+        self = .inUse(state: payload.state)
     }
 }
