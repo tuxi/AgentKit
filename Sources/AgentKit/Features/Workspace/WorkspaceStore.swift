@@ -77,6 +77,9 @@ public final class WorkspaceStore {
     /// 与 Agent Runtime 通信的客户端（agent-wire v1）。
     public let client: RuntimeClient
 
+    /// Device-local durable state for drafts, model choices and read cursors.
+    public let localStateStore: any ConversationLocalStateStore
+
     /// 客户端工具注册表。
     private let toolRegistry: ToolRegistry
 
@@ -139,20 +142,24 @@ public final class WorkspaceStore {
         toolRegistry: ToolRegistry = ToolRegistry(),
         timelineExtensions: [any TimelineExtension] = [],
         onAuthExpired: (@MainActor () async -> Void)? = nil,
-        attentionReadStore: any ConversationAttentionReadStore = UserDefaultsConversationAttentionReadStore.shared,
+        localStateStore: any ConversationLocalStateStore = SQLiteConversationLocalStateStore.shared,
+        attentionReadStore: (any ConversationAttentionReadStore)? = nil,
         onAttentionEvent: (@MainActor (ConversationAttentionEvent) -> Void)? = nil
     ) {
         self.client = client
+        self.localStateStore = localStateStore
         self.toolRegistry = toolRegistry
         self.timelineExtensions = timelineExtensions
         self.onAuthExpired = onAuthExpired
         self.listViewModel = ConversationListViewModel(client: client)
+        let resolvedAttentionStore = attentionReadStore
+            ?? ConversationLocalStateAttentionReadStore(localStateStore: localStateStore)
         self.supervisor = ConversationSupervisor(
             client: client,
             toolRegistry: toolRegistry,
             timelineExtensions: timelineExtensions,
             onAuthExpired: onAuthExpired,
-            attentionReadStore: attentionReadStore,
+            attentionReadStore: resolvedAttentionStore,
             onAttentionEvent: onAttentionEvent
         )
     }
@@ -235,6 +242,7 @@ public final class WorkspaceStore {
             selectedConversation = nil
         }
         await supervisor.removeDeletedConversation(sessionID: conversation.id)
+        try? localStateStore.removeState(for: .session(conversation.id))
     }
 
     // MARK: - Runtime lifecycle
@@ -380,6 +388,7 @@ public final class WorkspaceStore {
 
     /// 后台进入：请求 runtime 做有界 suspend/checkpoint，不销毁 server。
     public func handleAppEnteredBackground() {
+        try? localStateStore.flush()
         #if os(iOS)
         supervisor.stopActivityMonitoring()
         AgentRuntime.shared.suspendRuntime()
@@ -389,6 +398,7 @@ public final class WorkspaceStore {
     /// Release workspace-scoped polling and sockets when the host removes the
     /// workspace root view. Runtime sessions remain server-owned and resumable.
     public func handleWorkspaceDisappeared() {
+        try? localStateStore.flush()
         supervisor.stopActivityMonitoring()
         Task { await supervisor.disconnectAll() }
     }
@@ -440,11 +450,25 @@ public final class WorkspaceStore {
     public func beginDraft() {
         selectedConversation = nil          // only clears presentation selection
         projects.reload()                   // 项目目录可能被「文件」App 改动，开草稿时刷新
-        draft = SessionDraft(workspace: recentWorkspaces.mostRecent)
+        if draft == nil {
+            if let recovered = try? localStateStore.latestDraft() {
+                draft = makeSessionDraft(from: recovered)
+            } else {
+                draft = SessionDraft(workspace: recentWorkspaces.mostRecent)
+                persistDraftMetadata()
+            }
+        }
         draftNavigationRevision += 1
         if runtimeCapabilityDiscoveryState != .available {
             Task { await refreshRuntimeState() }
         }
+    }
+
+    /// Cold-start entry used by the empty detail page. It restores the most recent
+    /// unsent draft before creating a new one, so App restarts never flash an empty
+    /// composer over durable text.
+    public func restoreDraftOrBegin() {
+        beginDraft()
     }
 
     /// 在 Documents 根下创建新项目并选入当前草稿（iOS）。失败时抛 `ProjectsError`。
@@ -482,21 +506,27 @@ public final class WorkspaceStore {
         }
         draft?.state = .ready
         recentWorkspaces.touch(workspace)
+        persistDraftMetadata()
     }
 
     public func setDraftManagedWorktreeEnabled(_ enabled: Bool) {
         guard draft != nil else { return }
         guard !enabled || supportsManagedWorktreeCreation else { return }
         draft?.usesManagedWorktree = enabled
+        persistDraftMetadata()
     }
 
     public func setDraftManagedWorktreeBaseRef(_ baseRef: ManagedWorktreeBaseRef) {
         guard draft?.usesManagedWorktree == true else { return }
         draft?.managedWorktreeBaseRef = baseRef
+        persistDraftMetadata()
     }
 
     /// 放弃当前草稿。
     public func cancelDraft() {
+        if let id = draft?.id {
+            try? localStateStore.removeState(for: .draft(id))
+        }
         draft = nil
     }
 
@@ -533,7 +563,19 @@ public final class WorkspaceStore {
                 model: model
             )
             await vm.connect(to: ref)
-            await vm.send(input: .text(firstMessage, model: model))
+            guard await vm.send(input: .text(firstMessage, model: model)) else {
+                throw ConversationLocalDraftError.turnNotAccepted
+            }
+
+            try localStateStore.migrateDraft(current.id, to: ref.id)
+            try localStateStore.updateState(for: .session(ref.id)) { state in
+                state.composerDraft.text = ""
+                if !model.isEmpty {
+                    state.selectedModelID = model
+                    state.recentModelIDs.removeAll { $0 == model }
+                    state.recentModelIDs.insert(model, at: 0)
+                }
+            }
 
             // 草稿 → 真实会话
             listViewModel.prepend(ref)
@@ -541,7 +583,45 @@ public final class WorkspaceStore {
             draft = nil
         } catch {
             draft?.state = .failed(error.localizedDescription)
+            persistDraftMetadata()
         }
+    }
+
+    private func persistDraftMetadata() {
+        guard let draft else { return }
+        try? localStateStore.updateState(for: .draft(draft.id)) { state in
+            state.composerDraft.workspaceID = draft.workspace?.id
+            state.composerDraft.workspacePath = draft.workspace?.url.path
+            state.composerDraft.workspaceBranch = draft.workspace?.branch
+            state.composerDraft.executionPolicy = draft.usesManagedWorktree
+                ? WorkspaceExecutionPolicy.isolatedWorktree.rawValue
+                : WorkspaceExecutionPolicy.sharedWorkspace.rawValue
+            state.composerDraft.wantsManagedWorktree = draft.usesManagedWorktree
+            state.composerDraft.managedWorktreeBaseRef = draft.managedWorktreeBaseRef.rawValue
+            state.composerDraft.managedWorktreeSuggestedName = draft.managedWorktreeSuggestedName
+            state.composerDraft.clientRequestID = draft.clientRequestID
+        }
+    }
+
+    private func makeSessionDraft(
+        from recovered: (id: UUID, state: ConversationLocalState)
+    ) -> SessionDraft {
+        let composer = recovered.state.composerDraft
+        let workspace = composer.workspacePath.flatMap { path -> Workspace? in
+            guard !path.isEmpty else { return nil }
+            return Workspace(
+                url: URL(fileURLWithPath: path),
+                branch: composer.workspaceBranch
+            )
+        }
+        return SessionDraft(
+            id: recovered.id,
+            workspace: workspace,
+            clientRequestID: composer.clientRequestID ?? "create_\(UUID().uuidString)",
+            usesManagedWorktree: composer.wantsManagedWorktree,
+            managedWorktreeBaseRef: ManagedWorktreeBaseRef(rawValue: composer.managedWorktreeBaseRef ?? "") ?? .head,
+            managedWorktreeSuggestedName: composer.managedWorktreeSuggestedName
+        )
     }
 
     // MARK: - Inspector
@@ -555,6 +635,14 @@ public final class WorkspaceStore {
     public func dismissInspector() {
         inspectorSelection = nil
         isInspectorPresented = false
+    }
+}
+
+private enum ConversationLocalDraftError: Error, LocalizedError {
+    case turnNotAccepted
+
+    var errorDescription: String? {
+        "会话已创建，但首条消息尚未被本地控制通道接收，请重试。"
     }
 }
 

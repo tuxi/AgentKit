@@ -35,6 +35,9 @@ public final class ModelSettingsStore {
     private static let lastModelKey = "code_agent.model.last_selected"
     private static let usedModelsKey = "code_agent.model.used_models"
 
+    private let defaults: UserDefaults
+    private let localStateStore: any ConversationLocalStateStore
+
     /// 每一个对话选择的模型：[conversationID: modelID]
     private var usedModels: [String: String] = [:]
     /// 最后一次选择模型（跨对话，用于新对话默认值）
@@ -42,22 +45,30 @@ public final class ModelSettingsStore {
 
     // MARK: - Init
 
-    public init() {
+    public init(
+        defaults: UserDefaults = .standard,
+        localStateStore: any ConversationLocalStateStore = SQLiteConversationLocalStateStore.shared
+    ) {
+        self.defaults = defaults
+        self.localStateStore = localStateStore
         // 从本地缓存恢复
-        self.lastSelectedModel = UserDefaults.standard.string(forKey: Self.lastModelKey)
-        self.usedModels = UserDefaults.standard.dictionary(forKey: Self.usedModelsKey) as? [String: String] ?? [:]
+        self.lastSelectedModel = defaults.string(forKey: Self.lastModelKey)
+        self.usedModels = defaults.dictionary(forKey: Self.usedModelsKey) as? [String: String] ?? [:]
+        migrateLegacyConversationModels()
     }
 
     // MARK: - Persistence
 
     private func persistLastSelected() {
         if let model = lastSelectedModel {
-            UserDefaults.standard.set(model, forKey: Self.lastModelKey)
+            defaults.set(model, forKey: Self.lastModelKey)
         }
     }
 
     private func persistUsedModels() {
-        UserDefaults.standard.set(usedModels, forKey: Self.usedModelsKey)
+        // Per-session values moved to ConversationLocalStateStore. Removing the
+        // legacy dictionary prevents two writable sources of truth.
+        defaults.removeObject(forKey: Self.usedModelsKey)
     }
 
     // MARK: - Model List Injection (called by host app)
@@ -82,11 +93,24 @@ public final class ModelSettingsStore {
         guard !modelID.isEmpty else { return }
         self.usedModels[conversation] = modelID
         persistUsedModels()
+        try? localStateStore.updateState(for: .session(conversation)) { state in
+            state.selectedModelID = modelID
+            state.recentModelIDs.removeAll { $0 == modelID }
+            state.recentModelIDs.insert(modelID, at: 0)
+            if state.recentModelIDs.count > 8 {
+                state.recentModelIDs.removeLast(state.recentModelIDs.count - 8)
+            }
+        }
     }
 
     public func getModel(with conversation: String?) -> String? {
         guard let conversation, !conversation.isEmpty else {
             return modelForNewConversation
+        }
+        if let persisted = try? localStateStore.state(for: .session(conversation))?.selectedModelID,
+           !persisted.isEmpty {
+            usedModels[conversation] = persisted
+            return persisted
         }
         return usedModels[conversation] ?? modelForNewConversation
     }
@@ -116,5 +140,32 @@ public final class ModelSettingsStore {
             return first.id
         }
         return ""
+    }
+
+    public func recentModels(for conversation: String) -> [String] {
+        guard !conversation.isEmpty else { return [] }
+        return (try? localStateStore.state(for: .session(conversation))?.recentModelIDs) ?? []
+    }
+
+    private func migrateLegacyConversationModels() {
+        guard !usedModels.isEmpty else { return }
+        var migrationSucceeded = true
+        for (sessionID, modelID) in usedModels {
+            do {
+                try localStateStore.updateState(for: .session(sessionID)) { state in
+                    if state.selectedModelID == nil {
+                        state.selectedModelID = modelID
+                    }
+                    if !state.recentModelIDs.contains(modelID) {
+                        state.recentModelIDs.append(modelID)
+                    }
+                }
+            } catch {
+                migrationSucceeded = false
+            }
+        }
+        if migrationSucceeded {
+            defaults.removeObject(forKey: Self.usedModelsKey)
+        }
     }
 }

@@ -14,9 +14,12 @@
 
 import Foundation
 
-/// UI 本地占位会话（尚未创建真实 Session）。
-/// 首条消息文本仍由输入框 `@State` 持有，因此 draft 自身无需缓冲消息。
+/// UI 本地占位会话（尚未创建真实 Session）。Composer 内容以 `id` 为键
+/// 持久化到 ConversationLocalStateStore，创建成功后原子迁移到 session ID。
 public struct SessionDraft: Equatable, Sendable {
+
+    /// Stable local identity across view reconstruction and App restarts.
+    public let id: UUID
 
     public enum State: Equatable, Sendable {
         /// 尚未选择 workspace，无法发送。
@@ -49,12 +52,14 @@ public struct SessionDraft: Equatable, Sendable {
     public var state: State
 
     public init(
+        id: UUID = UUID(),
         workspace: Workspace? = nil,
         clientRequestID: String = "create_\(UUID().uuidString)",
         usesManagedWorktree: Bool = false,
         managedWorktreeBaseRef: ManagedWorktreeBaseRef = .head,
         managedWorktreeSuggestedName: String? = nil
     ) {
+        self.id = id
         self.workspace = workspace
         self.clientRequestID = clientRequestID
         self.usesManagedWorktree = usesManagedWorktree

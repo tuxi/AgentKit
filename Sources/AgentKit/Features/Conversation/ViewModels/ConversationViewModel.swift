@@ -277,11 +277,12 @@ public final class ConversationViewModel {
     }
 
     /// 发送结构化输入，驱动一轮对话。
-    public func send(input: AgentInput) async {
-        guard !isArchived, let channel else { return }
+    @discardableResult
+    public func send(input: AgentInput) async -> Bool {
+        guard !isArchived, let channel else { return false }
         guard input.startsNewTurn, let turnCoordinator else {
             await channel.send(input: input)
-            return
+            return true
         }
 
         turnDispatchTask?.cancel()
@@ -319,6 +320,7 @@ public final class ConversationViewModel {
             }
             await turnCoordinator.cancel(ticket: ticket)
         }
+        return true
     }
 
     /// 发送消息，驱动一轮对话。

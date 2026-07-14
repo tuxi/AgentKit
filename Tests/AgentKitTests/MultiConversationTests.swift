@@ -5,7 +5,10 @@ final class MultiConversationTests: XCTestCase {
     @MainActor
     func testSelectionSwitchRetainsIndependentControllersAndChannels() async throws {
         let client = MultiSessionRuntimeClient()
-        let store = WorkspaceStore(client: client)
+        let store = WorkspaceStore(
+            client: client,
+            localStateStore: InMemoryConversationLocalStateStore()
+        )
         let a = ConversationRef(id: "a", workspacePath: "/tmp/a", name: "A")
         let b = ConversationRef(id: "b", workspacePath: "/tmp/b", name: "B")
 
@@ -29,7 +32,10 @@ final class MultiConversationTests: XCTestCase {
     @MainActor
     func testSlowOldConnectionCannotOverrideNewSelection() async throws {
         let client = MultiSessionRuntimeClient(connectDelays: ["a": .milliseconds(180)])
-        let store = WorkspaceStore(client: client)
+        let store = WorkspaceStore(
+            client: client,
+            localStateStore: InMemoryConversationLocalStateStore()
+        )
         let a = ConversationRef(id: "a", workspacePath: "", name: "A")
         let b = ConversationRef(id: "b", workspacePath: "", name: "B")
 
@@ -176,7 +182,10 @@ final class MultiConversationTests: XCTestCase {
             capabilitySnapshot: capabilities,
             activity: RuntimeActivitySnapshot(sessions: [])
         )
-        let store = WorkspaceStore(client: client)
+        let store = WorkspaceStore(
+            client: client,
+            localStateStore: InMemoryConversationLocalStateStore()
+        )
         await store.refreshRuntimeState()
         store.beginDraft()
         store.selectWorkspace(Workspace(
@@ -209,7 +218,10 @@ final class MultiConversationTests: XCTestCase {
     @MainActor
     func testManagedWorktreeDraftCannotEnableWithoutCapability() async {
         let client = MultiSessionRuntimeClient()
-        let store = WorkspaceStore(client: client)
+        let store = WorkspaceStore(
+            client: client,
+            localStateStore: InMemoryConversationLocalStateStore()
+        )
         store.beginDraft()
         store.selectWorkspace(Workspace(
             url: URL(fileURLWithPath: "/tmp/AgentKit"),
@@ -219,6 +231,102 @@ final class MultiConversationTests: XCTestCase {
         store.setDraftManagedWorktreeEnabled(true)
 
         XCTAssertFalse(store.draft?.usesManagedWorktree ?? true)
+    }
+
+    @MainActor
+    func testPersistedDraftRestoresWorkspaceAndStableProvisioningIdentity() throws {
+        let localState = InMemoryConversationLocalStateStore()
+        let draftID = UUID()
+        try localState.updateState(for: .draft(draftID)) { state in
+            state.composerDraft.text = "continue after restart"
+            state.composerDraft.workspacePath = "/tmp/AgentKit"
+            state.composerDraft.workspaceBranch = "main"
+            state.composerDraft.clientRequestID = "create-stable"
+            state.composerDraft.wantsManagedWorktree = true
+            state.composerDraft.managedWorktreeBaseRef = "fresh"
+            state.composerDraft.managedWorktreeSuggestedName = "steady-turing"
+            state.selectedModelID = "model-a"
+        }
+        let store = WorkspaceStore(
+            client: MultiSessionRuntimeClient(),
+            localStateStore: localState
+        )
+
+        store.restoreDraftOrBegin()
+
+        XCTAssertEqual(store.draft?.id, draftID)
+        XCTAssertEqual(store.draft?.workspace?.url.path, "/tmp/AgentKit")
+        XCTAssertEqual(store.draft?.workspace?.branch, "main")
+        XCTAssertEqual(store.draft?.clientRequestID, "create-stable")
+        XCTAssertEqual(store.draft?.managedWorktreeSuggestedName, "steady-turing")
+        XCTAssertEqual(store.draft?.managedWorktreeBaseRef, .fresh)
+        XCTAssertTrue(store.draft?.usesManagedWorktree == true)
+        XCTAssertEqual(
+            try localState.state(for: .draft(draftID))?.composerDraft.text,
+            "continue after restart"
+        )
+    }
+
+    @MainActor
+    func testDraftCommitMigratesStateAndClearsOnlySubmittedText() async throws {
+        let localState = InMemoryConversationLocalStateStore()
+        let client = MultiSessionRuntimeClient()
+        let store = WorkspaceStore(client: client, localStateStore: localState)
+        store.beginDraft()
+        store.selectWorkspace(Workspace(
+            url: URL(fileURLWithPath: "/tmp/AgentKit"),
+            branch: "main"
+        ))
+        let draftID = try XCTUnwrap(store.draft?.id)
+        try localState.updateState(for: .draft(draftID)) { state in
+            state.composerDraft.text = "persist while sending"
+            state.selectedModelID = "model-a"
+        }
+
+        await store.commitDraft(firstMessage: "persist while sending", model: "model-a")
+
+        let sessionID = try XCTUnwrap(store.selectedConversation?.id)
+        XCTAssertNil(store.draft)
+        XCTAssertNil(try localState.state(for: .draft(draftID)))
+        let session = try XCTUnwrap(localState.state(for: .session(sessionID)))
+        XCTAssertEqual(session.composerDraft.text, "")
+        XCTAssertEqual(session.selectedModelID, "model-a")
+
+        // A disappearing draft composer may still attempt one final write.
+        try localState.updateState(for: .draft(draftID)) { state in
+            state.composerDraft.text = "stale write"
+        }
+        XCTAssertNil(try localState.state(for: .draft(draftID)))
+    }
+
+    @MainActor
+    func testArchiveRetainsLocalStateAndPermanentDeleteRemovesIt() async throws {
+        let capabilities = RuntimeCapabilitySnapshot(capabilities: [
+            "conversation_archive_v1": true,
+        ])
+        let conversation = ConversationRef(id: "local-lifecycle", workspacePath: "/tmp/project")
+        let client = MultiSessionRuntimeClient(
+            capabilitySnapshot: capabilities,
+            activity: RuntimeActivitySnapshot(sessions: []),
+            activeConversations: [conversation]
+        )
+        let localState = InMemoryConversationLocalStateStore()
+        try localState.updateState(for: .session(conversation.id)) { state in
+            state.composerDraft.text = "keep on archive"
+            state.selectedModelID = "model-a"
+        }
+        let store = WorkspaceStore(client: client, localStateStore: localState)
+        await store.listViewModel.refresh()
+        await store.refreshRuntimeState()
+
+        let archived = try await store.archiveConversation(conversation)
+        XCTAssertEqual(
+            try localState.state(for: .session(conversation.id))?.composerDraft.text,
+            "keep on archive"
+        )
+
+        try await store.deleteConversation(archived, worktreeDisposition: .keep)
+        XCTAssertNil(try localState.state(for: .session(conversation.id)))
     }
 
     func testManagedWorktreeSuggestedNameIsReadableAndStableWithinDraft() {
@@ -263,10 +371,13 @@ final class MultiConversationTests: XCTestCase {
             "workspace_execution_policy_v1": true,
             "managed_worktree_v1": true,
         ])
-        let store = WorkspaceStore(client: MultiSessionRuntimeClient(
-            capabilitySnapshot: capabilities,
-            activity: RuntimeActivitySnapshot(sessions: [])
-        ))
+        let store = WorkspaceStore(
+            client: MultiSessionRuntimeClient(
+                capabilitySnapshot: capabilities,
+                activity: RuntimeActivitySnapshot(sessions: [])
+            ),
+            localStateStore: InMemoryConversationLocalStateStore()
+        )
         await store.refreshRuntimeState()
         store.beginDraft()
         store.selectWorkspace(Workspace(

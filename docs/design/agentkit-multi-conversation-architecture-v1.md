@@ -1,6 +1,6 @@
 # AgentKit 多会话执行架构 v1
 
-> 状态：Draft
+> 状态：Active — 多控制器、Attention、Managed Worktree、Archive/Restore 与本地状态 v1 已落地
 >
 > 适用端：macOS、iOS
 >
@@ -425,12 +425,16 @@ Workspace；UI 以 `baseWorkspaceID` 分组，以 `workspaceID` 标识实际 che
 - AgentKit 按 `baseWorkspaceID` 分组，并展示 checkout/branch/provisioning 状态；
 - 全部验收后才启用 `managed_worktree_v1`。
 
-### 后续：ConversationLocalStateStore
+### ConversationLocalStateStore（已完成）
 
 - 将 per-conversation 模型、recent models、输入/附件草稿和已读游标收敛到客户端持久化 Store；
 - 使用稳定 `draftID` 保存尚未创建 session 的 Composer，并在创建成功后原子迁移到 `sessionID`；
 - App 退出、view 回收和会话切换不得丢失输入草稿；
 - 该 Store 是客户端本地真相，不进入 Runtime activity，且不阻塞 Managed Worktree v1。
+
+AgentKit v1 使用 Application Support SQLite + WAL，实现 Composer debounce、App 生命周期
+flush、draft→session 原子迁移、迟到写 tombstone、旧模型/Attention UserDefaults 迁移，以及
+archive 保留/永久删除清理。附件引用已进入持久化模型；实际附件选择与上传仍由独立资产功能推进。
 
 ## 15. 测试与验收
 

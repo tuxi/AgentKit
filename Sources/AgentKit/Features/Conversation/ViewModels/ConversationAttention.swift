@@ -64,6 +64,127 @@ public protocol ConversationAttentionReadStore: Sendable {
 
     func lastNotifiedApprovalSequence(for sessionID: String) -> Int64?
     func setLastNotifiedApprovalSequence(_ sequence: Int64, for sessionID: String)
+
+    func lastReadSequence(for sessionID: String) -> Int64?
+    func setLastReadSequence(_ sequence: Int64, for sessionID: String)
+}
+
+public extension ConversationAttentionReadStore {
+    func lastReadSequence(for sessionID: String) -> Int64? {
+        lastSeenTerminalSequence(for: sessionID)
+    }
+
+    func setLastReadSequence(_ sequence: Int64, for sessionID: String) {
+        setLastSeenTerminalSequence(sequence, for: sessionID)
+    }
+}
+
+/// Default attention adapter backed by the unified local-state database. Reads
+/// fall back to the previous UserDefaults store once, so an upgrade cannot emit
+/// every historical terminal as a new notification.
+public final class ConversationLocalStateAttentionReadStore: ConversationAttentionReadStore, @unchecked Sendable {
+    public static let shared = ConversationLocalStateAttentionReadStore(
+        localStateStore: SQLiteConversationLocalStateStore.shared
+    )
+
+    private enum Cursor {
+        case seenTerminal
+        case notifiedTerminal
+        case notifiedApproval
+    }
+
+    private let localStateStore: any ConversationLocalStateStore
+    private let legacyStore: UserDefaultsConversationAttentionReadStore?
+
+    public init(
+        localStateStore: any ConversationLocalStateStore,
+        legacyStore: UserDefaultsConversationAttentionReadStore? = .shared
+    ) {
+        self.localStateStore = localStateStore
+        self.legacyStore = legacyStore
+    }
+
+    public var hasEstablishedBaseline: Bool {
+        if localStateStore.hasEstablishedAttentionBaseline { return true }
+        guard legacyStore?.hasEstablishedBaseline == true else { return false }
+        try? localStateStore.establishAttentionBaseline()
+        return true
+    }
+
+    public func establishBaseline() {
+        try? localStateStore.establishAttentionBaseline()
+    }
+
+    public func lastSeenTerminalSequence(for sessionID: String) -> Int64? {
+        cursor(.seenTerminal, sessionID: sessionID)
+    }
+
+    public func setLastSeenTerminalSequence(_ sequence: Int64, for sessionID: String) {
+        setCursor(.seenTerminal, sequence: sequence, sessionID: sessionID)
+    }
+
+    public func lastNotifiedTerminalSequence(for sessionID: String) -> Int64? {
+        cursor(.notifiedTerminal, sessionID: sessionID)
+    }
+
+    public func setLastNotifiedTerminalSequence(_ sequence: Int64, for sessionID: String) {
+        setCursor(.notifiedTerminal, sequence: sequence, sessionID: sessionID)
+    }
+
+    public func lastNotifiedApprovalSequence(for sessionID: String) -> Int64? {
+        cursor(.notifiedApproval, sessionID: sessionID)
+    }
+
+    public func setLastNotifiedApprovalSequence(_ sequence: Int64, for sessionID: String) {
+        setCursor(.notifiedApproval, sequence: sequence, sessionID: sessionID)
+    }
+
+    public func lastReadSequence(for sessionID: String) -> Int64? {
+        (try? localStateStore.state(for: .session(sessionID))?.lastReadSequence) ?? nil
+    }
+
+    public func setLastReadSequence(_ sequence: Int64, for sessionID: String) {
+        try? localStateStore.updateState(for: .session(sessionID)) { state in
+            state.lastReadSequence = max(state.lastReadSequence, sequence)
+        }
+    }
+
+    private func cursor(_ cursor: Cursor, sessionID: String) -> Int64? {
+        let state = try? localStateStore.state(for: .session(sessionID))
+        let value: Int64
+        switch cursor {
+        case .seenTerminal: value = state?.lastSeenTerminalSequence ?? 0
+        case .notifiedTerminal: value = state?.lastNotifiedTerminalSequence ?? 0
+        case .notifiedApproval: value = state?.lastNotifiedApprovalSequence ?? 0
+        }
+        if value > 0 { return value }
+
+        let legacy: Int64?
+        switch cursor {
+        case .seenTerminal: legacy = legacyStore?.lastSeenTerminalSequence(for: sessionID)
+        case .notifiedTerminal: legacy = legacyStore?.lastNotifiedTerminalSequence(for: sessionID)
+        case .notifiedApproval: legacy = legacyStore?.lastNotifiedApprovalSequence(for: sessionID)
+        }
+        if let legacy {
+            setCursor(cursor, sequence: legacy, sessionID: sessionID)
+            return legacy
+        }
+        return state == nil ? nil : 0
+    }
+
+    private func setCursor(_ cursor: Cursor, sequence: Int64, sessionID: String) {
+        try? localStateStore.updateState(for: .session(sessionID)) { state in
+            switch cursor {
+            case .seenTerminal:
+                state.lastSeenTerminalSequence = max(state.lastSeenTerminalSequence, sequence)
+                state.lastReadSequence = max(state.lastReadSequence, sequence)
+            case .notifiedTerminal:
+                state.lastNotifiedTerminalSequence = max(state.lastNotifiedTerminalSequence, sequence)
+            case .notifiedApproval:
+                state.lastNotifiedApprovalSequence = max(state.lastNotifiedApprovalSequence, sequence)
+            }
+        }
+    }
 }
 
 /// Default local persistence. Session IDs are server-assigned and stable across

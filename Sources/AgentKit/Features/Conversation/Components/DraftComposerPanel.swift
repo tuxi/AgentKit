@@ -14,8 +14,9 @@ import SwiftUI
 /// 用于草稿页（新建对话）和活跃会话两种场景。
 /// 对标 Claude Code / Codex：模型选择器在输入栏中，每个对话独立管理自己的模型。
 struct DraftComposerPanel: View {
-    
+    @Environment(WorkspaceStore.self) private var workspaceStore
     @Environment(ModelSettingsStore.self) private var modelSettings
+    @Environment(\.scenePhase) private var scenePhase
 
     let placeholder: String
     let isEnabled: Bool
@@ -36,6 +37,9 @@ struct DraftComposerPanel: View {
 
     @State private var text = ""
     @State private var isSending = false
+    @State private var loadedStateKey: ConversationLocalStateKey?
+    @State private var pendingSaveTask: Task<Void, Never>?
+    @State private var isRestoringLocalState = false
 #if os(macOS)
     @State private var composerHeight: CGFloat = 56
     private let composerMinHeight: CGFloat = 56
@@ -141,10 +145,21 @@ struct DraftComposerPanel: View {
 //                .stroke(Color.draftPanelStroke, lineWidth: 1)
 //        }
         .shadow(color: .black.opacity(0.10), radius: 20, y: 10)
-        .task(id: viewModel?.conversation?.id ?? "draft-\(draftRevision)") {
-            // 模型列表由宿主 App（如 CodeAgentApp）在启动时注入。
-            // ModelSettingsStore.setAvailableModels(_:defaultModel:) 应在 App 初始化时调用。
-            selectedModel = modelSettings.getModel(with: viewModel?.conversation?.id)
+        .task(id: persistenceKey?.storageKey ?? "none-\(draftRevision)") {
+            restoreLocalState()
+        }
+        .onChange(of: text) { _, newValue in
+            guard !isRestoringLocalState, let key = loadedStateKey else { return }
+            scheduleTextSave(newValue, for: key)
+        }
+        .onChange(of: scenePhase) { _, phase in
+            if phase == .background || phase == .inactive {
+                persistCurrentText()
+                try? workspaceStore.localStateStore.flush()
+            }
+        }
+        .onDisappear {
+            persistCurrentText()
         }
     }
 
@@ -187,6 +202,7 @@ struct DraftComposerPanel: View {
                         selectedModel = modelID
                         viewModel?.selectedModel = modelID
                         modelSettings.didUseModel(modelID, conversation: viewModel?.conversation?.id ?? "")
+                        persistModel(modelID)
                         onModelChange?(modelID)
                         isMenuPresented = false
                     } label: {
@@ -278,7 +294,69 @@ struct DraftComposerPanel: View {
         Task {
             let ok = await onSend(toSend, selectedModel ?? "")
             isSending = false
-            if ok { text = "" }
+            if ok {
+                text = ""
+                persistCurrentText()
+            }
+        }
+    }
+
+    private var persistenceKey: ConversationLocalStateKey? {
+        if isDraft, let id = workspaceStore.draft?.id {
+            return .draft(id)
+        }
+        if let id = viewModel?.conversation?.id ?? workspaceStore.selectedConversation?.id {
+            return .session(id)
+        }
+        return nil
+    }
+
+    private func restoreLocalState() {
+        pendingSaveTask?.cancel()
+        if let oldKey = loadedStateKey {
+            persist(text: text, for: oldKey)
+        }
+        let key = persistenceKey
+        loadedStateKey = key
+        isRestoringLocalState = true
+        defer { isRestoringLocalState = false }
+
+        let state = key.flatMap { try? workspaceStore.localStateStore.state(for: $0) }
+        text = state?.composerDraft.text ?? ""
+        selectedModel = state?.selectedModelID
+            ?? modelSettings.getModel(with: viewModel?.conversation?.id)
+    }
+
+    private func scheduleTextSave(_ value: String, for key: ConversationLocalStateKey) {
+        pendingSaveTask?.cancel()
+        pendingSaveTask = Task {
+            try? await Task.sleep(for: .milliseconds(400))
+            guard !Task.isCancelled else { return }
+            persist(text: value, for: key)
+        }
+    }
+
+    private func persistCurrentText() {
+        pendingSaveTask?.cancel()
+        guard let key = loadedStateKey else { return }
+        persist(text: text, for: key)
+    }
+
+    private func persist(text: String, for key: ConversationLocalStateKey) {
+        try? workspaceStore.localStateStore.updateState(for: key) { state in
+            state.composerDraft.text = text
+        }
+    }
+
+    private func persistModel(_ modelID: String) {
+        guard let key = loadedStateKey, !modelID.isEmpty else { return }
+        try? workspaceStore.localStateStore.updateState(for: key) { state in
+            state.selectedModelID = modelID
+            state.recentModelIDs.removeAll { $0 == modelID }
+            state.recentModelIDs.insert(modelID, at: 0)
+            if state.recentModelIDs.count > 8 {
+                state.recentModelIDs.removeLast(state.recentModelIDs.count - 8)
+            }
         }
     }
 }
@@ -441,4 +519,3 @@ struct PlanApprovalBar: View {
         }
     }
 }
-

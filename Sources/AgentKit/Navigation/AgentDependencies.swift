@@ -28,6 +28,10 @@ public struct AgentDependencies {
     /// GUI-owned persistence for terminal read/notified cursors.
     public let attentionReadStore: any ConversationAttentionReadStore
 
+    /// GUI-owned durable composer/model/read state. Hosts may inject an encrypted
+    /// implementation; the default uses Application Support SQLite.
+    public let localStateStore: any ConversationLocalStateStore
+
     /// Host hook for local notifications or other out-of-conversation alerts.
     public let onAttentionEvent: (@MainActor (ConversationAttentionEvent) -> Void)?
 
@@ -36,14 +40,17 @@ public struct AgentDependencies {
         toolRegistry: ToolRegistry = ToolRegistry(),
         timelineExtensions: [any TimelineExtension] = [],
         onAuthExpired: (@MainActor () async -> Void)? = nil,
-        attentionReadStore: any ConversationAttentionReadStore = UserDefaultsConversationAttentionReadStore.shared,
+        localStateStore: any ConversationLocalStateStore = SQLiteConversationLocalStateStore.shared,
+        attentionReadStore: (any ConversationAttentionReadStore)? = nil,
         onAttentionEvent: (@MainActor (ConversationAttentionEvent) -> Void)? = nil
     ) {
         self.client = client
         self.toolRegistry = toolRegistry
         self.timelineExtensions = timelineExtensions
         self.onAuthExpired = onAuthExpired
+        self.localStateStore = localStateStore
         self.attentionReadStore = attentionReadStore
+            ?? ConversationLocalStateAttentionReadStore(localStateStore: localStateStore)
         self.onAttentionEvent = onAttentionEvent
     }
 }

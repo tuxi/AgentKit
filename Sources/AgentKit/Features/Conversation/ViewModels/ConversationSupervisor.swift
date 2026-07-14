@@ -81,7 +81,7 @@ public final class ConversationSupervisor {
         toolRegistry: ToolRegistry,
         timelineExtensions: [any TimelineExtension],
         onAuthExpired: (@MainActor () async -> Void)?,
-        attentionReadStore: any ConversationAttentionReadStore = UserDefaultsConversationAttentionReadStore.shared,
+        attentionReadStore: any ConversationAttentionReadStore = ConversationLocalStateAttentionReadStore.shared,
         onAttentionEvent: (@MainActor (ConversationAttentionEvent) -> Void)? = nil
     ) {
         self.client = client
@@ -381,6 +381,10 @@ public final class ConversationSupervisor {
         for activity in snapshot.sessions {
             guard knownIDs.contains(activity.sessionID) else { continue }
             let sessionID = activity.sessionID
+
+            if selectedSessionID == sessionID, let sequence = activity.lastSequence, sequence > 0 {
+                attentionReadStore.setLastReadSequence(sequence, for: sessionID)
+            }
 
             // A session first observed after the migration baseline is new work.
             if attentionReadStore.lastSeenTerminalSequence(for: sessionID) == nil {

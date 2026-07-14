@@ -94,7 +94,7 @@ public struct ConversationDetailView: View {
                 && store.activeConversationViewModel == nil
                 && store.selectedConversation == nil
                 && conversation == nil {
-                store.beginDraft()
+                store.restoreDraftOrBegin()
             }
         }
     }
@@ -208,10 +208,9 @@ public struct ConversationDetailView: View {
                         onStop: { Task { await vm.cancelTurn() } },
                         onSend: { text, model in
                             let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
-                            await vm.send(input: .text(trimmed, model: model))
-                            return true
+                            return await vm.send(input: .text(trimmed, model: model))
                         },
-                        viewModel: viewModel,
+                        viewModel: vm,
                         onModelChange: { newID in
                             #if os(iOS)
                             Task {
