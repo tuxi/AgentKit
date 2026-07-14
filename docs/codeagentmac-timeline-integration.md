@@ -81,9 +81,10 @@ CodeAgentMac 的 Timeline 卡片建议这样映射：
 
 ## 边界与插件接入
 
-AgentKit 仅提供通用 `TimelineExtension`：接收已摄入的 `AgentEvent`，并可在每个 turn
-之后返回宿主自有的视图。它不识别 `action_commit`、desktop-control schema、Broker、MCP
-socket 或 Artifact URI。
+AgentKit 提供两层宿主扩展契约：`TimelineExtension` 可为原生回退返回 `AnyView`；
+`WebTimelineExtension` 为单文档 workbench 返回安全的 `TimelineWebNode` 语义节点
+（card/section/row/badge/action），不接受任意主文档 HTML/JavaScript。它仍不识别
+`action_commit`、desktop-control schema、Broker、MCP socket 或 Artifact URI。
 
 CodeAgentMac 的实现位于 `Examples/CodeAgent/CodeAgent/DesktopControlEvidenceTimeline.swift`：
 
@@ -93,7 +94,10 @@ CodeAgentMac 的实现位于 `Examples/CodeAgent/CodeAgent/DesktopControlEvidenc
    `mcp__desktop_control__evidence_timeline_item_get` 结构化 output 读取 Timeline item；
 3. 直接用 Timeline item 渲染卡片；不读取 SQLite，也不从 Markdown 反推数据；
 4. 可选地消费 `mcp__desktop_control__evidence_bundle_export` 的 output，显示 runtime
-   已导出的 `resource_link`。
+   已导出的 `resource_link`；
+5. 同一份 card 状态同时生成原生卡片和语义 Web 节点；Markdown/HTML 报告动作经
+   opaque registry 打开 AgentKit 原生 Inspector。HTML 只进入禁脚本、禁网络和禁二次
+   导航的隔离 WebView，不注入对话 DOM。
 
 `.mcp.json`、MCP server 生命周期、`tools/call` 和 `resources/read` 全部由 Go runtime
 管理；CodeAgentMac 不启动 `desktop-control-mcp`，也不持有 Broker socket。

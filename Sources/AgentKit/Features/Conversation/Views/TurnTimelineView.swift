@@ -18,15 +18,19 @@ public struct TurnTimelineView: View {
     /// Stable conversation identity. The native macOS timeline uses this to
     /// distinguish a newly opened conversation from a streaming update.
     let conversationID: String?
+    let rendererMode: ConversationRendererMode
+    @State private var didWebRendererFail = false
 
     public init(
         snapshot: RuntimeSnapshot,
         timelineExtensions: [any TimelineExtension] = [],
-        conversationID: String? = nil
+        conversationID: String? = nil,
+        rendererMode: ConversationRendererMode = .auto
     ) {
         self.snapshot = snapshot
         self.timelineExtensions = timelineExtensions
         self.conversationID = conversationID
+        self.rendererMode = rendererMode
     }
     
     // 获取当前排在最底部的view的id
@@ -39,14 +43,26 @@ public struct TurnTimelineView: View {
 
     public var body: some View {
         #if os(macOS)
-        // AppKit owns the scroll container on macOS.  TurnView itself remains
-        // unchanged, so its TextKit-backed NativeTranscriptView is still the
-        // renderer for every transcript row.
-        MacNativeChatTimeline(
-            snapshot: snapshot,
-            timelineExtensions: timelineExtensions,
-            conversationID: conversationID
-        )
+        switch didWebRendererFail ? .native : rendererMode.resolved(
+            hasLegacyTimelineExtensions: hasLegacyTimelineExtensions
+        ) {
+        case .web:
+            ConversationWebWorkbenchView(
+                snapshot: snapshot,
+                conversationID: conversationID,
+                extensionContributions: webExtensionContributions,
+                timelineExtensions: timelineExtensions,
+                onFatalFailure: { didWebRendererFail = true }
+            )
+        case .native, .auto:
+            // AppKit owns the native scroll container. TurnView itself remains
+            // unchanged, preserving the TextKit behavior reference and rollback.
+            MacNativeChatTimeline(
+                snapshot: snapshot,
+                timelineExtensions: timelineExtensions,
+                conversationID: conversationID
+            )
+        }
         #else
         FollowingScrollView(
             lastItemId: actualLastItemId,
@@ -89,6 +105,29 @@ public struct TurnTimelineView: View {
         .background(timelineBackground.ignoresSafeArea())
         #endif
     }
+
+    #if os(macOS)
+    private var hasLegacyTimelineExtensions: Bool {
+        timelineExtensions.contains { !($0 is any WebTimelineExtension) }
+    }
+
+    private var webExtensionContributions: [String: [TimelineWebContribution]] {
+        var result: [String: [TimelineWebContribution]] = [:]
+        for turn in snapshot.turns {
+            var contributions: [TimelineWebContribution] = []
+            for timelineExtension in timelineExtensions {
+                guard let webExtension = timelineExtension as? any WebTimelineExtension else {
+                    continue
+                }
+                contributions.append(contentsOf: webExtension.makeWebNodes(for: turn.id).map {
+                    TimelineWebContribution(extensionID: timelineExtension.id, node: $0)
+                })
+            }
+            if !contributions.isEmpty { result[turn.id] = contributions }
+        }
+        return result
+    }
+    #endif
 
     private var timelineBackground: Color {
         #if os(iOS)

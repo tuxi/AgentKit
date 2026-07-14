@@ -13,24 +13,20 @@ import AgentKit
 
 struct CodeAgentRootView: View {
 
-    @Environment(AppContainer.self) private var container
-
     @State private var store: WorkspaceStore
     @State private var router = AgentRouter()
     @State private var columnVisibility: NavigationSplitViewVisibility = .all
 
-    init() {
-        let dependencies = AgentDependencies(
-            client: DefaultAgentClient(
-                environment: RuntimeEnvironment(host: "127.0.0.1", port: 8797)
-            ),
-            toolRegistry: ToolRegistry()
-        )
+    init(dependencies: AgentDependencies) {
         self._store = State(initialValue: WorkspaceStore(
             client: dependencies.client,
             toolRegistry: dependencies.toolRegistry,
-            timelineExtensions: [],
-            onAuthExpired: nil
+            timelineExtensions: dependencies.timelineExtensions,
+            conversationRendererMode: dependencies.conversationRendererMode,
+            onAuthExpired: dependencies.onAuthExpired,
+            localStateStore: dependencies.localStateStore,
+            attentionReadStore: dependencies.attentionReadStore,
+            onAttentionEvent: dependencies.onAttentionEvent
         ))
     }
 

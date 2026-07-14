@@ -21,6 +21,9 @@ public struct AgentDependencies {
     /// Host-owned additions to the generic conversation Timeline.
     public let timelineExtensions: [any TimelineExtension]
 
+    /// macOS conversation detail renderer. Auto selects Web when all extensions support it.
+    public let conversationRendererMode: ConversationRendererMode
+
     /// auth 恢复钩子。收到 `turn_failed(code: auth_expired)` 时由 ViewModel 调用。
     /// Host 在此实现「刷新 token → Reconfigure Runtime」（credential-injection-v1 §5.2）。
     public let onAuthExpired: (@MainActor () async -> Void)?
@@ -39,6 +42,7 @@ public struct AgentDependencies {
         client: RuntimeClient,
         toolRegistry: ToolRegistry = ToolRegistry(),
         timelineExtensions: [any TimelineExtension] = [],
+        conversationRendererMode: ConversationRendererMode = .auto,
         onAuthExpired: (@MainActor () async -> Void)? = nil,
         localStateStore: any ConversationLocalStateStore = SQLiteConversationLocalStateStore.shared,
         attentionReadStore: (any ConversationAttentionReadStore)? = nil,
@@ -47,6 +51,7 @@ public struct AgentDependencies {
         self.client = client
         self.toolRegistry = toolRegistry
         self.timelineExtensions = timelineExtensions
+        self.conversationRendererMode = conversationRendererMode
         self.onAuthExpired = onAuthExpired
         self.localStateStore = localStateStore
         self.attentionReadStore = attentionReadStore

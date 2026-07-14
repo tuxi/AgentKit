@@ -15,7 +15,7 @@ import WebKit
 
 @MainActor
 @Observable
-final class DesktopControlEvidenceTimeline: TimelineExtension {
+final class DesktopControlEvidenceTimeline: WebTimelineExtension {
     let id = "com.objc.codeagent.desktop-control-evidence"
 
     private var cards: [DesktopEvidenceCard] = []
@@ -52,6 +52,84 @@ final class DesktopControlEvidenceTimeline: TimelineExtension {
                 }
             }
         )
+    }
+
+    func makeWebNodes(for turnID: String) -> [TimelineWebNode] {
+        cards.filter { $0.turnID == turnID }.map { card in
+            guard let item = card.item else {
+                return TimelineWebNode(
+                    id: card.id,
+                    title: "正在等待 Evidence Timeline…",
+                    summary: card.auditEventID,
+                    status: "pending",
+                    tone: .neutral
+                )
+            }
+
+            var documentActions: [TimelineWebNode.ActionReference] = []
+            if let markdown = item.documents.markdown {
+                documentActions.append(.document(
+                    id: "\(markdown.id).open",
+                    title: "Markdown",
+                    tooltip: markdown.title,
+                    document: TimelineWebDocument(
+                        id: markdown.id,
+                        title: markdown.title,
+                        format: .markdown,
+                        body: markdown.body
+                    )
+                ))
+            }
+            if let html = item.documents.html {
+                documentActions.append(.document(
+                    id: "\(html.id).open",
+                    title: "HTML",
+                    tooltip: html.title,
+                    document: TimelineWebDocument(
+                        id: html.id,
+                        title: html.title,
+                        format: .html,
+                        body: html.body
+                    )
+                ))
+            }
+
+            return TimelineWebNode(
+                id: card.id,
+                title: item.title,
+                summary: item.summary,
+                status: item.status,
+                tone: webTone(for: item.status),
+                badges: [
+                    .init(id: "action", text: item.actionType, tone: .info),
+                    .init(id: "target", text: item.target),
+                    .init(id: "risk", text: item.risk, tone: item.risk == "high" ? .warning : .neutral),
+                ],
+                sections: item.sections.map { section in
+                    .init(
+                        id: section.id,
+                        title: section.title,
+                        summary: section.summary,
+                        status: section.status,
+                        rows: section.rows.map {
+                            .init(id: $0.id, label: $0.label, value: $0.displayValue)
+                        }
+                    )
+                },
+                actions: documentActions,
+                footer: card.bundle.map { "证据 bundle 已导出 · \($0.artifact.uri)" }
+            )
+        }
+    }
+
+    private func webTone(for status: String) -> TimelineWebNode.Tone {
+        switch status {
+        case "passed": return .success
+        case "failed", "error": return .danger
+        case "observed": return .info
+        case "unavailable": return .warning
+        default: return .neutral
+        }
     }
 
     private func registerActionCommit(callID: String, turnID: String?, output: JSONValue?) {

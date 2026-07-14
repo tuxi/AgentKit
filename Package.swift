@@ -37,7 +37,8 @@ let package = Package(
             resources: [
                 // iOS 内嵌 runtime 的默认 config，经 Bundle.module 读取传给 MobileStart。
                 .copy("Resources/config.yaml"),
-                .copy("Resources/skills")   // 从 build/skills/ 拷贝到 app bundle
+                .copy("Resources/skills"),   // 从 build/skills/ 拷贝到 app bundle
+                .copy("Resources/ConversationWeb")
             ],
             linkerSettings: [
                 .linkedLibrary("sqlite3")

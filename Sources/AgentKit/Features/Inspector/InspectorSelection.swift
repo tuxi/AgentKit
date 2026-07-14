@@ -18,6 +18,7 @@ public enum InspectorSelection: Hashable {
     case tool(String)
     case plan(String)
     case childStream(ChildStreamSelection)
+    case timelineDocument(TimelineWebDocument)
 }
 
 /// P8.7 — 子流查看器（task 子agent / 后台 job）的选择载荷。

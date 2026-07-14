@@ -19,7 +19,7 @@ struct CodeAgentApp: App {
 
     var body: some Scene {
         WindowGroup {
-            CodeAgentRootView()
+            CodeAgentRootView(dependencies: container.makeAgentDependencies())
                 .environment(container)
                 .environment(container.modelSettings)
         }

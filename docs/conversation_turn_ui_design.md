@@ -3,6 +3,13 @@
 > 对话详情页的渲染规范。目标：一轮对话（turn）在视觉上是**一条连续的消息**，
 > 而不是一串平级事件卡片 —— 对齐 Claude Code / Cursor 的 agent turn 体验。
 
+> **Renderer evolution (2026-07-14):** Turn/Block 语义模型继续作为唯一内容模型；macOS
+> 已加入单会话单 `WKWebView` 的 Web workbench 实现，以及 action registry、原生
+> Inspector/文件/资产路由、增量 DOM patch、selection anchor 和完整滚动契约的核心实现。
+> 当前 `.auto` 已对所有扩展都支持 `WebTimelineExtension` 的 macOS 配置默认启用 Web；
+> 旧 `AnyView` 扩展、shell 加载失败或 Web 进程连续异常会回退原生时间线。迁移与验收计划见
+> [`design/agentkit-conversation-web-workbench-v1.md`](design/agentkit-conversation-web-workbench-v1.md)。
+
 ## Status — 已实现（addendum, 2026-06）
 
 Turn → Block 模型已落地（Phase A–E），实机验证通过。落地过程中有一处**关键修正**，

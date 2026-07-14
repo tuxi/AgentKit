@@ -2,6 +2,7 @@
 /.build
 build/
 /build
+node_modules/
 /Packages
 xcuserdata/
 DerivedData/

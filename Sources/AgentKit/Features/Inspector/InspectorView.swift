@@ -62,6 +62,10 @@ public struct InspectorView: View {
 
                 ChildStreamInspectorView(selection: selection)
 
+            case .timelineDocument(let document):
+
+                TimelineDocumentInspectorView(document: document)
+
             default:
 
                 ContentUnavailableView(
