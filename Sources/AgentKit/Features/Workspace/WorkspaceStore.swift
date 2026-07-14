@@ -106,6 +106,14 @@ public final class WorkspaceStore {
         supervisor.runtimeCapabilities.supportsManagedWorktree
     }
 
+    public var runtimeCapabilityDiscoveryState: RuntimeCapabilityDiscoveryState {
+        supervisor.runtimeCapabilityDiscoveryState
+    }
+
+    public var runtimeCapabilityErrorMessage: String? {
+        supervisor.runtimeCapabilityErrorMessage
+    }
+
     /// 手动续跑 paused 会话时的短暂状态。
     public private(set) var isResumingPausedConversation = false
 
@@ -360,6 +368,9 @@ public final class WorkspaceStore {
         projects.reload()                   // 项目目录可能被「文件」App 改动，开草稿时刷新
         draft = SessionDraft(workspace: recentWorkspaces.mostRecent)
         draftNavigationRevision += 1
+        if runtimeCapabilityDiscoveryState != .available {
+            Task { await refreshRuntimeState() }
+        }
     }
 
     /// 在 Documents 根下创建新项目并选入当前草稿（iOS）。失败时抛 `ProjectsError`。
@@ -402,7 +413,6 @@ public final class WorkspaceStore {
     public func setDraftManagedWorktreeEnabled(_ enabled: Bool) {
         guard draft != nil else { return }
         guard !enabled || supportsManagedWorktreeCreation else { return }
-        guard !enabled || draft?.workspace?.branch != nil else { return }
         draft?.usesManagedWorktree = enabled
     }
 

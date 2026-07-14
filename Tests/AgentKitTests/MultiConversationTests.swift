@@ -217,6 +217,51 @@ final class MultiConversationTests: XCTestCase {
     }
 
     @MainActor
+    func testManagedWorktreeCapabilityDiscoveryIsNotConflatedWithLegacy() async {
+        let capabilities = RuntimeCapabilitySnapshot(capabilities: [
+            "workspace_execution_policy_v1": true,
+            "managed_worktree_v1": true,
+        ])
+        let availableStore = WorkspaceStore(client: MultiSessionRuntimeClient(
+            capabilitySnapshot: capabilities,
+            activity: RuntimeActivitySnapshot(sessions: [])
+        ))
+
+        XCTAssertEqual(availableStore.runtimeCapabilityDiscoveryState, .idle)
+        await availableStore.refreshRuntimeState()
+        XCTAssertEqual(availableStore.runtimeCapabilityDiscoveryState, .available)
+        XCTAssertTrue(availableStore.supportsManagedWorktreeCreation)
+
+        let unavailableStore = WorkspaceStore(client: MultiSessionRuntimeClient())
+        await unavailableStore.refreshRuntimeState()
+        XCTAssertEqual(unavailableStore.runtimeCapabilityDiscoveryState, .unavailable)
+        XCTAssertFalse(unavailableStore.supportsManagedWorktreeCreation)
+        XCTAssertNotNil(unavailableStore.runtimeCapabilityErrorMessage)
+    }
+
+    @MainActor
+    func testRuntimeCapabilityAllowsManagedWorktreeWhenLocalBranchProbeIsUnavailable() async {
+        let capabilities = RuntimeCapabilitySnapshot(capabilities: [
+            "workspace_execution_policy_v1": true,
+            "managed_worktree_v1": true,
+        ])
+        let store = WorkspaceStore(client: MultiSessionRuntimeClient(
+            capabilitySnapshot: capabilities,
+            activity: RuntimeActivitySnapshot(sessions: [])
+        ))
+        await store.refreshRuntimeState()
+        store.beginDraft()
+        store.selectWorkspace(Workspace(
+            url: URL(fileURLWithPath: "/sandboxed/project"),
+            branch: nil
+        ))
+
+        store.setDraftManagedWorktreeEnabled(true)
+
+        XCTAssertTrue(store.draft?.usesManagedWorktree == true)
+    }
+
+    @MainActor
     func testManagedWorktreeDeleteRequiresExplicitDirtyForceThenDeletesConversation() async throws {
         let client = MultiSessionRuntimeClient()
         let store = WorkspaceStore(client: client)

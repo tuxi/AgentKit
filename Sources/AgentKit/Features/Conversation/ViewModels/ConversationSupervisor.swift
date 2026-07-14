@@ -20,6 +20,16 @@ public enum ConversationActivityState: String, Sendable, Equatable {
     case idle
 }
 
+/// Discovery is separate from the capability snapshot itself. `.legacy` means
+/// "no guarantees" and must not also be used to mean "the first HTTP request has
+/// not run yet", otherwise capability-gated controls disappear during first render.
+public enum RuntimeCapabilityDiscoveryState: Sendable, Equatable {
+    case idle
+    case loading
+    case available
+    case unavailable
+}
+
 public enum PendingConversationApprovalKind: Sendable, Equatable {
     case tool
     case plan
@@ -40,6 +50,8 @@ public struct PendingConversationApproval: Identifiable, Sendable, Equatable {
 public final class ConversationSupervisor {
     public private(set) var controllers: [String: ConversationViewModel] = [:]
     public private(set) var runtimeCapabilities: RuntimeCapabilitySnapshot = .legacy
+    public private(set) var runtimeCapabilityDiscoveryState: RuntimeCapabilityDiscoveryState = .idle
+    public private(set) var runtimeCapabilityErrorMessage: String?
     public private(set) var runtimeActivities: [String: RuntimeSessionActivity] = [:]
     public private(set) var unreadTerminals: [String: ConversationTerminalAttention] = [:]
 
@@ -60,6 +72,7 @@ public final class ConversationSupervisor {
     @ObservationIgnored private var activityRefreshTask: Task<Void, Never>?
     @ObservationIgnored private var activityMonitoringTask: Task<Void, Never>?
     @ObservationIgnored private var resourceReconciliationTask: Task<Void, Never>?
+    private var capabilityRefreshRevision: UInt64 = 0
 
     private static let defaultMaxRetainedControllers = 8
 
@@ -213,19 +226,28 @@ public final class ConversationSupervisor {
     /// Refresh runtime-wide truth. Unsupported/404 is an intentional legacy downgrade.
     public func refreshRuntimeState(conversations: [ConversationRef]) async {
         knownConversations = Dictionary(uniqueKeysWithValues: conversations.map { ($0.id, $0) })
+        capabilityRefreshRevision &+= 1
+        let refreshRevision = capabilityRefreshRevision
+        runtimeCapabilityDiscoveryState = .loading
+        runtimeCapabilityErrorMessage = nil
         let capabilitySnapshot: RuntimeCapabilitySnapshot
         do {
             capabilitySnapshot = try await client.runtimeCapabilities()
         } catch {
+            guard refreshRevision == capabilityRefreshRevision else { return }
             runtimeCapabilities = .legacy
             runtimeActivities = [:]
             activityCursor = nil
+            runtimeCapabilityDiscoveryState = .unavailable
+            runtimeCapabilityErrorMessage = error.localizedDescription
             await capabilityRegistry.update(.legacy)
             return
         }
+        guard refreshRevision == capabilityRefreshRevision else { return }
         let supportedDeltaBefore = runtimeCapabilities.flags.contains(.sessionAttentionSnapshot)
             && runtimeCapabilities.flags.contains(.sessionAttentionDelta)
         runtimeCapabilities = capabilitySnapshot
+        runtimeCapabilityDiscoveryState = .available
         let supportsDeltaNow = capabilitySnapshot.flags.contains(.sessionAttentionSnapshot)
             && capabilitySnapshot.flags.contains(.sessionAttentionDelta)
         if !supportsDeltaNow || !supportedDeltaBefore {

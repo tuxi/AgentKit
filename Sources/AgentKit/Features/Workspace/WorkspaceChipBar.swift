@@ -137,9 +137,7 @@ struct WorkspaceChipBar: View {
             if let branch = ws.branch {
                 chip(icon: "arrow.triangle.branch", text: branch)
             }
-            if store.supportsManagedWorktreeCreation, ws.branch != nil {
-                managedWorktreeMenu
-            }
+            managedWorktreeControl
 
         case .committing(let ws):
             localChip
@@ -221,6 +219,42 @@ struct WorkspaceChipBar: View {
         .menuIndicator(.hidden)
         .fixedSize()
         .disabled(store.isPreparingWorkspace)
+    }
+
+    @ViewBuilder
+    private var managedWorktreeControl: some View {
+        if store.supportsManagedWorktreeCreation {
+            managedWorktreeMenu
+        } else {
+            let isLoading = store.runtimeCapabilityDiscoveryState == .idle
+                || store.runtimeCapabilityDiscoveryState == .loading
+            let canRetry = store.runtimeCapabilityDiscoveryState == .unavailable
+            Button {
+                guard canRetry else { return }
+                Task { await store.refreshRuntimeState() }
+            } label: {
+                chip(
+                    icon: isLoading ? "ellipsis.circle" : "exclamationmark.triangle",
+                    text: isLoading ? "Worktree 检测中" : "Worktree 不可用"
+                )
+            }
+            .buttonStyle(.plain)
+            .disabled(!canRetry || store.isPreparingWorkspace)
+            .help(worktreeUnavailableHelp)
+        }
+    }
+
+    private var worktreeUnavailableHelp: String {
+        switch store.runtimeCapabilityDiscoveryState {
+        case .idle, .loading:
+            return "正在读取 Runtime 的托管 Worktree 能力。"
+        case .available:
+            return "当前 Runtime 未声明 managed_worktree_v1 和 workspace_execution_policy_v1。"
+        case .unavailable:
+            return store.runtimeCapabilityErrorMessage.map {
+                "无法读取 Runtime 能力：\($0)。点击重试。"
+            } ?? "无法读取 Runtime 能力。点击重试。"
+        }
     }
 
     private func worktreeStateTitle(_ worktree: ManagedWorktreeMetadata) -> String {
