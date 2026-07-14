@@ -27,6 +27,9 @@ public struct ConversationListView: View {
     @State private var knownWorkspaceIDs: Set<String> = []
     @State private var didInitializeExpansion = false
     @State private var isProjectsExpanded = true
+    @State private var deletionTarget: ConversationRef?
+    @State private var forcedDeletion: ForcedWorktreeDeletion?
+    @State private var deletionErrorMessage: String?
 
     public init(viewModel: ConversationListViewModel,
                 selected: Binding<ConversationRef?>,
@@ -188,6 +191,66 @@ public struct ConversationListView: View {
                 renameTarget = nil
             }
         }
+        .confirmationDialog(
+            deletionTarget?.worktree?.managed == true ? "删除任务和 Worktree？" : "删除任务？",
+            isPresented: Binding(
+                get: { deletionTarget != nil },
+                set: { if !$0 { deletionTarget = nil } }
+            ),
+            titleVisibility: .visible
+        ) {
+            if let target = deletionTarget {
+                if target.worktree?.managed == true {
+                    Button("仅删除任务，保留 Worktree", role: .destructive) {
+                        performDeletion(target, disposition: .keep)
+                    }
+                    Button("删除任务和 Worktree", role: .destructive) {
+                        performDeletion(target, disposition: .remove)
+                    }
+                } else {
+                    Button("删除任务", role: .destructive) {
+                        performDeletion(target, disposition: .keep)
+                    }
+                }
+                Button("取消", role: .cancel) { deletionTarget = nil }
+            }
+        } message: {
+            if deletionTarget?.worktree?.managed == true {
+                Text("Worktree 可能包含未提交修改、未跟踪文件或新提交。选择删除 Worktree 时会先执行安全检查。Git 分支不会被删除。")
+            } else {
+                Text("此操作会永久删除任务及其事件历史，无法撤销。")
+            }
+        }
+        .alert(
+            "Worktree 包含未保存的更改",
+            isPresented: Binding(
+                get: { forcedDeletion != nil },
+                set: { if !$0 { forcedDeletion = nil } }
+            ),
+            presenting: forcedDeletion
+        ) { confirmation in
+            Button("取消", role: .cancel) { forcedDeletion = nil }
+            Button("强制删除 Worktree 和任务", role: .destructive) {
+                performDeletion(
+                    confirmation.conversation,
+                    disposition: .remove,
+                    force: true
+                )
+            }
+        } message: { confirmation in
+            Text(confirmation.message)
+        }
+        .alert(
+            "无法删除任务",
+            isPresented: Binding(
+                get: { deletionErrorMessage != nil },
+                set: { if !$0 { deletionErrorMessage = nil } }
+            )
+        ) {
+            Button("好", role: .cancel) { deletionErrorMessage = nil }
+        } message: {
+            Text(deletionErrorMessage ?? "未知错误")
+        }
     }
 
     private var projectGroupHeader: some View {
@@ -269,11 +332,11 @@ public struct ConversationListView: View {
                     #if os(iOS)
                     .swipeActions(edge: .trailing) {
                         Button(role: .destructive) {
-                            // TODO: 调用后端删除 API
-                            // await viewModel.deleteConversation(ref)
+                            deletionTarget = ref
                         } label: {
                             Label("删除", systemImage: "trash")
                         }
+                        .disabled(!canDelete(ref))
                     }
                     #endif
                     .contextMenu {
@@ -283,6 +346,13 @@ public struct ConversationListView: View {
                         } label: {
                             Label("重命名", systemImage: "pencil")
                         }
+                        Divider()
+                        Button(role: .destructive) {
+                            deletionTarget = ref
+                        } label: {
+                            Label("删除…", systemImage: "trash")
+                        }
+                        .disabled(!canDelete(ref))
                     }
             }
         }
@@ -303,6 +373,49 @@ public struct ConversationListView: View {
             expandedWorkspaceIDs.formIntersection(currentIDs)
         }
         knownWorkspaceIDs = currentIDs
+    }
+
+    private func canDelete(_ conversation: ConversationRef) -> Bool {
+        store.canDeleteConversation(conversation)
+            && !viewModel.deletingConversationIDs.contains(conversation.id)
+    }
+
+    private func performDeletion(
+        _ conversation: ConversationRef,
+        disposition: ConversationWorktreeDisposition,
+        force: Bool = false
+    ) {
+        deletionTarget = nil
+        forcedDeletion = nil
+        Task {
+            do {
+                try await store.deleteConversation(
+                    conversation,
+                    worktreeDisposition: disposition,
+                    forceWorktreeRemoval: force
+                )
+            } catch let error as ManagedWorktreeRemovalError
+                where error.isDirtyConflict && !force {
+                forcedDeletion = ForcedWorktreeDeletion(
+                    conversation: conversation,
+                    summary: error.summary
+                )
+            } catch {
+                deletionErrorMessage = error.localizedDescription
+            }
+        }
+    }
+}
+
+private struct ForcedWorktreeDeletion {
+    let conversation: ConversationRef
+    let summary: ManagedWorktreeDirtySummary?
+
+    var message: String {
+        guard let summary else {
+            return "Runtime 检测到可能丢失的更改。强制删除会永久移除 checkout，但保留 Git 分支。"
+        }
+        return "检测到 \(summary.modifiedFiles) 个已修改文件、\(summary.untrackedFiles) 个未跟踪文件和 \(summary.newCommits) 个新提交。强制删除会永久移除 checkout，但保留 Git 分支。"
     }
 }
 

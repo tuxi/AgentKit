@@ -217,6 +217,96 @@ final class MultiConversationTests: XCTestCase {
     }
 
     @MainActor
+    func testManagedWorktreeDeleteRequiresExplicitDirtyForceThenDeletesConversation() async throws {
+        let client = MultiSessionRuntimeClient()
+        let store = WorkspaceStore(client: client)
+        let conversation = ConversationRef(
+            id: "managed-delete",
+            workspacePath: "/tmp/AgentKit/.codeagent/worktrees/delete-a31f",
+            worktree: ManagedWorktreeMetadata(
+                managed: true,
+                branch: "codeagent/delete-a31f",
+                state: "ready"
+            )
+        )
+        store.listViewModel.prepend(conversation)
+        client.removeManagedWorktreeError = ManagedWorktreeRemovalError(
+            code: "worktree_dirty",
+            message: "managed worktree has dirty changes",
+            sessionID: conversation.id,
+            summary: ManagedWorktreeDirtySummary(
+                modifiedFiles: 2,
+                untrackedFiles: 1,
+                newCommits: 3
+            )
+        )
+
+        do {
+            try await store.deleteConversation(
+                conversation,
+                worktreeDisposition: .remove
+            )
+            XCTFail("expected dirty conflict")
+        } catch let error as ManagedWorktreeRemovalError {
+            XCTAssertTrue(error.isDirtyConflict)
+            XCTAssertEqual(error.summary?.newCommits, 3)
+        }
+        XCTAssertTrue(store.listViewModel.conversations.contains { $0.id == conversation.id })
+        XCTAssertTrue(client.deletedConversationIDs.isEmpty)
+
+        client.removeManagedWorktreeError = nil
+        try await store.deleteConversation(
+            conversation,
+            worktreeDisposition: .remove,
+            forceWorktreeRemoval: true
+        )
+
+        XCTAssertEqual(client.removeManagedWorktreeRequests.map(\.force), [false, true])
+        XCTAssertEqual(client.deletedConversationIDs, [conversation.id])
+        XCTAssertEqual(client.operationLog.suffix(2), ["remove:managed-delete", "delete:managed-delete"])
+        XCTAssertFalse(store.listViewModel.conversations.contains { $0.id == conversation.id })
+    }
+
+    @MainActor
+    func testDeleteManagedConversationCanKeepWorktree() async throws {
+        let client = MultiSessionRuntimeClient()
+        let store = WorkspaceStore(client: client)
+        let conversation = ConversationRef(
+            id: "managed-keep",
+            workspacePath: "/tmp/worktree",
+            worktree: ManagedWorktreeMetadata(managed: true, state: "ready")
+        )
+        store.listViewModel.prepend(conversation)
+
+        try await store.deleteConversation(conversation, worktreeDisposition: .keep)
+
+        XCTAssertTrue(client.removeManagedWorktreeRequests.isEmpty)
+        XCTAssertEqual(client.deletedConversationIDs, [conversation.id])
+    }
+
+    @MainActor
+    func testActiveConversationCannotBeDeleted() async throws {
+        let client = MultiSessionRuntimeClient()
+        let store = WorkspaceStore(client: client)
+        let conversation = ConversationRef(
+            id: "active-delete",
+            workspacePath: "/tmp/AgentKit",
+            turnStatus: "running"
+        )
+        store.listViewModel.prepend(conversation)
+
+        do {
+            try await store.deleteConversation(conversation, worktreeDisposition: .keep)
+            XCTFail("expected active deletion rejection")
+        } catch is ConversationDeletionError {
+            // Expected: deleting the repository row underneath a live executor is unsafe.
+        }
+
+        XCTAssertTrue(client.deletedConversationIDs.isEmpty)
+        XCTAssertTrue(store.listViewModel.conversations.contains { $0.id == conversation.id })
+    }
+
+    @MainActor
     func testRuntimeQueueIsNotReportedAsUnsupportedParallelism() async throws {
         let client = MultiSessionRuntimeClient()
         let store = WorkspaceStore(client: client)
@@ -631,6 +721,10 @@ private final class MultiSessionRuntimeClient: RuntimeClient, @unchecked Sendabl
     private(set) var activitySnapshotRequestCount = 0
     private(set) var activitySnapshotCursors: [Int64?] = []
     private(set) var createRequests: [CreateConversationRequest] = []
+    private(set) var removeManagedWorktreeRequests: [ManagedWorktreeRemoveRequest] = []
+    private(set) var deletedConversationIDs: [String] = []
+    private(set) var operationLog: [String] = []
+    var removeManagedWorktreeError: Error?
 
     init(
         connectDelays: [String: Duration] = [:],
@@ -719,6 +813,22 @@ private final class MultiSessionRuntimeClient: RuntimeClient, @unchecked Sendabl
     func listConversations() async throws -> [ConversationRef] { [] }
     func renameConversation(id: String, name: String) async throws -> ConversationRef {
         ConversationRef(id: id, workspacePath: "", name: name)
+    }
+    func removeManagedWorktree(
+        conversationID: String,
+        request: ManagedWorktreeRemoveRequest
+    ) async throws -> ManagedWorktreeRemoveResponse {
+        removeManagedWorktreeRequests.append(request)
+        operationLog.append("remove:\(conversationID)")
+        if let removeManagedWorktreeError { throw removeManagedWorktreeError }
+        return ManagedWorktreeRemoveResponse(
+            sessionID: conversationID,
+            worktree: ManagedWorktreeMetadata(managed: true, state: "removed")
+        )
+    }
+    func deleteConversation(id: String) async throws {
+        operationLog.append("delete:\(id)")
+        deletedConversationIDs.append(id)
     }
 
     func connect(conversationID: String, since: Int) async throws -> AsyncStream<AgentEvent> {

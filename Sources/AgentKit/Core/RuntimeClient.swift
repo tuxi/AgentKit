@@ -46,6 +46,17 @@ public protocol RuntimeClient: Sendable {
     /// 修改会话名称。
     func renameConversation(id: String, name: String) async throws -> ConversationRef
 
+    /// Explicitly remove a Runtime-managed worktree. This never deletes the
+    /// conversation and never escalates to force on its own.
+    func removeManagedWorktree(
+        conversationID: String,
+        request: ManagedWorktreeRemoveRequest
+    ) async throws -> ManagedWorktreeRemoveResponse
+
+    /// Permanently delete conversation state. Managed worktrees must be handled
+    /// explicitly before this call; Runtime intentionally does not remove them.
+    func deleteConversation(id: String) async throws
+
     /// 绑定到已存在的 server-owned session，返回事件流。
     ///
     /// ⚠️ `connect` = attach to server-owned session, NOT create session.
@@ -159,6 +170,17 @@ extension RuntimeClient {
     /// policy metadata. Code-Agent overrides this and transmits the full request.
     public func createConversation(request: CreateConversationRequest) async throws -> ConversationRef {
         try await createConversation(workspacePath: request.workspacePath)
+    }
+
+    public func removeManagedWorktree(
+        conversationID: String,
+        request: ManagedWorktreeRemoveRequest
+    ) async throws -> ManagedWorktreeRemoveResponse {
+        throw RuntimeHTTPError.unsupported
+    }
+
+    public func deleteConversation(id: String) async throws {
+        throw RuntimeHTTPError.unsupported
     }
 
     /// 便捷入口：不带续传游标的 connect（等价 `since: 0`，即无已回放历史）。

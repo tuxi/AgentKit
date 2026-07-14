@@ -55,6 +55,11 @@ public protocol AgentTransport: Sendable {
 
     /// 修改会话名称。
     func renameConversation(id: String, name: String) async throws -> ConversationRef
+    func removeManagedWorktree(
+        conversationID: String,
+        request: ManagedWorktreeRemoveRequest
+    ) async throws -> ManagedWorktreeRemoveResponse
+    func deleteConversation(id: String) async throws
 
     /// 绑定到已存在的 server-owned session，返回事件流。
     ///
@@ -181,6 +186,17 @@ extension AgentTransport {
 
     public func createConversation(request: CreateConversationRequest) async throws -> ConversationRef {
         try await createConversation(workspacePath: request.workspacePath)
+    }
+
+    public func removeManagedWorktree(
+        conversationID: String,
+        request: ManagedWorktreeRemoveRequest
+    ) async throws -> ManagedWorktreeRemoveResponse {
+        throw RuntimeHTTPError.unsupported
+    }
+
+    public func deleteConversation(id: String) async throws {
+        throw RuntimeHTTPError.unsupported
     }
 
     /// 便捷入口：不带续传游标的 attach（等价 `since: 0`，即无已回放历史）。

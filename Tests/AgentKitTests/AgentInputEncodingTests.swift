@@ -101,6 +101,18 @@ final class AgentInputEncodingTests: XCTestCase {
         XCTAssertEqual(worktree["suggested_name"] as? String, "task-42")
         XCTAssertEqual(worktree["base_ref"] as? String, "head")
     }
+
+    func testManagedWorktreeRemovalRequiresExplicitRequestIDAndForce() throws {
+        let request = ManagedWorktreeRemoveRequest(
+            requestID: "remove-42",
+            force: true
+        )
+        let data = try JSONEncoder().encode(request)
+        let object = try XCTUnwrap(JSONSerialization.jsonObject(with: data) as? [String: Any])
+
+        XCTAssertEqual(object["request_id"] as? String, "remove-42")
+        XCTAssertEqual(object["force"] as? Bool, true)
+    }
 }
 
 private struct LocalFileTool: StructuredClientTool {

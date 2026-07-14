@@ -156,6 +156,38 @@ public final class WorkspaceStore {
         }
     }
 
+    public func canDeleteConversation(_ conversation: ConversationRef) -> Bool {
+        switch supervisor.activity(for: conversation) {
+        case .idle, .succeeded, .failed, .cancelled:
+            return true
+        case .connecting, .queued, .running, .waitingForApproval,
+             .waitingForClientTool, .paused:
+            return false
+        }
+    }
+
+    /// Permanent deletion is allowed only after the turn reaches a terminal/idle
+    /// state. Managed checkout disposition is always an explicit user choice.
+    public func deleteConversation(
+        _ conversation: ConversationRef,
+        worktreeDisposition: ConversationWorktreeDisposition,
+        forceWorktreeRemoval: Bool = false
+    ) async throws {
+        let activity = supervisor.activity(for: conversation)
+        guard canDeleteConversation(conversation) else {
+            throw ConversationDeletionError.active(activity.rawValue)
+        }
+        try await listViewModel.deleteConversation(
+            conversation,
+            worktreeDisposition: worktreeDisposition,
+            forceWorktreeRemoval: forceWorktreeRemoval
+        )
+        if selectedConversation?.id == conversation.id {
+            selectedConversation = nil
+        }
+        await supervisor.removeDeletedConversation(sessionID: conversation.id)
+    }
+
     // MARK: - Runtime lifecycle
 
     /// Refresh capability/activity snapshots and reconnect every live background session.

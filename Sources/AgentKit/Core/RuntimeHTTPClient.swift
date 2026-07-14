@@ -173,6 +173,53 @@ struct RuntimeHTTPClient: Sendable {
         return try decodeEnvelope(ConversationRef.self, from: data)
     }
 
+    /// Explicit cleanup is deliberately separate from conversation deletion.
+    /// A dirty conflict is decoded into a structured error so the host can show
+    /// an informed, second destructive confirmation before sending `force=true`.
+    func removeManagedWorktree(
+        conversationID: String,
+        request value: ManagedWorktreeRemoveRequest
+    ) async throws -> ManagedWorktreeRemoveResponse {
+        let request = try await buildRequest(
+            "POST",
+            pathComponents: "v1/conversations", conversationID, "worktree", "remove",
+            body: value
+        )
+        let (data, response) = try await session.data(for: request)
+        guard let http = response as? HTTPURLResponse else {
+            throw RuntimeHTTPError.invalidResponse
+        }
+        guard (200...201).contains(http.statusCode) else {
+            if let envelope = try? decoder.decode(
+                RuntimeEnvelope<ManagedWorktreeErrorPayload>.self,
+                from: data
+            ), let payload = envelope.data {
+                throw ManagedWorktreeRemovalError(
+                    code: payload.code,
+                    message: payload.message,
+                    sessionID: payload.sessionID,
+                    summary: payload.summary
+                )
+            }
+            try validateHTTP(response, data: data)
+            throw RuntimeHTTPError.invalidResponse
+        }
+        return try decodeEnvelope(ManagedWorktreeRemoveResponse.self, from: data)
+    }
+
+    /// Runtime never implicitly removes a managed worktree from this endpoint.
+    func deleteConversation(id: String) async throws {
+        let request = try await buildRequest("DELETE", pathComponents: "v1/conversations", id)
+        let (data, response) = try await session.data(for: request)
+        guard let http = response as? HTTPURLResponse else {
+            throw RuntimeHTTPError.invalidResponse
+        }
+        guard http.statusCode == 204 else {
+            try validateHTTP(response, data: data)
+            throw RuntimeHTTPError.invalidResponse
+        }
+    }
+
     /// `GET /v1/conversations/{id}/messages` — 对话主干。
     func getMessages(conversationID: String) async throws -> [Message] {
         let request = try await buildRequest("GET", pathComponents: "v1/conversations", conversationID, "messages")

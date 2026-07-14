@@ -200,6 +200,17 @@ public final class CodeAgentTransport: AgentTransport, @unchecked Sendable {
         try await http.renameConversation(id: id, name: name)
     }
 
+    public func removeManagedWorktree(
+        conversationID: String,
+        request: ManagedWorktreeRemoveRequest
+    ) async throws -> ManagedWorktreeRemoveResponse {
+        try await http.removeManagedWorktree(conversationID: conversationID, request: request)
+    }
+
+    public func deleteConversation(id: String) async throws {
+        try await http.deleteConversation(id: id)
+    }
+
     public func attach(sessionID: String, since: Int) async throws -> AsyncStream<AgentEvent> {
         await disconnect()
 
@@ -437,6 +448,17 @@ public final class DefaultAgentClient: RuntimeClient, @unchecked Sendable {
 
     public func renameConversation(id: String, name: String) async throws -> ConversationRef {
         try await transport.renameConversation(id: id, name: name)
+    }
+
+    public func removeManagedWorktree(
+        conversationID: String,
+        request: ManagedWorktreeRemoveRequest
+    ) async throws -> ManagedWorktreeRemoveResponse {
+        try await transport.removeManagedWorktree(conversationID: conversationID, request: request)
+    }
+
+    public func deleteConversation(id: String) async throws {
+        try await transport.deleteConversation(id: id)
     }
 
     public func connect(conversationID: String, since: Int) async throws -> AsyncStream<AgentEvent> {

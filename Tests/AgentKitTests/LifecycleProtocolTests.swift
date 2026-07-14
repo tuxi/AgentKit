@@ -127,6 +127,26 @@ final class LifecycleProtocolTests: XCTestCase {
         XCTAssertEqual(main.workspaceGroupingID, ref.workspaceGroupingID)
     }
 
+    func testManagedWorktreeMetadataDefaultsOmittedNeedsRebindToFalse() throws {
+        let json = """
+        {
+          "managed": true,
+          "name": "task-a31f",
+          "branch": "codeagent/task-a31f",
+          "base_ref": "head",
+          "state": "ready"
+        }
+        """
+
+        let metadata = try JSONDecoder().decode(
+            ManagedWorktreeMetadata.self,
+            from: Data(json.utf8)
+        )
+
+        XCTAssertFalse(metadata.needsRebind)
+        XCTAssertTrue(metadata.isReady)
+    }
+
     func testConversationDetailDecodesManagedWorktreeMetadata() throws {
         let json = """
         {

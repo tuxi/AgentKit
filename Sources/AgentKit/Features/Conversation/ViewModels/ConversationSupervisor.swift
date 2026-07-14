@@ -452,6 +452,21 @@ public final class ConversationSupervisor {
         }
     }
 
+    /// Remove all client-side state for a conversation after Runtime confirms
+    /// permanent deletion. This is intentionally never called for archive.
+    public func removeDeletedConversation(sessionID: String) async {
+        if let controller = controllers.removeValue(forKey: sessionID) {
+            await controller.disconnect()
+        }
+        controllerLastAccess.removeValue(forKey: sessionID)
+        runtimeActivities.removeValue(forKey: sessionID)
+        unreadTerminals.removeValue(forKey: sessionID)
+        knownConversations.removeValue(forKey: sessionID)
+        if selectedSessionID == sessionID {
+            selectedSessionID = nil
+        }
+    }
+
     /// Enforce the Runtime connection limit as an LRU soft cap. Selected and
     /// non-idle controllers are never evicted; if live work itself exceeds the
     /// cap, correctness wins and the temporary excess is retained.

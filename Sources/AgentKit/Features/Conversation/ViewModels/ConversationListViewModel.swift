@@ -22,6 +22,9 @@ public final class ConversationListViewModel {
     /// 是否正在加载。
     public private(set) var isLoading = false
 
+    /// Conversations currently executing a destructive delete workflow.
+    public private(set) var deletingConversationIDs: Set<String> = []
+
     /// 列表内容版本号。`ConversationRef` 的 identity 只看 `id`，用版本号显式驱动列表刷新。
     public private(set) var revision = 0
 
@@ -142,6 +145,40 @@ public final class ConversationListViewModel {
         } catch {
             errorMessage = error.localizedDescription
             return nil
+        }
+    }
+
+    /// Delete is explicitly two-phase for managed worktrees: optional checkout
+    /// removal first, conversation state second. Runtime itself never couples
+    /// these operations, preventing an ordinary delete from losing code.
+    public func deleteConversation(
+        _ ref: ConversationRef,
+        worktreeDisposition: ConversationWorktreeDisposition,
+        forceWorktreeRemoval: Bool = false
+    ) async throws {
+        deletingConversationIDs.insert(ref.id)
+        errorMessage = nil
+        defer { deletingConversationIDs.remove(ref.id) }
+
+        do {
+            if worktreeDisposition == .remove,
+               let worktree = ref.worktree,
+               worktree.managed,
+               worktree.state != "removed" {
+                _ = try await client.removeManagedWorktree(
+                    conversationID: ref.id,
+                    request: ManagedWorktreeRemoveRequest(
+                        requestID: "remove_\(UUID().uuidString)",
+                        force: forceWorktreeRemoval
+                    )
+                )
+            }
+            try await client.deleteConversation(id: ref.id)
+            conversations.removeAll { $0.id == ref.id }
+            revision += 1
+        } catch {
+            errorMessage = error.localizedDescription
+            throw error
         }
     }
 }
