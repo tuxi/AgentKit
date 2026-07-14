@@ -36,7 +36,23 @@ public struct Workspace: Identifiable, Hashable, Sendable {
     /// - detached HEAD（直接是 commit hash）→ 取前 7 位
     /// - 无 `.git/HEAD` → nil
     public static func resolveBranch(at url: URL) -> String? {
-        let head = url.appendingPathComponent(".git/HEAD")
+        let dotGit = url.appendingPathComponent(".git")
+        let head: URL
+        var isDirectory: ObjCBool = false
+        if FileManager.default.fileExists(atPath: dotGit.path, isDirectory: &isDirectory),
+           isDirectory.boolValue {
+            head = dotGit.appendingPathComponent("HEAD")
+        } else if let rawGitFile = try? String(contentsOf: dotGit, encoding: .utf8),
+                  rawGitFile.hasPrefix("gitdir:") {
+            let gitDirValue = rawGitFile
+                .dropFirst("gitdir:".count)
+                .trimmingCharacters(in: .whitespacesAndNewlines)
+            let gitDir = URL(fileURLWithPath: gitDirValue, relativeTo: url)
+                .standardizedFileURL
+            head = gitDir.appendingPathComponent("HEAD")
+        } else {
+            return nil
+        }
         guard let raw = try? String(contentsOf: head, encoding: .utf8) else { return nil }
         let line = raw.trimmingCharacters(in: .whitespacesAndNewlines)
         if let range = line.range(of: "refs/heads/") {

@@ -211,8 +211,8 @@ struct WorkspaceChipBar: View {
             }
         } label: {
             chip(
-                icon: "square.stack.3d.up",
-                text: "Worktree",
+                icon: enabled ? "checkmark.square.fill" : "square",
+                text: "独立 Worktree",
                 prominent: enabled,
                 showsChevron: true
             )

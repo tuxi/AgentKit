@@ -73,8 +73,16 @@ public final class RecentWorkspacesStore {
             workspaces = []
             return
         }
-        workspaces = datas.compactMap { Self.resolveBookmark($0) }
-        for ws in workspaces { beginAccess(to: ws.url) }
+        // A security-scoped URL is not readable until access has started. Resolve
+        // and acquire each URL before constructing Workspace, because Workspace.init
+        // probes `.git/HEAD` to decide whether managed worktree creation is available.
+        // The previous order constructed Workspace first, so every restored sandboxed
+        // Git project lost its branch and the Worktree control disappeared from drafts.
+        workspaces = datas.compactMap { data in
+            guard let url = Self.resolveBookmarkURL(data) else { return nil }
+            beginAccess(to: url)
+            return Workspace(url: url)
+        }
     }
 
     // MARK: - Persistence
@@ -102,7 +110,7 @@ public final class RecentWorkspacesStore {
         )
     }
 
-    private static func resolveBookmark(_ data: Data) -> Workspace? {
+    private static func resolveBookmarkURL(_ data: Data) -> URL? {
         var isStale = false
         #if os(macOS)
         if let url = try? URL(
@@ -111,17 +119,14 @@ public final class RecentWorkspacesStore {
             relativeTo: nil,
             bookmarkDataIsStale: &isStale
         ) {
-            return Workspace(url: url)
+            return url
         }
         #endif
-        guard let url = try? URL(
+        return try? URL(
             resolvingBookmarkData: data,
             options: [],
             relativeTo: nil,
             bookmarkDataIsStale: &isStale
-        ) else {
-            return nil
-        }
-        return Workspace(url: url)
+        )
     }
 }
