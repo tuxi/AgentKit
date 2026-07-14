@@ -43,6 +43,15 @@ public protocol RuntimeClient: Sendable {
     /// 列出 backend 内存中的活跃 session。
     func listConversations() async throws -> [ConversationRef]
 
+    /// List the Runtime-owned archived partition. Never synthesized locally.
+    func listArchivedConversations() async throws -> [ConversationRef]
+
+    /// Move an idle conversation into the durable archived partition.
+    func archiveConversation(id: String) async throws -> ConversationArchiveResponse
+
+    /// Restore an archived conversation to the default active list.
+    func restoreConversation(id: String) async throws -> ConversationArchiveResponse
+
     /// 修改会话名称。
     func renameConversation(id: String, name: String) async throws -> ConversationRef
 
@@ -176,6 +185,18 @@ extension RuntimeClient {
         conversationID: String,
         request: ManagedWorktreeRemoveRequest
     ) async throws -> ManagedWorktreeRemoveResponse {
+        throw RuntimeHTTPError.unsupported
+    }
+
+    public func listArchivedConversations() async throws -> [ConversationRef] {
+        throw RuntimeHTTPError.unsupported
+    }
+
+    public func archiveConversation(id: String) async throws -> ConversationArchiveResponse {
+        throw RuntimeHTTPError.unsupported
+    }
+
+    public func restoreConversation(id: String) async throws -> ConversationArchiveResponse {
         throw RuntimeHTTPError.unsupported
     }
 

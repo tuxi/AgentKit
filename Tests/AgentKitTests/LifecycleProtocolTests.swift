@@ -58,6 +58,70 @@ final class LifecycleProtocolTests: XCTestCase {
         XCTAssertNotNil(ref.pausedDate)
     }
 
+    func testConversationArchiveContractDecodesAcrossListDetailAndActivity() throws {
+        let archivedAt = "2026-07-14T10:00:00Z"
+        let ref = try JSONDecoder().decode(ConversationRef.self, from: Data("""
+        {
+          "id": "session_archived",
+          "workspace_path": "/tmp/project",
+          "archived_at": "\(archivedAt)"
+        }
+        """.utf8))
+        XCTAssertTrue(ref.isArchived)
+        XCTAssertEqual(ref.archivedAt, archivedAt)
+        XCTAssertFalse(ref.withArchivedAt(nil).isArchived)
+
+        let detail = try JSONDecoder().decode(ConversationDetail.self, from: Data("""
+        {
+          "id": "session_archived",
+          "turn_count": 1,
+          "message_count": 2,
+          "created_at": "2026-07-14T09:00:00Z",
+          "updated_at": "2026-07-14T09:30:00Z",
+          "workspace_path": "/tmp/project",
+          "archived_at": "\(archivedAt)"
+        }
+        """.utf8))
+        XCTAssertTrue(detail.isArchived)
+
+        let activity = try JSONDecoder().decode(RuntimeActivitySnapshot.self, from: Data("""
+        {
+          "sessions": [{
+            "session_id": "session_archived",
+            "state": "idle",
+            "archived_at": "\(archivedAt)"
+          }]
+        }
+        """.utf8))
+        XCTAssertEqual(activity.sessions.first?.archivedAt, archivedAt)
+
+        let response = try JSONDecoder().decode(ConversationArchiveResponse.self, from: Data("""
+        { "id": "session_archived", "archived_at": "\(archivedAt)" }
+        """.utf8))
+        XCTAssertEqual(response, ConversationArchiveResponse(id: "session_archived", archivedAt: archivedAt))
+    }
+
+    func testArchiveOperationErrorsMapStableRuntimeCodes() throws {
+        let inUse = ConversationOperationErrorPayload(
+            code: "conversation_in_use",
+            message: "conversation has an active or resumable turn",
+            sessionID: "session_a",
+            state: "queued"
+        )
+        XCTAssertEqual(
+            ConversationArchiveError(operationPayload: inUse),
+            .inUse(state: "queued")
+        )
+
+        let unsupported = ConversationOperationErrorPayload(
+            code: "conversation_archive_not_supported",
+            message: "configured Runtime storage does not support durable conversation archive",
+            sessionID: nil,
+            state: nil
+        )
+        XCTAssertEqual(ConversationArchiveError(operationPayload: unsupported), .notSupported)
+    }
+
     func testConversationDetailDecodesWorkspaceAnchor() throws {
         let json = """
         {
@@ -330,7 +394,8 @@ final class LifecycleProtocolTests: XCTestCase {
             "session_attention_snapshot_v1": true,
             "session_attention_delta_v1": true,
             "workspace_execution_policy_v1": true,
-            "managed_worktree_v1": true
+            "managed_worktree_v1": true,
+            "conversation_archive_v1": true
           },
           "limits": { "max_concurrent_turns": 4, "max_connected_sessions": 16 }
         }
@@ -343,6 +408,7 @@ final class LifecycleProtocolTests: XCTestCase {
         XCTAssertTrue(capabilities.flags.contains(.sessionAttentionSnapshot))
         XCTAssertTrue(capabilities.flags.contains(.sessionAttentionDelta))
         XCTAssertTrue(capabilities.supportsManagedWorktree)
+        XCTAssertTrue(capabilities.supportsConversationArchive)
         XCTAssertEqual(capabilities.limits?.maxConcurrentTurns, 4)
 
         let activityJSON = """

@@ -49,6 +49,10 @@ public final class ConversationViewModel {
             || ["accepted", "queued", "running", "resuming"].contains(lifecycleStatus)
     }
 
+    public var isArchived: Bool {
+        detail?.isArchived == true || conversation?.isArchived == true
+    }
+
     /// 会话概要（来自 `GET /v1/conversations/{id}`）。
     public private(set) var detail: ConversationDetail?
 
@@ -216,9 +220,6 @@ public final class ConversationViewModel {
         pausedAt = conversation.pausedDate
         messages = []
 
-        let channel = client.makeSessionChannel(conversationID: conversation.id)
-        self.channel = channel
-
         // Create engine for this session
         let eng = RuntimeEngine(sessionID: conversation.id)
         self.engine = eng
@@ -236,6 +237,17 @@ public final class ConversationViewModel {
         // 返回值 = 历史批最大 seq（v1.2 §4 续传游标）。
         let sinceCursor = await fetchHistory(conversationID: conversation.id, engine: eng)
         reconcileRuntimeActivityBaseline(historyCursor: sinceCursor)
+
+        // Archived history remains fully readable, but Runtime rejects new turns.
+        // Do not retain a control socket or input channel until restore completes.
+        if isArchived {
+            channel = nil
+            isConnected = false
+            return
+        }
+
+        let channel = client.makeSessionChannel(conversationID: conversation.id)
+        self.channel = channel
 
         // Phase 2: 连接实时流 → feed to engine
         do {
@@ -266,7 +278,7 @@ public final class ConversationViewModel {
 
     /// 发送结构化输入，驱动一轮对话。
     public func send(input: AgentInput) async {
-        guard let channel else { return }
+        guard !isArchived, let channel else { return }
         guard input.startsNewTurn, let turnCoordinator else {
             await channel.send(input: input)
             return

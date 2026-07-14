@@ -52,6 +52,9 @@ public protocol AgentTransport: Sendable {
 
     /// 列出 backend 内存中的活跃 session。
     func listConversations() async throws -> [ConversationRef]
+    func listArchivedConversations() async throws -> [ConversationRef]
+    func archiveConversation(id: String) async throws -> ConversationArchiveResponse
+    func restoreConversation(id: String) async throws -> ConversationArchiveResponse
 
     /// 修改会话名称。
     func renameConversation(id: String, name: String) async throws -> ConversationRef
@@ -192,6 +195,18 @@ extension AgentTransport {
         conversationID: String,
         request: ManagedWorktreeRemoveRequest
     ) async throws -> ManagedWorktreeRemoveResponse {
+        throw RuntimeHTTPError.unsupported
+    }
+
+    public func listArchivedConversations() async throws -> [ConversationRef] {
+        throw RuntimeHTTPError.unsupported
+    }
+
+    public func archiveConversation(id: String) async throws -> ConversationArchiveResponse {
+        throw RuntimeHTTPError.unsupported
+    }
+
+    public func restoreConversation(id: String) async throws -> ConversationArchiveResponse {
         throw RuntimeHTTPError.unsupported
     }
 

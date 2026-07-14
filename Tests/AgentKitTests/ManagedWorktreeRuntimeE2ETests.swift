@@ -65,6 +65,22 @@ final class ManagedWorktreeRuntimeE2ETests: XCTestCase {
         try FileManager.default.removeItem(at: dirtySource)
         print("[W3] dirty source warning verified")
 
+        // Archive is a durable list partition and must keep the managed checkout.
+        let firstArchive = try await client.archiveConversation(id: warningConversation.id)
+        let repeatedArchive = try await client.archiveConversation(id: warningConversation.id)
+        XCTAssertNotNil(firstArchive.archivedAt)
+        XCTAssertEqual(firstArchive.archivedAt, repeatedArchive.archivedAt)
+        let activeAfterArchive = try await client.listConversations()
+        XCTAssertFalse(activeAfterArchive.contains { $0.id == warningConversation.id })
+        let archivedBeforeRestart = try await client.listArchivedConversations()
+        let archivedWarning = try XCTUnwrap(
+            archivedBeforeRestart.first { $0.id == warningConversation.id }
+        )
+        XCTAssertEqual(archivedWarning.archivedAt, firstArchive.archivedAt)
+        XCTAssertEqual(archivedWarning.worktree?.branch, warningConversation.worktree?.branch)
+        XCTAssertTrue(FileManager.default.fileExists(atPath: warningConversation.workspacePath))
+        print("[W3] archive partition and worktree retention verified")
+
         let managedA = try await createManagedConversation(client: client, root: root, name: "parallel-a")
         let managedB = try await createManagedConversation(client: client, root: root, name: "parallel-b")
         XCTAssertNotEqual(managedA.workspacePath, managedB.workspacePath)
@@ -95,6 +111,20 @@ final class ManagedWorktreeRuntimeE2ETests: XCTestCase {
         XCTAssertEqual(restoredB.workspacePath, managedB.workspacePath)
         XCTAssertEqual(restoredA.worktree?.state, "ready")
         XCTAssertEqual(restoredB.worktree?.state, "ready")
+        let archivedAfterRestart = try await client.listArchivedConversations()
+        XCTAssertEqual(
+            archivedAfterRestart.first { $0.id == warningConversation.id }?.archivedAt,
+            firstArchive.archivedAt
+        )
+        _ = try await client.restoreConversation(id: warningConversation.id)
+        let archivedAfterRestore = try await client.listArchivedConversations()
+        XCTAssertTrue(archivedAfterRestore.allSatisfy {
+            $0.id != warningConversation.id
+        })
+        let activeAfterRestore = try await client.listConversations()
+        XCTAssertTrue(activeAfterRestore.contains {
+            $0.id == warningConversation.id && !$0.isArchived
+        })
         print("[W3] restart recovery verified")
 
         // A missing checkout is reconciled on restart and surfaced to both detail

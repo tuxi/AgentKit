@@ -60,6 +60,8 @@ public struct AgentCapabilityFlags: OptionSet, Sendable {
     public static let sessionAttentionDelta = AgentCapabilityFlags(rawValue: 1 << 13)
     /// Runtime can explicitly provision, recover and safely remove Git worktrees.
     public static let managedWorktree = AgentCapabilityFlags(rawValue: 1 << 14)
+    /// Runtime persistently partitions conversations into active and archived lists.
+    public static let conversationArchive = AgentCapabilityFlags(rawValue: 1 << 15)
 
     // MARK: - Presets
 

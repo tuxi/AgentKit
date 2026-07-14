@@ -34,6 +34,7 @@ public struct ConversationDetail: Sendable, Codable, Hashable {
     public let baseWorkspaceID: String?
     public let worktree: ManagedWorktreeMetadata?
     public let warnings: [RuntimeAPIWarning]?
+    public let archivedAt: String?
 
     enum CodingKeys: String, CodingKey {
         case id
@@ -50,6 +51,7 @@ public struct ConversationDetail: Sendable, Codable, Hashable {
         case workspaceID = "workspace_id"
         case baseWorkspaceID = "base_workspace_id"
         case worktree, warnings
+        case archivedAt = "archived_at"
     }
 
     public init(from decoder: Decoder) throws {
@@ -69,7 +71,10 @@ public struct ConversationDetail: Sendable, Codable, Hashable {
         baseWorkspaceID = try c.decodeIfPresent(String.self, forKey: .baseWorkspaceID)
         worktree = try c.decodeIfPresent(ManagedWorktreeMetadata.self, forKey: .worktree)
         warnings = try c.decodeIfPresent([RuntimeAPIWarning].self, forKey: .warnings)
+        archivedAt = try c.decodeIfPresent(String.self, forKey: .archivedAt)
     }
+
+    public var isArchived: Bool { archivedAt?.isEmpty == false }
 
     public var workspaceGroupingName: String? {
         if let path = workspacePath,

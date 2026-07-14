@@ -125,9 +125,18 @@ public struct ConversationDetailView: View {
     private func activeView(vm: ConversationViewModel) -> some View {
         let isPaused = vm.lifecycleStatus == "paused"
             || (vm.lifecycleStatus == nil && store.selectedConversation?.isPaused == true)
+        let isArchived = vm.isArchived
 
         return VStack(spacing: 0) {
-            if isPaused {
+            if isArchived, let conversation = vm.conversation {
+                ArchivedConversationBar(
+                    isRestoring: store.listViewModel.restoringConversationIDs.contains(conversation.id),
+                    errorMessage: store.listViewModel.errorMessage
+                ) {
+                    Task { _ = try? await store.restoreConversation(conversation) }
+                }
+                .transition(.move(edge: .top).combined(with: .opacity))
+            } else if isPaused {
                 ResumePausedBar(
                     pausedAt: vm.pausedAt ?? store.selectedConversation?.pausedDate,
                     isResuming: store.isResumingPausedConversation,
@@ -188,10 +197,12 @@ public struct ConversationDetailView: View {
                             ? "Runtime 已接收 — 等待调度"
                             : isPaused
                             ? "会话已暂停 — 点击继续"
+                            : isArchived
+                            ? "会话已归档 — 恢复后可继续"
                             : (vm.snapshot.pendingApproval != nil || vm.snapshot.pendingPlanApproval != nil)
                             ? "审批中 — 请选择「允许」或「拒绝」"
                             : "输入消息…",
-                        isEnabled: !isPaused && !vm.isTurnActive && vm.snapshot.pendingApproval == nil && vm.snapshot.pendingPlanApproval == nil,
+                        isEnabled: !isArchived && !isPaused && !vm.isTurnActive && vm.snapshot.pendingApproval == nil && vm.snapshot.pendingPlanApproval == nil,
                         isDraft: false,
                         isTurnRunning: vm.isTurnActive,
                         onStop: { Task { await vm.cancelTurn() } },
@@ -218,6 +229,7 @@ public struct ConversationDetailView: View {
                 .animation(.easeOut(duration: 0.25), value: vm.snapshot.pendingApproval != nil)
                 .animation(.easeOut(duration: 0.25), value: vm.snapshot.pendingPlanApproval != nil)
                 .animation(.easeOut(duration: 0.25), value: isPaused)
+                .animation(.easeOut(duration: 0.25), value: isArchived)
             }
     }
 
@@ -276,6 +288,36 @@ public struct ConversationDetailView: View {
             }
             .disabled(store.selectedConversation == nil)
         }
+    }
+}
+
+private struct ArchivedConversationBar: View {
+    let isRestoring: Bool
+    let errorMessage: String?
+    let onRestore: () -> Void
+
+    var body: some View {
+        HStack(spacing: 10) {
+            Image(systemName: "archivebox.fill")
+                .foregroundStyle(.secondary)
+            VStack(alignment: .leading, spacing: 2) {
+                Text("此任务已归档")
+                    .font(.subheadline.weight(.semibold))
+                Text(errorMessage ?? "历史记录和 Worktree 均已保留；恢复后可以继续执行。")
+                    .font(.caption)
+                    .foregroundStyle(errorMessage == nil ? Color.secondary : Color.orange)
+                    .lineLimit(2)
+            }
+            Spacer(minLength: 8)
+            Button("恢复") { onRestore() }
+                .disabled(isRestoring)
+            if isRestoring {
+                ProgressView().controlSize(.small)
+            }
+        }
+        .padding(.horizontal, 14)
+        .padding(.vertical, 9)
+        .background(.bar)
     }
 }
 

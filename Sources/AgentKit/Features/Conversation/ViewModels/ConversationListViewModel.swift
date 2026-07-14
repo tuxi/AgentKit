@@ -15,15 +15,19 @@ public final class ConversationListViewModel {
 
     /// 从 Runtime 拉取的会话列表（仅含 `id`，v1 无 metadata）。
     public private(set) var conversations: [ConversationRef] = []
+    public private(set) var archivedConversations: [ConversationRef] = []
 
     /// 异步操作中的错误。
     public private(set) var errorMessage: String?
 
     /// 是否正在加载。
     public private(set) var isLoading = false
+    public private(set) var isLoadingArchived = false
 
     /// Conversations currently executing a destructive delete workflow.
     public private(set) var deletingConversationIDs: Set<String> = []
+    public private(set) var archivingConversationIDs: Set<String> = []
+    public private(set) var restoringConversationIDs: Set<String> = []
 
     /// 列表内容版本号。`ConversationRef` 的 identity 只看 `id`，用版本号显式驱动列表刷新。
     public private(set) var revision = 0
@@ -87,6 +91,27 @@ public final class ConversationListViewModel {
                 return
             }
         }
+    }
+
+    /// Refresh the Runtime-owned archived partition. Callers must capability-gate
+    /// this method; unsupported backends intentionally remain empty.
+    public func refreshArchived() async {
+        guard !isLoadingArchived else { return }
+        isLoadingArchived = true
+        defer { isLoadingArchived = false }
+        do {
+            archivedConversations = try await client.listArchivedConversations()
+            revision += 1
+            errorMessage = nil
+        } catch {
+            errorMessage = error.localizedDescription
+        }
+    }
+
+    public func clearArchived() {
+        guard !archivedConversations.isEmpty else { return }
+        archivedConversations = []
+        revision += 1
     }
 
     #if os(iOS)
@@ -175,7 +200,51 @@ public final class ConversationListViewModel {
             }
             try await client.deleteConversation(id: ref.id)
             conversations.removeAll { $0.id == ref.id }
+            archivedConversations.removeAll { $0.id == ref.id }
             revision += 1
+        } catch {
+            errorMessage = error.localizedDescription
+            throw error
+        }
+    }
+
+    @discardableResult
+    public func archiveConversation(_ ref: ConversationRef) async throws -> ConversationRef {
+        archivingConversationIDs.insert(ref.id)
+        errorMessage = nil
+        defer { archivingConversationIDs.remove(ref.id) }
+
+        do {
+            let response = try await client.archiveConversation(id: ref.id)
+            guard let archivedAt = response.archivedAt, !archivedAt.isEmpty else {
+                throw RuntimeHTTPError.invalidResponse
+            }
+            let archived = ref.withArchivedAt(archivedAt)
+            conversations.removeAll { $0.id == ref.id }
+            archivedConversations.removeAll { $0.id == ref.id }
+            archivedConversations.insert(archived, at: 0)
+            revision += 1
+            return archived
+        } catch {
+            errorMessage = error.localizedDescription
+            throw error
+        }
+    }
+
+    @discardableResult
+    public func restoreConversation(_ ref: ConversationRef) async throws -> ConversationRef {
+        restoringConversationIDs.insert(ref.id)
+        errorMessage = nil
+        defer { restoringConversationIDs.remove(ref.id) }
+
+        do {
+            _ = try await client.restoreConversation(id: ref.id)
+            let restored = ref.withArchivedAt(nil)
+            archivedConversations.removeAll { $0.id == ref.id }
+            conversations.removeAll { $0.id == ref.id }
+            conversations.insert(restored, at: 0)
+            revision += 1
+            return restored
         } catch {
             errorMessage = error.localizedDescription
             throw error

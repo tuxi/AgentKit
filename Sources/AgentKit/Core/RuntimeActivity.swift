@@ -125,6 +125,7 @@ public struct RuntimeCapabilitySnapshot: Codable, Sendable, Equatable {
         if capabilities["session_attention_snapshot_v1"] == true { flags.insert(.sessionAttentionSnapshot) }
         if capabilities["session_attention_delta_v1"] == true { flags.insert(.sessionAttentionDelta) }
         if capabilities["managed_worktree_v1"] == true { flags.insert(.managedWorktree) }
+        if capabilities["conversation_archive_v1"] == true { flags.insert(.conversationArchive) }
         return flags
     }
 
@@ -139,6 +140,10 @@ public struct RuntimeCapabilitySnapshot: Codable, Sendable, Equatable {
 
     public var supportsManagedWorktree: Bool {
         flags.contains(.managedWorktree) && flags.contains(.workspaceExecutionPolicy)
+    }
+
+    public var supportsConversationArchive: Bool {
+        flags.contains(.conversationArchive)
     }
 }
 
@@ -174,6 +179,7 @@ public struct RuntimeSessionActivity: Codable, Sendable, Equatable, Identifiable
     public let pendingClientToolCount: Int?
     public let queuePosition: Int?
     public let queueReason: String?
+    public let archivedAt: String?
     public let latestTerminal: RuntimeTerminalActivity?
     public let updatedAt: String?
     public let executionPolicy: String?
@@ -194,6 +200,7 @@ public struct RuntimeSessionActivity: Codable, Sendable, Equatable, Identifiable
         case pendingClientToolCount = "pending_client_tool_count"
         case queuePosition = "queue_position"
         case queueReason = "queue_reason"
+        case archivedAt = "archived_at"
         case latestTerminal = "latest_terminal"
         case updatedAt = "updated_at"
         case executionPolicy = "execution_policy"
@@ -212,6 +219,7 @@ public struct RuntimeSessionActivity: Codable, Sendable, Equatable, Identifiable
         pendingClientToolCount: Int? = nil,
         queuePosition: Int? = nil,
         queueReason: String? = nil,
+        archivedAt: String? = nil,
         latestTerminal: RuntimeTerminalActivity? = nil,
         updatedAt: String? = nil,
         executionPolicy: String? = nil,
@@ -228,6 +236,7 @@ public struct RuntimeSessionActivity: Codable, Sendable, Equatable, Identifiable
         self.pendingClientToolCount = pendingClientToolCount
         self.queuePosition = queuePosition
         self.queueReason = queueReason
+        self.archivedAt = archivedAt
         self.latestTerminal = latestTerminal
         self.updatedAt = updatedAt
         self.executionPolicy = executionPolicy

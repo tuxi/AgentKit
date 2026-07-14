@@ -196,6 +196,18 @@ public final class CodeAgentTransport: AgentTransport, @unchecked Sendable {
         try await http.listConversations()
     }
 
+    public func listArchivedConversations() async throws -> [ConversationRef] {
+        try await http.listArchivedConversations()
+    }
+
+    public func archiveConversation(id: String) async throws -> ConversationArchiveResponse {
+        try await http.archiveConversation(id: id)
+    }
+
+    public func restoreConversation(id: String) async throws -> ConversationArchiveResponse {
+        try await http.restoreConversation(id: id)
+    }
+
     public func renameConversation(id: String, name: String) async throws -> ConversationRef {
         try await http.renameConversation(id: id, name: name)
     }
@@ -444,6 +456,18 @@ public final class DefaultAgentClient: RuntimeClient, @unchecked Sendable {
 
     public func listConversations() async throws -> [ConversationRef] {
         try await transport.listConversations()
+    }
+
+    public func listArchivedConversations() async throws -> [ConversationRef] {
+        try await transport.listArchivedConversations()
+    }
+
+    public func archiveConversation(id: String) async throws -> ConversationArchiveResponse {
+        try await transport.archiveConversation(id: id)
+    }
+
+    public func restoreConversation(id: String) async throws -> ConversationArchiveResponse {
+        try await transport.restoreConversation(id: id)
     }
 
     public func renameConversation(id: String, name: String) async throws -> ConversationRef {

@@ -106,6 +106,10 @@ public final class WorkspaceStore {
         supervisor.runtimeCapabilities.supportsManagedWorktree
     }
 
+    public var supportsConversationArchive: Bool {
+        supervisor.runtimeCapabilities.supportsConversationArchive
+    }
+
     public var runtimeCapabilityDiscoveryState: RuntimeCapabilityDiscoveryState {
         supervisor.runtimeCapabilityDiscoveryState
     }
@@ -174,6 +178,43 @@ public final class WorkspaceStore {
         }
     }
 
+    public func canArchiveConversation(_ conversation: ConversationRef) -> Bool {
+        supportsConversationArchive
+            && !conversation.isArchived
+            && canDeleteConversation(conversation)
+    }
+
+    @discardableResult
+    public func archiveConversation(_ conversation: ConversationRef) async throws -> ConversationRef {
+        guard supportsConversationArchive else {
+            throw ConversationArchiveError.notSupported
+        }
+        let activity = supervisor.activity(for: conversation)
+        guard canArchiveConversation(conversation) else {
+            throw ConversationArchiveError.inUse(state: activity.rawValue)
+        }
+        let archived = try await listViewModel.archiveConversation(conversation)
+        await supervisor.detachArchivedConversation(sessionID: conversation.id)
+        if selectedConversation?.id == conversation.id {
+            selectedConversation = nil
+            selectedConversation = archived
+        }
+        return archived
+    }
+
+    @discardableResult
+    public func restoreConversation(_ conversation: ConversationRef) async throws -> ConversationRef {
+        guard supportsConversationArchive else {
+            throw ConversationArchiveError.notSupported
+        }
+        let restored = try await listViewModel.restoreConversation(conversation)
+        if selectedConversation?.id == conversation.id {
+            selectedConversation = nil
+            selectedConversation = restored
+        }
+        return restored
+    }
+
     /// Permanent deletion is allowed only after the turn reaches a terminal/idle
     /// state. Managed checkout disposition is always an explicit user choice.
     public func deleteConversation(
@@ -201,6 +242,39 @@ public final class WorkspaceStore {
     /// Refresh capability/activity snapshots and reconnect every live background session.
     public func refreshRuntimeState() async {
         await supervisor.refreshRuntimeState(conversations: listViewModel.conversations)
+        if supportsConversationArchive {
+            await listViewModel.refreshArchived()
+        } else {
+            listViewModel.clearArchived()
+        }
+        await reconcileSelectedConversationPartition()
+    }
+
+    /// A conversation can be archived/restored by another client while selected.
+    /// Move the local selection to the Runtime-owned partition and ensure archived
+    /// history cannot keep an old live control channel.
+    private func reconcileSelectedConversationPartition() async {
+        guard let selectedConversation else { return }
+        if let active = listViewModel.conversations.first(where: { $0.id == selectedConversation.id }) {
+            if selectedConversation.isArchived {
+                self.selectedConversation = nil
+                self.selectedConversation = active
+            } else {
+                self.selectedConversation = active
+            }
+            return
+        }
+        if let archived = listViewModel.archivedConversations.first(where: { $0.id == selectedConversation.id }) {
+            if !selectedConversation.isArchived {
+                await supervisor.detachArchivedConversation(sessionID: selectedConversation.id)
+                self.selectedConversation = nil
+            }
+            self.selectedConversation = archived
+            return
+        }
+
+        self.selectedConversation = nil
+        await supervisor.removeDeletedConversation(sessionID: selectedConversation.id)
     }
 
     /// 启动 host 侧网络恢复监听。用于修复静默 resume transient 失败后卡在 paused 的情况。

@@ -27,9 +27,11 @@ public struct ConversationListView: View {
     @State private var knownWorkspaceIDs: Set<String> = []
     @State private var didInitializeExpansion = false
     @State private var isProjectsExpanded = true
+    @State private var isArchivedExpanded = false
     @State private var deletionTarget: ConversationRef?
     @State private var forcedDeletion: ForcedWorktreeDeletion?
     @State private var deletionErrorMessage: String?
+    @State private var archiveErrorMessage: String?
 
     public init(viewModel: ConversationListViewModel,
                 selected: Binding<ConversationRef?>,
@@ -42,6 +44,17 @@ public struct ConversationListView: View {
     /// 当前可见的会话列表（客户端搜索过滤）。
     private var filteredConversations: [ConversationRef] {
         let conversations = viewModel.conversations
+        guard !searchText.trimmingCharacters(in: .whitespaces).isEmpty else {
+            return conversations
+        }
+        return conversations.filter { ref in
+            ref.id.localizedCaseInsensitiveContains(searchText)
+                || (ref.name ?? "").localizedCaseInsensitiveContains(searchText)
+        }
+    }
+
+    private var filteredArchivedConversations: [ConversationRef] {
+        let conversations = viewModel.archivedConversations
         guard !searchText.trimmingCharacters(in: .whitespaces).isEmpty else {
             return conversations
         }
@@ -106,8 +119,44 @@ public struct ConversationListView: View {
     #endif
 
     public var body: some View {
+        conversationList
+        .listStyle(.sidebar)
+        .scrollContentBackground(.hidden)
+        .task {
+            await viewModel.refresh()
+            await store.refreshRuntimeState()
+        }
+        .onAppear {
+            syncExpandedWorkspaceIDs()
+        }
+        .onChange(of: viewModel.revision) { _, _ in
+            syncExpandedWorkspaceIDs()
+        }
+        .onChange(of: searchText) { _, newValue in
+            guard !newValue.trimmingCharacters(in: .whitespaces).isEmpty else { return }
+            // 搜索结果位于某个收起的项目时，自动展开该项目，避免结果被隐藏。
+            isProjectsExpanded = true
+            expandedWorkspaceIDs.formUnion(conversationGroups.map(\.id))
+            if !filteredArchivedConversations.isEmpty {
+                isArchivedExpanded = true
+            }
+        }
+        .onChange(of: store.supportsConversationArchive) { _, supported in
+            Task {
+                if supported {
+                    await viewModel.refreshArchived()
+                } else {
+                    viewModel.clearArchived()
+                    isArchivedExpanded = false
+                }
+            }
+        }
+        .modifier(conversationDialogModifier)
+    }
+
+    private var conversationList: some View {
         let listRevision = viewModel.revision
-        List(selection: $selected) {
+        return List(selection: $selected) {
             if viewModel.isLoading {
                 ProgressView()
                     .controlSize(.small)
@@ -136,7 +185,10 @@ public struct ConversationListView: View {
             }
             #endif
 
-            if !viewModel.isLoading && filteredConversations.isEmpty && !searchText.isEmpty {
+            if !viewModel.isLoading,
+               filteredConversations.isEmpty,
+               (!store.supportsConversationArchive || filteredArchivedConversations.isEmpty),
+               !searchText.isEmpty {
                 ContentUnavailableView.search(text: searchText)
                     .listRowSeparator(.hidden)
                     .listRowBackground(Color.clear)
@@ -151,106 +203,28 @@ public struct ConversationListView: View {
                     }
                 }
             }
-        }
-        .listStyle(.sidebar)
-        .scrollContentBackground(.hidden)
-        .task {
-            await viewModel.refresh()
-            await store.refreshRuntimeState()
-        }
-        .onAppear {
-            syncExpandedWorkspaceIDs()
-        }
-        .onChange(of: listRevision) { _, _ in
-            syncExpandedWorkspaceIDs()
-        }
-        .onChange(of: searchText) { _, newValue in
-            guard !newValue.trimmingCharacters(in: .whitespaces).isEmpty else { return }
-            // 搜索结果位于某个收起的项目时，自动展开该项目，避免结果被隐藏。
-            isProjectsExpanded = true
-            expandedWorkspaceIDs.formUnion(conversationGroups.map(\.id))
-        }
-        .alert("重命名任务", isPresented: Binding(
-            get: { renameTarget != nil },
-            set: { if !$0 { renameTarget = nil } }
-        )) {
-            TextField("任务名称", text: $renameText)
-            Button("取消", role: .cancel) {
-                renameTarget = nil
-            }
-            Button("确定") {
-                let newName = renameText.trimmingCharacters(in: .whitespaces)
-                if let target = renameTarget, !newName.isEmpty {
-                    Task {
-                        if let updated = await viewModel.renameConversation(target, name: newName),
-                           selected?.id == updated.id {
-                            selected = updated
-                        }
-                    }
-                }
-                renameTarget = nil
+
+
+            if store.supportsConversationArchive {
+                archivedGroup(listRevision: listRevision)
             }
         }
-        .confirmationDialog(
-            deletionTarget?.worktree?.managed == true ? "删除任务和 Worktree？" : "删除任务？",
-            isPresented: Binding(
-                get: { deletionTarget != nil },
-                set: { if !$0 { deletionTarget = nil } }
-            ),
-            titleVisibility: .visible
-        ) {
-            if let target = deletionTarget {
-                if target.worktree?.managed == true {
-                    Button("仅删除任务，保留 Worktree", role: .destructive) {
-                        performDeletion(target, disposition: .keep)
-                    }
-                    Button("删除任务和 Worktree", role: .destructive) {
-                        performDeletion(target, disposition: .remove)
-                    }
-                } else {
-                    Button("删除任务", role: .destructive) {
-                        performDeletion(target, disposition: .keep)
-                    }
-                }
-                Button("取消", role: .cancel) { deletionTarget = nil }
+    }
+
+    private var conversationDialogModifier: some ViewModifier {
+        ConversationListDialogModifier(
+            renameTarget: $renameTarget,
+            renameText: $renameText,
+            deletionTarget: $deletionTarget,
+            forcedDeletion: $forcedDeletion,
+            deletionErrorMessage: $deletionErrorMessage,
+            archiveErrorMessage: $archiveErrorMessage,
+            selected: $selected,
+            viewModel: viewModel,
+            performDeletion: { conversation, disposition, force in
+                performDeletion(conversation, disposition: disposition, force: force)
             }
-        } message: {
-            if deletionTarget?.worktree?.managed == true {
-                Text("Worktree 可能包含未提交修改、未跟踪文件或新提交。选择删除 Worktree 时会先执行安全检查。Git 分支不会被删除。")
-            } else {
-                Text("此操作会永久删除任务及其事件历史，无法撤销。")
-            }
-        }
-        .alert(
-            "Worktree 包含未保存的更改",
-            isPresented: Binding(
-                get: { forcedDeletion != nil },
-                set: { if !$0 { forcedDeletion = nil } }
-            ),
-            presenting: forcedDeletion
-        ) { confirmation in
-            Button("取消", role: .cancel) { forcedDeletion = nil }
-            Button("强制删除 Worktree 和任务", role: .destructive) {
-                performDeletion(
-                    confirmation.conversation,
-                    disposition: .remove,
-                    force: true
-                )
-            }
-        } message: { confirmation in
-            Text(confirmation.message)
-        }
-        .alert(
-            "无法删除任务",
-            isPresented: Binding(
-                get: { deletionErrorMessage != nil },
-                set: { if !$0 { deletionErrorMessage = nil } }
-            )
-        ) {
-            Button("好", role: .cancel) { deletionErrorMessage = nil }
-        } message: {
-            Text(deletionErrorMessage ?? "未知错误")
-        }
+        )
     }
 
     private var projectGroupHeader: some View {
@@ -338,6 +312,15 @@ public struct ConversationListView: View {
                             Label("删除", systemImage: "trash")
                         }
                         .disabled(!canDelete(ref))
+                        if store.supportsConversationArchive {
+                            Button {
+                                performArchive(ref)
+                            } label: {
+                                Label("归档", systemImage: "archivebox")
+                            }
+                            .tint(Color.secondary)
+                            .disabled(!canArchive(ref))
+                        }
                     }
                     #endif
                     .contextMenu {
@@ -347,6 +330,14 @@ public struct ConversationListView: View {
                         } label: {
                             Label("重命名", systemImage: "pencil")
                         }
+                        if store.supportsConversationArchive {
+                            Button {
+                                performArchive(ref)
+                            } label: {
+                                Label("归档", systemImage: "archivebox")
+                            }
+                            .disabled(!canArchive(ref))
+                        }
                         Divider()
                         Button(role: .destructive) {
                             deletionTarget = ref
@@ -355,6 +346,92 @@ public struct ConversationListView: View {
                         }
                         .disabled(!canDelete(ref))
                     }
+            }
+        }
+    }
+
+    @ViewBuilder
+    private func archivedGroup(listRevision: Int) -> some View {
+        Button {
+            isArchivedExpanded.toggle()
+        } label: {
+            HStack(spacing: 9) {
+                Image(systemName: "archivebox")
+                    .font(.system(size: 15, weight: .medium))
+                    .foregroundStyle(.secondary)
+                    .frame(width: 18)
+                Text("已归档")
+                    .font(.system(size: 15, weight: .medium))
+                    .foregroundStyle(.primary)
+                if !viewModel.archivedConversations.isEmpty {
+                    Text("\(viewModel.archivedConversations.count)")
+                        .font(.caption2.monospacedDigit())
+                        .foregroundStyle(.tertiary)
+                }
+                if viewModel.isLoadingArchived {
+                    ProgressView().controlSize(.mini)
+                }
+                Spacer(minLength: 0)
+                Image(systemName: isArchivedExpanded ? "chevron.down" : "chevron.right")
+                    .font(.system(size: 10, weight: .bold))
+                    .foregroundStyle(.tertiary)
+            }
+            .padding(.horizontal, 8)
+            .padding(.vertical, 6)
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .listRowInsets(.init())
+        .listRowSeparator(.hidden)
+        .listRowBackground(Color.clear)
+
+        if isArchivedExpanded {
+            if filteredArchivedConversations.isEmpty {
+                Text(searchText.isEmpty ? "暂无归档任务" : "没有匹配的归档任务")
+                    .font(.caption)
+                    .foregroundStyle(.tertiary)
+                    .listRowInsets(.init(top: 5, leading: 38, bottom: 5, trailing: 12))
+                    .listRowSeparator(.hidden)
+                    .listRowBackground(Color.clear)
+            } else {
+                ForEach(filteredArchivedConversations, id: \.uiID) { ref in
+                    ConversationRow(ref: ref, activity: .idle, queueReason: nil)
+                        .id("archived-\(ref.uiID)-\(listRevision)")
+                        .tag(ref)
+                        .listRowInsets(.init(top: 0, leading: 12, bottom: 0, trailing: 12))
+                        .listRowSeparator(.hidden)
+                        .listRowBackground(Color.clear)
+                        #if os(iOS)
+                        .swipeActions(edge: .trailing) {
+                            Button(role: .destructive) {
+                                deletionTarget = ref
+                            } label: {
+                                Label("删除", systemImage: "trash")
+                            }
+                            Button {
+                                performRestore(ref)
+                            } label: {
+                                Label("恢复", systemImage: "arrow.uturn.backward")
+                            }
+                            .tint(.blue)
+                        }
+                        #endif
+                        .contextMenu {
+                            Button {
+                                performRestore(ref)
+                            } label: {
+                                Label("恢复", systemImage: "arrow.uturn.backward")
+                            }
+                            .disabled(viewModel.restoringConversationIDs.contains(ref.id))
+                            Divider()
+                            Button(role: .destructive) {
+                                deletionTarget = ref
+                            } label: {
+                                Label("永久删除…", systemImage: "trash")
+                            }
+                            .disabled(!canDelete(ref))
+                        }
+                }
             }
         }
     }
@@ -379,6 +456,32 @@ public struct ConversationListView: View {
     private func canDelete(_ conversation: ConversationRef) -> Bool {
         store.canDeleteConversation(conversation)
             && !viewModel.deletingConversationIDs.contains(conversation.id)
+    }
+
+    private func canArchive(_ conversation: ConversationRef) -> Bool {
+        store.canArchiveConversation(conversation)
+            && !viewModel.archivingConversationIDs.contains(conversation.id)
+    }
+
+    private func performArchive(_ conversation: ConversationRef) {
+        Task {
+            do {
+                _ = try await store.archiveConversation(conversation)
+                isArchivedExpanded = true
+            } catch {
+                archiveErrorMessage = error.localizedDescription
+            }
+        }
+    }
+
+    private func performRestore(_ conversation: ConversationRef) {
+        Task {
+            do {
+                _ = try await store.restoreConversation(conversation)
+            } catch {
+                archiveErrorMessage = error.localizedDescription
+            }
+        }
     }
 
     private func performDeletion(
@@ -417,6 +520,109 @@ private struct ForcedWorktreeDeletion {
             return "Runtime 检测到可能丢失的更改。强制删除会永久移除 checkout，但保留 Git 分支。"
         }
         return "检测到 \(summary.modifiedFiles) 个已修改文件、\(summary.untrackedFiles) 个未跟踪文件和 \(summary.newCommits) 个新提交。强制删除会永久移除 checkout，但保留 Git 分支。"
+    }
+}
+
+private struct ConversationListDialogModifier: ViewModifier {
+    @Binding var renameTarget: ConversationRef?
+    @Binding var renameText: String
+    @Binding var deletionTarget: ConversationRef?
+    @Binding var forcedDeletion: ForcedWorktreeDeletion?
+    @Binding var deletionErrorMessage: String?
+    @Binding var archiveErrorMessage: String?
+    @Binding var selected: ConversationRef?
+
+    let viewModel: ConversationListViewModel
+    let performDeletion: (ConversationRef, ConversationWorktreeDisposition, Bool) -> Void
+
+    func body(content: Content) -> some View {
+        content
+            .alert("重命名任务", isPresented: Binding(
+                get: { renameTarget != nil },
+                set: { if !$0 { renameTarget = nil } }
+            )) {
+                TextField("任务名称", text: $renameText)
+                Button("取消", role: .cancel) { renameTarget = nil }
+                Button("确定") {
+                    let newName = renameText.trimmingCharacters(in: .whitespaces)
+                    if let target = renameTarget, !newName.isEmpty {
+                        Task {
+                            if let updated = await viewModel.renameConversation(target, name: newName),
+                               selected?.id == updated.id {
+                                selected = updated
+                            }
+                        }
+                    }
+                    renameTarget = nil
+                }
+            }
+            .confirmationDialog(
+                deletionTarget?.worktree?.managed == true ? "删除任务和 Worktree？" : "删除任务？",
+                isPresented: Binding(
+                    get: { deletionTarget != nil },
+                    set: { if !$0 { deletionTarget = nil } }
+                ),
+                titleVisibility: .visible
+            ) {
+                if let target = deletionTarget {
+                    if target.worktree?.managed == true {
+                        Button("仅删除任务，保留 Worktree", role: .destructive) {
+                            performDeletion(target, .keep, false)
+                        }
+                        Button("删除任务和 Worktree", role: .destructive) {
+                            performDeletion(target, .remove, false)
+                        }
+                    } else {
+                        Button("删除任务", role: .destructive) {
+                            performDeletion(target, .keep, false)
+                        }
+                    }
+                    Button("取消", role: .cancel) { deletionTarget = nil }
+                }
+            } message: {
+                if deletionTarget?.worktree?.managed == true {
+                    Text("Worktree 可能包含未提交修改、未跟踪文件或新提交。选择删除 Worktree 时会先执行安全检查。Git 分支不会被删除。")
+                } else {
+                    Text("此操作会永久删除任务及其事件历史，无法撤销。")
+                }
+            }
+            .alert(
+                "Worktree 包含未保存的更改",
+                isPresented: Binding(
+                    get: { forcedDeletion != nil },
+                    set: { if !$0 { forcedDeletion = nil } }
+                ),
+                presenting: forcedDeletion
+            ) { confirmation in
+                Button("取消", role: .cancel) { forcedDeletion = nil }
+                Button("强制删除 Worktree 和任务", role: .destructive) {
+                    performDeletion(confirmation.conversation, .remove, true)
+                }
+            } message: { confirmation in
+                Text(confirmation.message)
+            }
+            .alert(
+                "无法删除任务",
+                isPresented: Binding(
+                    get: { deletionErrorMessage != nil },
+                    set: { if !$0 { deletionErrorMessage = nil } }
+                )
+            ) {
+                Button("好", role: .cancel) { deletionErrorMessage = nil }
+            } message: {
+                Text(deletionErrorMessage ?? "未知错误")
+            }
+            .alert(
+                "无法归档或恢复任务",
+                isPresented: Binding(
+                    get: { archiveErrorMessage != nil },
+                    set: { if !$0 { archiveErrorMessage = nil } }
+                )
+            ) {
+                Button("好", role: .cancel) { archiveErrorMessage = nil }
+            } message: {
+                Text(archiveErrorMessage ?? "未知错误")
+            }
     }
 }
 
@@ -499,6 +705,8 @@ private struct ConversationRow: View {
                 Label("已暂停", systemImage: "pause.circle.fill")
                     .font(.caption2.weight(.medium))
                     .foregroundStyle(.orange)
+            case .idle where ref.isArchived:
+                statusLabel("已归档", systemImage: "archivebox.fill", color: .secondary)
             case .idle where ref.name != nil:
                 Text(ref.id.prefix(8) + "…")
                     .font(.caption2)

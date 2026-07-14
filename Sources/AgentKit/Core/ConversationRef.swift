@@ -38,9 +38,15 @@ public struct ConversationRef: Identifiable, Hashable, Sendable, Codable {
     public let baseWorkspaceID: String?
     public let worktree: ManagedWorktreeMetadata?
     public let warnings: [RuntimeAPIWarning]?
+    /// Runtime-owned durable archive timestamp. Nil means the conversation is active.
+    public let archivedAt: String?
 
     public var isPaused: Bool {
         turnStatus == "paused"
+    }
+
+    public var isArchived: Bool {
+        archivedAt?.isEmpty == false
     }
 
     public var pausedDate: Date? {
@@ -48,11 +54,14 @@ public struct ConversationRef: Identifiable, Hashable, Sendable, Codable {
     }
     
     var uiID: String {
-        return id
-            + (name ?? "-")
-            + (turnStatus ?? "-")
-            + (worktree?.state ?? "-")
-            + (worktree?.branch ?? "-")
+        [
+            id,
+            name ?? "-",
+            turnStatus ?? "-",
+            worktree?.state ?? "-",
+            worktree?.branch ?? "-",
+            archivedAt ?? "-",
+        ].joined(separator: "|")
     }
 
     enum CodingKeys: String, CodingKey {
@@ -65,6 +74,7 @@ public struct ConversationRef: Identifiable, Hashable, Sendable, Codable {
         case executionPolicy = "execution_policy"
         case workspaceID = "workspace_id"
         case baseWorkspaceID = "base_workspace_id"
+        case archivedAt = "archived_at"
         case worktree, warnings
     }
 
@@ -79,7 +89,8 @@ public struct ConversationRef: Identifiable, Hashable, Sendable, Codable {
         workspaceID: String? = nil,
         baseWorkspaceID: String? = nil,
         worktree: ManagedWorktreeMetadata? = nil,
-        warnings: [RuntimeAPIWarning]? = nil
+        warnings: [RuntimeAPIWarning]? = nil,
+        archivedAt: String? = nil
     ) {
         self.id = id
         self.workspacePath = workspacePath
@@ -92,6 +103,24 @@ public struct ConversationRef: Identifiable, Hashable, Sendable, Codable {
         self.baseWorkspaceID = baseWorkspaceID
         self.worktree = worktree
         self.warnings = warnings
+        self.archivedAt = archivedAt
+    }
+
+    public func withArchivedAt(_ archivedAt: String?) -> ConversationRef {
+        ConversationRef(
+            id: id,
+            workspacePath: workspacePath,
+            workspace: workspace,
+            name: name,
+            turnStatus: turnStatus,
+            pausedAt: pausedAt,
+            executionPolicy: executionPolicy,
+            workspaceID: workspaceID,
+            baseWorkspaceID: baseWorkspaceID,
+            worktree: worktree,
+            warnings: warnings,
+            archivedAt: archivedAt
+        )
     }
 
     /// Worktree sessions stay grouped under their source project rather than

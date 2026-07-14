@@ -149,10 +149,56 @@ struct RuntimeHTTPClient: Sendable {
 
     /// `GET /v1/conversations`
     func listConversations() async throws -> [ConversationRef] {
-        let request = try await buildRequest("GET", pathComponents: "v1/conversations")
+        try await listConversations(archived: false)
+    }
+
+    func listArchivedConversations() async throws -> [ConversationRef] {
+        try await listConversations(archived: true)
+    }
+
+    private func listConversations(archived: Bool) async throws -> [ConversationRef] {
+        let request = try await buildRequest(
+            "GET",
+            pathComponents: "v1/conversations",
+            queryItems: [URLQueryItem(name: "archived", value: archived ? "true" : "false")]
+        )
         let (data, response) = try await session.data(for: request)
         try validateHTTP(response, data: data)
         return try decodeEnvelope([ConversationRef].self, from: data)
+    }
+
+    func archiveConversation(id: String) async throws -> ConversationArchiveResponse {
+        try await performArchiveOperation(id: id, operation: "archive")
+    }
+
+    func restoreConversation(id: String) async throws -> ConversationArchiveResponse {
+        try await performArchiveOperation(id: id, operation: "restore")
+    }
+
+    private func performArchiveOperation(
+        id: String,
+        operation: String
+    ) async throws -> ConversationArchiveResponse {
+        let request = try await buildRequest(
+            "POST",
+            pathComponents: "v1/conversations", id, operation
+        )
+        let (data, response) = try await session.data(for: request)
+        guard let http = response as? HTTPURLResponse else {
+            throw RuntimeHTTPError.invalidResponse
+        }
+        guard http.statusCode == 200 else {
+            if let envelope = try? decoder.decode(
+                RuntimeEnvelope<ConversationOperationErrorPayload>.self,
+                from: data
+            ), let payload = envelope.data,
+               let archiveError = ConversationArchiveError(operationPayload: payload) {
+                throw archiveError
+            }
+            try validateHTTP(response, data: data)
+            throw RuntimeHTTPError.invalidResponse
+        }
+        return try decodeEnvelope(ConversationArchiveResponse.self, from: data)
     }
 
     // MARK: - 历史读取（§2 历史读取）

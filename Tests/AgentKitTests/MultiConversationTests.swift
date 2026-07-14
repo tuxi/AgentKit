@@ -370,6 +370,127 @@ final class MultiConversationTests: XCTestCase {
     }
 
     @MainActor
+    func testArchiveAndRestoreMoveRuntimeOwnedPartitionsAndPreserveWorktree() async throws {
+        let capabilities = RuntimeCapabilitySnapshot(capabilities: [
+            "activity_snapshot_v1": true,
+            "conversation_archive_v1": true,
+        ])
+        let client = MultiSessionRuntimeClient(
+            capabilitySnapshot: capabilities,
+            activity: RuntimeActivitySnapshot(sessions: [])
+        )
+        let store = WorkspaceStore(client: client)
+        let conversation = ConversationRef(
+            id: "archive-me",
+            workspacePath: "/tmp/AgentKit/.codeagent/worktrees/archive-me-a31f",
+            name: "Archive me",
+            worktree: ManagedWorktreeMetadata(
+                managed: true,
+                branch: "codeagent/archive-me-a31f",
+                state: "ready"
+            )
+        )
+        store.listViewModel.prepend(conversation)
+        await store.refreshRuntimeState()
+        store.selectedConversation = conversation
+        try await Task.sleep(for: .milliseconds(25))
+        XCTAssertTrue(client.channel(for: conversation.id).isConnected)
+
+        let archived = try await store.archiveConversation(conversation)
+        try await Task.sleep(for: .milliseconds(25))
+
+        XCTAssertTrue(archived.isArchived)
+        XCTAssertEqual(archived.worktree, conversation.worktree)
+        XCTAssertFalse(store.listViewModel.conversations.contains { $0.id == conversation.id })
+        XCTAssertEqual(store.listViewModel.archivedConversations.map(\.id), [conversation.id])
+        XCTAssertEqual(client.archivedConversationIDs, [conversation.id])
+        XCTAssertEqual(client.channel(for: conversation.id).disconnectCount, 1)
+        XCTAssertTrue(store.selectedConversation?.isArchived == true)
+        XCTAssertTrue(store.activeConversationViewModel?.isArchived == true)
+        XCTAssertFalse(client.channel(for: conversation.id).isConnected)
+
+        let restored = try await store.restoreConversation(archived)
+        try await Task.sleep(for: .milliseconds(25))
+
+        XCTAssertFalse(restored.isArchived)
+        XCTAssertEqual(restored.worktree, conversation.worktree)
+        XCTAssertEqual(store.listViewModel.conversations.first?.id, conversation.id)
+        XCTAssertTrue(store.listViewModel.archivedConversations.isEmpty)
+        XCTAssertEqual(client.restoredConversationIDs, [conversation.id])
+        XCTAssertTrue(client.channel(for: conversation.id).isConnected)
+        store.supervisor.stopActivityMonitoring()
+    }
+
+    @MainActor
+    func testArchiveIsCapabilityGatedAndRejectsActiveConversationLocally() async throws {
+        let conversation = ConversationRef(id: "archive-running", workspacePath: "/tmp/project")
+        let unsupportedStore = WorkspaceStore(client: MultiSessionRuntimeClient())
+        unsupportedStore.listViewModel.prepend(conversation)
+
+        do {
+            _ = try await unsupportedStore.archiveConversation(conversation)
+            XCTFail("expected capability rejection")
+        } catch let error as ConversationArchiveError {
+            XCTAssertEqual(error, .notSupported)
+        }
+
+        let capabilities = RuntimeCapabilitySnapshot(capabilities: [
+            "activity_snapshot_v1": true,
+            "conversation_archive_v1": true,
+        ])
+        let client = MultiSessionRuntimeClient(
+            capabilitySnapshot: capabilities,
+            activity: RuntimeActivitySnapshot(sessions: [
+                RuntimeSessionActivity(sessionID: conversation.id, state: "running")
+            ])
+        )
+        let store = WorkspaceStore(client: client)
+        store.listViewModel.prepend(conversation)
+        await store.refreshRuntimeState()
+
+        do {
+            _ = try await store.archiveConversation(conversation)
+            XCTFail("expected active archive rejection")
+        } catch let error as ConversationArchiveError {
+            XCTAssertEqual(error, .inUse(state: ConversationActivityState.running.rawValue))
+        }
+        XCTAssertTrue(client.archivedConversationIDs.isEmpty)
+        store.supervisor.stopActivityMonitoring()
+    }
+
+    @MainActor
+    func testRefreshMovesExternallyArchivedSelectionToReadOnlyController() async throws {
+        let capabilities = RuntimeCapabilitySnapshot(capabilities: [
+            "activity_snapshot_v1": true,
+            "conversation_archive_v1": true,
+        ])
+        let conversation = ConversationRef(id: "external-archive", workspacePath: "/tmp/project")
+        let client = MultiSessionRuntimeClient(
+            capabilitySnapshot: capabilities,
+            activity: RuntimeActivitySnapshot(sessions: []),
+            activeConversations: [conversation]
+        )
+        let store = WorkspaceStore(client: client)
+        await store.listViewModel.refresh()
+        await store.refreshRuntimeState()
+        store.selectedConversation = conversation
+        try await Task.sleep(for: .milliseconds(25))
+        XCTAssertTrue(client.channel(for: conversation.id).isConnected)
+
+        let archived = conversation.withArchivedAt("2026-07-14T10:00:00Z")
+        client.setConversationLists(active: [], archived: [archived])
+        await store.listViewModel.refresh()
+        await store.refreshRuntimeState()
+        try await Task.sleep(for: .milliseconds(25))
+
+        XCTAssertTrue(store.selectedConversation?.isArchived == true)
+        XCTAssertTrue(store.activeConversationViewModel?.isArchived == true)
+        XCTAssertFalse(client.channel(for: conversation.id).isConnected)
+        XCTAssertEqual(client.channel(for: conversation.id).disconnectCount, 1)
+        store.supervisor.stopActivityMonitoring()
+    }
+
+    @MainActor
     func testRuntimeQueueIsNotReportedAsUnsupportedParallelism() async throws {
         let client = MultiSessionRuntimeClient()
         let store = WorkspaceStore(client: client)
@@ -875,6 +996,8 @@ private final class MultiSessionRuntimeClient: RuntimeClient, @unchecked Sendabl
     private let connectDelays: [String: Duration]
     private let capabilitySnapshot: RuntimeCapabilitySnapshot?
     private var activity: RuntimeActivitySnapshot?
+    private var activeConversations: [ConversationRef]
+    private var archivedConversations: [ConversationRef]
     private var queuedActivities: [RuntimeActivitySnapshot] = []
     private(set) var capabilitySnapshotRequestCount = 0
     private(set) var activitySnapshotRequestCount = 0
@@ -882,17 +1005,23 @@ private final class MultiSessionRuntimeClient: RuntimeClient, @unchecked Sendabl
     private(set) var createRequests: [CreateConversationRequest] = []
     private(set) var removeManagedWorktreeRequests: [ManagedWorktreeRemoveRequest] = []
     private(set) var deletedConversationIDs: [String] = []
+    private(set) var archivedConversationIDs: [String] = []
+    private(set) var restoredConversationIDs: [String] = []
     private(set) var operationLog: [String] = []
     var removeManagedWorktreeError: Error?
 
     init(
         connectDelays: [String: Duration] = [:],
         capabilitySnapshot: RuntimeCapabilitySnapshot? = nil,
-        activity: RuntimeActivitySnapshot? = nil
+        activity: RuntimeActivitySnapshot? = nil,
+        activeConversations: [ConversationRef] = [],
+        archivedConversations: [ConversationRef] = []
     ) {
         self.connectDelays = connectDelays
         self.capabilitySnapshot = capabilitySnapshot
         self.activity = activity
+        self.activeConversations = activeConversations
+        self.archivedConversations = archivedConversations
     }
 
     func channel(for id: String) -> MultiSessionChannelDouble {
@@ -937,6 +1066,11 @@ private final class MultiSessionRuntimeClient: RuntimeClient, @unchecked Sendabl
         queuedActivities.append(contentsOf: activities)
     }
 
+    func setConversationLists(active: [ConversationRef], archived: [ConversationRef]) {
+        activeConversations = active
+        archivedConversations = archived
+    }
+
     func createConversation(workspacePath: String) async throws -> ConversationRef {
         ConversationRef(id: UUID().uuidString, workspacePath: workspacePath)
     }
@@ -969,7 +1103,29 @@ private final class MultiSessionRuntimeClient: RuntimeClient, @unchecked Sendabl
             baseWorkspaceID: request.baseWorkspaceID
         )
     }
-    func listConversations() async throws -> [ConversationRef] { [] }
+    func listConversations() async throws -> [ConversationRef] { activeConversations }
+    func listArchivedConversations() async throws -> [ConversationRef] { archivedConversations }
+    func archiveConversation(id: String) async throws -> ConversationArchiveResponse {
+        archivedConversationIDs.append(id)
+        operationLog.append("archive:\(id)")
+        let archivedAt = "2026-07-14T10:00:00Z"
+        if let ref = activeConversations.first(where: { $0.id == id }) {
+            activeConversations.removeAll { $0.id == id }
+            archivedConversations.removeAll { $0.id == id }
+            archivedConversations.append(ref.withArchivedAt(archivedAt))
+        }
+        return ConversationArchiveResponse(id: id, archivedAt: archivedAt)
+    }
+    func restoreConversation(id: String) async throws -> ConversationArchiveResponse {
+        restoredConversationIDs.append(id)
+        operationLog.append("restore:\(id)")
+        if let ref = archivedConversations.first(where: { $0.id == id }) {
+            archivedConversations.removeAll { $0.id == id }
+            activeConversations.removeAll { $0.id == id }
+            activeConversations.append(ref.withArchivedAt(nil))
+        }
+        return ConversationArchiveResponse(id: id)
+    }
     func renameConversation(id: String, name: String) async throws -> ConversationRef {
         ConversationRef(id: id, workspacePath: "", name: name)
     }
