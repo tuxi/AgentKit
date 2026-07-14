@@ -30,6 +30,14 @@ public struct ConversationRef: Identifiable, Hashable, Sendable, Codable {
     public let turnStatus: String?
     /// Unix seconds when the session was marked paused. Used for cold-start "continue" UI.
     public let pausedAt: Int64?
+    /// Runtime-enforced execution policy. Kept as a string for forward compatibility.
+    public let executionPolicy: String?
+    /// Identity of the actual checkout used by Runtime tools.
+    public let workspaceID: String?
+    /// Identity of the source project used for sidebar grouping.
+    public let baseWorkspaceID: String?
+    public let worktree: ManagedWorktreeMetadata?
+    public let warnings: [RuntimeAPIWarning]?
 
     public var isPaused: Bool {
         turnStatus == "paused"
@@ -40,7 +48,11 @@ public struct ConversationRef: Identifiable, Hashable, Sendable, Codable {
     }
     
     var uiID: String {
-        return id + (name ?? "-") + (turnStatus ?? "-")
+        return id
+            + (name ?? "-")
+            + (turnStatus ?? "-")
+            + (worktree?.state ?? "-")
+            + (worktree?.branch ?? "-")
     }
 
     enum CodingKeys: String, CodingKey {
@@ -50,6 +62,10 @@ public struct ConversationRef: Identifiable, Hashable, Sendable, Codable {
         case name
         case turnStatus = "turn_status"
         case pausedAt = "paused_at"
+        case executionPolicy = "execution_policy"
+        case workspaceID = "workspace_id"
+        case baseWorkspaceID = "base_workspace_id"
+        case worktree, warnings
     }
 
     public init(
@@ -58,7 +74,12 @@ public struct ConversationRef: Identifiable, Hashable, Sendable, Codable {
         workspace: WorkspaceAnchor? = nil,
         name: String? = nil,
         turnStatus: String? = nil,
-        pausedAt: Int64? = nil
+        pausedAt: Int64? = nil,
+        executionPolicy: String? = nil,
+        workspaceID: String? = nil,
+        baseWorkspaceID: String? = nil,
+        worktree: ManagedWorktreeMetadata? = nil,
+        warnings: [RuntimeAPIWarning]? = nil
     ) {
         self.id = id
         self.workspacePath = workspacePath
@@ -66,6 +87,54 @@ public struct ConversationRef: Identifiable, Hashable, Sendable, Codable {
         self.name = name
         self.turnStatus = turnStatus
         self.pausedAt = pausedAt
+        self.executionPolicy = executionPolicy
+        self.workspaceID = workspaceID
+        self.baseWorkspaceID = baseWorkspaceID
+        self.worktree = worktree
+        self.warnings = warnings
+    }
+
+    /// Worktree sessions stay grouped under their source project rather than
+    /// creating a top-level workspace for the checkout directory.
+    public var workspaceGroupingID: String {
+        // Prefer a path identity whenever Runtime gives us one. Existing main
+        // checkout conversations often only have WorkspaceAnchor.rootPath,
+        // while managed worktrees carry base_workspace_id. Normalizing both to
+        // `path:` keeps old and new sessions in the same sidebar group.
+        if let baseWorkspaceID, baseWorkspaceID.hasPrefix("/") {
+            return "path:\(URL(fileURLWithPath: baseWorkspaceID).standardizedFileURL.path)"
+        }
+        if let rootPath = workspace?.localRootPath, !rootPath.isEmpty {
+            return "path:\(URL(fileURLWithPath: rootPath).standardizedFileURL.path)"
+        }
+        if let basePath = inferredBaseWorkspacePath {
+            return "path:\(URL(fileURLWithPath: basePath).standardizedFileURL.path)"
+        }
+        if let baseWorkspaceID, !baseWorkspaceID.isEmpty {
+            return "base:\(baseWorkspaceID)"
+        }
+        if let workspace { return "workspace:\(workspace.id)" }
+        guard !workspacePath.isEmpty else { return "chat" }
+        return "path:\(URL(fileURLWithPath: workspacePath).standardizedFileURL.path)"
+    }
+
+    public var workspaceGroupingName: String {
+        if let basePath = inferredBaseWorkspacePath {
+            return URL(fileURLWithPath: basePath).lastPathComponent
+        }
+        if worktree == nil, let workspace { return workspace.displayName }
+        if let baseWorkspaceID, baseWorkspaceID.hasPrefix("/") {
+            return URL(fileURLWithPath: baseWorkspaceID).lastPathComponent
+        }
+        if let baseWorkspaceID, !baseWorkspaceID.isEmpty { return baseWorkspaceID }
+        guard !workspacePath.isEmpty else { return "聊天" }
+        return URL(fileURLWithPath: workspacePath).lastPathComponent
+    }
+
+    public var inferredBaseWorkspacePath: String? {
+        let marker = "/.codeagent/worktrees/"
+        guard let range = workspacePath.range(of: marker) else { return nil }
+        return String(workspacePath[..<range.lowerBound])
     }
 
     public static func == (lhs: Self, rhs: Self) -> Bool {

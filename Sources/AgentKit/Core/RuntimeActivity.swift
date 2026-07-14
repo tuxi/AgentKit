@@ -100,6 +100,7 @@ public struct RuntimeCapabilitySnapshot: Codable, Sendable, Equatable {
         if capabilities["workspace_execution_policy_v1"] == true { flags.insert(.workspaceExecutionPolicy) }
         if capabilities["session_attention_snapshot_v1"] == true { flags.insert(.sessionAttentionSnapshot) }
         if capabilities["session_attention_delta_v1"] == true { flags.insert(.sessionAttentionDelta) }
+        if capabilities["managed_worktree_v1"] == true { flags.insert(.managedWorktree) }
         return flags
     }
 
@@ -111,6 +112,10 @@ public struct RuntimeCapabilitySnapshot: Codable, Sendable, Equatable {
     }
 
     public static let legacy = RuntimeCapabilitySnapshot(schema: "legacy", protocolVersion: 0)
+
+    public var supportsManagedWorktree: Bool {
+        flags.contains(.managedWorktree) && flags.contains(.workspaceExecutionPolicy)
+    }
 }
 
 public struct RuntimeTerminalActivity: Codable, Sendable, Equatable {
@@ -146,6 +151,10 @@ public struct RuntimeSessionActivity: Codable, Sendable, Equatable, Identifiable
     public let queuePosition: Int?
     public let latestTerminal: RuntimeTerminalActivity?
     public let updatedAt: String?
+    public let executionPolicy: String?
+    public let workspaceID: String?
+    public let baseWorkspaceID: String?
+    public let worktree: ManagedWorktreeMetadata?
 
     public var id: String { sessionID }
     public var effectiveActiveTurnID: String? { activeTurnID ?? turnID }
@@ -161,6 +170,10 @@ public struct RuntimeSessionActivity: Codable, Sendable, Equatable, Identifiable
         case queuePosition = "queue_position"
         case latestTerminal = "latest_terminal"
         case updatedAt = "updated_at"
+        case executionPolicy = "execution_policy"
+        case workspaceID = "workspace_id"
+        case baseWorkspaceID = "base_workspace_id"
+        case worktree
     }
 
     public init(
@@ -173,7 +186,11 @@ public struct RuntimeSessionActivity: Codable, Sendable, Equatable, Identifiable
         pendingClientToolCount: Int? = nil,
         queuePosition: Int? = nil,
         latestTerminal: RuntimeTerminalActivity? = nil,
-        updatedAt: String? = nil
+        updatedAt: String? = nil,
+        executionPolicy: String? = nil,
+        workspaceID: String? = nil,
+        baseWorkspaceID: String? = nil,
+        worktree: ManagedWorktreeMetadata? = nil
     ) {
         self.sessionID = sessionID
         self.turnID = turnID
@@ -185,6 +202,10 @@ public struct RuntimeSessionActivity: Codable, Sendable, Equatable, Identifiable
         self.queuePosition = queuePosition
         self.latestTerminal = latestTerminal
         self.updatedAt = updatedAt
+        self.executionPolicy = executionPolicy
+        self.workspaceID = workspaceID
+        self.baseWorkspaceID = baseWorkspaceID
+        self.worktree = worktree
     }
 }
 

@@ -133,11 +133,13 @@ struct RuntimeHTTPClient: Sendable {
     /// `POST /v1/conversations` with workspace lease identity and policy.
     func createConversation(request value: CreateConversationRequest) async throws -> ConversationRef {
         let payload = CreateConversationRequest(
+            clientRequestID: value.clientRequestID,
             workspacePath: value.workspacePath.isEmpty ? "." : value.workspacePath,
             workspaceExtID: value.workspaceExtID,
             executionPolicy: value.executionPolicy,
             workspaceID: value.workspaceID,
-            baseWorkspaceID: value.baseWorkspaceID
+            baseWorkspaceID: value.baseWorkspaceID,
+            worktree: value.worktree
         )
         let request = try await buildRequest("POST", pathComponents: "v1/conversations", body: payload)
         let (data, response) = try await session.data(for: request)

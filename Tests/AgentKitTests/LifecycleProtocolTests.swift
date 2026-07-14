@@ -86,6 +86,77 @@ final class LifecycleProtocolTests: XCTestCase {
         XCTAssertEqual(detail.workspace?.kind, "local")
     }
 
+    func testManagedWorktreeMetadataDecodesAndGroupsUnderBaseWorkspace() throws {
+        let json = """
+        {
+          "id": "sess_worktree",
+          "workspace_path": "/tmp/AgentKit/.codeagent/worktrees/fix-auth-a31f",
+          "name": "Fix auth",
+          "execution_policy": "isolated_worktree",
+          "workspace_id": "/tmp/AgentKit/.codeagent/worktrees/fix-auth-a31f",
+          "base_workspace_id": "/tmp/AgentKit",
+          "worktree": {
+            "managed": true,
+            "name": "fix-auth-a31f",
+            "branch": "codeagent/fix-auth-a31f",
+            "base_ref": "head",
+            "state": "ready",
+            "needs_rebind": false
+          },
+          "warnings": [{
+            "code": "worktree_orphan_detected",
+            "message": "An unrelated orphan was preserved"
+          }]
+        }
+        """
+
+        let ref = try JSONDecoder().decode(ConversationRef.self, from: Data(json.utf8))
+
+        XCTAssertEqual(ref.executionPolicy, "isolated_worktree")
+        XCTAssertEqual(ref.worktree?.branch, "codeagent/fix-auth-a31f")
+        XCTAssertTrue(ref.worktree?.isReady == true)
+        XCTAssertEqual(ref.warnings?.first?.code, "worktree_orphan_detected")
+        XCTAssertEqual(ref.workspaceGroupingID, "path:/tmp/AgentKit")
+        XCTAssertEqual(ref.workspaceGroupingName, "AgentKit")
+
+        let main = ConversationRef(
+            id: "sess_main",
+            workspacePath: "/tmp/AgentKit",
+            workspace: WorkspaceAnchor(id: "legacy-anchor", rootPath: "/tmp/AgentKit")
+        )
+        XCTAssertEqual(main.workspaceGroupingID, ref.workspaceGroupingID)
+    }
+
+    func testConversationDetailDecodesManagedWorktreeMetadata() throws {
+        let json = """
+        {
+          "id": "sess_worktree",
+          "turn_count": 1,
+          "message_count": 2,
+          "created_at": "2026-07-14T08:00:00Z",
+          "updated_at": "2026-07-14T08:02:00Z",
+          "workspace_path": "/tmp/AgentKit/.codeagent/worktrees/fix-auth-a31f",
+          "execution_policy": "isolated_worktree",
+          "workspace_id": "/tmp/AgentKit/.codeagent/worktrees/fix-auth-a31f",
+          "base_workspace_id": "/tmp/AgentKit",
+          "worktree": {
+            "managed": true,
+            "name": "fix-auth-a31f",
+            "branch": "codeagent/fix-auth-a31f",
+            "base_ref": "head",
+            "state": "missing",
+            "needs_rebind": true
+          }
+        }
+        """
+
+        let detail = try JSONDecoder().decode(ConversationDetail.self, from: Data(json.utf8))
+
+        XCTAssertEqual(detail.baseWorkspaceID, "/tmp/AgentKit")
+        XCTAssertEqual(detail.workspaceGroupingName, "AgentKit")
+        XCTAssertTrue(detail.worktree?.requiresAttention == true)
+    }
+
     func testLifecycleEventsDecodeFromWire() throws {
         let paused = try decodeEvent("""
         { "kind": "turn_paused", "turn_id": "turn_1", "text": "paused" }
@@ -189,7 +260,8 @@ final class LifecycleProtocolTests: XCTestCase {
             "activity_snapshot_v1": true,
             "session_attention_snapshot_v1": true,
             "session_attention_delta_v1": true,
-            "workspace_execution_policy_v1": true
+            "workspace_execution_policy_v1": true,
+            "managed_worktree_v1": true
           },
           "limits": { "max_concurrent_turns": 4, "max_connected_sessions": 16 }
         }
@@ -201,6 +273,7 @@ final class LifecycleProtocolTests: XCTestCase {
         XCTAssertTrue(capabilities.allowsMultiSessionExecution)
         XCTAssertTrue(capabilities.flags.contains(.sessionAttentionSnapshot))
         XCTAssertTrue(capabilities.flags.contains(.sessionAttentionDelta))
+        XCTAssertTrue(capabilities.supportsManagedWorktree)
         XCTAssertEqual(capabilities.limits?.maxConcurrentTurns, 4)
 
         let activityJSON = """
@@ -217,6 +290,17 @@ final class LifecycleProtocolTests: XCTestCase {
             "pending_approval_count": 1,
             "pending_client_tool_count": 0,
             "queue_position": 0,
+            "execution_policy": "isolated_worktree",
+            "workspace_id": "/tmp/AgentKit/.codeagent/worktrees/task-a31f",
+            "base_workspace_id": "/tmp/AgentKit",
+            "worktree": {
+              "managed": true,
+              "name": "task-a31f",
+              "branch": "codeagent/task-a31f",
+              "base_ref": "fresh",
+              "state": "ready",
+              "needs_rebind": false
+            },
             "latest_terminal": {
               "turn_id": "turn_2",
               "kind": "turn_finished",
@@ -235,6 +319,8 @@ final class LifecycleProtocolTests: XCTestCase {
         XCTAssertEqual(activity.sessions.first?.effectiveActiveTurnID, "turn_3")
         XCTAssertEqual(activity.sessions.first?.pendingApprovalCount, 1)
         XCTAssertEqual(activity.sessions.first?.latestTerminal?.sequence, 170)
+        XCTAssertEqual(activity.sessions.first?.executionPolicy, "isolated_worktree")
+        XCTAssertEqual(activity.sessions.first?.worktree?.branch, "codeagent/task-a31f")
     }
 
     func testCurrentCodeAgentRuntimeCapabilityAndActivityFixturesDecode() throws {

@@ -58,6 +58,8 @@ public struct AgentCapabilityFlags: OptionSet, Sendable {
     public static let sessionAttentionSnapshot = AgentCapabilityFlags(rawValue: 1 << 12)
     /// Runtime supports cursor-based incremental session attention snapshots.
     public static let sessionAttentionDelta = AgentCapabilityFlags(rawValue: 1 << 13)
+    /// Runtime can explicitly provision, recover and safely remove Git worktrees.
+    public static let managedWorktree = AgentCapabilityFlags(rawValue: 1 << 14)
 
     // MARK: - Presets
 

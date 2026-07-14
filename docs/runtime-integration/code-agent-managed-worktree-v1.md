@@ -1,6 +1,6 @@
 # Code-Agent Managed Worktree v1 要求
 
-> 状态：Proposed
+> 状态：Implemented — Code-Agent Runtime M0–M4
 >
 > 目标仓库：Code-Agent Runtime
 >

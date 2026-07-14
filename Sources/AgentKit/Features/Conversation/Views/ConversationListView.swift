@@ -324,17 +324,10 @@ private struct ConversationWorkspaceGroup: Identifiable {
                 return
             }
 
-            if let workspace = conversation.workspace {
-                id = "workspace:\(workspace.id)"
-                title = workspace.displayName
-                systemImage = "folder"
-                return
-            }
-
-            // 兼容尚未返回结构化 workspace 的旧会话；规范化路径后作为本地分组键。
-            let path = URL(fileURLWithPath: conversation.workspacePath).standardizedFileURL.path
-            id = "path:\(path)"
-            title = URL(fileURLWithPath: path).lastPathComponent
+            // Managed worktrees stay under their source project. ConversationRef
+            // also preserves the legacy workspace/path grouping fallback.
+            id = conversation.workspaceGroupingID
+            title = conversation.workspaceGroupingName
             systemImage = "folder"
         }
     }
@@ -353,10 +346,15 @@ private struct ConversationRow: View {
 
     var body: some View {
         HStack(spacing: 8) {
-            Text(ref.name ?? ref.id)
-                .font(.system(size: 14, weight: .medium))
-                .foregroundStyle(.primary)
-                .lineLimit(1)
+            VStack(alignment: .leading, spacing: 2) {
+                Text(ref.name ?? ref.id)
+                    .font(.system(size: 14, weight: .medium))
+                    .foregroundStyle(.primary)
+                    .lineLimit(1)
+                if let worktree = ref.worktree {
+                    worktreeDetail(worktree)
+                }
+            }
             Spacer(minLength: 6)
 
             switch activity {
@@ -402,5 +400,36 @@ private struct ConversationRow: View {
         Label(title, systemImage: systemImage)
             .font(.caption2.weight(.medium))
             .foregroundStyle(color)
+    }
+
+    @ViewBuilder
+    private func worktreeDetail(_ worktree: ManagedWorktreeMetadata) -> some View {
+        let hasSourceWarning = ref.warnings?.contains(where: { $0.code == "source_workspace_dirty" }) == true
+        HStack(spacing: 4) {
+            Image(systemName: worktree.requiresAttention
+                ? "exclamationmark.triangle.fill"
+                : "arrow.triangle.branch")
+            Text(worktree.requiresAttention
+                ? worktreeAttentionTitle(worktree)
+                : (worktree.branch ?? worktree.name ?? "Worktree"))
+                .lineLimit(1)
+            if !worktree.requiresAttention {
+                Text("· Worktree")
+            }
+            if hasSourceWarning {
+                Image(systemName: "exclamationmark.circle")
+                    .foregroundStyle(.orange)
+                    .accessibilityLabel("主工作区未提交修改未复制")
+            }
+        }
+        .font(.caption2)
+        .foregroundStyle(worktree.requiresAttention ? Color.orange : Color.secondary)
+    }
+
+    private func worktreeAttentionTitle(_ worktree: ManagedWorktreeMetadata) -> String {
+        if worktree.needsRebind || worktree.state == "missing" { return "Worktree 不可用" }
+        if worktree.state == "remove_failed" { return "Worktree 清理失败" }
+        if worktree.state == "failed" { return "Worktree 创建失败" }
+        return worktree.state
     }
 }

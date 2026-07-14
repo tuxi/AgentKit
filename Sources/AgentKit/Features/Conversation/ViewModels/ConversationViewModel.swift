@@ -127,6 +127,9 @@ public final class ConversationViewModel {
 
     /// 本会话用于展示的工作区标签。
     public var workspaceDisplayName: String? {
+        if managedWorktree != nil {
+            return detail?.workspaceGroupingName ?? conversation?.workspaceGroupingName
+        }
         if let anchor = workspaceAnchor {
             return anchor.displayName
         }
@@ -135,6 +138,10 @@ public final class ConversationViewModel {
             return URL(fileURLWithPath: path).lastPathComponent
         }
         return nil
+    }
+
+    public var managedWorktree: ManagedWorktreeMetadata? {
+        detail?.worktree ?? conversation?.worktree
     }
 
     /// Structured workspace anchor from the runtime contract.

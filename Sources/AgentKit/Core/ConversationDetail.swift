@@ -29,6 +29,11 @@ public struct ConversationDetail: Sendable, Codable, Hashable {
 
     /// Unix seconds when the session was paused.
     public let pausedAt: Int64?
+    public let executionPolicy: String?
+    public let workspaceID: String?
+    public let baseWorkspaceID: String?
+    public let worktree: ManagedWorktreeMetadata?
+    public let warnings: [RuntimeAPIWarning]?
 
     enum CodingKeys: String, CodingKey {
         case id
@@ -41,6 +46,10 @@ public struct ConversationDetail: Sendable, Codable, Hashable {
         case name
         case turnStatus = "turn_status"
         case pausedAt = "paused_at"
+        case executionPolicy = "execution_policy"
+        case workspaceID = "workspace_id"
+        case baseWorkspaceID = "base_workspace_id"
+        case worktree, warnings
     }
 
     public init(from decoder: Decoder) throws {
@@ -55,5 +64,22 @@ public struct ConversationDetail: Sendable, Codable, Hashable {
         name = try c.decodeIfPresent(String.self, forKey: .name)
         turnStatus = try c.decodeIfPresent(String.self, forKey: .turnStatus)
         pausedAt = try c.decodeIfPresent(Int64.self, forKey: .pausedAt)
+        executionPolicy = try c.decodeIfPresent(String.self, forKey: .executionPolicy)
+        workspaceID = try c.decodeIfPresent(String.self, forKey: .workspaceID)
+        baseWorkspaceID = try c.decodeIfPresent(String.self, forKey: .baseWorkspaceID)
+        worktree = try c.decodeIfPresent(ManagedWorktreeMetadata.self, forKey: .worktree)
+        warnings = try c.decodeIfPresent([RuntimeAPIWarning].self, forKey: .warnings)
+    }
+
+    public var workspaceGroupingName: String? {
+        if let path = workspacePath,
+           let range = path.range(of: "/.codeagent/worktrees/") {
+            return URL(fileURLWithPath: String(path[..<range.lowerBound])).lastPathComponent
+        }
+        if worktree == nil, let workspace { return workspace.displayName }
+        if let baseWorkspaceID, baseWorkspaceID.hasPrefix("/") {
+            return URL(fileURLWithPath: baseWorkspaceID).lastPathComponent
+        }
+        return baseWorkspaceID
     }
 }

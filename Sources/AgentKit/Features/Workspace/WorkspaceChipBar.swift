@@ -90,7 +90,7 @@ struct WorkspaceChipBar: View {
         case draftEmpty
         case draftReady(Workspace)
         case committing(Workspace)
-        case frozen(name: String, branch: String?)
+        case frozen(name: String, branch: String?, worktree: ManagedWorktreeMetadata?)
         case hidden
     }
 
@@ -103,7 +103,11 @@ struct WorkspaceChipBar: View {
             return .draftEmpty
         }
         if let vm = store.activeConversationViewModel, let name = vm.workspaceDisplayName {
-            return .frozen(name: name, branch: vm.workspace?.branch)
+            return .frozen(
+                name: name,
+                branch: vm.managedWorktree?.branch ?? vm.workspace?.branch,
+                worktree: vm.managedWorktree
+            )
         }
         return .hidden
     }
@@ -133,17 +137,32 @@ struct WorkspaceChipBar: View {
             if let branch = ws.branch {
                 chip(icon: "arrow.triangle.branch", text: branch)
             }
+            if store.supportsManagedWorktreeCreation, ws.branch != nil {
+                managedWorktreeMenu
+            }
 
         case .committing(let ws):
             localChip
             chip(icon: "folder", text: ws.name)
+            if store.draft?.usesManagedWorktree == true {
+                chip(icon: "square.stack.3d.up.fill", text: "Worktree", prominent: true)
+            }
             ProgressView().controlSize(.small)
 
-        case .frozen(let name, let branch):
+        case .frozen(let name, let branch, let worktree):
             localChip
             chip(icon: "folder", text: name)          // 只读，无下拉
             if let branch {
                 chip(icon: "arrow.triangle.branch", text: branch)
+            }
+            if let worktree {
+                chip(
+                    icon: worktree.requiresAttention
+                        ? "exclamationmark.triangle.fill"
+                        : "square.stack.3d.up.fill",
+                    text: worktree.requiresAttention ? worktreeStateTitle(worktree) : "Worktree",
+                    prominent: worktree.requiresAttention
+                )
             }
 
         case .hidden:
@@ -153,6 +172,62 @@ struct WorkspaceChipBar: View {
 
     private var localChip: some View {
         chip(icon: "desktopcomputer", text: "Local")
+    }
+
+    private var managedWorktreeMenu: some View {
+        let enabled = store.draft?.usesManagedWorktree == true
+        return Menu {
+            Button {
+                store.setDraftManagedWorktreeEnabled(!enabled)
+            } label: {
+                Label(
+                    enabled ? "使用主工作区" : "使用独立 Worktree",
+                    systemImage: enabled ? "square" : "checkmark.square"
+                )
+            }
+
+            if enabled {
+                Divider()
+                Button {
+                    store.setDraftManagedWorktreeBaseRef(.head)
+                } label: {
+                    Label(
+                        "从当前 HEAD 创建",
+                        systemImage: store.draft?.managedWorktreeBaseRef == .head
+                            ? "checkmark.circle.fill"
+                            : "circle"
+                    )
+                }
+                Button {
+                    store.setDraftManagedWorktreeBaseRef(.fresh)
+                } label: {
+                    Label(
+                        "从远端默认分支创建",
+                        systemImage: store.draft?.managedWorktreeBaseRef == .fresh
+                            ? "checkmark.circle.fill"
+                            : "circle"
+                    )
+                }
+            }
+        } label: {
+            chip(
+                icon: "square.stack.3d.up",
+                text: "Worktree",
+                prominent: enabled,
+                showsChevron: true
+            )
+        }
+        .menuStyle(.borderlessButton)
+        .menuIndicator(.hidden)
+        .fixedSize()
+        .disabled(store.isPreparingWorkspace)
+    }
+
+    private func worktreeStateTitle(_ worktree: ManagedWorktreeMetadata) -> String {
+        if worktree.needsRebind || worktree.state == "missing" { return "Worktree 不可用" }
+        if worktree.state == "remove_failed" { return "清理失败" }
+        if worktree.state == "failed" { return "创建失败" }
+        return worktree.state
     }
 
     // MARK: - Workspace menu (recents + open folder)

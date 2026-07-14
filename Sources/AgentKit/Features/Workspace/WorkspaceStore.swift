@@ -100,6 +100,12 @@ public final class WorkspaceStore {
         return supervisor.controller(sessionID: id)
     }
 
+    /// Managed creation is shown only when Runtime guarantees provisioning and
+    /// workspace policy enforcement. A missing capability is a safe hide.
+    public var supportsManagedWorktreeCreation: Bool {
+        supervisor.runtimeCapabilities.supportsManagedWorktree
+    }
+
     /// 手动续跑 paused 会话时的短暂状态。
     public private(set) var isResumingPausedConversation = false
 
@@ -354,8 +360,23 @@ public final class WorkspaceStore {
     public func selectWorkspace(_ workspace: Workspace) {
         guard draft != nil else { return }
         draft?.workspace = workspace
+        if workspace.branch == nil {
+            draft?.usesManagedWorktree = false
+        }
         draft?.state = .ready
         recentWorkspaces.touch(workspace)
+    }
+
+    public func setDraftManagedWorktreeEnabled(_ enabled: Bool) {
+        guard draft != nil else { return }
+        guard !enabled || supportsManagedWorktreeCreation else { return }
+        guard !enabled || draft?.workspace?.branch != nil else { return }
+        draft?.usesManagedWorktree = enabled
+    }
+
+    public func setDraftManagedWorktreeBaseRef(_ baseRef: ManagedWorktreeBaseRef) {
+        guard draft?.usesManagedWorktree == true else { return }
+        draft?.managedWorktreeBaseRef = baseRef
     }
 
     /// 放弃当前草稿。
@@ -367,12 +388,25 @@ public final class WorkspaceStore {
     /// 这是唯一的 Session 创建点。失败时草稿进入 `.failed`，保留用户输入以便重试。
     public func commitDraft(firstMessage: String, model: String = "") async {
         guard let current = draft, let workspace = current.workspace else { return }
+        if current.usesManagedWorktree && !supportsManagedWorktreeCreation {
+            draft?.state = .failed("当前 Runtime 暂不支持托管 Worktree。")
+            return
+        }
         draft?.state = .committing
         do {
+            let managedRequest = current.usesManagedWorktree
+                ? ManagedWorktreeCreateRequest(
+                    suggestedName: firstMessage,
+                    baseRef: current.managedWorktreeBaseRef
+                )
+                : nil
             let ref = try await client.createConversation(request: CreateConversationRequest(
+                clientRequestID: current.clientRequestID,
                 workspacePath: workspace.url.path,
-                executionPolicy: .sharedWorkspace,
-                workspaceID: workspace.id
+                executionPolicy: current.usesManagedWorktree ? .isolatedWorktree : .sharedWorkspace,
+                workspaceID: workspace.id,
+                baseWorkspaceID: workspace.id,
+                worktree: managedRequest
             ))
             let vm = supervisor.controller(
                 for: ref,

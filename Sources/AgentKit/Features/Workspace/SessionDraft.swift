@@ -32,11 +32,28 @@ public struct SessionDraft: Equatable, Sendable {
     /// 绑定的工作区（选定后，发送首条消息时锁定）。
     public var workspace: Workspace?
 
+    /// Stable idempotency key reused when managed provisioning is retried.
+    public let clientRequestID: String
+
+    /// Explicit opt-in. False is the product and protocol default.
+    public var usesManagedWorktree: Bool
+
+    /// The committed ref used to create an opted-in worktree.
+    public var managedWorktreeBaseRef: ManagedWorktreeBaseRef
+
     /// 当前草稿状态。
     public var state: State
 
-    public init(workspace: Workspace? = nil) {
+    public init(
+        workspace: Workspace? = nil,
+        clientRequestID: String = "create_\(UUID().uuidString)",
+        usesManagedWorktree: Bool = false,
+        managedWorktreeBaseRef: ManagedWorktreeBaseRef = .head
+    ) {
         self.workspace = workspace
+        self.clientRequestID = clientRequestID
+        self.usesManagedWorktree = usesManagedWorktree
+        self.managedWorktreeBaseRef = managedWorktreeBaseRef
         self.state = workspace == nil ? .drafting : .ready
     }
 

@@ -164,6 +164,59 @@ final class MultiConversationTests: XCTestCase {
     }
 
     @MainActor
+    func testManagedWorktreeDraftSendsOptInIdempotentCreateRequest() async throws {
+        let capabilities = RuntimeCapabilitySnapshot(capabilities: [
+            "multi_session_execution_v1": true,
+            "session_scoped_client_tools_v1": true,
+            "activity_snapshot_v1": true,
+            "workspace_execution_policy_v1": true,
+            "managed_worktree_v1": true,
+        ])
+        let client = MultiSessionRuntimeClient(
+            capabilitySnapshot: capabilities,
+            activity: RuntimeActivitySnapshot(sessions: [])
+        )
+        let store = WorkspaceStore(client: client)
+        await store.refreshRuntimeState()
+        store.beginDraft()
+        store.selectWorkspace(Workspace(
+            url: URL(fileURLWithPath: "/tmp/AgentKit"),
+            branch: "main"
+        ))
+        store.setDraftManagedWorktreeEnabled(true)
+        store.setDraftManagedWorktreeBaseRef(.fresh)
+        let clientRequestID = try XCTUnwrap(store.draft?.clientRequestID)
+
+        await store.commitDraft(firstMessage: "Fix authentication", model: "test-model")
+
+        let request = try XCTUnwrap(client.createRequests.first)
+        XCTAssertEqual(request.clientRequestID, clientRequestID)
+        XCTAssertEqual(request.workspacePath, "/tmp/AgentKit")
+        XCTAssertEqual(request.executionPolicy, .isolatedWorktree)
+        XCTAssertEqual(request.workspaceID, "/tmp/AgentKit")
+        XCTAssertEqual(request.baseWorkspaceID, "/tmp/AgentKit")
+        XCTAssertEqual(request.worktree?.managed, true)
+        XCTAssertEqual(request.worktree?.suggestedName, "Fix authentication")
+        XCTAssertEqual(request.worktree?.baseRef, .fresh)
+        XCTAssertEqual(store.selectedConversation?.worktree?.state, "ready")
+    }
+
+    @MainActor
+    func testManagedWorktreeDraftCannotEnableWithoutCapability() async {
+        let client = MultiSessionRuntimeClient()
+        let store = WorkspaceStore(client: client)
+        store.beginDraft()
+        store.selectWorkspace(Workspace(
+            url: URL(fileURLWithPath: "/tmp/AgentKit"),
+            branch: "main"
+        ))
+
+        store.setDraftManagedWorktreeEnabled(true)
+
+        XCTAssertFalse(store.draft?.usesManagedWorktree ?? true)
+    }
+
+    @MainActor
     func testRuntimeQueueIsNotReportedAsUnsupportedParallelism() async throws {
         let client = MultiSessionRuntimeClient()
         let store = WorkspaceStore(client: client)
@@ -577,6 +630,7 @@ private final class MultiSessionRuntimeClient: RuntimeClient, @unchecked Sendabl
     private(set) var capabilitySnapshotRequestCount = 0
     private(set) var activitySnapshotRequestCount = 0
     private(set) var activitySnapshotCursors: [Int64?] = []
+    private(set) var createRequests: [CreateConversationRequest] = []
 
     init(
         connectDelays: [String: Duration] = [:],
@@ -632,6 +686,35 @@ private final class MultiSessionRuntimeClient: RuntimeClient, @unchecked Sendabl
 
     func createConversation(workspacePath: String) async throws -> ConversationRef {
         ConversationRef(id: UUID().uuidString, workspacePath: workspacePath)
+    }
+    func createConversation(request: CreateConversationRequest) async throws -> ConversationRef {
+        createRequests.append(request)
+        let id = UUID().uuidString
+        if let worktree = request.worktree, worktree.managed {
+            let path = request.workspacePath + "/.codeagent/worktrees/test-managed-a31f"
+            return ConversationRef(
+                id: id,
+                workspacePath: path,
+                name: worktree.suggestedName,
+                executionPolicy: request.executionPolicy?.rawValue,
+                workspaceID: path,
+                baseWorkspaceID: request.baseWorkspaceID,
+                worktree: ManagedWorktreeMetadata(
+                    managed: true,
+                    name: "test-managed-a31f",
+                    branch: "codeagent/test-managed-a31f",
+                    baseRef: worktree.baseRef?.rawValue,
+                    state: "ready"
+                )
+            )
+        }
+        return ConversationRef(
+            id: id,
+            workspacePath: request.workspacePath,
+            executionPolicy: request.executionPolicy?.rawValue,
+            workspaceID: request.workspaceID,
+            baseWorkspaceID: request.baseWorkspaceID
+        )
     }
     func listConversations() async throws -> [ConversationRef] { [] }
     func renameConversation(id: String, name: String) async throws -> ConversationRef {

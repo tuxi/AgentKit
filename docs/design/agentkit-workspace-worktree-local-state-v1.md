@@ -1,6 +1,6 @@
 # AgentKit Workspace、Worktree 与会话本地状态设计 v1
 
-> 状态：Proposed
+> 状态：Active — Runtime M0–M4 与 AgentKit W2 已完成，W3 生产验收待进行
 >
 > 适用端：macOS、iOS
 >
@@ -316,12 +316,16 @@ public struct ComposerDraft: Codable, Sendable, Equatable {
 - 实现项目内 worktree 根的工具排除和路径安全。
 - 实现非破坏性 remove 和 dirty 检查。
 
+完成于 Code-Agent Runtime `35e2620`、`dfa2c1d`、`4f8c89c`、`b925335`、`0682721`、`3d141ff`。
+
 ### W2：AgentKit / CodeAgent
 
 - 新建会话增加独立 Worktree 开关。
 - 按 `baseWorkspaceID` 分组，row 展示 checkout/branch 状态。
 - provisioning、失败、missing、cleanup 状态可见。
 - capability 缺失时安全隐藏或降级。
+
+AgentKit 已完成创建协议、能力门控、项目分组、Worktree/branch/异常状态展示与 macOS/iOS 宿主构建验证。显式 remove 操作将在宿主提供 conversation 删除/归档入口时接入，不改变“删除会话不得隐式删除 worktree”的约束。
 
 ### W3：生产验收
 

@@ -76,20 +76,30 @@ final class AgentInputEncodingTests: XCTestCase {
 
     func testConversationCreationEncodesExecutionPolicyIdentity() throws {
         let request = CreateConversationRequest(
+            clientRequestID: "create-42",
             workspacePath: "/worktrees/task-42",
             workspaceExtID: "bookmark-1",
             executionPolicy: .isolatedWorktree,
             workspaceID: "worktree-42",
-            baseWorkspaceID: "repo-main"
+            baseWorkspaceID: "repo-main",
+            worktree: ManagedWorktreeCreateRequest(
+                suggestedName: "task-42",
+                baseRef: .head
+            )
         )
         let data = try JSONEncoder().encode(request)
         let object = try XCTUnwrap(JSONSerialization.jsonObject(with: data) as? [String: Any])
 
         XCTAssertEqual(object["workspace_path"] as? String, "/worktrees/task-42")
         XCTAssertEqual(object["workspace_ext_id"] as? String, "bookmark-1")
+        XCTAssertEqual(object["client_request_id"] as? String, "create-42")
         XCTAssertEqual(object["execution_policy"] as? String, "isolated_worktree")
         XCTAssertEqual(object["workspace_id"] as? String, "worktree-42")
         XCTAssertEqual(object["base_workspace_id"] as? String, "repo-main")
+        let worktree = try XCTUnwrap(object["worktree"] as? [String: Any])
+        XCTAssertEqual(worktree["managed"] as? Bool, true)
+        XCTAssertEqual(worktree["suggested_name"] as? String, "task-42")
+        XCTAssertEqual(worktree["base_ref"] as? String, "head")
     }
 }
 
