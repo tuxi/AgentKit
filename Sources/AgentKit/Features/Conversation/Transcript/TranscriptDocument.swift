@@ -190,6 +190,17 @@ enum TurnTranscriptBuilder {
         presentation: ToolTranscriptPresentation,
         to builder: inout TranscriptAttributedBuilder
     ) {
+        if let artifact = tool.artifact {
+            builder.appendIndentedLabel("Artifact")
+            builder.appendActionLine(
+                SummaryRenderer.summary(for: artifact),
+                action: .openArtifact(callID: tool.callID),
+                style: .artifact
+            )
+            if case .diff(let payload) = artifact.content, !payload.diffContent.isEmpty {
+                builder.appendDiff(payload.diffContent)
+            }
+        }
         if let argsText = formattedArgs(tool.args) {
             builder.appendIndentedLabel("Input")
             builder.appendCode(argsText, language: "json")
@@ -212,18 +223,6 @@ enum TurnTranscriptBuilder {
                 case .text:
                     builder.appendCode(tool.output, language: "text")
                 }
-            }
-        }
-
-        if let artifact = tool.artifact {
-            builder.appendIndentedLabel("Artifact")
-            builder.appendActionLine(
-                SummaryRenderer.summary(for: artifact),
-                action: .openArtifact(callID: tool.callID),
-                style: .artifact
-            )
-            if case .diff(let payload) = artifact.content, !payload.diffContent.isEmpty {
-                builder.appendDiff(payload.diffContent)
             }
         }
     }

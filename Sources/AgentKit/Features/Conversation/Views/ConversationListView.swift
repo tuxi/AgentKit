@@ -708,9 +708,10 @@ private struct ConversationRow: View {
             case .idle where ref.isArchived:
                 statusLabel("已归档", systemImage: "archivebox.fill", color: .secondary)
             case .idle where ref.name != nil:
-                Text(ref.id.prefix(8) + "…")
-                    .font(.caption2)
-                    .foregroundStyle(.tertiary)
+//                Text(ref.id.prefix(8) + "…")
+//                    .font(.caption2)
+//                    .foregroundStyle(.tertiary)
+                EmptyView()
             case .idle:
                 EmptyView()
             }
