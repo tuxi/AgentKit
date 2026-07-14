@@ -41,6 +41,10 @@ public struct SessionDraft: Equatable, Sendable {
     /// The committed ref used to create an opted-in worktree.
     public var managedWorktreeBaseRef: ManagedWorktreeBaseRef
 
+    /// Stable for this draft and deliberately unrelated to the user prompt.
+    /// Runtime will sanitize it and append its reservation-derived short ID.
+    public let managedWorktreeSuggestedName: String
+
     /// 当前草稿状态。
     public var state: State
 
@@ -48,12 +52,15 @@ public struct SessionDraft: Equatable, Sendable {
         workspace: Workspace? = nil,
         clientRequestID: String = "create_\(UUID().uuidString)",
         usesManagedWorktree: Bool = false,
-        managedWorktreeBaseRef: ManagedWorktreeBaseRef = .head
+        managedWorktreeBaseRef: ManagedWorktreeBaseRef = .head,
+        managedWorktreeSuggestedName: String? = nil
     ) {
         self.workspace = workspace
         self.clientRequestID = clientRequestID
         self.usesManagedWorktree = usesManagedWorktree
         self.managedWorktreeBaseRef = managedWorktreeBaseRef
+        self.managedWorktreeSuggestedName = managedWorktreeSuggestedName
+            ?? ManagedWorktreeSuggestedNameGenerator.make()
         self.state = workspace == nil ? .drafting : .ready
     }
 

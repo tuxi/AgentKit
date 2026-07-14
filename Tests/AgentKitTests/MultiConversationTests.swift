@@ -186,6 +186,7 @@ final class MultiConversationTests: XCTestCase {
         store.setDraftManagedWorktreeEnabled(true)
         store.setDraftManagedWorktreeBaseRef(.fresh)
         let clientRequestID = try XCTUnwrap(store.draft?.clientRequestID)
+        let suggestedName = try XCTUnwrap(store.draft?.managedWorktreeSuggestedName)
 
         await store.commitDraft(firstMessage: "Fix authentication", model: "test-model")
 
@@ -196,7 +197,11 @@ final class MultiConversationTests: XCTestCase {
         XCTAssertEqual(request.workspaceID, "/tmp/AgentKit")
         XCTAssertEqual(request.baseWorkspaceID, "/tmp/AgentKit")
         XCTAssertEqual(request.worktree?.managed, true)
-        XCTAssertEqual(request.worktree?.suggestedName, "Fix authentication")
+        XCTAssertEqual(request.worktree?.suggestedName, suggestedName)
+        XCTAssertFalse(suggestedName.contains("Fix authentication"))
+        XCTAssertTrue(suggestedName.allSatisfy {
+            $0.isASCII && ($0.isLowercase || $0.isNumber || $0 == "-")
+        })
         XCTAssertEqual(request.worktree?.baseRef, .fresh)
         XCTAssertEqual(store.selectedConversation?.worktree?.state, "ready")
     }
@@ -214,6 +219,19 @@ final class MultiConversationTests: XCTestCase {
         store.setDraftManagedWorktreeEnabled(true)
 
         XCTAssertFalse(store.draft?.usesManagedWorktree ?? true)
+    }
+
+    func testManagedWorktreeSuggestedNameIsReadableAndStableWithinDraft() {
+        let draft = SessionDraft(
+            workspace: Workspace(url: URL(fileURLWithPath: "/tmp/project"), branch: "main")
+        )
+
+        let components = draft.managedWorktreeSuggestedName.split(separator: "-")
+        XCTAssertEqual(components.count, 2)
+        XCTAssertEqual(draft.managedWorktreeSuggestedName, draft.managedWorktreeSuggestedName)
+        XCTAssertTrue(draft.managedWorktreeSuggestedName.allSatisfy {
+            $0.isASCII && ($0.isLowercase || $0.isNumber || $0 == "-")
+        })
     }
 
     @MainActor

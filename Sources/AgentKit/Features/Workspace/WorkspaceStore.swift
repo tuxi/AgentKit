@@ -438,7 +438,10 @@ public final class WorkspaceStore {
         do {
             let managedRequest = current.usesManagedWorktree
                 ? ManagedWorktreeCreateRequest(
-                    suggestedName: firstMessage,
+                    // Never derive this from firstMessage. The draft owns one
+                    // prompt-independent ASCII hint so idempotent retries cannot
+                    // change the Runtime reservation identity.
+                    suggestedName: current.managedWorktreeSuggestedName,
                     baseRef: current.managedWorktreeBaseRef
                 )
                 : nil

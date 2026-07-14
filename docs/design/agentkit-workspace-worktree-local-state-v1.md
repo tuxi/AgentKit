@@ -135,6 +135,8 @@ codeagent/<slug>-<short-id>
 
 - slug 仅用于可读性；短 ID 保证并发和重试下不冲突。
 - Runtime 最终决定合法化后的目录和分支名称，客户端只提供建议名称。
+- 客户端不得从 user prompt、会话正文或文件内容自动派生 `suggested_name`；这既会泄露用户内容，也会把任意 Unicode 和标点带入路径、Git ref、日志及外部工具边界。
+- `suggested_name` 只能来自用户显式填写的 Worktree 名称，或草稿创建时一次性生成并保持稳定的 ASCII 可读名称（如 `fervent-mirzakhani`）；字段缺失时由 Runtime 安全回退。Runtime 仍负责最终合法化并追加 reservation 短 ID。
 - 目录名、分支名和会话标题允许不同步变化。
 - session 重命名不得自动重命名已存在的目录或分支。
 

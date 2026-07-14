@@ -14,6 +14,26 @@ public enum ManagedWorktreeBaseRef: String, Codable, Sendable, Equatable, CaseIt
     case fresh
 }
 
+/// Generates a prompt-independent, ASCII-only readability hint. Runtime remains
+/// authoritative and appends its stable reservation suffix before using the value
+/// as either a checkout directory or Git ref.
+enum ManagedWorktreeSuggestedNameGenerator {
+    private static let adjectives = [
+        "agile", "calm", "curious", "eager", "fervent", "focused",
+        "gentle", "lucid", "nimble", "patient", "steady", "vivid",
+    ]
+    private static let surnames = [
+        "babbage", "curie", "darwin", "einstein", "faraday", "hopper",
+        "lovelace", "mirzakhani", "newton", "noether", "ramanujan", "turing",
+    ]
+
+    static func make() -> String {
+        let adjective = adjectives.randomElement() ?? "steady"
+        let surname = surnames.randomElement() ?? "turing"
+        return "\(adjective)-\(surname)"
+    }
+}
+
 public struct ManagedWorktreeCreateRequest: Codable, Sendable, Equatable {
     public let managed: Bool
     public let suggestedName: String?
