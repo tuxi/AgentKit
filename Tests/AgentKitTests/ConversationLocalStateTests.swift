@@ -125,9 +125,54 @@ final class ConversationLocalStateTests: XCTestCase {
         XCTAssertEqual(settings.recentModels(for: "session-a").first, "model-b")
     }
 
+    @MainActor
+    func testConversationModelChoicesAreIndependentAndMissingChoiceUsesGatewayDefault() throws {
+        let suite = "ConversationLocalStateTests.\(UUID().uuidString)"
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
+        defer { defaults.removePersistentDomain(forName: suite) }
+        let localState = InMemoryConversationLocalStateStore()
+        let settings = ModelSettingsStore(defaults: defaults, localStateStore: localState)
+        settings.setAvailableModels(
+            [
+                model("model-default", "Default"),
+                model("model-1", "One"),
+                model("model-2", "Two"),
+            ],
+            defaultModel: "model-default"
+        )
+
+        settings.didUseModel("model-1", conversation: "conversation-a")
+
+        XCTAssertEqual(settings.getModel(with: "conversation-a"), "model-1")
+        XCTAssertEqual(settings.getModel(with: "conversation-b"), "model-default")
+
+        settings.didUseModel("model-2", conversation: "conversation-b")
+        XCTAssertEqual(settings.getModel(with: "conversation-a"), "model-1")
+        XCTAssertEqual(settings.getModel(with: "conversation-b"), "model-2")
+        XCTAssertEqual(settings.getModel(with: nil), "model-2", "new drafts may use the app-wide recent model")
+
+        let reopened = ModelSettingsStore(defaults: defaults, localStateStore: localState)
+        reopened.setAvailableModels(settings.gatewayModels ?? [], defaultModel: "model-default")
+        XCTAssertEqual(reopened.getModel(with: "conversation-a"), "model-1")
+        XCTAssertEqual(reopened.getModel(with: "conversation-b"), "model-2")
+    }
+
     private func temporaryDatabaseURL() -> URL {
         FileManager.default.temporaryDirectory
             .appendingPathComponent("AgentKitLocalStateTests-\(UUID().uuidString)", isDirectory: true)
             .appendingPathComponent("state.sqlite")
+    }
+
+    private func model(_ id: String, _ displayName: String) -> GatewayModel {
+        GatewayModel(
+            id: id,
+            displayName: displayName,
+            provider: "test",
+            contextWindow: nil,
+            supportsStreaming: true,
+            supportsToolCalls: true,
+            category: nil,
+            available: true
+        )
     }
 }

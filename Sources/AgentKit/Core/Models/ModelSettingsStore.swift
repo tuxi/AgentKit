@@ -112,7 +112,10 @@ public final class ModelSettingsStore {
             usedModels[conversation] = persisted
             return persisted
         }
-        return usedModels[conversation] ?? modelForNewConversation
+        // An existing conversation without an explicit choice must not inherit
+        // another conversation's latest selection. `lastSelectedModel` is only
+        // the convenience default for a brand-new local draft.
+        return usedModels[conversation] ?? defaultModelForExistingConversation
     }
 
     /// 模型的 display name（用于 UI）。
@@ -140,6 +143,17 @@ public final class ModelSettingsStore {
             return first.id
         }
         return ""
+    }
+
+    /// Existing sessions that have never selected a model use the Gateway
+    /// default, independent from the app-wide recent model used by new drafts.
+    public var defaultModelForExistingConversation: String {
+        if let model = gatewayDefaultModel,
+           let models = gatewayModels,
+           models.contains(where: { $0.id == model && $0.available != false }) {
+            return model
+        }
+        return gatewayModels?.first(where: { $0.available != false })?.id ?? ""
     }
 
     public func recentModels(for conversation: String) -> [String] {
