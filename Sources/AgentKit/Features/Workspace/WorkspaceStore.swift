@@ -38,12 +38,26 @@ public final class WorkspaceStore {
                 // 选中一个真实会话即丢弃未提交的草稿。
                 draft = nil
                 let controller = supervisor.controller(for: conversation)
+                #if os(macOS)
+                if !residentConversationIDs.contains(conversation.id) {
+                    residentConversationIDs.append(conversation.id)
+                }
+                residentConversationViewModels[conversation.id] = controller
+                #endif
                 // Controller installation is synchronous; history/socket loading cannot
                 // later overwrite selection because it only mutates this session.
                 Task { await controller.connect(to: conversation) }
             }
         }
     }
+
+    #if os(macOS)
+    /// Conversation workbenches visited in this window. Their timeline
+    /// views remain mounted while another conversation is selected, preserving
+    /// each WKWebView's DOM, viewport, selection, and disclosure state.
+    public private(set) var residentConversationIDs: [String] = []
+    public private(set) var residentConversationViewModels: [String: ConversationViewModel] = [:]
+    #endif
 
     // MARK: - Session Draft (P5.0 延迟创建)
 
@@ -247,6 +261,10 @@ public final class WorkspaceStore {
             selectedConversation = nil
         }
         await supervisor.removeDeletedConversation(sessionID: conversation.id)
+        #if os(macOS)
+        residentConversationIDs.removeAll { $0 == conversation.id }
+        residentConversationViewModels.removeValue(forKey: conversation.id)
+        #endif
         try? localStateStore.removeState(for: .session(conversation.id))
     }
 
@@ -288,6 +306,10 @@ public final class WorkspaceStore {
 
         self.selectedConversation = nil
         await supervisor.removeDeletedConversation(sessionID: selectedConversation.id)
+        #if os(macOS)
+        residentConversationIDs.removeAll { $0 == selectedConversation.id }
+        residentConversationViewModels.removeValue(forKey: selectedConversation.id)
+        #endif
     }
 
     /// 启动 host 侧网络恢复监听。用于修复静默 resume transient 失败后卡在 paused 的情况。

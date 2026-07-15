@@ -1127,6 +1127,27 @@ final class ConversationWebDocumentTests: XCTestCase {
         XCTAssertTrue(target.hasPrefix(progressiveSource))
         XCTAssertEqual(progressiveState?["isPlaying"] as? Bool, true)
 
+        _ = try await webView.evaluateJavaScript(
+            "window.AgentKitWorkbench.setSuspended(true)"
+        )
+        let suspendedLength = try await webView.evaluateJavaScript(
+            "document.querySelector('[data-selection-id=\"block:text-typewriter\"]').textContent.length"
+        ) as? Int
+        try await Task.sleep(for: .milliseconds(100))
+        let stillSuspendedLength = try await webView.evaluateJavaScript(
+            "document.querySelector('[data-selection-id=\"block:text-typewriter\"]').textContent.length"
+        ) as? Int
+        XCTAssertEqual(stillSuspendedLength, suspendedLength)
+
+        _ = try await webView.evaluateJavaScript(
+            "window.AgentKitWorkbench.setSuspended(false)"
+        )
+        try await Task.sleep(for: .milliseconds(80))
+        let resumedLength = try await webView.evaluateJavaScript(
+            "document.querySelector('[data-selection-id=\"block:text-typewriter\"]').textContent.length"
+        ) as? Int
+        XCTAssertGreaterThan(resumedLength ?? 0, suspendedLength ?? 0)
+
         var pinnedDistances: [Double] = []
         for _ in 0..<6 {
             try await Task.sleep(for: .milliseconds(25))

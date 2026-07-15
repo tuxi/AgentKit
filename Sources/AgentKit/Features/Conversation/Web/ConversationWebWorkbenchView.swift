@@ -17,6 +17,7 @@ struct ConversationWebWorkbenchView: NSViewRepresentable {
     let conversationID: String?
     let extensionContributions: [String: [TimelineWebContribution]]
     let timelineExtensions: [any TimelineExtension]
+    let isVisible: Bool
     let onFatalFailure: @MainActor () -> Void
 
     @Environment(WorkspaceStore.self) private var workspaceStore
@@ -62,6 +63,7 @@ struct ConversationWebWorkbenchView: NSViewRepresentable {
             store: workspaceStore,
             openURL: openURL
         )
+        context.coordinator.setVisible(isVisible)
         context.coordinator.loadShell()
         return webView
     }
@@ -75,6 +77,7 @@ struct ConversationWebWorkbenchView: NSViewRepresentable {
             store: workspaceStore,
             openURL: openURL
         )
+        context.coordinator.setVisible(isVisible)
     }
 
     static func dismantleNSView(_ webView: WKWebView, coordinator: Coordinator) {
@@ -122,6 +125,7 @@ struct ConversationWebWorkbenchView: NSViewRepresentable {
         private var recoveryViewport: ConversationWebUpdate.RecoveryViewport?
         private var shouldRestoreViewportAfterReload = false
         private var isViewportInteracting = false
+        private var isVisible = true
         private var lastApplyDurationMilliseconds: Double = 0
         private let actionRegistry = ConversationWebActionRegistry()
 
@@ -204,6 +208,26 @@ struct ConversationWebWorkbenchView: NSViewRepresentable {
             scheduleLatestDocumentSend()
         }
 
+        func setVisible(_ visible: Bool) {
+            guard isVisible != visible else { return }
+            isVisible = visible
+            if visible {
+                applyVisibilityToPage()
+                scheduleLatestDocumentSend(delayMilliseconds: 0)
+            } else {
+                sendTask?.cancel()
+                sendTask = nil
+                applyVisibilityToPage()
+            }
+        }
+
+        private func applyVisibilityToPage() {
+            guard isPageReady else { return }
+            webView?.evaluateJavaScript(
+                "window.AgentKitWorkbench?.setSuspended(\(!isVisible))"
+            )
+        }
+
         func loadShell() {
             let indexURL = ConversationWebSchemeHandler.indexURL
             shellURL = indexURL
@@ -227,6 +251,7 @@ struct ConversationWebWorkbenchView: NSViewRepresentable {
                     return
                 }
                 isPageReady = true
+                applyVisibilityToPage()
                 // A fresh Web process has no document even when Swift retains
                 // an acknowledged revision from before a reload.
                 inFlightDocument = nil
@@ -239,7 +264,9 @@ struct ConversationWebWorkbenchView: NSViewRepresentable {
                 acknowledgementTimeoutTask?.cancel()
                 acknowledgementTimeoutTask = nil
                 actionRegistry.removeAll()
-                scheduleLatestDocumentSend(delayMilliseconds: 0)
+                if isVisible {
+                    scheduleLatestDocumentSend(delayMilliseconds: 0)
+                }
             case "ack":
                 handleAcknowledgement(body)
             case "resync":
@@ -330,6 +357,7 @@ struct ConversationWebWorkbenchView: NSViewRepresentable {
         }
 
         private func scheduleLatestDocumentSend(delayMilliseconds: Int? = nil) {
+            guard isVisible else { return }
             guard !isViewportInteracting else { return }
             guard sendTask == nil else { return }
             let resolvedDelay = delayMilliseconds ?? nextStreamingDelayMilliseconds
@@ -348,6 +376,7 @@ struct ConversationWebWorkbenchView: NSViewRepresentable {
         /// diffed only after the displayed revision acknowledges.
         private func sendLatestDocumentIfPossible() {
             guard isPageReady,
+                  isVisible,
                   !isViewportInteracting,
                   inFlightDocument == nil,
                   let webView,
@@ -467,7 +496,7 @@ struct ConversationWebWorkbenchView: NSViewRepresentable {
                     "Applied Web revision \(revision, privacy: .public) in \(duration, privacy: .public) ms"
                 )
             }
-            if appliedSourceVersion != sourceVersion, !isViewportInteracting {
+            if appliedSourceVersion != sourceVersion, isVisible, !isViewportInteracting {
                 scheduleLatestDocumentSend()
             }
         }

@@ -13,9 +13,11 @@ public struct ConversationTimelineView: View {
 
     @Environment(WorkspaceStore.self) private var store
     let viewModel: ConversationViewModel
+    let isVisible: Bool
 
-    public init(viewModel: ConversationViewModel) {
+    public init(viewModel: ConversationViewModel, isVisible: Bool = true) {
         self.viewModel = viewModel
+        self.isVisible = isVisible
     }
 
     public var body: some View {
@@ -23,10 +25,12 @@ public struct ConversationTimelineView: View {
             snapshot: viewModel.snapshot,
             timelineExtensions: viewModel.timelineExtensions,
             conversationID: viewModel.conversation?.id,
-            rendererMode: store.conversationRendererMode
+            rendererMode: store.conversationRendererMode,
+            isVisible: isVisible
         )
-            // Scope scroll/follow state to the session — switching
-            // conversations starts fresh, anchored at the bottom.
+            // Scope identity to this resident session. The view remains mounted
+            // across ordinary selection changes, so returning preserves its DOM
+            // and viewport; only its first mount starts at the bottom.
             .id(viewModel.conversation?.id)
     }
 }

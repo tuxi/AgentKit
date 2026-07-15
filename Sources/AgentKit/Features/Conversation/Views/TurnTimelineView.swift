@@ -19,18 +19,21 @@ public struct TurnTimelineView: View {
     /// distinguish a newly opened conversation from a streaming update.
     let conversationID: String?
     let rendererMode: ConversationRendererMode
+    let isVisible: Bool
     @State private var didWebRendererFail = false
 
     public init(
         snapshot: RuntimeSnapshot,
         timelineExtensions: [any TimelineExtension] = [],
         conversationID: String? = nil,
-        rendererMode: ConversationRendererMode = .auto
+        rendererMode: ConversationRendererMode = .auto,
+        isVisible: Bool = true
     ) {
         self.snapshot = snapshot
         self.timelineExtensions = timelineExtensions
         self.conversationID = conversationID
         self.rendererMode = rendererMode
+        self.isVisible = isVisible
     }
     
     // 获取当前排在最底部的view的id
@@ -52,6 +55,7 @@ public struct TurnTimelineView: View {
                 conversationID: conversationID,
                 extensionContributions: webExtensionContributions,
                 timelineExtensions: timelineExtensions,
+                isVisible: isVisible,
                 onFatalFailure: { didWebRendererFail = true }
             )
         case .native, .auto:

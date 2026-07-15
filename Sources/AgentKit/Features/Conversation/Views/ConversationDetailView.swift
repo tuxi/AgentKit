@@ -147,7 +147,7 @@ public struct ConversationDetailView: View {
                 .transition(.move(edge: .top).combined(with: .opacity))
             }
 
-            ConversationTimelineView(viewModel: vm)
+            residentTimelines(activeViewModel: vm)
         }
         .padding(.horizontal)
             .safeAreaInset(edge: .bottom, spacing: 8) {
@@ -230,6 +230,38 @@ public struct ConversationDetailView: View {
                 .animation(.easeOut(duration: 0.25), value: isPaused)
                 .animation(.easeOut(duration: 0.25), value: isArchived)
             }
+    }
+
+    @ViewBuilder
+    private func residentTimelines(activeViewModel: ConversationViewModel) -> some View {
+        #if os(macOS)
+        let activeID = activeViewModel.conversation?.id
+        let residentIDs = activeID.map { id in
+            store.residentConversationIDs.contains(id)
+                ? store.residentConversationIDs
+                : store.residentConversationIDs + [id]
+        } ?? store.residentConversationIDs
+
+        ZStack {
+            ForEach(residentIDs, id: \.self) { conversationID in
+                if let resident = store.residentConversationViewModels[conversationID]
+                    ?? (conversationID == activeID ? activeViewModel : nil) {
+                    let isVisible = conversationID == activeID
+                    ConversationTimelineView(
+                        viewModel: resident,
+                        isVisible: isVisible
+                    )
+                    .opacity(isVisible ? 1 : 0)
+                    .allowsHitTesting(isVisible)
+                    .accessibilityHidden(!isVisible)
+                    .zIndex(isVisible ? 1 : 0)
+                }
+            }
+        }
+        .background(Color(nsColor: .windowBackgroundColor))
+        #else
+        ConversationTimelineView(viewModel: activeViewModel)
+        #endif
     }
 
     // MARK: - Toolbar

@@ -24,9 +24,14 @@ final class MultiConversationTests: XCTestCase {
         XCTAssertEqual(store.supervisor.controllers.count, 2)
         XCTAssertEqual(client.channel(for: "a").disconnectCount, 0)
         XCTAssertEqual(client.channel(for: "b").disconnectCount, 0)
+        XCTAssertEqual(store.residentConversationIDs, ["a", "b"])
+        XCTAssertTrue(store.residentConversationViewModels["a"] === controllerA)
+        XCTAssertTrue(store.residentConversationViewModels["b"] === controllerB)
 
         store.selectedConversation = a
         XCTAssertTrue(store.activeConversationViewModel === controllerA)
+        XCTAssertEqual(store.residentConversationIDs, ["a", "b"])
+        XCTAssertTrue(store.residentConversationViewModels["a"] === controllerA)
     }
 
     @MainActor

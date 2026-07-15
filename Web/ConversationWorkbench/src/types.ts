@@ -188,6 +188,7 @@ declare global {
   interface Window {
     AgentKitWorkbench?: {
       applyUpdateBase64(payload: string): void;
+      setSuspended(suspended: boolean): void;
       viewportDiagnostics(): {
         pinned: boolean;
         interacting: boolean;

@@ -19,6 +19,9 @@ import "./workbench.css";
 let currentRevision = 0;
 let currentConversationID: string | undefined;
 let currentUpdateStartedAt = 0;
+let workbenchSuspended = false;
+let suspendedFocusID: string | undefined;
+const workbenchSuspensionEvent = "agentkit-workbench-suspension";
 
 function postToNative(message: NativeBridgeMessage): void {
   window.webkit?.messageHandlers?.agentkitWorkbench?.postMessage(message);
@@ -960,6 +963,7 @@ function StreamingMarkdown({
       fallback = undefined;
     };
     const scheduleTick = () => {
+      if (workbenchSuspended) return;
       frame = window.requestAnimationFrame(tick);
       // Detached/background WKWebViews may throttle rAF. Keep playback
       // eventual without using this timer in the foreground render path.
@@ -1018,8 +1022,17 @@ function StreamingMarkdown({
 
       scheduleTick();
     };
+    const handleSuspensionChange = () => {
+      if (workbenchSuspended) {
+        cancelScheduledTick();
+      } else if (frame === undefined && fallback === undefined) {
+        scheduleTick();
+      }
+    };
+    window.addEventListener(workbenchSuspensionEvent, handleSuspensionChange);
     scheduleTick();
     return () => {
+      window.removeEventListener(workbenchSuspensionEvent, handleSuspensionChange);
       cancelScheduledTick();
     };
   }, []);
@@ -1476,6 +1489,22 @@ function App(): React.JSX.Element {
       },
     );
     window.AgentKitWorkbench = {
+      setSuspended(suspended: boolean) {
+        if (workbenchSuspended === suspended) return;
+        workbenchSuspended = suspended;
+        if (suspended) {
+          if (document.activeElement instanceof HTMLElement) {
+            suspendedFocusID = document.activeElement.dataset.focusId;
+            document.activeElement.blur();
+          }
+        } else if (suspendedFocusID && !hasActiveTextSelection()) {
+          document.querySelector<HTMLElement>(
+            `[data-focus-id="${CSS.escape(suspendedFocusID)}"]`,
+          )?.focus({ preventScroll: true });
+          suspendedFocusID = undefined;
+        }
+        window.dispatchEvent(new Event(workbenchSuspensionEvent));
+      },
       viewportDiagnostics() {
         return viewportController.diagnostics();
       },

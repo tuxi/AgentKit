@@ -1,6 +1,6 @@
 # AgentKit Conversation Web Workbench v1
 
-> Status: Accepted — Phase 0–8 implementation is present; Web is the eligible macOS default with native rollback
+> Status: Accepted — Phase 0–9 implementation is present; Web is the eligible macOS default with native rollback
 > Date: 2026-07-14
 > Scope: Conversation detail renderer on macOS; iOS remains on the native renderer until parity is proven.
 
@@ -34,6 +34,10 @@ Implementation baseline added to the working tree on 2026-07-14:
   reduced-motion/high-contrast styling, expanded CSP and private-scheme allowlisting;
 - 500-turn render plus 25 rapid tail patches, raw-HTML rejection, semantic/a11y checks,
   apply-duration diagnostics, repeated-process-failure fallback, and CodeAgent app build.
+- window-resident conversation workbenches: switching A → B → A preserves each
+  conversation's WKWebView, DOM, viewport, selection, horizontal offsets, disclosure
+  state, and local React state; hidden renderers suspend DOM delivery and typewriter work
+  while their Runtime controllers continue independently.
 
 The default switch is eligibility-gated, not unconditional. `.auto` and `.web` use the Web
 workbench only when every active extension conforms to `WebTimelineExtension`; legacy
@@ -671,6 +675,7 @@ Implementation checkpoint (2026-07-15):
 | 6 | Implemented: semantic extension schema/action routing, Desktop Control evidence migration, native document Inspector, and legacy eligibility fallback. |
 | 7 | Core hardening implemented: semantic roles/names, stable keyboard focus, selection priority, reduced motion/contrast, CSP and scheme allowlist checks, 500-turn/rapid-patch stress, recovery/apply diagnostics. Manual VoiceOver QA and production monitoring continue. |
 | 8 | Eligible macOS configurations now default to Web through `.auto`; legacy extensions and repeated renderer failures fall back to native. Native code is intentionally retained for the stability window. |
+| 9 | Implemented: window-resident conversation timelines retain visited WKWebViews across ordinary A → B → A selection changes; hidden renderers stop Swift document delivery and Web-local playback, then coalesce directly to the latest snapshot when shown again. |
 
 ### Phase 0 — Characterization and contracts
 
@@ -767,6 +772,23 @@ Exit gate: no P0/P1 accessibility or security issue; agreed performance budgets 
 
 Exit gate: Web is the supported macOS conversation workbench; native is fallback until
 the deprecation window closes.
+
+### Phase 9 — Persistent conversation workspaces
+
+- Treat conversation selection as foreground/background workspace switching, not page
+  navigation.
+- Retain each visited macOS timeline and its WKWebView for the window session.
+- Keep inactive Runtime controllers connected while suspending inactive renderer patches,
+  typewriter playback, focus ownership, and hit testing.
+- Restore a resident conversation by revealing its existing DOM first, then coalesce its
+  accumulated Runtime snapshot into one latest-state patch.
+- Release a resident renderer only when the conversation is deleted, the owning view tree
+  closes, or a future memory-pressure policy explicitly evicts it after saving lightweight
+  presentation state.
+
+Exit gate: switching A → B → A does not reload A's shell, flash a blank page, reset its
+viewport/selection/disclosures, or disconnect either session; hidden streaming work does
+not consume renderer cadence.
 
 ## 20. Test matrix
 
