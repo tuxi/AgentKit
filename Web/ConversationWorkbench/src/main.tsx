@@ -195,12 +195,14 @@ function restoreSelection(snapshot: SelectionSnapshot | null): void {
   );
 }
 
-function captureHorizontalOffsets(): Map<string, number> {
+function captureHorizontalOffsets(roots: ParentNode[] = [document]): Map<string, number> {
   const offsets = new Map<string, number>();
-  document.querySelectorAll<HTMLElement>("[data-scroll-id]").forEach((element) => {
-    const id = element.dataset.scrollId;
-    if (id && element.scrollLeft > 0) offsets.set(id, element.scrollLeft);
-  });
+  for (const root of roots) {
+    root.querySelectorAll<HTMLElement>("[data-scroll-id]").forEach((element) => {
+      const id = element.dataset.scrollId;
+      if (id && element.scrollLeft > 0) offsets.set(id, element.scrollLeft);
+    });
+  }
   return offsets;
 }
 
@@ -213,12 +215,34 @@ function restoreHorizontalOffsets(offsets: Map<string, number>): void {
   }
 }
 
-function captureExpandedDisclosures(): Set<string> {
-  return new Set(
-    Array.from(document.querySelectorAll<HTMLDetailsElement>("details[open][data-disclosure-id]"))
-      .map((element) => element.dataset.disclosureId)
-      .filter((id): id is string => Boolean(id)),
-  );
+function captureExpandedDisclosures(roots: ParentNode[] = [document]): Set<string> {
+  const ids = new Set<string>();
+  for (const root of roots) {
+    root.querySelectorAll<HTMLDetailsElement>("details[open][data-disclosure-id]")
+      .forEach((element) => {
+        const id = element.dataset.disclosureId;
+        if (id) ids.add(id);
+      });
+  }
+  return ids;
+}
+
+/// Only nodes replaced by an update can lose browser-owned state. Streaming
+/// normally replaces one tail block, so avoid querying every code frame and
+/// disclosure in a long conversation on every token batch.
+function replacedDOMRoots(update: ConversationWebUpdate): ParentNode[] {
+  if (update.kind === "reset" || !update.patch) return [];
+  const selectors = new Set<string>();
+  for (const operation of update.patch.operations) {
+    if (operation.kind === "replaceBlock" && operation.block?.id) {
+      selectors.add(`[data-block-id="${CSS.escape(operation.block.id)}"]`);
+    } else if (operation.kind === "replaceTurn" && operation.turn?.id) {
+      selectors.add(`[data-turn-id="${CSS.escape(operation.turn.id)}"]`);
+    }
+  }
+  return Array.from(selectors)
+    .map((selector) => document.querySelector<HTMLElement>(selector))
+    .filter((element): element is HTMLElement => Boolean(element));
 }
 
 function restoreExpandedDisclosures(ids: Set<string>): void {
@@ -245,83 +269,222 @@ function restoreFocusedElement(focusID: string | null): void {
 }
 
 type ViewportAnchor = { id: string; top: number };
-type ViewportSnapshot = { pinned: boolean; anchor: ViewportAnchor | null };
+type ViewportSnapshot = {
+  pinned: boolean;
+  anchor: ViewportAnchor | null;
+  interactionEpoch: number;
+};
 
 class ViewportController {
-  private pinned = true;
-  private programmatic = false;
-  private userIntentUntil = 0;
-  private lastAnchor: ViewportAnchor | null = null;
-  private onPinChange: (pinned: boolean) => void = () => {};
+  private static readonly bottomThreshold = 36;
 
-  start(onPinChange: (pinned: boolean) => void): () => void {
+  private pinned = true;
+  private programmaticUntil = 0;
+  private interacting = false;
+  private interactionEpoch = 0;
+  private lastAnchor: ViewportAnchor | null = null;
+  private interactionTimer: number | undefined;
+  private followFrame: number | undefined;
+  private followTimer: number | undefined;
+  private reportTimer: number | undefined;
+  private reportDueAt: number | undefined;
+  private resizeObserver: ResizeObserver | undefined;
+  private lastEvent = "start";
+  private onPinChange: (pinned: boolean) => void = () => {};
+  private onViewportChange: (snapshot: ViewportSnapshot) => void = () => {};
+
+  start(
+    onPinChange: (pinned: boolean) => void,
+    onViewportChange: (snapshot: ViewportSnapshot) => void,
+  ): () => void {
     this.onPinChange = onPinChange;
-    const markUserIntent = () => {
-      this.userIntentUntil = performance.now() + 600;
+    this.onViewportChange = onViewportChange;
+
+    const beginInteraction = (leavesBottom: boolean) => {
+      // A real gesture always wins, even if it starts during the short lease
+      // used to identify scroll events caused by our own correction.
+      this.programmaticUntil = 0;
+      this.interactionEpoch += 1;
+      this.interacting = true;
+      this.lastEvent = leavesBottom ? "interaction-away" : "interaction";
+      if (leavesBottom) this.setPinned(false);
+      this.cancelScheduledFollow();
+      this.scheduleViewportReport(24);
+      this.scheduleInteractionEnd();
+    };
+    const handleWheel = (event: WheelEvent) => {
+      beginInteraction(event.deltaY < 0);
+    };
+    const handlePointerDown = () => {
+      beginInteraction(false);
+    };
+    const handlePointerEnd = () => {
+      this.scheduleInteractionEnd(80);
+    };
+    const handleTouchStart = () => {
+      beginInteraction(false);
+    };
+    const handleTouchEnd = () => {
+      this.scheduleInteractionEnd(100);
     };
     const markKeyboardIntent = (event: KeyboardEvent) => {
-      if (["ArrowUp", "ArrowDown", "PageUp", "PageDown", "Home", "End", " "].includes(event.key)) {
-        markUserIntent();
-      }
+      if (!["ArrowUp", "ArrowDown", "PageUp", "PageDown", "Home", "End", " "].includes(event.key)) return;
+      const target = event.target instanceof HTMLElement ? event.target : null;
+      if (target?.closest("button, summary, a, input, textarea, select, [contenteditable='true']")) return;
+      beginInteraction(["ArrowUp", "PageUp", "Home"].includes(event.key));
     };
     const handleScroll = () => {
-      if (this.programmatic || performance.now() > this.userIntentUntil) return;
-      this.setPinned(this.distanceFromBottom() <= 36);
-      this.lastAnchor = this.captureAnchor();
+      if (performance.now() < this.programmaticUntil) return;
+      if (!this.interacting) beginInteraction(false);
+      this.lastEvent = "user-scroll";
+      this.setPinned(this.isAtBottom());
+      // Do not walk the conversation on every scroll event. The throttled
+      // viewport report or interaction-end checkpoint captures it once.
+      this.lastAnchor = null;
+      this.scheduleViewportReport();
     };
     const handleResize = () => {
-      const snapshot: ViewportSnapshot = {
-        pinned: this.pinned,
-        anchor: this.lastAnchor ?? this.captureAnchor(),
-      };
-      window.setTimeout(() => this.restore(snapshot, false), 0);
+      if (this.interacting) return;
+      if (this.pinned && !this.isAtBottom()) {
+        this.scheduleFollow();
+      } else if (this.lastAnchor) {
+        this.restoreAnchor(this.lastAnchor);
+      }
+      this.scheduleViewportReport();
     };
-    window.addEventListener("wheel", markUserIntent, { passive: true });
-    window.addEventListener("touchstart", markUserIntent, { passive: true });
-    window.addEventListener("pointerdown", markUserIntent, { passive: true });
+
+    window.addEventListener("wheel", handleWheel, { passive: true });
+    window.addEventListener("touchstart", handleTouchStart, { passive: true });
+    window.addEventListener("touchend", handleTouchEnd, { passive: true });
+    window.addEventListener("pointerdown", handlePointerDown, { passive: true });
+    window.addEventListener("pointerup", handlePointerEnd, { passive: true });
+    window.addEventListener("pointercancel", handlePointerEnd, { passive: true });
     window.addEventListener("keydown", markKeyboardIntent);
     window.addEventListener("scroll", handleScroll, { passive: true });
     window.addEventListener("resize", handleResize);
+    this.resizeObserver = new ResizeObserver(() => {
+      // Height growth follows only while the viewport was already following.
+      // User interaction or a reading position cancels this path immediately.
+      if (this.pinned && !this.interacting && !this.isAtBottom()) {
+        this.lastEvent = "resize-follow";
+        this.scheduleFollow();
+      }
+    });
+    this.resizeObserver.observe(document.body);
+    const root = document.getElementById("root");
+    if (root) this.resizeObserver.observe(root);
+
     return () => {
-      window.removeEventListener("wheel", markUserIntent);
-      window.removeEventListener("touchstart", markUserIntent);
-      window.removeEventListener("pointerdown", markUserIntent);
+      window.removeEventListener("wheel", handleWheel);
+      window.removeEventListener("touchstart", handleTouchStart);
+      window.removeEventListener("touchend", handleTouchEnd);
+      window.removeEventListener("pointerdown", handlePointerDown);
+      window.removeEventListener("pointerup", handlePointerEnd);
+      window.removeEventListener("pointercancel", handlePointerEnd);
       window.removeEventListener("keydown", markKeyboardIntent);
       window.removeEventListener("scroll", handleScroll);
       window.removeEventListener("resize", handleResize);
+      this.resizeObserver?.disconnect();
+      this.resizeObserver = undefined;
+      if (this.interactionTimer !== undefined) window.clearTimeout(this.interactionTimer);
+      if (this.followFrame !== undefined) window.cancelAnimationFrame(this.followFrame);
+      if (this.followTimer !== undefined) window.clearTimeout(this.followTimer);
+      if (this.reportTimer !== undefined) window.clearTimeout(this.reportTimer);
+      this.reportDueAt = undefined;
     };
   }
 
   capture(): ViewportSnapshot {
+    if (!this.interacting && this.pinned && !this.isAtBottom()) {
+      // Geometry is authoritative. A stale boolean must never pull a reader
+      // back to the tail when the content was already away from the bottom.
+      this.setPinned(false);
+    }
+    return {
+      pinned: this.pinned && !this.interacting && this.isAtBottom(),
+      anchor: this.lastAnchor ?? this.captureAnchor(),
+      interactionEpoch: this.interactionEpoch,
+    };
+  }
+
+  diagnostics(): {
+    pinned: boolean;
+    interacting: boolean;
+    distanceFromBottom: number;
+    interactionEpoch: number;
+    lastEvent: string;
+  } {
     return {
       pinned: this.pinned,
-      anchor: this.lastAnchor ?? this.captureAnchor(),
+      interacting: this.interacting,
+      distanceFromBottom: this.distanceFromBottom(),
+      interactionEpoch: this.interactionEpoch,
+      lastEvent: this.lastEvent,
     };
   }
 
   restore(snapshot: ViewportSnapshot, forcePinToBottom: boolean): void {
+    if (this.interacting || snapshot.interactionEpoch !== this.interactionEpoch) {
+      // A gesture that started after capture owns the viewport. Never correct
+      // underneath wheel/scrollbar/selection interaction.
+      this.lastAnchor = this.captureAnchor();
+      this.lastEvent = "restore-yielded-to-user";
+      this.scheduleViewportReport();
+      return;
+    }
     if (forcePinToBottom || snapshot.pinned) {
+      this.lastEvent = forcePinToBottom ? "restore-forced" : "restore-following";
       this.setPinned(true);
       this.scrollToBottom();
       return;
     }
     this.setPinned(false);
-    if (snapshot.anchor) {
-      const element = document.querySelector<HTMLElement>(
-        `[data-anchor-id="${CSS.escape(snapshot.anchor.id)}"]`,
-      );
-      if (element) {
-        this.performProgrammaticScroll(() => {
-          window.scrollBy(0, element.getBoundingClientRect().top - snapshot.anchor!.top);
-        });
-      }
-    }
+    this.lastEvent = "restore-anchor";
+    if (snapshot.anchor) this.restoreAnchor(snapshot.anchor);
     this.lastAnchor = this.captureAnchor();
+    this.scheduleViewportReport();
   }
 
   jumpToLatest(): void {
+    this.interactionEpoch += 1;
+    this.interacting = false;
     this.setPinned(true);
     this.scrollToBottom();
+  }
+
+  private scheduleInteractionEnd(delay = 160): void {
+    if (this.interactionTimer !== undefined) window.clearTimeout(this.interactionTimer);
+    this.interactionTimer = window.setTimeout(() => {
+      this.interactionTimer = undefined;
+      this.interacting = false;
+      this.setPinned(this.isAtBottom());
+      this.lastEvent = this.pinned ? "interaction-ended-at-bottom" : "interaction-ended-reading";
+      this.lastAnchor = this.captureAnchor();
+      this.scheduleViewportReport(0);
+    }, delay);
+  }
+
+  private scheduleFollow(): void {
+    if (!this.pinned || this.interacting
+        || this.followFrame !== undefined || this.followTimer !== undefined) return;
+    const perform = () => {
+      if (this.followFrame !== undefined) window.cancelAnimationFrame(this.followFrame);
+      if (this.followTimer !== undefined) window.clearTimeout(this.followTimer);
+      this.followFrame = undefined;
+      this.followTimer = undefined;
+      if (this.pinned && !this.interacting) this.scrollToBottom();
+    };
+    this.followFrame = window.requestAnimationFrame(perform);
+    // Detached/background WKWebViews may throttle rAF. The timeout preserves
+    // the same coalescing contract and guarantees eventual bottom alignment.
+    this.followTimer = window.setTimeout(perform, 24);
+  }
+
+  private cancelScheduledFollow(): void {
+    if (this.followFrame !== undefined) window.cancelAnimationFrame(this.followFrame);
+    if (this.followTimer !== undefined) window.clearTimeout(this.followTimer);
+    this.followFrame = undefined;
+    this.followTimer = undefined;
   }
 
   private scrollToBottom(): void {
@@ -329,20 +492,29 @@ class ViewportController {
       window.scrollTo(0, document.documentElement.scrollHeight);
     });
     this.lastAnchor = this.captureAnchor();
+    this.scheduleViewportReport();
+  }
+
+  private restoreAnchor(anchor: ViewportAnchor): void {
+    const element = document.querySelector<HTMLElement>(
+      `[data-anchor-id="${CSS.escape(anchor.id)}"]`,
+    );
+    if (!element) return;
+    this.performProgrammaticScroll(() => {
+      window.scrollBy(0, element.getBoundingClientRect().top - anchor.top);
+    });
   }
 
   private performProgrammaticScroll(operation: () => void): void {
-    this.programmatic = true;
+    this.programmaticUntil = performance.now() + 120;
     operation();
-    window.setTimeout(() => {
-      this.programmatic = false;
-    }, 0);
   }
 
   private setPinned(next: boolean): void {
     if (this.pinned === next) return;
     this.pinned = next;
     this.onPinChange(next);
+    this.scheduleViewportReport();
   }
 
   private distanceFromBottom(): number {
@@ -350,7 +522,44 @@ class ViewportController {
     return viewport.scrollHeight - viewport.scrollTop - viewport.clientHeight;
   }
 
+  private isAtBottom(): boolean {
+    return this.distanceFromBottom() <= ViewportController.bottomThreshold;
+  }
+
+  private scheduleViewportReport(delay = 120): void {
+    const dueAt = performance.now() + delay;
+    if (this.reportTimer !== undefined && this.reportDueAt !== undefined) {
+      // A user-intent report must not be postponed by the subsequent scroll
+      // event's ordinary debounce.
+      if (this.reportDueAt <= dueAt) return;
+      window.clearTimeout(this.reportTimer);
+    }
+    this.reportDueAt = dueAt;
+    this.reportTimer = window.setTimeout(() => {
+      this.reportTimer = undefined;
+      this.reportDueAt = undefined;
+      const anchor = this.lastAnchor ?? this.captureAnchor();
+      this.onViewportChange({
+        pinned: this.pinned && !this.interacting && this.isAtBottom(),
+        anchor,
+        interactionEpoch: this.interactionEpoch,
+      });
+    }, delay);
+  }
+
   private captureAnchor(): ViewportAnchor | null {
+    const sampleX = Math.max(1, Math.min(window.innerWidth - 1, window.innerWidth / 2));
+    const sampleYs = [1, 16, 64, Math.min(window.innerHeight - 1, 160)];
+    for (const y of sampleYs) {
+      for (const hit of document.elementsFromPoint(sampleX, Math.max(1, y))) {
+        const element = hit.closest<HTMLElement>("[data-anchor-id]");
+        const id = element?.dataset.anchorId;
+        if (element && id) return { id, top: element.getBoundingClientRect().top };
+      }
+    }
+
+    // Unusual layouts can leave the sampled points over fixed chrome. Keep a
+    // correctness fallback, but normal scrolling never needs this full scan.
     const elements = document.querySelectorAll<HTMLElement>("[data-anchor-id]");
     for (const element of elements) {
       const rect = element.getBoundingClientRect();
@@ -366,6 +575,7 @@ class ViewportController {
 const viewportController = new ViewportController();
 
 type RestorationSnapshot = {
+  revision: number;
   selection: SelectionSnapshot | null;
   horizontalOffsets: Map<string, number>;
   expandedDisclosures: Set<string>;
@@ -392,6 +602,18 @@ function applyOperations(
         next = { ...next, turns };
         break;
       }
+      case "updateTurn": {
+        if (operation.index === undefined || !operation.turn) break;
+        const currentTurn = next.turns[operation.index];
+        if (!currentTurn) break;
+        const turns = next.turns.slice();
+        turns[operation.index] = {
+          ...operation.turn,
+          blocks: currentTurn.blocks,
+        };
+        next = { ...next, turns };
+        break;
+      }
       case "appendTurn":
         if (operation.turn) next = { ...next, turns: [...next.turns, operation.turn] };
         break;
@@ -400,6 +622,45 @@ function applyOperations(
           next = { ...next, turns: next.turns.slice(0, operation.index) };
         }
         break;
+      case "replaceBlock": {
+        if (
+          operation.index === undefined
+          || operation.blockIndex === undefined
+          || !operation.block
+        ) break;
+        const currentTurn = next.turns[operation.index];
+        if (!currentTurn) break;
+        const blocks = currentTurn.blocks.slice();
+        blocks[operation.blockIndex] = operation.block;
+        const turns = next.turns.slice();
+        turns[operation.index] = { ...currentTurn, blocks };
+        next = { ...next, turns };
+        break;
+      }
+      case "appendBlock": {
+        if (operation.index === undefined || !operation.block) break;
+        const currentTurn = next.turns[operation.index];
+        if (!currentTurn) break;
+        const turns = next.turns.slice();
+        turns[operation.index] = {
+          ...currentTurn,
+          blocks: [...currentTurn.blocks, operation.block],
+        };
+        next = { ...next, turns };
+        break;
+      }
+      case "removeBlocks": {
+        if (operation.index === undefined || operation.blockIndex === undefined) break;
+        const currentTurn = next.turns[operation.index];
+        if (!currentTurn) break;
+        const turns = next.turns.slice();
+        turns[operation.index] = {
+          ...currentTurn,
+          blocks: currentTurn.blocks.slice(0, operation.blockIndex),
+        };
+        next = { ...next, turns };
+        break;
+      }
       case "setLive":
         next = { ...next, live: operation.live };
         break;
@@ -673,7 +934,11 @@ function activateSelectableAction(
   dispatchAction(actionID);
 }
 
-function Block({ block }: { block: ConversationWebBlock }): React.JSX.Element {
+const Block = memo(function Block({
+  block,
+}: {
+  block: ConversationWebBlock;
+}): React.JSX.Element {
   switch (block.kind) {
     case "markdown":
       return <Markdown block={block} />;
@@ -762,7 +1027,7 @@ function Block({ block }: { block: ConversationWebBlock }): React.JSX.Element {
         </section>
       );
   }
-}
+});
 
 function ExtensionSection({
   nodeID,
@@ -924,8 +1189,26 @@ function App(): React.JSX.Element {
   const conversationID = useRef<string | undefined>(undefined);
 
   useLayoutEffect(() => {
-    const stopViewportController = viewportController.start(setIsPinned);
+    const stopViewportController = viewportController.start(
+      setIsPinned,
+      (snapshot) => {
+        if (!currentConversationID) return;
+        postToNative({
+          type: "viewport",
+          protocolVersion,
+          revision: currentRevision,
+          conversationID: currentConversationID,
+          pinned: snapshot.pinned,
+          interacting: viewportController.diagnostics().interacting,
+          anchorID: snapshot.anchor?.id,
+          anchorTop: snapshot.anchor?.top,
+        });
+      },
+    );
     window.AgentKitWorkbench = {
+      viewportDiagnostics() {
+        return viewportController.diagnostics();
+      },
       applyUpdateBase64(payload: string) {
         try {
           currentUpdateStartedAt = performance.now();
@@ -946,15 +1229,40 @@ function App(): React.JSX.Element {
             return;
           }
 
+          const capturedViewport = viewportController.capture();
+          const replacedRoots = replacedDOMRoots(update);
+          const recoveredViewport = isReset && update.recoveryViewport
+            ? {
+                pinned: update.recoveryViewport.pinned,
+                anchor: update.recoveryViewport.anchorID
+                  ? {
+                      id: update.recoveryViewport.anchorID,
+                      top: update.recoveryViewport.anchorTop ?? 0,
+                    }
+                  : null,
+                interactionEpoch: capturedViewport.interactionEpoch,
+              }
+            : null;
           pendingRestoration.current = {
+            revision: update.revision,
             selection: isReset ? null : captureSelection(),
-            horizontalOffsets: isReset ? new Map() : captureHorizontalOffsets(),
-            expandedDisclosures: isReset ? new Set() : captureExpandedDisclosures(),
+            horizontalOffsets: isReset
+              ? new Map()
+              : captureHorizontalOffsets(replacedRoots),
+            expandedDisclosures: isReset
+              ? new Set()
+              : captureExpandedDisclosures(replacedRoots),
             focusID: isReset ? null : captureFocusedElement(),
             viewport: isReset
-              ? { pinned: true, anchor: null }
-              : viewportController.capture(),
-            forcePinToBottom: isReset || Boolean(update.patch?.forcePinToBottom),
+              ? recoveredViewport ?? {
+                  pinned: true,
+                  anchor: null,
+                  interactionEpoch: capturedViewport.interactionEpoch,
+                }
+              : capturedViewport,
+            forcePinToBottom: isReset
+              ? recoveredViewport === null
+              : Boolean(update.patch?.forcePinToBottom),
           };
           currentRevision = update.revision;
           if (isReset) {
@@ -988,14 +1296,23 @@ function App(): React.JSX.Element {
   useLayoutEffect(() => {
     if (!conversation) return;
     const restoration = pendingRestoration.current ?? {
+      revision: conversation.revision,
       selection: null,
       horizontalOffsets: new Map<string, number>(),
       expandedDisclosures: new Set<string>(),
       focusID: null,
-      viewport: { pinned: true, anchor: null },
+      viewport: {
+        pinned: true,
+        anchor: null,
+        interactionEpoch: viewportController.capture().interactionEpoch,
+      },
       forcePinToBottom: true,
     };
     const revealTask = window.setTimeout(() => {
+      // A newer update may arrive before this post-layout task runs. Never let
+      // an older task restore stale pin state or clear the newer snapshot.
+      if (conversation.revision !== currentRevision
+          || restoration.revision !== conversation.revision) return;
       restoreExpandedDisclosures(restoration.expandedDisclosures);
       restoreHorizontalOffsets(restoration.horizontalOffsets);
       restoreSelection(restoration.selection);
@@ -1009,7 +1326,9 @@ function App(): React.JSX.Element {
         conversationID: conversation.conversationID,
         applyDurationMilliseconds: Math.max(0, performance.now() - currentUpdateStartedAt),
       });
-      pendingRestoration.current = undefined;
+      if (pendingRestoration.current === restoration) {
+        pendingRestoration.current = undefined;
+      }
     }, 0);
     return () => window.clearTimeout(revealTask);
   }, [conversation]);

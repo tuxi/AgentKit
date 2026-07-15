@@ -147,7 +147,7 @@ final class ConversationWebDocumentTests: XCTestCase {
         XCTAssertNil(block.text)
     }
 
-    func testDifferReplacesOnlyChangedTurnAndForcesPinForAppend() {
+    func testDifferUsesBlockPatchAndDoesNotForcePinForAppend() {
         func turn(_ id: String, _ text: String) -> ConversationTurn {
             ConversationTurn(
                 id: id,
@@ -181,8 +181,9 @@ final class ConversationWebDocumentTests: XCTestCase {
         let patch = ConversationWebDocumentDiffer.update(from: old, to: changed)
         XCTAssertEqual(patch?.kind, .patch)
         XCTAssertEqual(patch?.patch?.operations.count, 1)
-        XCTAssertEqual(patch?.patch?.operations.first?.kind, .replaceTurn)
+        XCTAssertEqual(patch?.patch?.operations.first?.kind, .replaceBlock)
         XCTAssertEqual(patch?.patch?.operations.first?.index, 1)
+        XCTAssertEqual(patch?.patch?.operations.first?.blockIndex, 0)
         XCTAssertEqual(patch?.patch?.forcePinToBottom, false)
 
         let appended = ConversationWebDocumentBuilder.build(
@@ -199,7 +200,7 @@ final class ConversationWebDocumentTests: XCTestCase {
         )
         let appendPatch = ConversationWebDocumentDiffer.update(from: changed, to: appended)
         XCTAssertEqual(appendPatch?.patch?.operations.last?.kind, .appendTurn)
-        XCTAssertEqual(appendPatch?.patch?.forcePinToBottom, true)
+        XCTAssertEqual(appendPatch?.patch?.forcePinToBottom, false)
 
         let revisionGap = ConversationWebDocumentBuilder.build(
             snapshot: RuntimeSnapshot(timeline: [], turns: appended.turns.map { webTurn in
@@ -212,6 +213,94 @@ final class ConversationWebDocumentTests: XCTestCase {
             ConversationWebDocumentDiffer.update(from: appended, to: revisionGap)?.kind,
             .reset
         )
+    }
+
+    func testResetCarriesProcessRecoveryViewportWithoutForcingBottom() throws {
+        let document = ConversationWebDocumentBuilder.build(
+            snapshot: RuntimeSnapshot(timeline: [], turns: []),
+            conversationID: "conversation",
+            revision: 12
+        )
+        let viewport = ConversationWebUpdate.RecoveryViewport(
+            pinned: false,
+            anchorID: "block:text-8",
+            anchorTop: 137.5
+        )
+
+        let update = ConversationWebDocumentDiffer.reset(
+            document,
+            recoveryViewport: viewport
+        )
+
+        XCTAssertEqual(update.kind, .reset)
+        XCTAssertEqual(update.recoveryViewport, viewport)
+        XCTAssertNil(update.patch)
+
+        let encoded = try JSONEncoder().encode(update)
+        let decoded = try JSONDecoder().decode(ConversationWebUpdate.self, from: encoded)
+        XCTAssertEqual(decoded.recoveryViewport, viewport)
+    }
+
+    @MainActor
+    func testIncrementalBuilderReusesStableTurnsAndExpiresChangedTurnActions() throws {
+        func turn(_ id: String, _ text: String) -> ConversationTurn {
+            ConversationTurn(
+                id: id,
+                userPrompt: MessageNodePayload(role: .user, text: id),
+                blocks: [.text(
+                    id: "text-\(id)",
+                    MessageNodePayload(role: .assistant, text: text)
+                )],
+                footer: nil,
+                isLive: id == "tail"
+            )
+        }
+
+        let registry = ConversationWebActionRegistry()
+        let firstSnapshot = RuntimeSnapshot(
+            timeline: [],
+            turns: [turn("stable", "unchanged"), turn("tail", "old")]
+        )
+        registry.beginRevision(1)
+        let first = ConversationWebDocumentBuilder.build(
+            snapshot: firstSnapshot,
+            conversationID: "conversation",
+            revision: 1,
+            registerAction: registry.register
+        )
+        registry.finishRevision(
+            retaining: ConversationWebDocumentBuilder.actionTokens(in: first)
+        )
+
+        let secondSnapshot = RuntimeSnapshot(
+            timeline: [],
+            turns: [firstSnapshot.turns[0], turn("tail", "new")]
+        )
+        registry.beginRevision(2)
+        let second = ConversationWebDocumentBuilder.build(
+            snapshot: secondSnapshot,
+            conversationID: "conversation",
+            revision: 2,
+            reusing: .init(
+                snapshot: firstSnapshot,
+                document: first,
+                extensionContributions: [:]
+            ),
+            registerAction: registry.register
+        )
+        registry.finishRevision(
+            retaining: ConversationWebDocumentBuilder.actionTokens(in: second)
+        )
+
+        let stableToken = try XCTUnwrap(first.turns[0].copyActionID)
+        let oldTailToken = try XCTUnwrap(first.turns[1].copyActionID)
+        let newTailToken = try XCTUnwrap(second.turns[1].copyActionID)
+        XCTAssertEqual(second.turns[0], first.turns[0])
+        XCTAssertEqual(second.turns[0].copyActionID, stableToken)
+        XCTAssertNotEqual(newTailToken, oldTailToken)
+        XCTAssertNotNil(registry.resolve(stableToken, revision: 2))
+        XCTAssertNil(registry.resolve(oldTailToken, revision: 2))
+        XCTAssertNotNil(registry.resolve(newTailToken, revision: 2))
     }
 
     @MainActor
@@ -239,6 +328,34 @@ final class ConversationWebDocumentTests: XCTestCase {
         registry.beginRevision()
         registry.finishRevision()
         XCTAssertNil(registry.resolve(firstToken))
+    }
+
+    @MainActor
+    func testActionRegistryKeepsDisplayedAndInflightRevisionsIsolated() {
+        let registry = ConversationWebActionRegistry()
+        let stable = ConversationWebAction.transcript(
+            turnID: "turn-1",
+            action: .openPath("/tmp/stable.swift")
+        )
+        let nextOnly = ConversationWebAction.showTurnAssets(turnID: "turn-1")
+
+        registry.beginRevision(10)
+        let stableToken = registry.register(stable)
+        registry.finishRevision()
+
+        registry.beginRevision(11)
+        XCTAssertEqual(registry.register(stable), stableToken)
+        let nextToken = registry.register(nextOnly)
+        registry.finishRevision()
+
+        XCTAssertEqual(registry.resolve(stableToken, revision: 10), stable)
+        XCTAssertEqual(registry.resolve(stableToken, revision: 11), stable)
+        XCTAssertNil(registry.resolve(nextToken, revision: 10))
+        XCTAssertEqual(registry.resolve(nextToken, revision: 11), nextOnly)
+
+        registry.retainRevisions([11])
+        XCTAssertNil(registry.resolve(stableToken, revision: 10))
+        XCTAssertEqual(registry.resolve(stableToken, revision: 11), stable)
     }
 
     @MainActor
@@ -786,6 +903,7 @@ final class ConversationWebDocumentTests: XCTestCase {
             "window.getSelection().removeAllRanges(); document.querySelector('.code-actions button').focus(); window.dispatchEvent(new WheelEvent('wheel', { deltaY: -120 })); window.scrollTo(0, 0);"
         )
         try await Task.sleep(for: .milliseconds(80))
+        XCTAssertEqual(probe.lastViewportInteracting, true)
         let unpinnedBeforePatch = try await webView.evaluateJavaScript(
             "({ y: window.scrollY, jump: Boolean(document.querySelector('.jump-to-latest')), focusedAction: document.activeElement?.dataset.focusId ?? null })"
         ) as? [String: Any]
@@ -864,7 +982,7 @@ final class ConversationWebDocumentTests: XCTestCase {
         let appendPatch = try XCTUnwrap(
             ConversationWebDocumentDiffer.update(from: unpinnedDocument, to: appendedRuntimeDocument)
         )
-        XCTAssertEqual(appendPatch.patch?.forcePinToBottom, true)
+        XCTAssertEqual(appendPatch.patch?.forcePinToBottom, false)
         let fourthAcknowledgement = expectation(description: "New turn acknowledgement")
         probe.expectAcknowledgement(revision: 4, expectation: fourthAcknowledgement)
         let appendPayload = try JSONEncoder().encode(appendPatch).base64EncodedString()
@@ -872,6 +990,21 @@ final class ConversationWebDocumentTests: XCTestCase {
             "window.AgentKitWorkbench.applyUpdateBase64('\(appendPayload)')"
         )
         await fulfillment(of: [fourthAcknowledgement], timeout: 5)
+        try await Task.sleep(for: .milliseconds(30))
+        let readingStateAfterAppend = try await webView.evaluateJavaScript(
+            "({ y: window.scrollY, distance: document.documentElement.scrollHeight - window.scrollY - window.innerHeight, jump: Boolean(document.querySelector('.jump-to-latest')) })"
+        ) as? [String: Any]
+        XCTAssertEqual(readingStateAfterAppend?["jump"] as? Bool, true)
+        XCTAssertEqual(
+            readingStateAfterAppend?["y"] as? Double ?? -1,
+            unpinnedAfterPatch?["y"] as? Double ?? -2,
+            accuracy: 1
+        )
+        XCTAssertGreaterThan(readingStateAfterAppend?["distance"] as? Double ?? 0, 1)
+
+        _ = try await webView.evaluateJavaScript(
+            "document.querySelector('.jump-to-latest').click()"
+        )
         try await Task.sleep(for: .milliseconds(30))
         let bottomState = try await webView.evaluateJavaScript(
             "({ distance: document.documentElement.scrollHeight - window.scrollY - window.innerHeight, jump: Boolean(document.querySelector('.jump-to-latest')) })"
@@ -887,9 +1020,11 @@ final class ConversationWebDocumentTests: XCTestCase {
         let ready = expectation(description: "Long renderer handshake")
         let rendered = expectation(description: "Long document acknowledgement")
         let finalPatch = expectation(description: "Rapid tail patch acknowledgement")
+        let finalReadingPatch = expectation(description: "Rapid unpinned tail patch acknowledgement")
         let probe = ConversationWebBridgeProbe(ready: ready)
         probe.expectAcknowledgement(revision: 1, expectation: rendered)
         probe.expectAcknowledgement(revision: 26, expectation: finalPatch)
+        probe.expectAcknowledgement(revision: 51, expectation: finalReadingPatch)
 
         let configuration = WKWebViewConfiguration()
         configuration.websiteDataStore = .nonPersistent()
@@ -975,6 +1110,72 @@ final class ConversationWebDocumentTests: XCTestCase {
         XCTAssertLessThanOrEqual(inspection?["distance"] as? Double ?? 100, 1)
         XCTAssertEqual(inspection?["mainRole"] as? Int, 1)
 
+        // Height changes that happen after React commits still follow while
+        // the viewport was already at the bottom.
+        _ = try await webView.evaluateJavaScript(
+            "document.querySelector('[data-turn-id=\"turn-499\"]').style.paddingBottom = '240px'"
+        )
+        try await Task.sleep(for: .milliseconds(80))
+        let followedResizeDistance = try await webView.evaluateJavaScript(
+            "document.documentElement.scrollHeight - window.scrollY - window.innerHeight"
+        ) as? Double
+        let followedResizeDiagnostics = try await webView.evaluateJavaScript(
+            "window.AgentKitWorkbench.viewportDiagnostics()"
+        )
+        XCTAssertLessThanOrEqual(
+            followedResizeDistance ?? 100,
+            1,
+            String(describing: followedResizeDiagnostics)
+        )
+
+        _ = try await webView.evaluateJavaScript(
+            "window.dispatchEvent(new WheelEvent('wheel', { deltaY: -160 })); window.scrollTo(0, Math.floor(document.documentElement.scrollHeight / 2));"
+        )
+        try await Task.sleep(for: .milliseconds(220))
+        let readingBeforePatches = try await webView.evaluateJavaScript(
+            "({ y: window.scrollY, jump: Boolean(document.querySelector('.jump-to-latest')), viewport: window.AgentKitWorkbench.viewportDiagnostics() })"
+        ) as? [String: Any]
+        let readingY = readingBeforePatches?["y"] as? Double
+        XCTAssertEqual(readingBeforePatches?["jump"] as? Bool, true)
+
+        for revision in 27...51 {
+            var turns = initialTurns
+            turns[499] = turn(
+                499,
+                tail: "Reading-safe tail revision \(revision)\n\n"
+                    + String(repeating: "token ", count: revision * 5)
+            )
+            let next = ConversationWebDocumentBuilder.build(
+                snapshot: RuntimeSnapshot(timeline: [], turns: turns),
+                conversationID: "long-stress",
+                revision: UInt64(revision)
+            )
+            let update = try XCTUnwrap(
+                ConversationWebDocumentDiffer.update(from: previous, to: next)
+            )
+            let payload = try JSONEncoder().encode(update).base64EncodedString()
+            _ = try await webView.evaluateJavaScript(
+                "window.AgentKitWorkbench.applyUpdateBase64('\(payload)')"
+            )
+            previous = next
+        }
+        await fulfillment(of: [finalReadingPatch], timeout: 15)
+        try await Task.sleep(for: .milliseconds(160))
+
+        let readingInspection = try await webView.evaluateJavaScript(
+            "({ y: window.scrollY, jump: Boolean(document.querySelector('.jump-to-latest')), tail: document.querySelector('[data-selection-id=\"block:text-499\"]').textContent, viewport: window.AgentKitWorkbench.viewportDiagnostics() })"
+        ) as? [String: Any]
+        let viewportDiagnostics = readingInspection?["viewport"]
+        XCTAssertEqual(
+            readingInspection?["y"] as? Double ?? -1,
+            readingY ?? -2,
+            accuracy: 1,
+            String(describing: viewportDiagnostics)
+        )
+        XCTAssertEqual(readingInspection?["jump"] as? Bool, true)
+        XCTAssertTrue((readingInspection?["tail"] as? String)?.contains("revision 51") == true)
+        XCTAssertEqual(probe.lastViewportPinned, false)
+
         configuration.userContentController.removeScriptMessageHandler(forName: "agentkitWorkbench")
         _ = webView
     }
@@ -988,6 +1189,8 @@ private final class ConversationWebBridgeProbe: NSObject, WKScriptMessageHandler
     private var acknowledgementExpectations: [Int: XCTestExpectation] = [:]
     private(set) var protocolVersion: Int?
     private(set) var acknowledgedRevision: Int?
+    private(set) var lastViewportPinned: Bool?
+    private(set) var lastViewportInteracting: Bool?
 
     init(ready: XCTestExpectation) {
         self.ready = ready
@@ -1015,6 +1218,9 @@ private final class ConversationWebBridgeProbe: NSObject, WKScriptMessageHandler
                ) {
                 expectation.fulfill()
             }
+        case "viewport":
+            lastViewportPinned = body["pinned"] as? Bool
+            lastViewportInteracting = body["interacting"] as? Bool
         default:
             break
         }

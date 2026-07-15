@@ -22,10 +22,10 @@ Implementation baseline added to the working tree on 2026-07-14:
 - logical DOM selection anchors plus code/table horizontal offsets and tool expansion state
   restored across tail patches;
 - browser-owned pinned/unpinned scrolling, visible-anchor preservation, resize handling,
-  forced bottom on a new turn, and jump-to-latest;
+  bottom-only streaming follow, and jump-to-latest;
 - automated private-scheme load, handshake, two-turn render, selection CSS, initial reveal,
   narrow-viewport overflow, streaming selection preservation, stable-turn identity,
-  unpinned growth, and new-turn pin verification in a real `WKWebView`.
+  unpinned growth, and explicit jump-to-latest verification in a real `WKWebView`.
 - semantic `TimelineWebNode` cards/sections/rows/badges/actions, with host action IDs hidden
   behind the current revision's opaque registry;
 - `DesktopControlEvidenceTimeline` Web migration and native Inspector documents; HTML
@@ -431,7 +431,7 @@ The Web document is the sole vertical scroll owner. No outer `NSTableView` or Sw
 initial state                 -> pinned
 user scrolls > tolerance away -> unpinned
 user returns to bottom         -> pinned
-new user turn inserted         -> force pinned
+new turn/content inserted      -> follow only if already pinned
 content grows while pinned     -> preserve zero bottom distance
 content grows while unpinned   -> preserve visible anchor
 ```
@@ -666,8 +666,8 @@ Implementation checkpoint (2026-07-15):
 | 0–1 | Core contract, renderer switch, private-scheme shell, bridge, bundled renderer, recovery, and integration test are implemented. |
 | 2 | Turn/block/tool/todo/live projection is implemented; broader visual and HTML fixture coverage remains. |
 | 3 | Opaque registry and native action/Inspector routing are implemented; the exhaustive action and keyboard matrix remains. |
-| 4 | Revisioned tail patches, resync, logical selection anchors, horizontal offsets, expansion state, and unchanged-turn identity are implemented and integration-tested. |
-| 5 | Initial reveal, pin ownership, unpinned anchors, resize restoration, jump-to-latest, and new-turn force-pin are implemented; the full manual/native parity matrix remains. |
+| 4 | Revisioned block-level tail patches, single-in-flight ACK backpressure/coalescing, adaptive 50–160 ms render budgeting, stable-turn Swift projection reuse, scoped DOM-state capture, resync, logical selection anchors, horizontal offsets, expansion state, and unchanged-turn identity are implemented and integration-tested. |
+| 5 | Initial reveal, bottom-only follow, immediate user-interaction ownership, patch suspension during wheel/drag/selection, throttled visible-anchor capture, `ResizeObserver` growth handling, recovery viewport restoration, and jump-to-latest are implemented; the full manual/native parity matrix remains. |
 | 6 | Implemented: semantic extension schema/action routing, Desktop Control evidence migration, native document Inspector, and legacy eligibility fallback. |
 | 7 | Core hardening implemented: semantic roles/names, stable keyboard focus, selection priority, reduced motion/contrast, CSP and scheme allowlist checks, 500-turn/rapid-patch stress, recovery/apply diagnostics. Manual VoiceOver QA and production monitoring continue. |
 | 8 | Eligible macOS configurations now default to Web through `.auto`; legacy extensions and repeated renderer failures fall back to native. Native code is intentionally retained for the stability window. |
@@ -727,7 +727,8 @@ not re-render.
 ### Phase 5 — Scroll parity
 
 - Implement initial hidden layout and bottom reveal.
-- Port pinned/unpinned/new-turn behavior.
+- Port pinned/unpinned behavior with the strict rule that ordinary content growth follows
+  only when the viewport was already at the bottom before the patch.
 - Add unpinned visible-anchor preservation.
 - Handle composer, approval, inspector, and window resizing.
 - Add jump-to-latest control and user/programmatic scroll ownership tracking.

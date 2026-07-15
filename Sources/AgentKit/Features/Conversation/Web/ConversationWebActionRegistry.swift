@@ -18,10 +18,13 @@ enum ConversationWebAction: Hashable {
 final class ConversationWebActionRegistry {
     private var tokenByAction: [ConversationWebAction: String] = [:]
     private var actionByToken: [String: ConversationWebAction] = [:]
-    private var activeTokens: Set<String> = []
+    private var tokensByRevision: [UInt64: Set<String>] = [:]
+    private var buildingRevision: UInt64?
+    private var buildingTokens: Set<String> = []
 
-    func beginRevision() {
-        activeTokens.removeAll(keepingCapacity: true)
+    func beginRevision(_ revision: UInt64 = 0) {
+        buildingRevision = revision
+        buildingTokens.removeAll(keepingCapacity: true)
     }
 
     func register(_ action: ConversationWebAction) -> String {
@@ -33,27 +36,55 @@ final class ConversationWebActionRegistry {
             tokenByAction[action] = token
             actionByToken[token] = action
         }
-        activeTokens.insert(token)
+        buildingTokens.insert(token)
         return token
     }
 
-    func finishRevision() {
-        let expired = Set(actionByToken.keys).subtracting(activeTokens)
-        for token in expired {
-            guard let action = actionByToken.removeValue(forKey: token) else { continue }
-            tokenByAction.removeValue(forKey: action)
-        }
+    func finishRevision(retaining reusedTokens: Set<String> = []) {
+        guard let buildingRevision else { return }
+        buildingTokens.formUnion(reusedTokens.filter { actionByToken[$0] != nil })
+        tokensByRevision[buildingRevision] = buildingTokens
+        self.buildingRevision = nil
+        buildingTokens.removeAll(keepingCapacity: true)
+        removeUnreferencedTokens()
     }
 
-    func resolve(_ token: String) -> ConversationWebAction? {
-        guard activeTokens.contains(token) else { return nil }
+    func resolve(_ token: String, revision: UInt64? = nil) -> ConversationWebAction? {
+        if let revision {
+            guard tokensByRevision[revision]?.contains(token) == true else { return nil }
+        } else {
+            guard tokensByRevision.values.contains(where: { $0.contains(token) }) else {
+                return nil
+            }
+        }
         return actionByToken[token]
+    }
+
+    /// Keeps actions for the document currently visible in WebKit and an
+    /// optional in-flight successor. Older DOM revisions can no longer send
+    /// actions once they are not retained here.
+    func retainRevisions(_ revisions: Set<UInt64>) {
+        tokensByRevision = tokensByRevision.filter { revisions.contains($0.key) }
+        removeUnreferencedTokens()
     }
 
     func removeAll() {
         tokenByAction.removeAll(keepingCapacity: false)
         actionByToken.removeAll(keepingCapacity: false)
-        activeTokens.removeAll(keepingCapacity: false)
+        tokensByRevision.removeAll(keepingCapacity: false)
+        buildingRevision = nil
+        buildingTokens.removeAll(keepingCapacity: false)
+    }
+
+    private func removeUnreferencedTokens() {
+        let referenced = tokensByRevision.values.reduce(into: Set<String>()) {
+            $0.formUnion($1)
+        }.union(buildingTokens)
+        let expired = Set(actionByToken.keys).subtracting(referenced)
+        for token in expired {
+            guard let action = actionByToken.removeValue(forKey: token) else { continue }
+            tokenByAction.removeValue(forKey: action)
+        }
     }
 }
 

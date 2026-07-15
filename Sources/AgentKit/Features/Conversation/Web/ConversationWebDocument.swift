@@ -140,11 +140,18 @@ struct ConversationWebDocument: Codable, Equatable, Sendable {
 
 @MainActor
 enum ConversationWebDocumentBuilder {
+    struct ReuseSource {
+        let snapshot: RuntimeSnapshot
+        let document: ConversationWebDocument
+        let extensionContributions: [String: [TimelineWebContribution]]
+    }
+
     static func build(
         snapshot: RuntimeSnapshot,
         conversationID: String?,
         revision: UInt64? = nil,
         extensionContributions: [String: [TimelineWebContribution]] = [:],
+        reusing reuseSource: ReuseSource? = nil,
         registerAction: ((ConversationWebAction) -> String)? = nil
     ) -> ConversationWebDocument {
         ConversationWebDocument(
@@ -158,15 +165,48 @@ enum ConversationWebDocumentBuilder {
                     status: $0.status.rawValue
                 )
             },
-            turns: snapshot.turns.map {
-                makeTurn(
-                    $0,
-                    extensionContributions: extensionContributions[$0.id] ?? [],
+            turns: snapshot.turns.enumerated().map { index, turn in
+                let contributions = extensionContributions[turn.id] ?? []
+                if let reuseSource,
+                   index < reuseSource.snapshot.turns.count,
+                   index < reuseSource.document.turns.count,
+                   reuseSource.snapshot.turns[index] == turn,
+                   reuseSource.document.turns[index].id == turn.id,
+                   reuseSource.extensionContributions[turn.id] ?? [] == contributions {
+                    return reuseSource.document.turns[index]
+                }
+                return makeTurn(
+                    turn,
+                    extensionContributions: contributions,
                     registerAction: registerAction
                 )
             },
             live: makeLiveState(snapshot)
         )
+    }
+
+    static func actionTokens(in document: ConversationWebDocument) -> Set<String> {
+        var tokens = Set<String>()
+        for turn in document.turns {
+            if let token = turn.copyActionID { tokens.insert(token) }
+            if let token = turn.assetsActionID { tokens.insert(token) }
+            for block in turn.blocks {
+                if let token = block.actionID { tokens.insert(token) }
+                tokens.formUnion(block.codeCopyActionIDs)
+                tokens.formUnion(block.inlineActions.map(\.actionID))
+                for tool in block.tools {
+                    if let token = tool.artifactActionID { tokens.insert(token) }
+                    if let token = tool.copyOutputActionID { tokens.insert(token) }
+                    tokens.formUnion(tool.assetActions.map(\.actionID))
+                    tokens.formUnion(tool.argumentActions.map(\.actionID))
+                    tokens.formUnion(tool.outputActions.map(\.actionID))
+                }
+            }
+            for node in turn.extensionNodes {
+                tokens.formUnion(node.actions.map(\.actionID))
+            }
+        }
+        return tokens
     }
 
     private static func makeTurn(

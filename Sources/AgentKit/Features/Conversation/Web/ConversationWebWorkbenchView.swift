@@ -96,21 +96,40 @@ struct ConversationWebWorkbenchView: NSViewRepresentable {
         private weak var webView: WKWebView?
         private var messageProxy: WeakScriptMessageHandler?
         private var schemeHandler: ConversationWebSchemeHandler?
-        private var latestDocument: ConversationWebDocument?
-        private var lastSentDocument: ConversationWebDocument?
+        private var latestSnapshot: RuntimeSnapshot?
+        private var acknowledgedSnapshot: RuntimeSnapshot?
+        private var inFlightSnapshot: RuntimeSnapshot?
+        private var acknowledgedDocument: ConversationWebDocument?
+        private var inFlightDocument: ConversationWebDocument?
+        private var acknowledgedRevision: UInt64 = 0
         private var isPageReady = false
         private var shellURL: URL?
         private var sourceGeneration: UInt64?
         private var sourceConversationID: String?
         private var sourceExtensionContributions: [String: [TimelineWebContribution]] = [:]
-        private var rendererRevision: UInt64 = 0
+        private var acknowledgedExtensionContributions: [String: [TimelineWebContribution]] = [:]
+        private var inFlightExtensionContributions: [String: [TimelineWebContribution]]?
+        private var sourceVersion: UInt64 = 0
+        private var inFlightSourceVersion: UInt64?
+        private var sendTask: Task<Void, Never>?
+        private var acknowledgementTimeoutTask: Task<Void, Never>?
         private var latestTurns: [ConversationTurn] = []
         private var latestTimelineExtensions: [any TimelineExtension] = []
         private weak var workspaceStore: WorkspaceStore?
         private var openURL: OpenURLAction?
         private var onFatalFailure: (@MainActor () -> Void)?
-        private var processTerminationDates: [Date] = []
+        private var rendererFailureDates: [Date] = []
+        private var recoveryViewport: ConversationWebUpdate.RecoveryViewport?
+        private var shouldRestoreViewportAfterReload = false
+        private var isViewportInteracting = false
+        private var lastApplyDurationMilliseconds: Double = 0
         private let actionRegistry = ConversationWebActionRegistry()
+
+        /// Conversation text does not benefit from display-refresh-rate DOM
+        /// replacement. Leaving budget between Markdown/layout passes keeps
+        /// scrolling responsive and lets snapshot churn coalesce.
+        private static let minimumStreamingIntervalMilliseconds = 50
+        private static let maximumStreamingIntervalMilliseconds = 160
 
         fileprivate func attach(
             webView: WKWebView,
@@ -129,6 +148,10 @@ struct ConversationWebWorkbenchView: NSViewRepresentable {
             messageProxy = nil
             schemeHandler = nil
             isPageReady = false
+            sendTask?.cancel()
+            sendTask = nil
+            acknowledgementTimeoutTask?.cancel()
+            acknowledgementTimeoutTask = nil
             actionRegistry.removeAll()
             onFatalFailure = nil
         }
@@ -154,29 +177,31 @@ struct ConversationWebWorkbenchView: NSViewRepresentable {
             }
 
             if sourceConversationID != resolvedConversationID {
-                rendererRevision = 1
-                lastSentDocument = nil
+                sendTask?.cancel()
+                sendTask = nil
+                acknowledgementTimeoutTask?.cancel()
+                acknowledgementTimeoutTask = nil
+                acknowledgedDocument = nil
+                acknowledgedSnapshot = nil
+                inFlightDocument = nil
+                inFlightSnapshot = nil
+                acknowledgedRevision = 0
+                sourceVersion = 0
+                inFlightSourceVersion = nil
+                recoveryViewport = nil
+                shouldRestoreViewportAfterReload = false
+                isViewportInteracting = false
+                lastApplyDurationMilliseconds = 0
                 actionRegistry.removeAll()
-            } else {
-                rendererRevision &+= 1
+                acknowledgedExtensionContributions = [:]
+                inFlightExtensionContributions = nil
             }
+            latestSnapshot = snapshot
             sourceGeneration = snapshot.generation
             sourceConversationID = resolvedConversationID
             sourceExtensionContributions = extensionContributions
-
-            actionRegistry.beginRevision()
-            let document = ConversationWebDocumentBuilder.build(
-                snapshot: snapshot,
-                conversationID: resolvedConversationID,
-                revision: rendererRevision,
-                extensionContributions: extensionContributions,
-                registerAction: { [actionRegistry] action in
-                    actionRegistry.register(action)
-                }
-            )
-            actionRegistry.finishRevision()
-            latestDocument = document
-            sendLatestDocumentIfPossible()
+            sourceVersion &+= 1
+            scheduleLatestDocumentSend()
         }
 
         func loadShell() {
@@ -202,19 +227,39 @@ struct ConversationWebWorkbenchView: NSViewRepresentable {
                     return
                 }
                 isPageReady = true
-                lastSentDocument = nil
-                sendLatestDocumentIfPossible()
+                // A fresh Web process has no document even when Swift retains
+                // an acknowledged revision from before a reload.
+                inFlightDocument = nil
+                inFlightSnapshot = nil
+                inFlightSourceVersion = nil
+                acknowledgedDocument = nil
+                acknowledgedSnapshot = nil
+                acknowledgedExtensionContributions = [:]
+                inFlightExtensionContributions = nil
+                acknowledgementTimeoutTask?.cancel()
+                acknowledgementTimeoutTask = nil
+                actionRegistry.removeAll()
+                scheduleLatestDocumentSend(delayMilliseconds: 0)
             case "ack":
-                if let revision = body["revision"] as? Int,
-                   let duration = body["applyDurationMilliseconds"] as? Double {
-                    Self.logger.debug(
-                        "Applied Web revision \(revision, privacy: .public) in \(duration, privacy: .public) ms"
-                    )
-                }
+                handleAcknowledgement(body)
             case "resync":
                 Self.logger.notice("Web renderer requested a full document resync")
-                lastSentDocument = nil
-                sendLatestDocumentIfPossible()
+                if let currentRevision = (body["currentRevision"] as? NSNumber)?.uint64Value {
+                    acknowledgedRevision = max(acknowledgedRevision, currentRevision)
+                }
+                inFlightDocument = nil
+                inFlightSnapshot = nil
+                inFlightSourceVersion = nil
+                acknowledgedDocument = nil
+                acknowledgedSnapshot = nil
+                acknowledgedExtensionContributions = [:]
+                inFlightExtensionContributions = nil
+                acknowledgementTimeoutTask?.cancel()
+                acknowledgementTimeoutTask = nil
+                actionRegistry.removeAll()
+                scheduleLatestDocumentSend(delayMilliseconds: 0)
+            case "viewport":
+                handleViewport(body)
             case "action":
                 handleAction(body)
             default:
@@ -244,20 +289,35 @@ struct ConversationWebWorkbenchView: NSViewRepresentable {
         }
 
         func webViewWebContentProcessDidTerminate(_ webView: WKWebView) {
+            recoverRendererOrFallback(reason: "Web content process terminated")
+        }
+
+        private func recoverRendererOrFallback(reason: String) {
             let now = Date()
-            processTerminationDates = processTerminationDates.filter {
+            rendererFailureDates = rendererFailureDates.filter {
                 now.timeIntervalSince($0) < 30
             }
-            processTerminationDates.append(now)
+            rendererFailureDates.append(now)
             Self.logger.error(
-                "Web content process terminated; recent count=\(self.processTerminationDates.count, privacy: .public)"
+                "\(reason, privacy: .public); recent count=\(self.rendererFailureDates.count, privacy: .public)"
             )
-            if processTerminationDates.count >= 3 {
-                reportFatalFailure("Conversation Web process terminated repeatedly")
+            if rendererFailureDates.count >= 3 {
+                reportFatalFailure("Conversation Web renderer failed repeatedly")
                 return
             }
             isPageReady = false
-            lastSentDocument = nil
+            sendTask?.cancel()
+            sendTask = nil
+            acknowledgementTimeoutTask?.cancel()
+            acknowledgementTimeoutTask = nil
+            inFlightDocument = nil
+            inFlightSnapshot = nil
+            inFlightSourceVersion = nil
+            acknowledgedDocument = nil
+            acknowledgedSnapshot = nil
+            acknowledgedExtensionContributions = [:]
+            inFlightExtensionContributions = nil
+            shouldRestoreViewportAfterReload = recoveryViewport != nil
             loadShell()
         }
 
@@ -269,30 +329,190 @@ struct ConversationWebWorkbenchView: NSViewRepresentable {
             reportFatalFailure("Conversation Web shell failed to load: \(error.localizedDescription)")
         }
 
+        private func scheduleLatestDocumentSend(delayMilliseconds: Int? = nil) {
+            guard !isViewportInteracting else { return }
+            guard sendTask == nil else { return }
+            let resolvedDelay = delayMilliseconds ?? nextStreamingDelayMilliseconds
+            sendTask = Task { @MainActor [weak self] in
+                if resolvedDelay > 0 {
+                    try? await Task.sleep(for: .milliseconds(resolvedDelay))
+                }
+                guard !Task.isCancelled else { return }
+                self?.sendTask = nil
+                self?.sendLatestDocumentIfPossible()
+            }
+        }
+
+        /// Sends at most one update at a time. Snapshot churn while WebKit is
+        /// applying a revision is coalesced into the latest source state and is
+        /// diffed only after the displayed revision acknowledges.
         private func sendLatestDocumentIfPossible() {
             guard isPageReady,
+                  !isViewportInteracting,
+                  inFlightDocument == nil,
                   let webView,
-                  let document = latestDocument else { return }
-            guard let update = ConversationWebDocumentDiffer.update(
-                from: lastSentDocument,
-                to: document
-            ) else { return }
+                  let latestSnapshot,
+                  let sourceConversationID else { return }
+
+            let revision = acknowledgedRevision &+ 1
+            actionRegistry.beginRevision(revision)
+            let reuseSource = acknowledgedSnapshot.flatMap { snapshot in
+                acknowledgedDocument.map { document in
+                    ConversationWebDocumentBuilder.ReuseSource(
+                        snapshot: snapshot,
+                        document: document,
+                        extensionContributions: acknowledgedExtensionContributions
+                    )
+                }
+            }
+            let document = ConversationWebDocumentBuilder.build(
+                snapshot: latestSnapshot,
+                conversationID: sourceConversationID,
+                revision: revision,
+                extensionContributions: sourceExtensionContributions,
+                reusing: reuseSource,
+                registerAction: { [actionRegistry] action in
+                    actionRegistry.register(action)
+                }
+            )
+            actionRegistry.finishRevision(
+                retaining: ConversationWebDocumentBuilder.actionTokens(in: document)
+            )
+
+            let update: ConversationWebUpdate?
+            if let acknowledgedDocument {
+                update = ConversationWebDocumentDiffer.update(
+                    from: acknowledgedDocument,
+                    to: document
+                )
+            } else {
+                update = ConversationWebDocumentDiffer.reset(
+                    document,
+                    recoveryViewport: shouldRestoreViewportAfterReload
+                        ? recoveryViewport
+                        : nil
+                )
+            }
+
+            guard let update else {
+                actionRegistry.retainRevisions(
+                    acknowledgedRevision == 0 ? [] : [acknowledgedRevision]
+                )
+                return
+            }
 
             do {
                 let encoder = JSONEncoder()
                 encoder.outputFormatting = [.sortedKeys, .withoutEscapingSlashes]
                 let payload = try encoder.encode(update).base64EncodedString()
                 let script = "window.AgentKitWorkbench?.applyUpdateBase64('\(payload)')"
+                inFlightDocument = document
+                inFlightSnapshot = latestSnapshot
+                inFlightSourceVersion = sourceVersion
+                inFlightExtensionContributions = sourceExtensionContributions
+                actionRegistry.retainRevisions(
+                    Set([acknowledgedRevision, revision].filter { $0 > 0 })
+                )
                 webView.evaluateJavaScript(script) { [weak self] _, error in
-                    guard error == nil else {
-                        Self.logger.error("Failed to apply a Web document update")
-                        self?.lastSentDocument = nil
-                        return
-                    }
+                    guard let self, error != nil else { return }
+                    Self.logger.error("Failed to apply a Web document update")
+                    self.acknowledgementTimeoutTask?.cancel()
+                    self.acknowledgementTimeoutTask = nil
+                    self.inFlightDocument = nil
+                    self.inFlightSnapshot = nil
+                    self.inFlightSourceVersion = nil
+                    self.inFlightExtensionContributions = nil
+                    self.acknowledgedDocument = nil
+                    self.actionRegistry.retainRevisions(
+                        self.acknowledgedRevision == 0 ? [] : [self.acknowledgedRevision]
+                    )
+                    self.scheduleLatestDocumentSend(delayMilliseconds: 0)
                 }
-                lastSentDocument = document
+                startAcknowledgementTimeout(for: revision)
             } catch {
+                inFlightDocument = nil
+                inFlightSnapshot = nil
+                inFlightSourceVersion = nil
+                inFlightExtensionContributions = nil
+                actionRegistry.retainRevisions(
+                    acknowledgedRevision == 0 ? [] : [acknowledgedRevision]
+                )
                 assertionFailure("Failed to encode ConversationWebUpdate: \(error)")
+            }
+        }
+
+        private func handleAcknowledgement(_ body: [String: Any]) {
+            guard body["conversationID"] as? String == sourceConversationID,
+                  let revision = (body["revision"] as? NSNumber)?.uint64Value,
+                  let inFlightDocument,
+                  inFlightDocument.revision == revision else { return }
+
+            let appliedSourceVersion = inFlightSourceVersion
+            acknowledgementTimeoutTask?.cancel()
+            acknowledgementTimeoutTask = nil
+            acknowledgedDocument = inFlightDocument
+            acknowledgedSnapshot = inFlightSnapshot
+            acknowledgedExtensionContributions = inFlightExtensionContributions ?? [:]
+            acknowledgedRevision = revision
+            self.inFlightDocument = nil
+            inFlightSnapshot = nil
+            inFlightSourceVersion = nil
+            inFlightExtensionContributions = nil
+            shouldRestoreViewportAfterReload = false
+            actionRegistry.retainRevisions([revision])
+
+            if let duration = body["applyDurationMilliseconds"] as? Double {
+                lastApplyDurationMilliseconds = duration
+                Self.logger.debug(
+                    "Applied Web revision \(revision, privacy: .public) in \(duration, privacy: .public) ms"
+                )
+            }
+            if appliedSourceVersion != sourceVersion, !isViewportInteracting {
+                scheduleLatestDocumentSend()
+            }
+        }
+
+        private var nextStreamingDelayMilliseconds: Int {
+            let adaptiveDelay = Int((lastApplyDurationMilliseconds * 2).rounded(.up))
+            return min(
+                Self.maximumStreamingIntervalMilliseconds,
+                max(Self.minimumStreamingIntervalMilliseconds, adaptiveDelay)
+            )
+        }
+
+        private func startAcknowledgementTimeout(for revision: UInt64) {
+            acknowledgementTimeoutTask?.cancel()
+            acknowledgementTimeoutTask = Task { @MainActor [weak self] in
+                try? await Task.sleep(for: .seconds(5))
+                guard !Task.isCancelled,
+                      let self,
+                      self.inFlightDocument?.revision == revision else { return }
+                self.acknowledgementTimeoutTask = nil
+                self.recoverRendererOrFallback(
+                    reason: "Timed out waiting for Web revision \(revision) acknowledgement"
+                )
+            }
+        }
+
+        private func handleViewport(_ body: [String: Any]) {
+            guard body["conversationID"] as? String == sourceConversationID,
+                  let revision = (body["revision"] as? NSNumber)?.uint64Value,
+                  revision == acknowledgedRevision
+                    || revision == inFlightDocument?.revision,
+                  let pinned = body["pinned"] as? Bool else { return }
+
+            let wasInteracting = isViewportInteracting
+            isViewportInteracting = body["interacting"] as? Bool ?? false
+            let anchorID = body["anchorID"] as? String
+            guard anchorID?.utf8.count ?? 0 <= 256 else { return }
+            recoveryViewport = .init(
+                pinned: pinned,
+                anchorID: anchorID,
+                anchorTop: body["anchorTop"] as? Double
+            )
+            if wasInteracting, !isViewportInteracting,
+               inFlightDocument == nil {
+                scheduleLatestDocumentSend(delayMilliseconds: 0)
             }
         }
 
@@ -301,12 +521,13 @@ struct ConversationWebWorkbenchView: NSViewRepresentable {
                     == ConversationWebDocument.currentProtocolVersion,
                   body["conversationID"] as? String == sourceConversationID,
                   let revision = (body["revision"] as? NSNumber)?.uint64Value,
-                  revision == rendererRevision else { return }
+                  revision == acknowledgedRevision
+                    || revision == inFlightDocument?.revision else { return }
 
             if let actionID = body["actionID"] as? String,
                actionID.utf8.count <= 64,
                UUID(uuidString: actionID) != nil,
-               let action = actionRegistry.resolve(actionID),
+               let action = actionRegistry.resolve(actionID, revision: revision),
                let workspaceStore,
                let openURL {
                 ConversationWebActionDispatcher.dispatch(

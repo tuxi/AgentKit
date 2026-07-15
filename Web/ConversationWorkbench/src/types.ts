@@ -110,9 +110,20 @@ export interface ConversationWebDocument {
 }
 
 export interface ConversationWebOperation {
-  kind: "setTodos" | "replaceTurn" | "appendTurn" | "removeTurns" | "setLive";
+  kind:
+    | "setTodos"
+    | "replaceTurn"
+    | "updateTurn"
+    | "appendTurn"
+    | "removeTurns"
+    | "replaceBlock"
+    | "appendBlock"
+    | "removeBlocks"
+    | "setLive";
   index?: number;
+  blockIndex?: number;
   turn?: ConversationWebTurn;
+  block?: ConversationWebBlock;
   todos?: ConversationWebDocument["todos"];
   live?: ConversationWebDocument["live"];
 }
@@ -123,6 +134,11 @@ export interface ConversationWebUpdate {
   conversationID: string;
   revision: number;
   document?: ConversationWebDocument;
+  recoveryViewport?: {
+    pinned: boolean;
+    anchorID?: string;
+    anchorTop?: number;
+  };
   patch?: {
     baseRevision: number;
     forcePinToBottom: boolean;
@@ -156,12 +172,29 @@ export type NativeBridgeMessage =
       protocolVersion: number;
       currentRevision: number;
       receivedBaseRevision: number;
+    }
+  | {
+      type: "viewport";
+      protocolVersion: number;
+      revision: number;
+      conversationID: string;
+      pinned: boolean;
+      interacting: boolean;
+      anchorID?: string;
+      anchorTop?: number;
     };
 
 declare global {
   interface Window {
     AgentKitWorkbench?: {
       applyUpdateBase64(payload: string): void;
+      viewportDiagnostics(): {
+        pinned: boolean;
+        interacting: boolean;
+        distanceFromBottom: number;
+        interactionEpoch: number;
+        lastEvent: string;
+      };
     };
     webkit?: {
       messageHandlers?: {
