@@ -1,4 +1,4 @@
-import React, { memo, useLayoutEffect, useRef, useState } from "react";
+import React, { memo, useEffect, useLayoutEffect, useRef, useState } from "react";
 import { createRoot } from "react-dom/client";
 import ReactMarkdown, { defaultUrlTransform } from "react-markdown";
 import remarkGfm from "remark-gfm";
@@ -345,7 +345,7 @@ class ViewportController {
     };
     const handleResize = () => {
       if (this.interacting) return;
-      if (this.pinned && !this.isAtBottom()) {
+      if (this.pinned && !this.isExactlyAtBottom()) {
         this.scheduleFollow();
       } else if (this.lastAnchor) {
         this.restoreAnchor(this.lastAnchor);
@@ -365,7 +365,7 @@ class ViewportController {
     this.resizeObserver = new ResizeObserver(() => {
       // Height growth follows only while the viewport was already following.
       // User interaction or a reading position cancels this path immediately.
-      if (this.pinned && !this.interacting && !this.isAtBottom()) {
+      if (this.pinned && !this.interacting && !this.isExactlyAtBottom()) {
         this.lastEvent = "resize-follow";
         this.scheduleFollow();
       }
@@ -421,6 +421,23 @@ class ViewportController {
       interactionEpoch: this.interactionEpoch,
       lastEvent: this.lastEvent,
     };
+  }
+
+  isInteractionActive(): boolean {
+    return this.interacting;
+  }
+
+  /// Called from React layout effects after local typewriter growth. Keeping
+  /// the scroll correction in the same pre-paint transaction prevents the
+  /// one-frame bottom gap produced by ResizeObserver -> rAF correction.
+  contentDidChangeBeforePaint(): void {
+    if (!this.pinned || this.interacting || this.isExactlyAtBottom()) return;
+    this.cancelScheduledFollow();
+    this.lastEvent = "layout-follow";
+    this.performProgrammaticScroll(() => {
+      window.scrollTo(0, document.documentElement.scrollHeight);
+    });
+    this.scheduleViewportReport();
   }
 
   restore(snapshot: ViewportSnapshot, forcePinToBottom: boolean): void {
@@ -524,6 +541,10 @@ class ViewportController {
 
   private isAtBottom(): boolean {
     return this.distanceFromBottom() <= ViewportController.bottomThreshold;
+  }
+
+  private isExactlyAtBottom(): boolean {
+    return this.distanceFromBottom() <= 0.5;
   }
 
   private scheduleViewportReport(delay = 120): void {
@@ -739,7 +760,18 @@ function linkifiedActionText(
   return nodes;
 }
 
-function Markdown({ block }: { block: ConversationWebBlock }): React.JSX.Element {
+function fencedCodeLanguage(children: React.ReactNode): string {
+  const code = React.Children.toArray(children).find(React.isValidElement);
+  if (!code) return "text";
+  const className = (code.props as { className?: string }).className ?? "";
+  return className.match(/(?:^|\s)language-([^\s]+)/)?.[1] ?? "text";
+}
+
+const MarkdownBody = memo(function MarkdownBody({
+  block,
+}: {
+  block: ConversationWebBlock;
+}): React.JSX.Element {
   let codeBlockIndex = 0;
   return (
     <ReactMarkdown
@@ -779,20 +811,22 @@ function Markdown({ block }: { block: ConversationWebBlock }): React.JSX.Element
           </a>
         ),
         pre: ({ children, node: _node }) => {
+          const language = fencedCodeLanguage(children);
           const copyActionID = block.codeCopyActionIDs[codeBlockIndex];
           const scrollID = `code:${block.id}:${codeBlockIndex}`;
           codeBlockIndex += 1;
           return (
             <div className="overflow-frame code-frame" data-scroll-id={scrollID}>
-              {copyActionID ? (
-                <div className="code-actions">
+              <div className="block-frame-header">
+                <span className="block-frame-label" aria-hidden="true">{language}</span>
+                {copyActionID ? (
                   <ActionButton
                     actionID={copyActionID}
                     focusID={`code-copy:${scrollID}`}
                     tooltip="Copy code"
                   >Copy</ActionButton>
-                </div>
-              ) : null}
+                ) : null}
+              </div>
               <pre>{children}</pre>
             </div>
           );
@@ -812,6 +846,9 @@ function Markdown({ block }: { block: ConversationWebBlock }): React.JSX.Element
             className="overflow-frame table-frame"
             data-scroll-id={`table:${block.id}`}
           >
+            <div className="block-frame-header" aria-hidden="true">
+              <span className="block-frame-label">table</span>
+            </div>
             <table {...props}>{children}</table>
           </div>
         ),
@@ -823,6 +860,190 @@ function Markdown({ block }: { block: ConversationWebBlock }): React.JSX.Element
       {block.text ?? ""}
     </ReactMarkdown>
   );
+});
+
+const streamingFrameMilliseconds = 33;
+const streamingFallbackMilliseconds = 50;
+
+function hasActiveTextSelection(): boolean {
+  const selection = window.getSelection();
+  return Boolean(selection && !selection.isCollapsed);
+}
+
+function commonPrefixLength(lhs: string, rhs: string): number {
+  const limit = Math.min(lhs.length, rhs.length);
+  let index = 0;
+  while (index < limit && lhs[index] === rhs[index]) index += 1;
+  return index;
+}
+
+type StableMarkdownScanner = {
+  scannedOffset: number;
+  stableOffset: number;
+  openFence: "```" | "~~~" | null;
+};
+
+function newStableMarkdownScanner(): StableMarkdownScanner {
+  return { scannedOffset: 0, stableOffset: 0, openFence: null };
+}
+
+/// Advances only across newly completed lines and returns a prefix ending at a
+/// complete Markdown block separator. A blank line inside an open fenced code
+/// block is content, not a commit boundary.
+function advanceStableMarkdownPrefix(
+  text: string,
+  scanner: StableMarkdownScanner,
+): number {
+  while (scanner.scannedOffset < text.length) {
+    const newline = text.indexOf("\n", scanner.scannedOffset);
+    if (newline < 0) break;
+    const lineEnd = newline + 1;
+    const value = text.slice(scanner.scannedOffset, lineEnd);
+    const trimmed = value.trimStart();
+    if (scanner.openFence) {
+      if (trimmed.startsWith(scanner.openFence)) scanner.openFence = null;
+    } else if (trimmed.startsWith("```")) {
+      scanner.openFence = "```";
+    } else if (trimmed.startsWith("~~~")) {
+      scanner.openFence = "~~~";
+    }
+    scanner.scannedOffset = lineEnd;
+    if (!scanner.openFence && value.trim().length === 0) {
+      scanner.stableOffset = lineEnd;
+    }
+  }
+  return scanner.stableOffset;
+}
+
+function streamingPresentationBlock(
+  block: ConversationWebBlock,
+  text: string,
+): ConversationWebBlock {
+  return {
+    ...block,
+    text,
+    // These actions encode exact text and can change on every target revision.
+    // Expose them only on the final Markdown tree so a low-frequency parsed
+    // frame never sends a token from an older acknowledged revision.
+    inlineActions: [],
+    codeCopyActionIDs: [],
+  };
+}
+
+/// The renderer acknowledges the latest target immediately, while this local
+/// player reveals one lightweight active block at a stable cadence. Completed
+/// Markdown blocks are committed once; the growing tail never reparses on a
+/// timer. Playback and parsing both pause during scrolling or text selection.
+function StreamingMarkdown({
+  block,
+}: {
+  block: ConversationWebBlock;
+}): React.JSX.Element {
+  const targetBlock = useRef(block);
+  targetBlock.current = block;
+  const visibleText = useRef("");
+  const committedText = useRef("");
+  const markdownScanner = useRef(newStableMarkdownScanner());
+  const [visibleVersion, setVisibleVersion] = useState(0);
+  const [committedBlock, setCommittedBlock] = useState<ConversationWebBlock>(() =>
+    streamingPresentationBlock(block, ""));
+
+  useEffect(() => {
+    let frame: number | undefined;
+    let fallback: number | undefined;
+    let lastAdvanceAt = performance.now();
+
+    const cancelScheduledTick = () => {
+      if (frame !== undefined) window.cancelAnimationFrame(frame);
+      if (fallback !== undefined) window.clearTimeout(fallback);
+      frame = undefined;
+      fallback = undefined;
+    };
+    const scheduleTick = () => {
+      frame = window.requestAnimationFrame(tick);
+      // Detached/background WKWebViews may throttle rAF. Keep playback
+      // eventual without using this timer in the foreground render path.
+      fallback = window.setTimeout(
+        () => tick(performance.now()),
+        streamingFallbackMilliseconds,
+      );
+    };
+    const tick = (now: number) => {
+      cancelScheduledTick();
+      const target = targetBlock.current.text ?? "";
+      let current = visibleText.current;
+
+      if (!target.startsWith(current)) {
+        const retainedLength = commonPrefixLength(current, target);
+        current = target.slice(0, retainedLength);
+        visibleText.current = current;
+        if (retainedLength < markdownScanner.current.scannedOffset) {
+          markdownScanner.current = newStableMarkdownScanner();
+          advanceStableMarkdownPrefix(current, markdownScanner.current);
+        }
+        if (!current.startsWith(committedText.current)) {
+          committedText.current = "";
+          setCommittedBlock(streamingPresentationBlock(targetBlock.current, ""));
+        }
+        setVisibleVersion((version) => version + 1);
+      }
+
+      const userOwnsViewport = viewportController.isInteractionActive()
+        || hasActiveTextSelection();
+      if (!userOwnsViewport
+          && now - lastAdvanceAt >= streamingFrameMilliseconds
+          && current.length < target.length) {
+        const backlog = target.length - current.length;
+        // Small backlogs read like typing; large batches catch up quickly
+        // without making the UI wait seconds behind the model.
+        const step = Math.min(backlog, Math.max(2, Math.ceil(backlog * 0.22)));
+        current = target.slice(0, current.length + step);
+        visibleText.current = current;
+        lastAdvanceAt = now;
+        setVisibleVersion((version) => version + 1);
+      }
+
+      const stableLength = advanceStableMarkdownPrefix(
+        visibleText.current,
+        markdownScanner.current,
+      );
+      const nextCommittedText = visibleText.current.slice(0, stableLength);
+      if (!userOwnsViewport && committedText.current !== nextCommittedText) {
+        committedText.current = nextCommittedText;
+        setCommittedBlock(streamingPresentationBlock(
+          targetBlock.current,
+          nextCommittedText,
+        ));
+      }
+
+      scheduleTick();
+    };
+    scheduleTick();
+    return () => {
+      cancelScheduledTick();
+    };
+  }, []);
+
+  useLayoutEffect(() => {
+    viewportController.contentDidChangeBeforePaint();
+  }, [visibleVersion, committedBlock]);
+
+  const committed = committedText.current;
+  const visible = visibleText.current;
+  const tail = visible.startsWith(committed) ? visible.slice(committed.length) : visible;
+  void visibleVersion;
+  return (
+    <div className="streaming-markdown" aria-busy="true">
+      <MarkdownBody block={committedBlock} />
+      {tail ? <span className="streaming-text-tail">{tail}</span> : null}
+    </div>
+  );
+}
+
+function Markdown({ block }: { block: ConversationWebBlock }): React.JSX.Element {
+  return block.status === "streaming"
+    ? <StreamingMarkdown block={block} />
+    : <MarkdownBody block={block} />;
 }
 
 function visibleExecutionStatus(
@@ -1111,6 +1332,58 @@ function ExtensionNode({ node }: { node: ConversationWebExtensionNode }): React.
   );
 }
 
+function CollapsibleUserPrompt({
+  turnID,
+  text,
+}: {
+  turnID: string;
+  text: string;
+}) {
+  const [expanded, setExpanded] = useState(false);
+  const [canToggle, setCanToggle] = useState(false);
+  const contentRef = useRef<HTMLDivElement>(null);
+
+  useLayoutEffect(() => {
+    const element = contentRef.current;
+    if (!element) return;
+
+    const measure = () => {
+      if (!expanded) {
+        setCanToggle(element.scrollHeight > element.clientHeight + 1);
+      }
+    };
+    measure();
+
+    const observer = new ResizeObserver(measure);
+    observer.observe(element);
+    return () => observer.disconnect();
+  }, [text, expanded]);
+
+  return (
+    <div className="user-prompt">
+      <div
+        ref={contentRef}
+        className={`user-prompt-content ${expanded ? "is-expanded" : ""}`}
+        data-selection-id={`turn:${turnID}:user`}
+      >
+        {text}
+      </div>
+
+      {canToggle ? (
+        <button
+          type="button"
+          className="user-prompt-toggle"
+          data-focus-id={`user-prompt-toggle:${turnID}`}
+          aria-expanded={expanded}
+          onClick={() => setExpanded((value) => !value)}
+        >
+          {expanded ? "收起" : "显示更多"}
+        </button>
+      ) : null}
+    </div>
+  );
+}
+
 const Turn = memo(function Turn({ turn }: { turn: ConversationWebTurn }) {
   const footer = turn.footer;
   const headingID = `turn-heading-${turn.id}`;
@@ -1123,12 +1396,9 @@ const Turn = memo(function Turn({ turn }: { turn: ConversationWebTurn }) {
     >
       <h2 className="visually-hidden" id={headingID}>Conversation turn</h2>
       {turn.userPrompt ? (
-        <div className="user-prompt" data-selection-id={`turn:${turn.id}:user`}>
-          {turn.userPrompt}
-        </div>
+        <CollapsibleUserPrompt turnID={turn.id} text={turn.userPrompt} />
       ) : null}
       <div className="assistant-lane">
-        <div className="assistant-label" aria-hidden="true">Agent</div>
         {turn.blocks.map((block) => (
           <div
             className="turn-block"
@@ -1148,7 +1418,7 @@ const Turn = memo(function Turn({ turn }: { turn: ConversationWebTurn }) {
             {footer.contextTokens ? <span>ctx {footer.contextTokens}</span> : null}
           </footer>
         ) : null}
-        {turn.copyActionID || turn.assetsActionID ? (
+        {!turn.isLive && (turn.copyActionID || turn.assetsActionID) ? (
           <div className="turn-actions" aria-label="Turn actions">
             {turn.copyActionID ? (
               <ActionButton

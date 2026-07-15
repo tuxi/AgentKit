@@ -215,7 +215,7 @@ enum ConversationWebDocumentBuilder {
         registerAction: ((ConversationWebAction) -> String)?
     ) -> ConversationWebDocument.Turn {
         let assets = turnAssets(turn)
-        let copyActionID = registerAction.map { registerAction in
+        let copyActionID = turn.isLive ? nil : registerAction.map { registerAction in
             let copyText = TranscriptCache.shared.transcript(
                 for: turn,
                 state: TranscriptDocumentState()
@@ -245,7 +245,7 @@ enum ConversationWebDocumentBuilder {
             },
             isLive: turn.isLive,
             copyActionID: copyActionID,
-            assetsActionID: assets.isEmpty ? nil : registerAction.map {
+            assetsActionID: turn.isLive || assets.isEmpty ? nil : registerAction.map {
                 $0(.showTurnAssets(turnID: turn.id))
             },
             assetCount: assets.count

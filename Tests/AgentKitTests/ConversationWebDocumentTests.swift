@@ -293,14 +293,44 @@ final class ConversationWebDocumentTests: XCTestCase {
         )
 
         let stableToken = try XCTUnwrap(first.turns[0].copyActionID)
-        let oldTailToken = try XCTUnwrap(first.turns[1].copyActionID)
-        let newTailToken = try XCTUnwrap(second.turns[1].copyActionID)
+        XCTAssertNil(first.turns[1].copyActionID)
+        XCTAssertNil(second.turns[1].copyActionID)
         XCTAssertEqual(second.turns[0], first.turns[0])
         XCTAssertEqual(second.turns[0].copyActionID, stableToken)
-        XCTAssertNotEqual(newTailToken, oldTailToken)
         XCTAssertNotNil(registry.resolve(stableToken, revision: 2))
-        XCTAssertNil(registry.resolve(oldTailToken, revision: 2))
-        XCTAssertNotNil(registry.resolve(newTailToken, revision: 2))
+
+        let completedSnapshot = RuntimeSnapshot(
+            timeline: [],
+            turns: [firstSnapshot.turns[0], ConversationTurn(
+                id: "tail",
+                userPrompt: MessageNodePayload(role: .user, text: "tail"),
+                blocks: [.text(
+                    id: "text-tail",
+                    MessageNodePayload(role: .assistant, text: "new")
+                )],
+                footer: nil,
+                isLive: false
+            )]
+        )
+        registry.beginRevision(3)
+        let completed = ConversationWebDocumentBuilder.build(
+            snapshot: completedSnapshot,
+            conversationID: "conversation",
+            revision: 3,
+            reusing: .init(
+                snapshot: secondSnapshot,
+                document: second,
+                extensionContributions: [:]
+            ),
+            registerAction: registry.register
+        )
+        registry.finishRevision(
+            retaining: ConversationWebDocumentBuilder.actionTokens(in: completed)
+        )
+
+        let completedTailToken = try XCTUnwrap(completed.turns[1].copyActionID)
+        XCTAssertNotNil(registry.resolve(stableToken, revision: 3))
+        XCTAssertNotNil(registry.resolve(completedTailToken, revision: 3))
     }
 
     @MainActor
@@ -742,6 +772,8 @@ final class ConversationWebDocumentTests: XCTestCase {
               return {
                 turnCount: document.querySelectorAll('.turn').length,
                 tableOverflows: Boolean(frame && frame.scrollWidth > frame.clientWidth),
+                tableLabel: document.querySelector('.table-frame .block-frame-label')?.textContent ?? null,
+                codeLanguage: document.querySelector('.code-frame .block-frame-label')?.textContent ?? null,
                 userSelect: getComputedStyle(document.body).userSelect || getComputedStyle(document.body).webkitUserSelect,
                 opacity: getComputedStyle(document.documentElement).opacity,
                 mainLabel: document.querySelector('main').getAttribute('aria-label'),
@@ -791,6 +823,8 @@ final class ConversationWebDocumentTests: XCTestCase {
         ) as? [String: Any]
         XCTAssertEqual(inspection?["turnCount"] as? Int, 2)
         XCTAssertEqual(inspection?["tableOverflows"] as? Bool, true)
+        XCTAssertEqual(inspection?["tableLabel"] as? String, "table")
+        XCTAssertEqual(inspection?["codeLanguage"] as? String, "swift")
         XCTAssertEqual(inspection?["userSelect"] as? String, "text")
         XCTAssertEqual(inspection?["opacity"] as? String, "1")
         XCTAssertEqual(inspection?["mainLabel"] as? String, "Conversation")
@@ -834,7 +868,7 @@ final class ConversationWebDocumentTests: XCTestCase {
               const table = document.querySelector('.table-frame');
               table.scrollLeft = 96;
               document.querySelector('[data-turn-id="turn-1"]').dataset.identityProbe = 'preserved';
-              document.querySelector('.code-actions button').focus();
+              document.querySelector('.code-frame .block-frame-header button').focus();
               return selection.toString();
             })()
             """
@@ -900,7 +934,7 @@ final class ConversationWebDocumentTests: XCTestCase {
         XCTAssertNil(preservedState?["focusedAction"] as? String)
 
         _ = try await webView.evaluateJavaScript(
-            "window.getSelection().removeAllRanges(); document.querySelector('.code-actions button').focus(); window.dispatchEvent(new WheelEvent('wheel', { deltaY: -120 })); window.scrollTo(0, 0);"
+            "window.getSelection().removeAllRanges(); document.querySelector('.code-frame .block-frame-header button').focus(); window.dispatchEvent(new WheelEvent('wheel', { deltaY: -120 })); window.scrollTo(0, 0);"
         )
         try await Task.sleep(for: .milliseconds(80))
         XCTAssertEqual(probe.lastViewportInteracting, true)
@@ -1011,6 +1045,139 @@ final class ConversationWebDocumentTests: XCTestCase {
         ) as? [String: Any]
         XCTAssertLessThanOrEqual(bottomState?["distance"] as? Double ?? 100, 1)
         XCTAssertEqual(bottomState?["jump"] as? Bool, false)
+
+        configuration.userContentController.removeScriptMessageHandler(forName: "agentkitWorkbench")
+        _ = webView
+    }
+
+    func testStreamingMarkdownPlaysProgressivelyAndFlushesFinalText() async throws {
+        let ready = expectation(description: "Typewriter renderer handshake")
+        let streamingAcknowledgement = expectation(description: "Streaming target accepted")
+        let finalAcknowledgement = expectation(description: "Final text flushed")
+        let probe = ConversationWebBridgeProbe(ready: ready)
+        probe.expectAcknowledgement(revision: 1, expectation: streamingAcknowledgement)
+        probe.expectAcknowledgement(revision: 2, expectation: finalAcknowledgement)
+
+        let configuration = WKWebViewConfiguration()
+        configuration.websiteDataStore = .nonPersistent()
+        configuration.setURLSchemeHandler(
+            ConversationWebSchemeHandler(),
+            forURLScheme: ConversationWebSchemeHandler.scheme
+        )
+        configuration.userContentController.add(probe, name: "agentkitWorkbench")
+        let webView = WKWebView(
+            frame: .init(x: 0, y: 0, width: 760, height: 300),
+            configuration: configuration
+        )
+        webView.load(URLRequest(url: ConversationWebSchemeHandler.indexURL))
+        await fulfillment(of: [ready], timeout: 5)
+
+        let stableParagraph = "First paragraph."
+        let activeParagraph = Array(repeating: "typewriter", count: 220)
+            .joined(separator: " ")
+        let target = stableParagraph + "\n\n" + activeParagraph
+        func snapshot(isStreaming: Bool) -> RuntimeSnapshot {
+            RuntimeSnapshot(
+                timeline: [],
+                turns: [ConversationTurn(
+                    id: "turn-typewriter",
+                    userPrompt: MessageNodePayload(role: .user, text: "stream"),
+                    blocks: [.text(
+                        id: "text-typewriter",
+                        MessageNodePayload(
+                            role: .assistant,
+                            text: target,
+                            isStreaming: isStreaming
+                        )
+                    )],
+                    footer: nil,
+                    isLive: isStreaming
+                )]
+            )
+        }
+
+        let streamingDocument = ConversationWebDocumentBuilder.build(
+            snapshot: snapshot(isStreaming: true),
+            conversationID: "typewriter",
+            revision: 1
+        )
+        let streamingPayload = try JSONEncoder().encode(
+            ConversationWebDocumentDiffer.reset(streamingDocument)
+        ).base64EncodedString()
+        _ = try await webView.evaluateJavaScript(
+            "window.AgentKitWorkbench.applyUpdateBase64('\(streamingPayload)')"
+        )
+        await fulfillment(of: [streamingAcknowledgement], timeout: 5)
+
+        let acceptedLength = try await webView.evaluateJavaScript(
+            "document.querySelector('[data-selection-id=\"block:text-typewriter\"]').textContent.length"
+        ) as? Int
+        XCTAssertLessThan(acceptedLength ?? target.count, target.count)
+
+        try await Task.sleep(for: .milliseconds(100))
+        let progressiveState = try await webView.evaluateJavaScript(
+            "({ committed: document.querySelector('.streaming-markdown p')?.textContent ?? '', tail: document.querySelector('.streaming-text-tail')?.textContent ?? '', isPlaying: Boolean(document.querySelector('.streaming-markdown[aria-busy=\"true\"]')) })"
+        ) as? [String: Any]
+        let committedText = progressiveState?["committed"] as? String ?? ""
+        let tailText = progressiveState?["tail"] as? String ?? ""
+        let progressiveSource = committedText + "\n\n" + tailText
+        XCTAssertEqual(committedText, stableParagraph)
+        XCTAssertGreaterThan(tailText.count, 0)
+        XCTAssertLessThan(progressiveSource.count, target.count)
+        XCTAssertTrue(target.hasPrefix(progressiveSource))
+        XCTAssertEqual(progressiveState?["isPlaying"] as? Bool, true)
+
+        var pinnedDistances: [Double] = []
+        for _ in 0..<6 {
+            try await Task.sleep(for: .milliseconds(25))
+            let distance = try await webView.evaluateJavaScript(
+                "document.documentElement.scrollHeight - window.scrollY - window.innerHeight"
+            ) as? Double
+            pinnedDistances.append(distance ?? 100)
+        }
+        let pinnedDiagnostics = try await webView.evaluateJavaScript(
+            "window.AgentKitWorkbench.viewportDiagnostics()"
+        )
+        XCTAssertLessThanOrEqual(
+            pinnedDistances.map(abs).max() ?? 100,
+            1.5,
+            "Typewriter growth must remain bottom-aligned before paint: \(pinnedDistances), \(String(describing: pinnedDiagnostics))"
+        )
+
+        _ = try await webView.evaluateJavaScript(
+            "window.dispatchEvent(new WheelEvent('wheel', { deltaY: -120 })); window.scrollTo(0, 0);"
+        )
+        try await Task.sleep(for: .milliseconds(40))
+        let pausedLength = try await webView.evaluateJavaScript(
+            "document.querySelector('[data-selection-id=\"block:text-typewriter\"]').textContent.length"
+        ) as? Int
+        try await Task.sleep(for: .milliseconds(80))
+        let stillPausedLength = try await webView.evaluateJavaScript(
+            "document.querySelector('[data-selection-id=\"block:text-typewriter\"]').textContent.length"
+        ) as? Int
+        XCTAssertEqual(stillPausedLength, pausedLength)
+
+        let finalDocument = ConversationWebDocumentBuilder.build(
+            snapshot: snapshot(isStreaming: false),
+            conversationID: "typewriter",
+            revision: 2
+        )
+        let finalUpdate = try XCTUnwrap(
+            ConversationWebDocumentDiffer.update(from: streamingDocument, to: finalDocument)
+        )
+        let finalPayload = try JSONEncoder().encode(finalUpdate).base64EncodedString()
+        _ = try await webView.evaluateJavaScript(
+            "window.AgentKitWorkbench.applyUpdateBase64('\(finalPayload)')"
+        )
+        await fulfillment(of: [finalAcknowledgement], timeout: 5)
+        let finalParagraphs = try await webView.evaluateJavaScript(
+            "[...document.querySelectorAll('[data-selection-id=\"block:text-typewriter\"] p')].map((element) => element.textContent)"
+        ) as? [String]
+        XCTAssertEqual(finalParagraphs, [stableParagraph, activeParagraph])
+        let hasFinalTail = try await webView.evaluateJavaScript(
+            "Boolean(document.querySelector('.streaming-text-tail'))"
+        ) as? Bool
+        XCTAssertEqual(hasFinalTail, false)
 
         configuration.userContentController.removeScriptMessageHandler(forName: "agentkitWorkbench")
         _ = webView
