@@ -259,6 +259,10 @@ public final class CodeAgentTransport: AgentTransport, @unchecked Sendable {
 
     // MARK: - AgentTransport: Repos
 
+    public func cloneRepo(request: PublicGitCloneRequest) async throws -> ClonedRepo {
+        try await http.cloneRepo(request: request)
+    }
+
     public func cloneRepo(url: String, ref: String?) async throws -> ClonedRepo {
         try await http.cloneRepo(url: url, ref: ref)
     }
@@ -519,6 +523,10 @@ public final class DefaultAgentClient: RuntimeClient, @unchecked Sendable {
 
     public func cloneRepo(url: String, ref: String?) async throws -> ClonedRepo {
         try await transport.cloneRepo(url: url, ref: ref)
+    }
+
+    public func cloneRepo(request: PublicGitCloneRequest) async throws -> ClonedRepo {
+        try await transport.cloneRepo(request: request)
     }
 
     public func getConversationDetail(id: String) async throws -> ConversationDetail {

@@ -23,9 +23,10 @@ struct WorkspaceChipBar: View {
     @State private var pendingImportURL: URL?
     @State private var importName = ""
     @State private var isImportNamePresented = false
-    // GitHub clone（iOS）。
-    @State private var isGitHubPromptPresented = false
-    @State private var gitHubURL = ""
+    // Runtime-owned Public Git Clone v1.
+    @State private var isGitClonePresented = false
+    @State private var cloneTask: Task<Void, Never>?
+    @State private var cloneError: String?
 
     var body: some View {
         HStack(spacing: 6) {
@@ -48,6 +49,20 @@ struct WorkspaceChipBar: View {
         ) { result in
             handleImport(result)
         }
+        .sheet(isPresented: $isGitClonePresented) {
+            PublicGitCloneSheet(
+                projectsRoot: store.runtimeProjectsRoot,
+                isCloning: cloneTask != nil,
+                errorMessage: cloneError,
+                onCancel: {
+                    cloneTask?.cancel()
+                    isGitClonePresented = false
+                },
+                onClone: { form in
+                    startClone(form)
+                }
+            )
+        }
         .alert("为项目命名", isPresented: $isNewProjectPresented) {
             TextField("Project name", text: $newProjectName)
             Button("取消", role: .cancel) { }
@@ -65,17 +80,6 @@ struct WorkspaceChipBar: View {
             Button("导入") { confirmImport() }
         } message: {
             Text("将复制进 Documents。可改名以区分不同来源（iOS 无法自动获取来源 App 名）。")
-        }
-        .alert("从 GitHub 导入", isPresented: $isGitHubPromptPresented) {
-            TextField("https://github.com/owner/repo", text: $gitHubURL)
-                .autocorrectionDisabled()
-                #if os(iOS)
-                .textInputAutocapitalization(.never)
-                #endif
-            Button("取消", role: .cancel) { }
-            Button("Clone") { cloneFromGitHub() }
-        } message: {
-            Text("clone 公开仓库到 Documents（浅克隆）。")
         }
         .alert(
             "无法创建项目",
@@ -308,17 +312,17 @@ struct WorkspaceChipBar: View {
                         Label("导入现有文件夹…", systemImage: "square.and.arrow.down")
                         #endif
                     }
+                    if store.supportsPublicGitClone {
+                        Button {
+                            cloneError = nil
+                            isGitClonePresented = true
+                        } label: {
+                            Label("从 Git 仓库克隆…", systemImage: "arrow.down.circle")
+                        }
+                    }
                 } label: {
                     Label("新建项目", systemImage: "plus")
                 }
-                #if os(iOS)
-                Button {
-                    gitHubURL = ""
-                    isGitHubPromptPresented = true
-                } label: {
-                    Label("Import from GitHub…", systemImage: "arrow.down.circle")
-                }
-                #endif
             } else {
                 // macOS：无工作区根 → 任意文件夹选择。
                 Divider()
@@ -366,14 +370,27 @@ struct WorkspaceChipBar: View {
         }
     }
 
-    private func cloneFromGitHub() {
-        let url = gitHubURL.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !url.isEmpty else { return }
-        Task {
+    private func startClone(_ form: PublicGitCloneForm) {
+        guard cloneTask == nil else { return }
+        cloneError = nil
+        // A single attempt owns one stable id. URLSession/Runtime reconnect behavior
+        // reuses it; pressing Clone again after a terminal error creates a new id.
+        let request = PublicGitCloneRequest(
+            requestID: UUID().uuidString,
+            url: form.url,
+            ref: form.ref,
+            name: form.name,
+            depth: form.clonesFullHistory ? 0 : 1
+        )
+        cloneTask = Task {
+            defer { cloneTask = nil }
             do {
-                try await store.cloneAndSelectProject(url: url)
+                try await store.cloneAndSelectProject(request: request)
+                guard !Task.isCancelled else { return }
+                isGitClonePresented = false
             } catch {
-                createError = error.localizedDescription
+                guard !Task.isCancelled else { return }
+                cloneError = error.localizedDescription
             }
         }
     }
@@ -423,5 +440,110 @@ struct WorkspaceChipBar: View {
         )
         .foregroundStyle(prominent ? AnyShapeStyle(Color.accentColor) : AnyShapeStyle(.primary))
         .clipShape(Capsule())
+    }
+}
+
+private struct PublicGitCloneForm: Sendable {
+    let url: String
+    let name: String?
+    let ref: String?
+    let clonesFullHistory: Bool
+}
+
+private struct PublicGitCloneSheet: View {
+    let projectsRoot: String?
+    let isCloning: Bool
+    let errorMessage: String?
+    let onCancel: () -> Void
+    let onClone: (PublicGitCloneForm) -> Void
+
+    @State private var repositoryURL = ""
+    @State private var projectName = ""
+    @State private var gitRef = ""
+    @State private var clonesFullHistory = false
+
+    private var trimmedURL: String {
+        repositoryURL.trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    var body: some View {
+        NavigationStack {
+            Form {
+                Section {
+                    TextField("https://github.com/owner/repository.git", text: $repositoryURL)
+                        .autocorrectionDisabled()
+                        #if os(iOS)
+                        .textInputAutocapitalization(.never)
+                        .keyboardType(.URL)
+                        #endif
+                } header: {
+                    Text("公开 HTTPS Git 地址")
+                } footer: {
+                    Text("支持 GitHub、GitLab、Gitee 和公开自建 Git 服务；不传输登录凭据。")
+                }
+
+                Section("可选") {
+                    TextField("项目名（默认从 URL 推导）", text: $projectName)
+                    TextField("分支或标签（默认远程默认分支）", text: $gitRef)
+                        .autocorrectionDisabled()
+                        #if os(iOS)
+                        .textInputAutocapitalization(.never)
+                        #endif
+                    Toggle("克隆完整历史", isOn: $clonesFullHistory)
+                }
+
+                if let projectsRoot, !projectsRoot.isEmpty {
+                    Section("存放位置") {
+                        Label(projectsRoot, systemImage: "folder")
+                            .font(.caption)
+                            .textSelection(.enabled)
+                    }
+                }
+
+                if let errorMessage, !errorMessage.isEmpty {
+                    Section {
+                        Label(errorMessage, systemImage: "exclamationmark.triangle.fill")
+                            .foregroundStyle(.red)
+                    }
+                }
+
+                if isCloning {
+                    Section {
+                        HStack(spacing: 10) {
+                            ProgressView()
+                            Text("正在克隆仓库…")
+                            Spacer(minLength: 0)
+                        }
+                    }
+                }
+            }
+            .formStyle(.grouped)
+            .navigationTitle("从 Git 仓库克隆")
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) {
+                    Button(isCloning ? "取消 Clone" : "取消", action: onCancel)
+                }
+                ToolbarItem(placement: .confirmationAction) {
+                    Button("Clone") {
+                        onClone(PublicGitCloneForm(
+                            url: trimmedURL,
+                            name: optional(projectName),
+                            ref: optional(gitRef),
+                            clonesFullHistory: clonesFullHistory
+                        ))
+                    }
+                    .disabled(trimmedURL.isEmpty || isCloning)
+                }
+            }
+        }
+        #if os(macOS)
+        .frame(minWidth: 480, minHeight: 430)
+        #endif
+        .interactiveDismissDisabled(isCloning)
+    }
+
+    private func optional(_ raw: String) -> String? {
+        let value = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+        return value.isEmpty ? nil : value
     }
 }

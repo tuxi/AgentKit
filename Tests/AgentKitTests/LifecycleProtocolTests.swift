@@ -395,8 +395,10 @@ final class LifecycleProtocolTests: XCTestCase {
             "session_attention_delta_v1": true,
             "workspace_execution_policy_v1": true,
             "managed_worktree_v1": true,
-            "conversation_archive_v1": true
+            "conversation_archive_v1": true,
+            "public_git_clone_v1": true
           },
+          "projects_root": "/Users/test/Documents",
           "limits": { "max_concurrent_turns": 4, "max_connected_sessions": 16 }
         }
         """
@@ -409,7 +411,13 @@ final class LifecycleProtocolTests: XCTestCase {
         XCTAssertTrue(capabilities.flags.contains(.sessionAttentionDelta))
         XCTAssertTrue(capabilities.supportsManagedWorktree)
         XCTAssertTrue(capabilities.supportsConversationArchive)
+        XCTAssertTrue(capabilities.supportsPublicGitClone)
+        XCTAssertTrue(capabilities.flags.contains(.publicGitClone))
+        XCTAssertEqual(capabilities.projectsRoot, "/Users/test/Documents")
         XCTAssertEqual(capabilities.limits?.maxConcurrentTurns, 4)
+        XCTAssertFalse(RuntimeCapabilitySnapshot(
+            capabilities: ["public_git_clone_v1": true]
+        ).supportsPublicGitClone)
 
         let activityJSON = """
         {
@@ -456,6 +464,47 @@ final class LifecycleProtocolTests: XCTestCase {
         XCTAssertEqual(activity.sessions.first?.latestTerminal?.sequence, 170)
         XCTAssertEqual(activity.sessions.first?.executionPolicy, "isolated_worktree")
         XCTAssertEqual(activity.sessions.first?.worktree?.branch, "codeagent/task-a31f")
+    }
+
+    func testPublicGitCloneV1RequestResponseAndErrors() throws {
+        let request = PublicGitCloneRequest(
+            requestID: "clone-request-1",
+            url: "https://gitlab.com/team/repo.git",
+            ref: "main",
+            name: "study-repo",
+            depth: 0
+        )
+        let encoded = try JSONEncoder().encode(request)
+        let object = try XCTUnwrap(
+            JSONSerialization.jsonObject(with: encoded) as? [String: Any]
+        )
+        XCTAssertEqual(object["request_id"] as? String, "clone-request-1")
+        XCTAssertEqual(object["url"] as? String, "https://gitlab.com/team/repo.git")
+        XCTAssertEqual(object["ref"] as? String, "main")
+        XCTAssertEqual(object["name"] as? String, "study-repo")
+        XCTAssertEqual(object["depth"] as? Int, 0)
+
+        let responseJSON = """
+        {
+          "request_id": "clone-request-1",
+          "workspace_path": "/Users/test/Documents/study-repo",
+          "workspace_ref": { "root": "workspace", "rel": "study-repo" }
+        }
+        """
+        let response = try JSONDecoder().decode(ClonedRepo.self, from: Data(responseJSON.utf8))
+        XCTAssertEqual(response.requestID, "clone-request-1")
+        XCTAssertEqual(response.workspacePath, "/Users/test/Documents/study-repo")
+        XCTAssertEqual(response.workspaceRef?.root, "workspace")
+        XCTAssertEqual(response.workspaceRef?.rel, "study-repo")
+
+        XCTAssertEqual(
+            PublicGitCloneError(code: "repo_not_found", message: "not found").localizedDescription,
+            "未找到公开仓库，或该仓库需要登录。"
+        )
+        XCTAssertEqual(
+            PublicGitCloneError(code: "ref_not_found", message: "missing").localizedDescription,
+            "未找到指定的分支或标签。"
+        )
     }
 
     func testCurrentCodeAgentRuntimeCapabilityAndActivityFixturesDecode() throws {

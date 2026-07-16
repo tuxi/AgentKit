@@ -129,6 +129,14 @@ public final class WorkspaceStore {
         supervisor.runtimeCapabilities.supportsConversationArchive
     }
 
+    public var supportsPublicGitClone: Bool {
+        supervisor.runtimeCapabilities.supportsPublicGitClone
+    }
+
+    public var runtimeProjectsRoot: String? {
+        supervisor.runtimeCapabilities.projectsRoot
+    }
+
     public var runtimeCapabilityDiscoveryState: RuntimeCapabilityDiscoveryState {
         supervisor.runtimeCapabilityDiscoveryState
     }
@@ -520,14 +528,33 @@ public final class WorkspaceStore {
         selectWorkspace(workspace)
     }
 
-    /// clone 公开 GitHub 仓库到 Documents（runtime go-git）并选入当前草稿（iOS）。
-    public func cloneAndSelectProject(url: String, ref: String? = nil) async throws {
+    /// Clone a public HTTPS Git repository into Runtime's declared projects root.
+    /// This prepares only the local draft workspace; no Conversation or Worktree is created.
+    public func cloneAndSelectProject(request: PublicGitCloneRequest) async throws {
         guard draft != nil else { return }
+        guard supportsPublicGitClone, let projectsRoot = runtimeProjectsRoot else {
+            throw RuntimeHTTPError.unsupported
+        }
         isPreparingWorkspace = true
         defer { isPreparingWorkspace = false }
-        let cloned = try await client.cloneRepo(url: url, ref: ref)
-        projects.reload()   // 让新 clone 的目录出现在项目列表
-        selectWorkspace(Workspace(url: URL(fileURLWithPath: cloned.workspacePath)))
+        let cloned = try await client.cloneRepo(request: request)
+        try Task.checkCancellation()
+
+        let rootURL = URL(fileURLWithPath: projectsRoot).standardizedFileURL
+        let workspaceURL = URL(fileURLWithPath: cloned.workspacePath).standardizedFileURL
+        let rootPath = rootURL.path.hasSuffix("/") ? rootURL.path : rootURL.path + "/"
+        guard workspaceURL.path.hasPrefix(rootPath) else {
+            throw RuntimeHTTPError.invalidResponse
+        }
+
+        projects.reload()
+        draft?.usesManagedWorktree = false
+        selectWorkspace(Workspace(url: workspaceURL))
+    }
+
+    /// Legacy convenience wrapper. New UI should create and retain an explicit request.
+    public func cloneAndSelectProject(url: String, ref: String? = nil) async throws {
+        try await cloneAndSelectProject(request: PublicGitCloneRequest(url: url, ref: ref))
     }
 
     /// 在草稿中选择/切换工作区（仅草稿期可变）。

@@ -51,10 +51,13 @@ public struct RuntimeCapabilitySnapshot: Codable, Sendable, Equatable {
     public let protocolVersion: Int
     public let capabilities: [String: Bool]
     public let limits: RuntimeLimits?
+    /// Runtime-owned destination root for Public Git Clone projects.
+    public let projectsRoot: String?
 
     enum CodingKeys: String, CodingKey {
         case schema, capabilities, limits
         case protocolVersion = "protocol_version"
+        case projectsRoot = "projects_root"
     }
 
     private struct CapabilityKey: CodingKey {
@@ -69,12 +72,14 @@ public struct RuntimeCapabilitySnapshot: Codable, Sendable, Equatable {
         schema: String = "runtime-capabilities/v1",
         protocolVersion: Int = 1,
         capabilities: [String: Bool] = [:],
-        limits: RuntimeLimits? = nil
+        limits: RuntimeLimits? = nil,
+        projectsRoot: String? = nil
     ) {
         self.schema = schema
         self.protocolVersion = protocolVersion
         self.capabilities = capabilities
         self.limits = limits
+        self.projectsRoot = projectsRoot
     }
 
     /// Accept both the versioned design shape and Code-Agent's initial compact
@@ -96,6 +101,7 @@ public struct RuntimeCapabilitySnapshot: Codable, Sendable, Equatable {
             }
         }
         capabilities = decodedCapabilities
+        projectsRoot = try container.decodeIfPresent(String.self, forKey: .projectsRoot)
 
         if let explicitLimits = try container.decodeIfPresent(RuntimeLimits.self, forKey: .limits) {
             limits = explicitLimits
@@ -126,6 +132,7 @@ public struct RuntimeCapabilitySnapshot: Codable, Sendable, Equatable {
         if capabilities["session_attention_delta_v1"] == true { flags.insert(.sessionAttentionDelta) }
         if capabilities["managed_worktree_v1"] == true { flags.insert(.managedWorktree) }
         if capabilities["conversation_archive_v1"] == true { flags.insert(.conversationArchive) }
+        if capabilities["public_git_clone_v1"] == true { flags.insert(.publicGitClone) }
         return flags
     }
 
@@ -144,6 +151,10 @@ public struct RuntimeCapabilitySnapshot: Codable, Sendable, Equatable {
 
     public var supportsConversationArchive: Bool {
         flags.contains(.conversationArchive)
+    }
+
+    public var supportsPublicGitClone: Bool {
+        flags.contains(.publicGitClone) && projectsRoot?.isEmpty == false
     }
 }
 

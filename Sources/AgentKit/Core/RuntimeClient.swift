@@ -149,7 +149,10 @@ public protocol RuntimeClient: Sendable {
 
     // MARK: - Repos
 
-    /// clone 一个公开 GitHub 仓库到 backend 的 workspace 根下，返回其工作区路径。
+    /// Clone a public HTTPS Git repository using the Runtime-owned project root.
+    func cloneRepo(request: PublicGitCloneRequest) async throws -> ClonedRepo
+
+    /// Legacy convenience entry retained for source compatibility.
     /// 默认实现抛 `unsupported`（mock backend）。
     func cloneRepo(url: String, ref: String?) async throws -> ClonedRepo
 }
@@ -217,6 +220,10 @@ extension RuntimeClient {
     }
 
     /// 默认不支持 clone（mock backend）。`DefaultAgentClient` 覆盖。
+    public func cloneRepo(request: PublicGitCloneRequest) async throws -> ClonedRepo {
+        try await cloneRepo(url: request.url, ref: request.ref)
+    }
+
     public func cloneRepo(url: String, ref: String?) async throws -> ClonedRepo {
         throw RuntimeHTTPError.unsupported
     }

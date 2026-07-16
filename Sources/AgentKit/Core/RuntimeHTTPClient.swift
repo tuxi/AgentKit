@@ -315,17 +315,58 @@ struct RuntimeHTTPClient: Sendable {
         return try decodeEnvelope(AgentAssetContentResponse.self, from: data)
     }
 
-    /// `POST /v1/repos/clone` — go-git clone。
-    func cloneRepo(url repoURL: String, ref: String?) async throws -> ClonedRepo {
-        var body: [String: String] = ["url": repoURL]
-        if let ref, !ref.isEmpty { body["ref"] = ref }
-        let request = try await buildRequest("POST", pathComponents: "v1/repos/clone", body: body, timeout: 180)
-        let (data, response) = try await session.data(for: request)
+    /// `POST /v1/repos/clone` — Public Git Clone v1.
+    func cloneRepo(request cloneRequest: PublicGitCloneRequest) async throws -> ClonedRepo {
+        let request = try await buildRequest(
+            "POST",
+            pathComponents: "v1/repos/clone",
+            body: cloneRequest,
+            timeout: 310
+        )
+        let data: Data
+        let response: URLResponse
+        var transportAttempt = 0
+        while true {
+            do {
+                (data, response) = try await session.data(for: request)
+                break
+            } catch let error as URLError
+                where transportAttempt == 0
+                    && Self.isRetryableCloneTransportError(error)
+                    && !Task.isCancelled {
+                // The Runtime may still have accepted the synchronous request before
+                // the connection failed. Retry once with the exact same body/request_id;
+                // durable Runtime idempotency joins or replays that operation.
+                transportAttempt += 1
+                try await Task.sleep(for: .milliseconds(250))
+            }
+        }
         guard let http = response as? HTTPURLResponse else { throw RuntimeHTTPError.invalidResponse }
         guard (200...201).contains(http.statusCode) else {
-            throw RuntimeHTTPError.unexpectedStatus(http.statusCode, body: String(data: data, encoding: .utf8) ?? "")
+            if let envelope = try? decoder.decode(RuntimeEnvelope<PublicGitCloneFailurePayload>.self, from: data),
+               let failure = envelope.data {
+                throw PublicGitCloneError(code: failure.error, message: failure.message)
+            }
+            throw RuntimeHTTPError.unexpectedStatus(
+                http.statusCode,
+                body: String(data: data, encoding: .utf8) ?? ""
+            )
         }
         return try decodeEnvelope(ClonedRepo.self, from: data)
+    }
+
+    private static func isRetryableCloneTransportError(_ error: URLError) -> Bool {
+        switch error.code {
+        case .timedOut, .cannotFindHost, .cannotConnectToHost,
+             .dnsLookupFailed, .networkConnectionLost:
+            return true
+        default:
+            return false
+        }
+    }
+
+    func cloneRepo(url repoURL: String, ref: String?) async throws -> ClonedRepo {
+        try await cloneRepo(request: PublicGitCloneRequest(url: repoURL, ref: ref))
     }
 
     /// `GET /healthz` — 存活探针（不注入 credential，无需认证）。
@@ -368,13 +409,100 @@ private struct RuntimeEnvelope<T: Decodable>: Decodable {
 
 // MARK: - Clone result
 
-/// `POST /v1/repos/clone` 返回。host 主要用 `workspacePath` 建会话；
-/// `workspaceRef` 与 workspace-path spec 一致（持久身份），此处可选解码。
-public struct ClonedRepo: Decodable, Sendable {
-    public let workspacePath: String
+public struct PublicGitCloneRequest: Codable, Sendable, Equatable {
+    public let requestID: String
+    public let url: String
+    public let ref: String?
+    public let name: String?
+    public let depth: Int
 
     enum CodingKeys: String, CodingKey {
+        case url, ref, name, depth
+        case requestID = "request_id"
+    }
+
+    public init(
+        requestID: String = UUID().uuidString,
+        url: String,
+        ref: String? = nil,
+        name: String? = nil,
+        depth: Int = 1
+    ) {
+        self.requestID = requestID
+        self.url = url
+        self.ref = ref?.nilIfEmpty
+        self.name = name?.nilIfEmpty
+        self.depth = depth
+    }
+}
+
+public struct RuntimeWorkspaceReference: Decodable, Sendable, Equatable {
+    public let root: String
+    public let rel: String
+
+    public init(root: String, rel: String) {
+        self.root = root
+        self.rel = rel
+    }
+}
+
+/// `POST /v1/repos/clone` Public Git Clone v1 response.
+public struct ClonedRepo: Decodable, Sendable {
+    public let requestID: String?
+    public let workspacePath: String
+    public let workspaceRef: RuntimeWorkspaceReference?
+
+    enum CodingKeys: String, CodingKey {
+        case requestID = "request_id"
         case workspacePath = "workspace_path"
+        case workspaceRef = "workspace_ref"
+    }
+
+    public init(
+        requestID: String? = nil,
+        workspacePath: String,
+        workspaceRef: RuntimeWorkspaceReference? = nil
+    ) {
+        self.requestID = requestID
+        self.workspacePath = workspacePath
+        self.workspaceRef = workspaceRef
+    }
+}
+
+private struct PublicGitCloneFailurePayload: Decodable {
+    let error: String
+    let message: String
+}
+
+public struct PublicGitCloneError: LocalizedError, Sendable, Equatable {
+    public let code: String
+    public let message: String
+
+    public init(code: String, message: String) {
+        self.code = code
+        self.message = message
+    }
+
+    public var errorDescription: String? {
+        switch code {
+        case "invalid_url": return "请输入不含凭据的公开 HTTPS Git 地址。"
+        case "invalid_name": return "项目名不安全，请移除路径分隔符或保留名。"
+        case "invalid_request": return "Clone 请求无效：\(message)"
+        case "repo_not_found": return "未找到公开仓库，或该仓库需要登录。"
+        case "ref_not_found": return "未找到指定的分支或标签。"
+        case "destination_conflict": return "目标项目冲突，请重新发起 Clone。"
+        case "cancelled": return "Clone 已取消。"
+        case "network_error": return "无法访问 Git 仓库，请检查网络后重试。"
+        case "io_error": return "无法写入项目目录：\(message)"
+        default: return message
+        }
+    }
+}
+
+private extension String {
+    var nilIfEmpty: String? {
+        let value = trimmingCharacters(in: .whitespacesAndNewlines)
+        return value.isEmpty ? nil : value
     }
 }
 

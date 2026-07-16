@@ -276,6 +276,88 @@ final class MultiConversationTests: XCTestCase {
     }
 
     @MainActor
+    func testPublicGitCloneSelectsProjectWithoutCreatingConversationOrWorktree() async throws {
+        let projectsRoot = "/tmp/agentkit-public-clone"
+        let capabilities = RuntimeCapabilitySnapshot(
+            capabilities: [
+                "public_git_clone_v1": true,
+                "workspace_execution_policy_v1": true,
+                "managed_worktree_v1": true,
+            ],
+            projectsRoot: projectsRoot
+        )
+        let client = MultiSessionRuntimeClient(
+            capabilitySnapshot: capabilities,
+            activity: RuntimeActivitySnapshot(sessions: []),
+            clonedRepo: ClonedRepo(
+                requestID: "clone-1",
+                workspacePath: projectsRoot + "/repo1",
+                workspaceRef: RuntimeWorkspaceReference(root: "workspace", rel: "repo1")
+            )
+        )
+        let store = WorkspaceStore(
+            client: client,
+            localStateStore: InMemoryConversationLocalStateStore()
+        )
+        await store.refreshRuntimeState()
+        store.beginDraft()
+        store.selectWorkspace(Workspace(
+            url: URL(fileURLWithPath: "/tmp/existing-project"),
+            branch: "main"
+        ))
+        store.setDraftManagedWorktreeEnabled(true)
+
+        let request = PublicGitCloneRequest(
+            requestID: "clone-1",
+            url: "https://github.com/octocat/Hello-World.git",
+            ref: "master",
+            name: "repo",
+            depth: 1
+        )
+        try await store.cloneAndSelectProject(request: request)
+
+        XCTAssertEqual(client.cloneRequests, [request])
+        XCTAssertEqual(store.draft?.workspace?.url.path, projectsRoot + "/repo1")
+        XCTAssertFalse(store.draft?.usesManagedWorktree ?? true)
+        XCTAssertTrue(client.createRequests.isEmpty)
+        XCTAssertTrue(store.listViewModel.conversations.isEmpty)
+    }
+
+    @MainActor
+    func testPublicGitCloneRejectsWorkspaceOutsideDeclaredProjectsRoot() async throws {
+        let capabilities = RuntimeCapabilitySnapshot(
+            capabilities: ["public_git_clone_v1": true],
+            projectsRoot: "/tmp/declared-projects"
+        )
+        let client = MultiSessionRuntimeClient(
+            capabilitySnapshot: capabilities,
+            activity: RuntimeActivitySnapshot(sessions: []),
+            clonedRepo: ClonedRepo(workspacePath: "/tmp/outside/repo")
+        )
+        let store = WorkspaceStore(
+            client: client,
+            localStateStore: InMemoryConversationLocalStateStore()
+        )
+        await store.refreshRuntimeState()
+        store.beginDraft()
+
+        do {
+            try await store.cloneAndSelectProject(request: PublicGitCloneRequest(
+                requestID: "clone-outside",
+                url: "https://github.com/octocat/Hello-World.git"
+            ))
+            XCTFail("Expected an invalid Runtime response")
+        } catch let error as RuntimeHTTPError {
+            guard case .invalidResponse = error else {
+                return XCTFail("Unexpected error: \(error)")
+            }
+        }
+
+        XCTAssertNil(store.draft?.workspace)
+        XCTAssertTrue(client.createRequests.isEmpty)
+    }
+
+    @MainActor
     func testPersistedDraftRestoresWorkspaceAndStableProvisioningIdentity() throws {
         let localState = InMemoryConversationLocalStateStore()
         let draftID = UUID()
@@ -1152,10 +1234,12 @@ private final class MultiSessionRuntimeClient: RuntimeClient, @unchecked Sendabl
     private var activeConversations: [ConversationRef]
     private var archivedConversations: [ConversationRef]
     private var queuedActivities: [RuntimeActivitySnapshot] = []
+    private let clonedRepo: ClonedRepo?
     private(set) var capabilitySnapshotRequestCount = 0
     private(set) var activitySnapshotRequestCount = 0
     private(set) var activitySnapshotCursors: [Int64?] = []
     private(set) var createRequests: [CreateConversationRequest] = []
+    private(set) var cloneRequests: [PublicGitCloneRequest] = []
     private(set) var removeManagedWorktreeRequests: [ManagedWorktreeRemoveRequest] = []
     private(set) var deletedConversationIDs: [String] = []
     private(set) var archivedConversationIDs: [String] = []
@@ -1168,13 +1252,15 @@ private final class MultiSessionRuntimeClient: RuntimeClient, @unchecked Sendabl
         capabilitySnapshot: RuntimeCapabilitySnapshot? = nil,
         activity: RuntimeActivitySnapshot? = nil,
         activeConversations: [ConversationRef] = [],
-        archivedConversations: [ConversationRef] = []
+        archivedConversations: [ConversationRef] = [],
+        clonedRepo: ClonedRepo? = nil
     ) {
         self.connectDelays = connectDelays
         self.capabilitySnapshot = capabilitySnapshot
         self.activity = activity
         self.activeConversations = activeConversations
         self.archivedConversations = archivedConversations
+        self.clonedRepo = clonedRepo
     }
 
     func channel(for id: String) -> MultiSessionChannelDouble {
@@ -1226,6 +1312,11 @@ private final class MultiSessionRuntimeClient: RuntimeClient, @unchecked Sendabl
 
     func createConversation(workspacePath: String) async throws -> ConversationRef {
         ConversationRef(id: UUID().uuidString, workspacePath: workspacePath)
+    }
+    func cloneRepo(request: PublicGitCloneRequest) async throws -> ClonedRepo {
+        cloneRequests.append(request)
+        guard let clonedRepo else { throw TestError.unavailable }
+        return clonedRepo
     }
     func createConversation(request: CreateConversationRequest) async throws -> ConversationRef {
         createRequests.append(request)

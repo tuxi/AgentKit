@@ -62,6 +62,8 @@ public struct AgentCapabilityFlags: OptionSet, Sendable {
     public static let managedWorktree = AgentCapabilityFlags(rawValue: 1 << 14)
     /// Runtime persistently partitions conversations into active and archived lists.
     public static let conversationArchive = AgentCapabilityFlags(rawValue: 1 << 15)
+    /// Runtime can safely clone unauthenticated public HTTPS Git repositories.
+    public static let publicGitClone = AgentCapabilityFlags(rawValue: 1 << 16)
 
     // MARK: - Presets
 
