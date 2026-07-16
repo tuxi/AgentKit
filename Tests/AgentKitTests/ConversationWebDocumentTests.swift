@@ -334,6 +334,86 @@ final class ConversationWebDocumentTests: XCTestCase {
     }
 
     @MainActor
+    func testStreamingTailDoesNotRebuildAssetIndexOrStableToolBlocks() {
+        let tools = (0..<80).map { index in
+            ToolNodePayload(
+                callID: "tool-\(index)",
+                toolName: "read_file",
+                args: .object(["path": .string("Sources/File\(index).swift")]),
+                status: .completed,
+                output: "Read Sources/File\(index).swift",
+                assets: [AgentAssetRef(
+                    id: "asset-\(index)",
+                    kind: "file",
+                    displayName: "File\(index).swift",
+                    workspaceRelativePath: "Sources/File\(index).swift",
+                    absolutePath: "/tmp/project/Sources/File\(index).swift",
+                    sourceCallID: "tool-\(index)"
+                )]
+            )
+        }
+        func turn(tail: String) -> ConversationTurn {
+            ConversationTurn(
+                id: "live-turn",
+                userPrompt: MessageNodePayload(role: .user, text: "Inspect files"),
+                blocks: tools.map {
+                    .toolGroup(ToolGroup(id: $0.callID, tools: [$0]))
+                } + [.text(
+                    id: "streaming-tail",
+                    MessageNodePayload(role: .assistant, text: tail, isStreaming: true)
+                )],
+                footer: nil,
+                isLive: true
+            )
+        }
+
+        let registry = ConversationWebActionRegistry()
+        let firstSnapshot = RuntimeSnapshot(timeline: [], turns: [turn(tail: "A")])
+        var assetIndexBuilds = 0
+        registry.beginRevision(1)
+        let first = ConversationWebDocumentBuilder.build(
+            snapshot: firstSnapshot,
+            conversationID: "asset-stress",
+            revision: 1,
+            assetIndexFactory: {
+                assetIndexBuilds += 1
+                return AssetIndex(turn: $0)
+            },
+            registerAction: registry.register
+        )
+        registry.finishRevision(retaining: ConversationWebDocumentBuilder.actionTokens(in: first))
+        XCTAssertEqual(assetIndexBuilds, 1)
+
+        assetIndexBuilds = 0
+        let secondSnapshot = RuntimeSnapshot(
+            timeline: [],
+            turns: [turn(tail: String(repeating: "streaming token ", count: 2_000))]
+        )
+        registry.beginRevision(2)
+        let second = ConversationWebDocumentBuilder.build(
+            snapshot: secondSnapshot,
+            conversationID: "asset-stress",
+            revision: 2,
+            reusing: .init(
+                snapshot: firstSnapshot,
+                document: first,
+                extensionContributions: [:]
+            ),
+            assetIndexFactory: {
+                assetIndexBuilds += 1
+                return AssetIndex(turn: $0)
+            },
+            registerAction: registry.register
+        )
+        registry.finishRevision(retaining: ConversationWebDocumentBuilder.actionTokens(in: second))
+
+        XCTAssertEqual(assetIndexBuilds, 0)
+        XCTAssertEqual(second.turns[0].blocks.dropLast(), first.turns[0].blocks.dropLast())
+        XCTAssertTrue(second.turns[0].blocks.last?.inlineActions.isEmpty == true)
+        XCTAssertTrue(second.turns[0].blocks.last?.codeCopyActionIDs.isEmpty == true)
+    }
+
+    @MainActor
     func testOpaqueActionRegistryKeepsStableTokensAndRejectsExpiredActions() {
         let registry = ConversationWebActionRegistry()
         let firstAction = ConversationWebAction.transcript(

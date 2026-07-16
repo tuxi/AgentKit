@@ -153,6 +153,7 @@ enum ConversationWebDocumentBuilder {
         revision: UInt64? = nil,
         extensionContributions: [String: [TimelineWebContribution]] = [:],
         reusing reuseSource: ReuseSource? = nil,
+        assetIndexFactory: (ConversationTurn) -> AssetIndex = { AssetIndex(turn: $0) },
         registerAction: ((ConversationWebAction) -> String)? = nil
     ) -> ConversationWebDocument {
         ConversationWebDocument(
@@ -164,17 +165,25 @@ enum ConversationWebDocumentBuilder {
             todos: [],
             turns: snapshot.turns.enumerated().map { index, turn in
                 let contributions = extensionContributions[turn.id] ?? []
-                if let reuseSource,
-                   index < reuseSource.snapshot.turns.count,
-                   index < reuseSource.document.turns.count,
-                   reuseSource.snapshot.turns[index] == turn,
-                   reuseSource.document.turns[index].id == turn.id,
-                   reuseSource.extensionContributions[turn.id] ?? [] == contributions {
-                    return reuseSource.document.turns[index]
+                let previousTurn = reuseSource.flatMap {
+                    index < $0.snapshot.turns.count ? $0.snapshot.turns[index] : nil
+                }
+                let previousDocumentTurn = reuseSource.flatMap {
+                    index < $0.document.turns.count ? $0.document.turns[index] : nil
+                }
+                if previousTurn == turn,
+                   previousDocumentTurn?.id == turn.id,
+                   (reuseSource?.extensionContributions[turn.id] ?? []) == contributions {
+                    return previousDocumentTurn!
                 }
                 return makeTurn(
                     turn,
                     extensionContributions: contributions,
+                    previousTurn: previousTurn?.id == turn.id ? previousTurn : nil,
+                    previousDocumentTurn: previousDocumentTurn?.id == turn.id
+                        ? previousDocumentTurn
+                        : nil,
+                    assetIndexFactory: assetIndexFactory,
                     registerAction: registerAction
                 )
             },
@@ -209,9 +218,21 @@ enum ConversationWebDocumentBuilder {
     private static func makeTurn(
         _ turn: ConversationTurn,
         extensionContributions: [TimelineWebContribution],
+        previousTurn: ConversationTurn?,
+        previousDocumentTurn: ConversationWebDocument.Turn?,
+        assetIndexFactory: (ConversationTurn) -> AssetIndex,
         registerAction: ((ConversationWebAction) -> String)?
     ) -> ConversationWebDocument.Turn {
-        let assets = turnAssets(turn)
+        var cachedAssetIndex: AssetIndex?
+        func assetIndex() -> AssetIndex {
+            if let cachedAssetIndex { return cachedAssetIndex }
+            let index = assetIndexFactory(turn)
+            cachedAssetIndex = index
+            return index
+        }
+        // Turn-level asset actions are hidden while live. Defer collecting and
+        // deduplicating the entire turn until the terminal revision.
+        let assets = turn.isLive ? [] : turnAssets(turn)
         let copyActionID = turn.isLive ? nil : registerAction.map { registerAction in
             let copyText = TranscriptCache.shared.transcript(
                 for: turn,
@@ -225,8 +246,24 @@ enum ConversationWebDocumentBuilder {
         return ConversationWebDocument.Turn(
             id: turn.id,
             userPrompt: turn.userPrompt?.text,
-            blocks: turn.blocks.map {
-                makeBlock($0, turn: turn, registerAction: registerAction)
+            blocks: turn.blocks.enumerated().map { blockIndex, block in
+                let previousBlock = previousTurn.flatMap {
+                    blockIndex < $0.blocks.count ? $0.blocks[blockIndex] : nil
+                }
+                let previousWebBlock = previousDocumentTurn.flatMap {
+                    blockIndex < $0.blocks.count ? $0.blocks[blockIndex] : nil
+                }
+                if previousBlock == block, previousWebBlock?.id == block.id {
+                    return previousWebBlock!
+                }
+                return makeBlock(
+                    block,
+                    turn: turn,
+                    previousBlock: previousBlock,
+                    previousWebBlock: previousWebBlock,
+                    assetIndex: assetIndex,
+                    registerAction: registerAction
+                )
             },
             todos: turn.todos.map {
                 ConversationWebDocument.Todo(
@@ -311,6 +348,9 @@ enum ConversationWebDocumentBuilder {
     private static func makeBlock(
         _ block: TurnBlock,
         turn: ConversationTurn,
+        previousBlock: TurnBlock?,
+        previousWebBlock: ConversationWebDocument.Block?,
+        assetIndex: () -> AssetIndex,
         registerAction: ((ConversationWebAction) -> String)?
     ) -> ConversationWebDocument.Block {
         switch block {
@@ -326,13 +366,17 @@ enum ConversationWebDocumentBuilder {
                 childStreamKind: nil,
                 actionID: nil,
                 actionTooltip: nil,
-                inlineActions: inlineActions(
+                // The Web streaming player deliberately hides exact-text
+                // actions until completion. Avoid scanning the growing text
+                // and rebuilding AssetIndex for data the DOM will discard.
+                inlineActions: payload.isStreaming ? [] : inlineActions(
                     text: payload.text,
                     annotations: payload.textAnnotations,
-                    turn: turn,
+                    turnID: turn.id,
+                    assetIndex: assetIndex,
                     registerAction: registerAction
                 ),
-                codeCopyActionIDs: codeBlockCopyActions(
+                codeCopyActionIDs: payload.isStreaming ? [] : codeBlockCopyActions(
                     in: payload.text,
                     turnID: turn.id,
                     registerAction: registerAction
@@ -341,7 +385,27 @@ enum ConversationWebDocumentBuilder {
 
         case .toolGroup(let group):
             let groupPresentation = ToolTranscriptPresenter.groupPresentation(for: group)
-            let tools = group.tools.map { tool in
+            let previousTools: [ToolNodePayload] = if case .toolGroup(let previousGroup) = previousBlock {
+                previousGroup.tools
+            } else {
+                []
+            }
+            let previousWebTools = previousWebBlock?.kind == .toolGroup
+                ? previousWebBlock?.tools ?? []
+                : []
+            let tools = group.tools.enumerated().map { toolIndex, tool -> ConversationWebDocument.Tool in
+                if toolIndex < previousTools.count,
+                   toolIndex < previousWebTools.count,
+                   previousTools[toolIndex] == tool,
+                   previousWebTools[toolIndex].id == tool.callID {
+                    return previousWebTools[toolIndex]
+                }
+                let previousTool = toolIndex < previousTools.count
+                    ? previousTools[toolIndex]
+                    : nil
+                let previousWebTool = toolIndex < previousWebTools.count
+                    ? previousWebTools[toolIndex]
+                    : nil
                 let presentation = ToolTranscriptPresenter.presentation(for: tool)
                 let arguments = tool.args.flatMap(formattedJSON)
                 let output = tool.output.isEmpty ? nil : tool.output
@@ -355,7 +419,9 @@ enum ConversationWebDocumentBuilder {
                     changeSummary: presentation.changeSummary,
                     arguments: arguments,
                     output: output,
-                    artifactActionID: tool.artifact.flatMap { _ in
+                    artifactActionID: previousTool?.artifact == tool.artifact
+                        ? previousWebTool?.artifactActionID
+                        : tool.artifact.flatMap { _ in
                         registerAction.map {
                             $0(.transcript(
                                 turnID: turn.id,
@@ -363,9 +429,11 @@ enum ConversationWebDocumentBuilder {
                             ))
                         }
                     },
-                    assetActions: tool.assets.compactMap { asset in
+                    assetActions: previousTool?.assets == tool.assets
+                        ? previousWebTool?.assetActions ?? []
+                        : tool.assets.compactMap { asset in
                         guard let registerAction else { return nil }
-                        let reference = AssetIndex(turn: turn).reference(forStructuredAsset: asset)
+                        let reference = assetIndex().reference(forStructuredAsset: asset)
                         return ConversationWebDocument.ActionItem(
                             title: asset.displayName ?? reference.display,
                             actionID: registerAction(.transcript(
@@ -376,25 +444,31 @@ enum ConversationWebDocumentBuilder {
                             focusID: "tool:\(tool.callID):asset:\(reference.id)"
                         )
                     },
-                    copyOutputActionID: tool.output.isEmpty ? nil : registerAction.map {
+                    copyOutputActionID: tool.status == .running || tool.output.isEmpty
+                        ? nil
+                        : registerAction.map {
                         $0(.transcript(
                             turnID: turn.id,
                             action: .copyBlock(text: tool.output)
                         ))
                     },
-                    argumentActions: arguments.map {
+                    argumentActions: previousTool?.args == tool.args
+                        ? previousWebTool?.argumentActions ?? []
+                        : arguments.map {
                         inlineActions(
                             text: $0,
                             annotations: [],
-                            turn: turn,
+                            turnID: turn.id,
+                            assetIndex: assetIndex,
                             registerAction: registerAction
                         )
                     } ?? [],
-                    outputActions: output.map {
+                    outputActions: tool.status == .running ? [] : output.map {
                         inlineActions(
                             text: $0,
                             annotations: [],
-                            turn: turn,
+                            turnID: turn.id,
+                            assetIndex: assetIndex,
                             registerAction: registerAction
                         )
                     } ?? []
@@ -530,11 +604,12 @@ enum ConversationWebDocumentBuilder {
     private static func inlineActions(
         text: String,
         annotations: [AgentTextAnnotation],
-        turn: ConversationTurn,
+        turnID: String,
+        assetIndex: () -> AssetIndex,
         registerAction: ((ConversationWebAction) -> String)?
     ) -> [ConversationWebDocument.InlineAction] {
         guard let registerAction else { return [] }
-        let assetIndex = AssetIndex(turn: turn)
+        let assetIndex = assetIndex()
         var consumedKeys = Set<String>()
         let resolvedAnnotations = annotations.resolvingNearbyLineNumberAssets(
             assetIndex: assetIndex
@@ -562,7 +637,7 @@ enum ConversationWebDocumentBuilder {
                 return ConversationWebDocument.InlineAction(
                     text: nsText.substring(with: match.range),
                     actionID: registerAction(.transcript(
-                        turnID: turn.id,
+                        turnID: turnID,
                         action: .openAsset(match.reference)
                     )),
                     tooltip: match.reference.target
