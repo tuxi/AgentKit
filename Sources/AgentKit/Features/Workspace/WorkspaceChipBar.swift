@@ -48,12 +48,16 @@ struct WorkspaceChipBar: View {
         ) { result in
             handleImport(result)
         }
-        .alert("New Project", isPresented: $isNewProjectPresented) {
+        .alert("为项目命名", isPresented: $isNewProjectPresented) {
             TextField("Project name", text: $newProjectName)
-            Button("Cancel", role: .cancel) { }
-            Button("Create") { createProject() }
+            Button("取消", role: .cancel) { }
+            Button("创建") { createProject() }
         } message: {
-            Text("在 Documents 下创建一个新项目目录。")
+            #if os(macOS)
+            Text("将在文稿中创建一个新项目，并初始化 Git 仓库。")
+            #else
+            Text("将在 Documents 下创建一个新项目目录。")
+            #endif
         }
         .alert("导入文件夹", isPresented: $isImportNamePresented) {
             TextField("项目名", text: $importName)
@@ -288,23 +292,33 @@ struct WorkspaceChipBar: View {
                     }
                 }
                 Divider()
-                Button {
-                    newProjectName = ""
-                    isNewProjectPresented = true
+                Menu {
+                    Button {
+                        newProjectName = "New Project"
+                        isNewProjectPresented = true
+                    } label: {
+                        Label("新建空白项目…", systemImage: "folder.badge.plus")
+                    }
+                    Button {
+                        isImporterPresented = true
+                    } label: {
+                        #if os(macOS)
+                        Label("使用现有文件夹…", systemImage: "folder")
+                        #else
+                        Label("导入现有文件夹…", systemImage: "square.and.arrow.down")
+                        #endif
+                    }
                 } label: {
-                    Label("New Project…", systemImage: "folder.badge.plus")
+                    Label("新建项目", systemImage: "plus")
                 }
-                Button {
-                    isImporterPresented = true
-                } label: {
-                    Label("Import Folder…", systemImage: "square.and.arrow.down")
-                }
+                #if os(iOS)
                 Button {
                     gitHubURL = ""
                     isGitHubPromptPresented = true
                 } label: {
                     Label("Import from GitHub…", systemImage: "arrow.down.circle")
                 }
+                #endif
             } else {
                 // macOS：无工作区根 → 任意文件夹选择。
                 Divider()

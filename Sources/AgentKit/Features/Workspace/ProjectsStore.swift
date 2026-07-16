@@ -2,11 +2,12 @@
 //  ProjectsStore.swift
 //  AgentKit
 //
-//  端侧工作区根（iOS = 沙盒 Documents）下的「项目」目录管理。
+//  端侧工作区根（Documents）下的「项目」目录管理。
 //  与 AgentRuntime 传给 MobileStart 的 workspaceDir 对齐 —— 项目即 Documents 的子目录，
 //  内嵌 runtime 对其天然有读写权（无需 security scope），重装后由 runtime 按相对路径 re-anchor。
 //
-//  macOS：无单一工作区根（root == nil）→ isAvailable == false，沿用任意文件夹选择。
+//  macOS：新建项目位于当前用户的 Documents，并在创建后执行 `git init`。
+//  任意位置的现有项目仍通过文件夹选择器原地打开。
 //
 
 import Foundation
@@ -15,7 +16,7 @@ import Foundation
 @Observable
 public final class ProjectsStore {
 
-    /// 工作区根目录。iOS = Documents；macOS = nil（表示用任意文件夹选择，不走项目列表）。
+    /// 新建项目的根目录。默认为当前用户的 Documents。
     public let root: URL?
 
     /// 根下的项目子目录（按名称不区分大小写排序）。
@@ -26,13 +27,10 @@ public final class ProjectsStore {
         reload()
     }
 
-    /// 平台默认根：iOS 取 Documents，与 runtime 的 workspaceDir 一致。
+    /// 平台默认根：Documents。iOS 与内嵌 Runtime 的 workspaceDir 一致；
+    /// macOS 使用用户可直接在 Finder 中访问的文稿目录。
     public static var defaultRoot: URL? {
-        #if os(iOS)
         return FileManager.default.urls(for: .documentDirectory, in: .userDomainMask).first
-        #else
-        return nil
-        #endif
     }
 
     /// 是否启用「项目列表」模式（仅在有工作区根时）。
@@ -44,6 +42,11 @@ public final class ProjectsStore {
     /// 故在新建草稿、视图出现、创建项目后调用以保持新鲜。
     public func reload() {
         guard let root else { projects = []; return }
+        #if os(macOS)
+        // macOS 的 Documents 是用户通用目录，不能把其中每个子目录都当成
+        // CodeAgent 项目。新建/打开的项目由 RecentWorkspacesStore 持久化。
+        projects = []
+        #else
         let fm = FileManager.default
         let urls = (try? fm.contentsOfDirectory(
             at: root,
@@ -54,20 +57,30 @@ public final class ProjectsStore {
             .filter { (try? $0.resourceValues(forKeys: [.isDirectoryKey]).isDirectory) == true }
             .sorted { $0.lastPathComponent.localizedCaseInsensitiveCompare($1.lastPathComponent) == .orderedAscending }
             .map { Workspace(url: $0) }
+        #endif
     }
 
     // MARK: - Creation
 
     /// 在根下创建新项目目录并返回对应 Workspace。
-    /// 名称非法 / 已存在 / 无根 时抛 `ProjectsError`。
+    /// 若同名路径已存在，依次追加 `1`、`2`……，不覆盖任何现有内容。
+    /// macOS 创建后立即执行 `git init`；iOS 仍只创建沙盒目录。
     @discardableResult
     public func createProject(named rawName: String) throws -> Workspace {
         guard let root else { throw ProjectsError.noRoot }
         let name = try Self.validatedName(rawName)
-        let dir = root.appendingPathComponent(name, isDirectory: true)
+        let dir = Self.uniqueProjectDestination(for: name, in: root)
         let fm = FileManager.default
-        guard !fm.fileExists(atPath: dir.path) else { throw ProjectsError.alreadyExists(name) }
         try fm.createDirectory(at: dir, withIntermediateDirectories: false)
+        #if os(macOS)
+        do {
+            try Self.initializeGitRepository(at: dir)
+        } catch {
+            // 该目录是本次操作刚创建的；git 初始化失败时不留下半成品项目。
+            try? fm.removeItem(at: dir)
+            throw error
+        }
+        #endif
         reload()
         return Workspace(url: dir)
     }
@@ -148,6 +161,77 @@ public final class ProjectsStore {
         }
         return candidate
     }
+
+    /// 空白项目使用无空格数字后缀：Project、Project1、Project2……。
+    private static func uniqueProjectDestination(for name: String, in root: URL) -> URL {
+        let fm = FileManager.default
+        var suffix = 0
+        while true {
+            let component = suffix == 0 ? name : "\(name)\(suffix)"
+            let candidate = root.appendingPathComponent(component, isDirectory: true)
+            if !fm.fileExists(atPath: candidate.path) {
+                return candidate
+            }
+            suffix += 1
+        }
+    }
+
+    #if os(macOS)
+    private static func initializeGitRepository(at directory: URL) throws {
+        // App Sandbox 不允许启动 `/usr/bin/git`（该 shim 会转入 xcrun）。
+        // 直接生成 Git 定义的最小非 bare 仓库结构，与 `git init -b main`
+        // 的持久化结果等价，且不需要子进程或逃离沙盒。
+        let git = directory.appendingPathComponent(".git", isDirectory: true)
+        let fm = FileManager.default
+        do {
+            for relativePath in [
+                "objects/info",
+                "objects/pack",
+                "refs/heads",
+                "refs/tags",
+                "hooks",
+                "info",
+            ] {
+                try fm.createDirectory(
+                    at: git.appendingPathComponent(relativePath, isDirectory: true),
+                    withIntermediateDirectories: true
+                )
+            }
+
+            try "ref: refs/heads/main\n".write(
+                to: git.appendingPathComponent("HEAD"),
+                atomically: true,
+                encoding: .utf8
+            )
+            try """
+                [core]
+                \trepositoryformatversion = 0
+                \tfilemode = true
+                \tbare = false
+                \tlogallrefupdates = true
+                \tignorecase = true
+                \tprecomposeunicode = true
+
+                """.write(
+                    to: git.appendingPathComponent("config"),
+                    atomically: true,
+                    encoding: .utf8
+                )
+            try "Unnamed repository; edit this file 'description' to name the repository.\n".write(
+                to: git.appendingPathComponent("description"),
+                atomically: true,
+                encoding: .utf8
+            )
+            try "# git ls-files --others --exclude-from=.git/info/exclude\n".write(
+                to: git.appendingPathComponent("info/exclude"),
+                atomically: true,
+                encoding: .utf8
+            )
+        } catch {
+            throw ProjectsError.gitInitializationFailed(error.localizedDescription)
+        }
+    }
+    #endif
 }
 
 // MARK: - Errors
@@ -156,12 +240,14 @@ public enum ProjectsError: LocalizedError {
     case noRoot
     case invalidName
     case alreadyExists(String)
+    case gitInitializationFailed(String)
 
     public var errorDescription: String? {
         switch self {
         case .noRoot:               return "当前平台没有工作区根目录。"
         case .invalidName:          return "项目名不能为空，且不能包含「/」或以「.」开头。"
         case .alreadyExists(let n): return "项目「\(n)」已存在。"
+        case .gitInitializationFailed(let detail): return "无法初始化 Git 仓库：\(detail)"
         }
     }
 }

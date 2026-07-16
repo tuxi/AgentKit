@@ -259,7 +259,7 @@ struct DraftComposerPanel: View {
             text: $text,
             height: $composerHeight,
             placeholder: placeholder,
-            isEnabled: isEnabled,
+            isEnabled: true, // 任何时候都应该可以输入内容，但是在isEnabled=false不可以发送
             minHeight: composerMinHeight,
             maxHeight: composerMaxHeight,
             onSend: {
@@ -517,5 +517,203 @@ struct PlanApprovalBar: View {
             .padding(.horizontal, 12)
             .padding(.vertical, 10)
         }
+    }
+}
+
+
+// MARK: - ApprovalBar
+
+/// 文本高度测量 PreferenceKey。
+private struct TextHeightKey: PreferenceKey {
+    static let defaultValue: CGFloat = 0
+    static func reduce(value: inout CGFloat, nextValue: () -> CGFloat) {
+        value = nextValue()
+    }
+}
+
+/// 审批拦截栏 — 显示在输入框上方，阻断 input pipeline。
+/// 对标 Claude Code / Cursor：审批不是消息，而是阻塞输入的状态。
+
+/// v1.2 三态审批作用域。
+private enum ApprovalScope: String, CaseIterable, Hashable {
+    case local = "local"
+    case user = "user"
+    
+    var label: String {
+        switch self {
+        case .local: return "Project (local)"
+        case .user: return "User (global)"
+        }
+    }
+}
+
+// 扩展三态选择的回调
+struct ApprovalBar: View {
+    let request: ApprovalRequest
+    
+    // 三态回调映射图中的按钮
+    let onDeny: () -> Void          // Deny 1
+    let onAlwaysAllow: (String) -> Void    // Always allow 2 — 参数为 scope ("local" | "user")
+    let onAllowOnce: () -> Void      // Allow once 3 ↩
+    
+    @State private var scope: ApprovalScope = .local
+    @State private var contentHeight: CGFloat = 0
+    
+    var body: some View {
+        VStack(spacing: 0) {
+            Divider()
+            
+            VStack(alignment: .leading, spacing: 0) {
+                // 1. 顶部 Header 栏
+                HStack(alignment: .center, spacing: 6) {
+                    // 左侧黄色小圆点指示器
+                    Circle()
+                        .fill(Color.orange)
+                        .frame(width: 6, height: 6)
+                    
+                    Text("Allow CodeAgent to run \(request.displayToolName)?")
+                        .font(.system(size: 13, weight: .semibold))
+                        .foregroundStyle(.primary)
+                    
+                    Spacer()
+                    
+                    // 右侧 scope 选择标签（点击切换）
+                    Menu {
+                        Picker("Scope", selection: $scope) {
+                            ForEach(ApprovalScope.allCases, id: \.self) { s in
+                                Text(s.label).tag(s)
+                            }
+                        }
+                    } label: {
+                        Text(scope.label)
+                            .font(.system(size: 11))
+                            .foregroundStyle(.secondary)
+                            .padding(.horizontal, 6)
+                            .padding(.vertical, 2)
+                            .background(Color.approvalPanelBackground.opacity(0.5))
+                            .cornerRadius(4)
+                    }
+                    .menuStyle(.borderlessButton)
+                    .fixedSize()
+                }
+                .padding(.horizontal, 14)
+                .padding(.vertical, 10)
+                
+                // 2. 中间工具与参数内容区 (类似代码块容器)
+                VStack(alignment: .leading, spacing: 8) {
+                    // MCP 工具：显示 server → tool 解析结果
+                    if request.isMCP, let server = request.mcpServer {
+                        HStack(spacing: 4) {
+                            Text("MCP Server:")
+                                .font(.system(.caption, design: .monospaced))
+                                .foregroundStyle(.tertiary)
+                            Text(server)
+                                .font(.system(.caption, design: .monospaced))
+                                .foregroundStyle(.blue)
+                            Text("→")
+                                .font(.system(.caption, design: .monospaced))
+                                .foregroundStyle(.tertiary)
+                            Text(request.mcpBareToolName)
+                                .font(.system(.caption, design: .monospaced))
+                                .foregroundStyle(.secondary)
+                        }
+                        .frame(maxWidth: .infinity)
+                    }
+                    
+                    if let args = request.toolArgs, case .object(let dict) = args, !dict.isEmpty {
+                        // 测量文本真实高度：≤10行自适应；>10行固定180pt可滚动
+                        ScrollView(.vertical, showsIndicators: true) {
+                            argsText(dict)
+                                .background(GeometryReader { geo in
+                                    Color.clear.preference(
+                                        key: TextHeightKey.self,
+                                        value: geo.size.height
+                                    )
+                                })
+                                .frame(maxWidth: .infinity)
+                        }
+                        .onPreferenceChange(TextHeightKey.self) { contentHeight = $0 }
+                        .frame(height: contentHeight > 0 ? min(contentHeight, 180) : nil)
+                        .animation(.none, value: contentHeight)
+                        
+                    } else if !request.isMCP {
+                        Text("No arguments provided.")
+                            .font(.system(.caption, design: .monospaced))
+                            .foregroundStyle(.tertiary)
+                    }
+                }
+                .padding(12)
+                .background(Color.approvalSecondaryFill)
+                .cornerRadius(6)
+                .padding(.horizontal, 14)
+                
+                // 3. 底部三态按钮操作栏
+                HStack(spacing: 8) {
+                    // Deny 1
+                    Button(action: onDeny) {
+                        Text("Deny ") + Text("1").foregroundStyle(.tertiary)
+                    }
+                    .buttonStyle(.bordered)
+                    .controlSize(.small)
+                    
+                    Spacer()
+                    
+                    // Always allow 2 — MCP 工具显示 server 级提示
+                    Button(action: { onAlwaysAllow(scope.rawValue) }) {
+                        VStack(alignment: .center, spacing: 1) {
+                            Text("Always allow ") + Text("2").foregroundStyle(.tertiary)
+                        }
+                    }
+                    .buttonStyle(.bordered)
+                    .controlSize(.small)
+                    .overlay(alignment: .top) {
+                        if request.isMCP, let server = request.mcpServer {
+                            Text("all from \"\(server)\"")
+                                .font(.system(size: 9))
+                                .foregroundStyle(.tertiary)
+                                .offset(CGSizeMake(0, 20))
+                        }
+                    }
+                    
+                    // Allow once 3 ↩ (高亮主按钮)
+                    Button(action: onAllowOnce) {
+                        HStack(spacing: 4) {
+                            Text("Allow once ") + Text("3 ⌘↩").foregroundStyle(.primary.opacity(0.7))
+                        }
+                    }
+                    .buttonStyle(.borderedProminent)
+                    .controlSize(.small)
+                    .tint(.primary)
+                }
+                .padding(.horizontal, 14)
+                .padding(.vertical, 12)
+            }
+            .background(Color.approvalPanelBackground)
+            .layerBorder()
+            .padding(12)
+        }
+    }
+    
+    private func argsSummary(_ dict: [String: JSONValue]) -> String {
+        dict.map { "\($0.key): \($0.value.stringValue)" }.joined(separator: "\n")
+    }
+    
+    private func argsText(_ dict: [String: JSONValue]) -> some View {
+        Text(argsSummary(dict))
+        //            .textSelection(.enabled)
+            .font(.system(.caption, design: .monospaced))
+            .foregroundStyle(.secondary)
+            .frame(maxWidth: .infinity, alignment: .leading)
+    }
+}
+
+// 辅助扩展：便于快速绘制带圆角的细边框
+extension View {
+    func layerBorder() -> some View {
+        self.overlay(
+            RoundedRectangle(cornerRadius: 8)
+                .stroke(Color.gray.opacity(0.2), lineWidth: 1)
+        )
+        .cornerRadius(8)
     }
 }

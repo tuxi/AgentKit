@@ -70,6 +70,20 @@ public struct ConversationListView: View {
         var groups: [ConversationWorkspaceGroup] = []
         var indices: [String: Int] = [:]
 
+        // Runtime 只会返回已创建的 Conversation。将本地项目目录也纳入投影，
+        // 使刚创建但尚未发送首条消息的空项目仍能出现在侧边栏。
+        for workspace in visibleProjectWorkspaces {
+            let descriptor = ConversationWorkspaceGroup.Descriptor(workspace: workspace)
+            guard indices[descriptor.id] == nil else { continue }
+            indices[descriptor.id] = groups.count
+            groups.append(ConversationWorkspaceGroup(
+                id: descriptor.id,
+                title: descriptor.title,
+                systemImage: descriptor.systemImage,
+                conversations: []
+            ))
+        }
+
         for conversation in filteredConversations {
             let descriptor = ConversationWorkspaceGroup.Descriptor(conversation: conversation)
             if let index = indices[descriptor.id] {
@@ -85,6 +99,22 @@ public struct ConversationListView: View {
             }
         }
         return groups
+    }
+
+    private var visibleProjectWorkspaces: [Workspace] {
+        let query = searchText.trimmingCharacters(in: .whitespacesAndNewlines)
+        var result: [Workspace] = []
+        var seenPaths: Set<String> = []
+
+        for workspace in store.recentWorkspaces.workspaces + store.projects.projects {
+            let path = workspace.url.standardizedFileURL.path
+            guard seenPaths.insert(path).inserted else { continue }
+            guard query.isEmpty || workspace.name.localizedCaseInsensitiveContains(query) else {
+                continue
+            }
+            result.append(workspace)
+        }
+        return result
     }
 
     #if os(iOS)
@@ -188,7 +218,8 @@ public struct ConversationListView: View {
             if !viewModel.isLoading,
                filteredConversations.isEmpty,
                (!store.supportsConversationArchive || filteredArchivedConversations.isEmpty),
-               !searchText.isEmpty {
+               !searchText.isEmpty,
+               conversationGroups.isEmpty {
                 ContentUnavailableView.search(text: searchText)
                     .listRowSeparator(.hidden)
                     .listRowBackground(Color.clear)
@@ -338,6 +369,17 @@ public struct ConversationListView: View {
                             }
                             .disabled(!canArchive(ref))
                         }
+                        #if os(macOS)
+                        Divider()
+                        Button {
+                            if let workspacePath = store.selectedConversation?.workspacePath {
+                                // 在 Finder 中定位并高亮选中该文件
+                                NSWorkspace.shared.selectFile(workspacePath, inFileViewerRootedAtPath: "")
+                            }
+                        } label: {
+                            Label("在Finder中显示", systemImage: "folder")
+                        }
+                        #endif
                         Divider()
                         Button(role: .destructive) {
                             deletionTarget = ref
@@ -648,6 +690,12 @@ private struct ConversationWorkspaceGroup: Identifiable {
             // also preserves the legacy workspace/path grouping fallback.
             id = conversation.workspaceGroupingID
             title = conversation.workspaceGroupingName
+            systemImage = "folder"
+        }
+
+        init(workspace: Workspace) {
+            id = "path:\(workspace.url.standardizedFileURL.path)"
+            title = workspace.name
             systemImage = "folder"
         }
     }

@@ -239,6 +239,43 @@ final class MultiConversationTests: XCTestCase {
     }
 
     @MainActor
+    func testCreatingProjectDoesNotCreateConversationOrCarryWorktreeOptIn() async throws {
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent("agentkit-new-project-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+
+        let capabilities = RuntimeCapabilitySnapshot(capabilities: [
+            "workspace_execution_policy_v1": true,
+            "managed_worktree_v1": true,
+        ])
+        let client = MultiSessionRuntimeClient(
+            capabilitySnapshot: capabilities,
+            activity: RuntimeActivitySnapshot(sessions: [])
+        )
+        let store = WorkspaceStore(
+            client: client,
+            localStateStore: InMemoryConversationLocalStateStore(),
+            projects: ProjectsStore(root: root)
+        )
+        await store.refreshRuntimeState()
+        store.beginDraft()
+        store.selectWorkspace(Workspace(
+            url: URL(fileURLWithPath: "/tmp/existing-project"),
+            branch: "main"
+        ))
+        store.setDraftManagedWorktreeEnabled(true)
+        XCTAssertTrue(store.draft?.usesManagedWorktree == true)
+
+        try store.createAndSelectProject(named: "New Project")
+
+        XCTAssertEqual(store.draft?.workspace?.url.lastPathComponent, "New Project")
+        XCTAssertFalse(store.draft?.usesManagedWorktree ?? true)
+        XCTAssertTrue(client.createRequests.isEmpty)
+        XCTAssertTrue(store.listViewModel.conversations.isEmpty)
+    }
+
+    @MainActor
     func testPersistedDraftRestoresWorkspaceAndStableProvisioningIdentity() throws {
         let localState = InMemoryConversationLocalStateStore()
         let draftID = UUID()

@@ -70,11 +70,10 @@ public final class WorkspaceStore {
     public private(set) var draftNavigationRevision = 0
 
     /// 最近打开的工作区（持久化，供草稿选择/预选）。
-    public let recentWorkspaces = RecentWorkspacesStore()
+    public let recentWorkspaces: RecentWorkspacesStore
 
-    /// 端侧工作区根（iOS = Documents）下的项目目录（供草稿选择 / 新建）。
-    /// macOS 上 `isAvailable == false`，UI 回退到任意文件夹选择。
-    public let projects = ProjectsStore()
+    /// Documents 下的项目目录（供草稿选择 / 新建）。
+    public let projects: ProjectsStore
 
     /// 是否正在准备草稿的工作区（clone / import 进行中）。
     /// 此间 workspace 尚未就绪 → UI 应禁止再选目录、禁止发消息。
@@ -162,10 +161,14 @@ public final class WorkspaceStore {
         onAuthExpired: (@MainActor () async -> Void)? = nil,
         localStateStore: any ConversationLocalStateStore = SQLiteConversationLocalStateStore.shared,
         attentionReadStore: (any ConversationAttentionReadStore)? = nil,
-        onAttentionEvent: (@MainActor (ConversationAttentionEvent) -> Void)? = nil
+        onAttentionEvent: (@MainActor (ConversationAttentionEvent) -> Void)? = nil,
+        recentWorkspaces: RecentWorkspacesStore = RecentWorkspacesStore(),
+        projects: ProjectsStore = ProjectsStore()
     ) {
         self.client = client
         self.localStateStore = localStateStore
+        self.recentWorkspaces = recentWorkspaces
+        self.projects = projects
         self.toolRegistry = toolRegistry
         self.timelineExtensions = timelineExtensions
         self.conversationRendererMode = conversationRendererMode
@@ -502,6 +505,9 @@ public final class WorkspaceStore {
     public func createAndSelectProject(named name: String) throws {
         guard draft != nil else { return }
         let workspace = try projects.createProject(named: name)
+        // 新建项目只初始化主工作区。即使用户之前在另一个项目中
+        // 勾选过 Managed Worktree，也不应将该选择泄漏到新项目。
+        draft?.usesManagedWorktree = false
         selectWorkspace(workspace)
     }
 
@@ -576,7 +582,7 @@ public final class WorkspaceStore {
                     baseRef: current.managedWorktreeBaseRef
                 )
                 : nil
-            let ref = try await client.createConversation(request: CreateConversationRequest(
+            var ref = try await client.createConversation(request: CreateConversationRequest(
                 clientRequestID: current.clientRequestID,
                 workspacePath: workspace.url.path,
                 executionPolicy: current.usesManagedWorktree ? .isolatedWorktree : .sharedWorkspace,
@@ -584,6 +590,7 @@ public final class WorkspaceStore {
                 baseWorkspaceID: workspace.id,
                 worktree: managedRequest
             ))
+            ref.name = firstMessage.trimmingCharacters(in: .whitespacesAndNewlines)
             let vm = supervisor.controller(
                 for: ref,
                 workspace: workspace,
@@ -603,7 +610,6 @@ public final class WorkspaceStore {
                     state.recentModelIDs.insert(model, at: 0)
                 }
             }
-
             // 草稿 → 真实会话
             listViewModel.prepend(ref)
             selectedConversation = ref  // supervisor reuses the connected controller
