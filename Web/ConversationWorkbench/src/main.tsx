@@ -1569,6 +1569,7 @@ function App(): React.JSX.Element {
       setSuspended(suspended: boolean) {
         if (workbenchSuspended === suspended) return;
         workbenchSuspended = suspended;
+        document.documentElement.classList.toggle("workbench-suspended", suspended);
         if (suspended) {
           if (document.activeElement instanceof HTMLElement) {
             suspendedFocusID = document.activeElement.dataset.focusId;
@@ -1708,6 +1709,28 @@ function App(): React.JSX.Element {
     }, 0);
     return () => window.clearTimeout(revealTask);
   }, [conversation]);
+
+  useEffect(() => {
+    const hideTasks = new Map<HTMLElement, number>();
+    const revealHorizontalScrollbar = (event: Event) => {
+      const target = event.target instanceof HTMLElement
+        ? event.target.closest<HTMLElement>(".overflow-frame")
+        : null;
+      if (!target || target.scrollWidth <= target.clientWidth + 1) return;
+      target.classList.add("is-horizontal-scrolling");
+      const previous = hideTasks.get(target);
+      if (previous !== undefined) window.clearTimeout(previous);
+      hideTasks.set(target, window.setTimeout(() => {
+        target.classList.remove("is-horizontal-scrolling");
+        hideTasks.delete(target);
+      }, 650));
+    };
+    document.addEventListener("scroll", revealHorizontalScrollbar, true);
+    return () => {
+      document.removeEventListener("scroll", revealHorizontalScrollbar, true);
+      hideTasks.forEach((task) => window.clearTimeout(task));
+    };
+  }, []);
 
   if (!conversation) {
     return <main className="conversation-shell" aria-label="Conversation" aria-busy="true" />;

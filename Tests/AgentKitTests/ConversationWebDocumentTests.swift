@@ -670,7 +670,7 @@ final class ConversationWebDocumentTests: XCTestCase {
                 callID: "read-\(index)",
                 toolName: "read_file",
                 args: .object(["path": .string("/tmp/file-\(index).swift")]),
-                status: .completed,
+                status: index == 5 ? .running : .completed,
                 output: "contents \(index)",
                 elapsedMs: index * 20
             )
@@ -774,11 +774,16 @@ final class ConversationWebDocumentTests: XCTestCase {
             """
             (() => {
               const frame = document.querySelector('.table-frame');
+              frame?.dispatchEvent(new Event('scroll'));
               return {
                 turnCount: document.querySelectorAll('.turn').length,
                 tableOverflows: Boolean(frame && frame.scrollWidth > frame.clientWidth),
                 tableLabel: document.querySelector('.table-frame .block-frame-label')?.textContent ?? null,
                 codeLanguage: document.querySelector('.code-frame .block-frame-label')?.textContent ?? null,
+                rootFontSize: getComputedStyle(document.documentElement).fontSize,
+                codeOverflowY: document.querySelector('.code-frame') ? getComputedStyle(document.querySelector('.code-frame')).overflowY : null,
+                tableOverflowY: frame ? getComputedStyle(frame).overflowY : null,
+                horizontalScrollbarRevealed: frame?.classList.contains('is-horizontal-scrolling') ?? false,
                 userSelect: getComputedStyle(document.body).userSelect || getComputedStyle(document.body).webkitUserSelect,
                 opacity: getComputedStyle(document.documentElement).opacity,
                 mainLabel: document.querySelector('main').getAttribute('aria-label'),
@@ -793,6 +798,21 @@ final class ConversationWebDocumentTests: XCTestCase {
                 unnamedInteractive: [...document.querySelectorAll('button,a[href],summary,[role="button"]')].filter((element) => !(element.getAttribute('aria-label') || element.textContent?.trim())).length,
                 toolGroupCount: document.querySelectorAll('details.tool-group').length,
                 toolGroupOpen: document.querySelector('details.tool-group')?.open ?? null,
+                runningGroupAnimation: (() => {
+                  const summary = document.querySelector('.tool-group[data-status="running"] > .tool-group-summary');
+                  return summary ? getComputedStyle(summary).animationName : null;
+                })(),
+                runningToolAnimation: (() => {
+                  const summary = document.querySelector('.tool[data-status="running"] > .tool-summary');
+                  return summary ? getComputedStyle(summary).animationName : null;
+                })(),
+                suspendedToolAnimationPaused: (() => {
+                  const summary = document.querySelector('.tool[data-status="running"] > .tool-summary');
+                  window.AgentKitWorkbench.setSuspended(true);
+                  const state = summary ? getComputedStyle(summary).animationPlayState : null;
+                  window.AgentKitWorkbench.setSuspended(false);
+                  return state;
+                })(),
                 toolGroupTitle: document.querySelector('.tool-group-summary')?.textContent ?? null,
                 toolGroupIsCompact: (() => {
                   const group = document.querySelector('details.tool-group');
@@ -836,6 +856,10 @@ final class ConversationWebDocumentTests: XCTestCase {
         XCTAssertEqual(inspection?["tableOverflows"] as? Bool, true)
         XCTAssertEqual(inspection?["tableLabel"] as? String, "table")
         XCTAssertEqual(inspection?["codeLanguage"] as? String, "swift")
+        XCTAssertEqual(inspection?["rootFontSize"] as? String, "14px")
+        XCTAssertEqual(inspection?["codeOverflowY"] as? String, "hidden")
+        XCTAssertEqual(inspection?["tableOverflowY"] as? String, "hidden")
+        XCTAssertEqual(inspection?["horizontalScrollbarRevealed"] as? Bool, true)
         XCTAssertEqual(inspection?["userSelect"] as? String, "text")
         XCTAssertEqual(inspection?["opacity"] as? String, "1")
         XCTAssertEqual(inspection?["mainLabel"] as? String, "Conversation")
@@ -850,6 +874,9 @@ final class ConversationWebDocumentTests: XCTestCase {
         XCTAssertEqual(inspection?["unnamedInteractive"] as? Int, 0)
         XCTAssertEqual(inspection?["toolGroupCount"] as? Int, 1)
         XCTAssertEqual(inspection?["toolGroupOpen"] as? Bool, false)
+        XCTAssertEqual(inspection?["runningGroupAnimation"] as? String, "tool-working-wave")
+        XCTAssertEqual(inspection?["runningToolAnimation"] as? String, "tool-working-wave")
+        XCTAssertEqual(inspection?["suspendedToolAnimationPaused"] as? String, "paused")
         XCTAssertTrue((inspection?["toolGroupTitle"] as? String)?.contains("Read 5 files") == true)
         XCTAssertEqual(inspection?["toolGroupIsCompact"] as? Bool, true)
         XCTAssertEqual(inspection?["toolChromeIsClear"] as? Bool, true)

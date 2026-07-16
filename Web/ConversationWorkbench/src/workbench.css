@@ -12,8 +12,8 @@
   --danger: light-dark(rgb(174 33 33), rgb(255 122 122));
   --code-background: light-dark(rgb(246 246 246), rgb(28 28 28));
   font-family: -apple-system, BlinkMacSystemFont, "SF Pro Text", sans-serif;
-  font-size: 15px;
-  line-height: 1.55;
+  font-size: 14px;
+  line-height: 1.5;
   background: var(--background);
   color: var(--text);
   opacity: 0;
@@ -176,16 +176,40 @@ code {
   position: relative;
   max-width: 100%;
   overflow-x: auto;
+  overflow-y: hidden;
   overscroll-behavior-inline: contain;
+  scrollbar-color: transparent transparent;
+  scrollbar-width: thin;
   border: 1px solid var(--border);
   border-radius: 9px;
   background: var(--code-background);
 }
 
+.overflow-frame::-webkit-scrollbar {
+  width: 0;
+  height: 6px;
+}
+
+.overflow-frame::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+.overflow-frame::-webkit-scrollbar-thumb {
+  border-radius: 999px;
+  background: transparent;
+}
+
+.overflow-frame.is-horizontal-scrolling {
+  scrollbar-color: color-mix(in srgb, var(--secondary) 48%, transparent) transparent;
+}
+
+.overflow-frame.is-horizontal-scrolling::-webkit-scrollbar-thumb {
+  background: color-mix(in srgb, var(--secondary) 48%, transparent);
+}
+
 .block-frame-header {
   position: sticky;
   z-index: 3;
-  top: 0;
   left: 0;
   display: flex;
   width: 100%;
@@ -316,6 +340,36 @@ summary:active {
 .tool-group,
 .tool {
   color: var(--secondary);
+}
+
+@keyframes tool-working-wave {
+  from { background-position: 180% 50%; }
+  to { background-position: -80% 50%; }
+}
+
+/* Running state is conveyed by the existing text itself. This keeps the tool
+   rows transparent and stable while restoring the native shimmer affordance. */
+.tool-group[data-status="running"] > .tool-group-summary,
+.tool[data-status="running"] > .tool-summary {
+  color: transparent;
+  background-image: linear-gradient(
+    90deg,
+    var(--secondary) 0%,
+    var(--secondary) 34%,
+    var(--text) 50%,
+    var(--secondary) 66%,
+    var(--secondary) 100%
+  );
+  background-size: 240% 100%;
+  background-clip: text;
+  -webkit-background-clip: text;
+  -webkit-text-fill-color: transparent;
+  animation: tool-working-wave 1.45s linear infinite;
+}
+
+.workbench-suspended .tool-group[data-status="running"] > .tool-group-summary,
+.workbench-suspended .tool[data-status="running"] > .tool-summary {
+  animation-play-state: paused;
 }
 
 .tool-group > summary::marker,
@@ -789,6 +843,14 @@ summary:active {
     scroll-behavior: auto !important;
     transition-duration: 0s !important;
     transition-delay: 0s !important;
+  }
+
+  .tool-group[data-status="running"] > .tool-group-summary,
+  .tool[data-status="running"] > .tool-summary {
+    color: var(--secondary);
+    background-image: none;
+    -webkit-text-fill-color: currentColor;
+    animation: none;
   }
 }
 
