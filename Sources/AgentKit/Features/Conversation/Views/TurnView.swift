@@ -37,6 +37,10 @@ struct TurnView: View, Equatable {
                 handleTranscriptAction(action)
             }
 
+            if !turn.todos.isEmpty {
+                TodoPanel(todos: turn.todos, isLive: turn.isLive)
+            }
+
             bottomRow(copyText: transcript.copyText)
         }
         .frame(maxWidth: .infinity, alignment: .leading)

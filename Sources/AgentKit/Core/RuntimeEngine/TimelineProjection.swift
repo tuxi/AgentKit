@@ -86,6 +86,8 @@ public struct TimelineProjection: Sendable {
         var userPrompt: MessageNodePayload?
         var blocks: [TurnBlock] = []
         var pendingTools: [ToolNodePayload] = []
+        var plans: [TurnPlan] = []
+        var todos: [TodoItem] = []
         var contextTokens = 0, totalTokens = 0, usageUnits: Int64 = 0, footerElapsed = 0, footerCount = 0
         var hasUsageUnits = false
         var seenInvocationIDs: Set<String> = []
@@ -126,6 +128,14 @@ public struct TimelineProjection: Sendable {
                 blocks.append(.text(id: node.id,
                     MessageNodePayload(role: .assistant, text: p.text, isStreaming: p.isStreaming)))
             case .tool(let p):
+                // `propose_plan` has a dedicated semantic Plan node. Keeping
+                // its raw tool row would show the same proposal twice.
+                let semanticToolName = p.toolName
+                    .lowercased()
+                    .replacingOccurrences(of: "-", with: "_")
+                if semanticToolName == "propose_plan" {
+                    continue
+                }
                 // 隐藏发起了子流入口卡的那张工具卡（详情在入口卡 → 子流查看器里看）。
                 if entryCardCallIDs.contains(p.callID) {
                     continue
@@ -143,6 +153,17 @@ public struct TimelineProjection: Sendable {
                 // 子流入口卡：内嵌在 turn card 中的折叠卡片（Claude Code 式）。
                 flushTools()
                 blocks.append(.childStream(id: node.id, p))
+            case .todo(let items):
+                // A checklist is the state summary for its owning turn. Keep
+                // only the latest revision and render it at that turn's bottom.
+                todos = items
+            case .plan(let plan):
+                flushTools()
+                if let index = plans.firstIndex(where: { $0.id == plan.id }) {
+                    plans[index] = plan
+                } else {
+                    plans.append(plan)
+                }
             case .system(let p):
                 if p.kind == .modelActivity, let phase = p.metadata["phase"] {
                     // Model lifecycle → footer / spinner, never a block.
@@ -163,6 +184,12 @@ public struct TimelineProjection: Sendable {
                         }
                         if let e = p.metadata["elapsedMs"], let v = Int(e) { footerElapsed += v }
                     }
+                } else if p.kind == .modelActivity,
+                          p.metadata["type"] == "todos" {
+                    // The current task plan is projected once through
+                    // RuntimeSnapshot.latestTodos. Do not duplicate its lossy
+                    // status text as an ordinary system block in the turn.
+                    break
                 } else if p.kind == .contextCompact || p.kind == .skillLoaded {
                     // Demoted meta — not rendered in the main flow for now.
                     break
@@ -181,7 +208,8 @@ public struct TimelineProjection: Sendable {
                         hasUsageUnits: hasUsageUnits, elapsedMs: footerElapsed, invocationCount: footerCount)
             : nil
         return ConversationTurn(id: turnUID, userPrompt: userPrompt,
-                                blocks: blocks, footer: footer, isLive: isLive)
+                                blocks: blocks, plans: plans, todos: todos,
+                                footer: footer, isLive: isLive)
     }
 
     /// Collapse adjacent assistant-text blocks when one is a prefix of the other.
@@ -304,6 +332,18 @@ public struct TimelineProjection: Sendable {
             let text = "Approval: \(payload.toolName) — \(statusText)"
             kind = .system(SystemNodePayload(kind: .modelActivity, text: text,
                                               metadata: ["type": "approval", "requestID": payload.requestID]))
+
+        case .todo(let items):
+            kind = .todo(items)
+
+        case .plan(let payload):
+            kind = .plan(TurnPlan(
+                id: payload.planID,
+                requestID: payload.requestID,
+                title: payload.title,
+                content: payload.content,
+                status: payload.status
+            ))
         }
 
         return ExecutionNode(

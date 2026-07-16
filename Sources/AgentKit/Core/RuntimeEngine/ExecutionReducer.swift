@@ -183,9 +183,26 @@ public struct ExecutionReducer: Sendable {
                                        turnID: turnID ?? internalState.currentTurnID ?? "",
                                        ts: ts, graph: &graph)
 
-        // ── Plan Approval (handled at RuntimeEngine level, not in graph) ──
-        case .planApprovalRequest:
-            return []
+        // ── Plan ──
+        case .planApprovalRequest(let turnID, let request):
+            return handlePlan(
+                turnID: turnID ?? request.turnId ?? internalState.currentTurnID ?? "",
+                planID: request.planID,
+                requestID: request.id,
+                title: request.title,
+                content: request.content,
+                status: .pending,
+                ts: ts,
+                graph: &graph
+            )
+        case .planProposed(let turnID, let planID, let content):
+            return handlePlan(turnID: turnID ?? internalState.currentTurnID ?? "",
+                              planID: planID, requestID: nil, title: "Plan",
+                              content: content, status: .pending, ts: ts, graph: &graph)
+        case .planApproved(_, let planID):
+            return resolvePlan(planID: planID, status: .approved, graph: &graph)
+        case .planRejected(_, let planID):
+            return resolvePlan(planID: planID, status: .rejected, graph: &graph)
 
         // ── Approval ──
         case .approvalRequest(let turnID, let request):
@@ -727,11 +744,8 @@ public struct ExecutionReducer: Sendable {
 
     private mutating func handleTodoUpdated(turnID: String, todos: [TodoItem], ts: TimeInterval,
                                              graph: inout ExecutionGraph) -> [NodeID] {
-        let text = todos.map { "[\($0.status.rawValue)] \($0.content)" }.joined(separator: "\n")
         let nodeID = "\(turnID)_todos"
-        let payload = SystemPayload(kind: .modelActivity, text: text,
-                                     metadata: ["type": "todos", "count": String(todos.count)])
-        let node = GraphNode(id: nodeID, kind: .system, payload: .system(payload),
+        let node = GraphNode(id: nodeID, kind: .todo, payload: .todo(todos),
                              status: .completed, timestamp: ts, turnID: turnID)
 
         // Update existing node — don't create duplicate edges (branches)
@@ -739,6 +753,55 @@ public struct ExecutionReducer: Sendable {
             graph.upsertNode(node)
         } else {
             appendNode(node, to: &graph)
+        }
+        return [nodeID]
+    }
+
+    // MARK: - Plan handler
+
+    private mutating func handlePlan(
+        turnID: String,
+        planID: String,
+        requestID: String?,
+        title: String,
+        content: String,
+        status: TurnPlan.Status,
+        ts: TimeInterval,
+        graph: inout ExecutionGraph
+    ) -> [NodeID] {
+        let stablePlanID = planID.isEmpty ? (requestID ?? "\(turnID)_plan") : planID
+        let nodeID = "\(turnID)_plan_\(stablePlanID)"
+        let existing = graph.nodes[nodeID]
+        let existingPayload: PlanExecPayload? = existing.flatMap {
+            guard case .plan(let payload) = $0.payload else { return nil }
+            return payload
+        }
+        let payload = PlanExecPayload(
+            planID: stablePlanID,
+            requestID: requestID ?? existingPayload?.requestID,
+            title: title == "Plan" ? (existingPayload?.title ?? title) : title,
+            content: content.isEmpty ? (existingPayload?.content ?? "") : content,
+            status: existingPayload?.status == .pending ? status : (existingPayload?.status ?? status)
+        )
+        let node = GraphNode(id: nodeID, kind: .plan, payload: .plan(payload),
+                             status: .completed, timestamp: ts, turnID: turnID)
+        if existing == nil { appendNode(node, to: &graph) } else { graph.upsertNode(node) }
+        return [nodeID]
+    }
+
+    private mutating func resolvePlan(
+        planID: String,
+        status: TurnPlan.Status,
+        graph: inout ExecutionGraph
+    ) -> [NodeID] {
+        guard let nodeID = graph.nodes.first(where: { _, node in
+            guard case .plan(let payload) = node.payload else { return false }
+            return payload.planID == planID
+        })?.key else { return [] }
+        graph.updateNode(nodeID) { node in
+            guard case .plan(var payload) = node.payload else { return }
+            payload.status = status
+            node.payload = .plan(payload)
         }
         return [nodeID]
     }

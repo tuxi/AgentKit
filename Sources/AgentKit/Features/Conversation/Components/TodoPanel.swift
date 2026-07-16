@@ -2,7 +2,7 @@
 //  TodoPanel.swift
 //  AgentKit
 //
-//  Sticky todo progress panel — rendered above the timeline.
+//  Turn-owned todo progress panel — rendered at the bottom of its turn.
 //  Shows agent's current task plan with progress indicators.
 //  Auto-hides when empty. Collapsible. Never blocks execution (informational only).
 //
@@ -14,7 +14,13 @@ import SwiftUI
 struct TodoPanel: View {
     let todos: [TodoItem]
 
-    @State private var isExpanded = true
+    @State private var isExpanded: Bool
+
+    init(todos: [TodoItem], isLive: Bool = false) {
+        self.todos = todos
+        let isComplete = !todos.isEmpty && todos.allSatisfy { $0.status == .completed }
+        _isExpanded = State(initialValue: isLive && !isComplete)
+    }
 
     var body: some View {
         if todos.isEmpty { EmptyView() }
@@ -103,7 +109,9 @@ private struct TodoRow: View {
                 .font(.caption2)
                 .foregroundStyle(statusColor)
 
-            Text(todo.activeForm ?? todo.content)
+            Text(todo.status == .inProgress
+                 ? (todo.activeForm ?? todo.content)
+                 : todo.content)
                 .font(.caption2)
                 .foregroundStyle(todo.status == .completed ? .tertiary : .primary)
                 .strikethrough(todo.status == .completed)

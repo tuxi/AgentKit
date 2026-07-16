@@ -122,6 +122,24 @@ final class TimelineProjectionTurnsTests: XCTestCase {
         XCTAssertEqual(texts, ["Let me trace the data flow"])
     }
 
+    func testTodoUpdateDoesNotDuplicateAsModelActivityBlock() {
+        let turn = "t1"
+        let graph = reduce([
+            .turnStarted(turnID: turn, text: "make a plan"),
+            .todoUpdated(turnID: turn, todos: [
+                TodoItem(content: "First", status: .completed),
+                TodoItem(content: "Second", activeForm: "Doing second", status: .inProgress),
+            ]),
+        ])
+
+        let projected = TimelineProjection().projectTurns(graph).first
+        XCTAssertNotNil(projected)
+        XCTAssertFalse(projected?.blocks.contains { block in
+            if case .system = block { return true }
+            return false
+        } ?? true)
+    }
+
     // No lifecycle/text reorder leaks: assistant text is NOT forced to the end.
     func testAssistantTextNotPinnedToEnd() {
         let turn = "t1"

@@ -73,13 +73,6 @@ public struct TurnTimelineView: View {
             repinTrigger: snapshot.turns.last?.id
         ) {
             LazyVStack(alignment: .leading, spacing: 12) {
-                // Sticky todo panel — agent's current task plan.
-                if !snapshot.latestTodos.isEmpty {
-                    TodoPanel(todos: snapshot.latestTodos)
-                        .id("todo_panel")
-                        .padding(.bottom, 6)
-                }
-
                 ForEach(snapshot.turns) { turn in
                     TurnView(turn: turn)
                         .equatable()

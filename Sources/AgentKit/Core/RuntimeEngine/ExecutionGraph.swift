@@ -167,6 +167,8 @@ public enum GraphNodeKind: String, Sendable, CaseIterable {
     case system
     case childStream
     case approval
+    case todo
+    case plan
 }
 
 // MARK: - NodePayload
@@ -182,6 +184,8 @@ public enum NodePayload: Sendable {
     case system(SystemPayload)
     case childStream(ChildStreamPayload)
     case approval(ApprovalExecPayload)
+    case todo([TodoItem])
+    case plan(PlanExecPayload)
 }
 
 // MARK: - Payload structs
@@ -210,6 +214,23 @@ public struct ToolExecPayload: Sendable {
         self.exitCode = exitCode
         self.elapsedMs = elapsedMs
         self.isAutoApproved = isAutoApproved
+    }
+}
+
+public struct PlanExecPayload: Sendable {
+    public let planID: String
+    public let requestID: String?
+    public let title: String
+    public let content: String
+    public var status: TurnPlan.Status
+
+    public init(planID: String, requestID: String? = nil, title: String = "Plan",
+                content: String, status: TurnPlan.Status = .pending) {
+        self.planID = planID
+        self.requestID = requestID
+        self.title = title
+        self.content = content
+        self.status = status
     }
 }
 

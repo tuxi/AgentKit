@@ -56,6 +56,7 @@ export interface ConversationWebTurn {
   id: string;
   userPrompt?: string;
   blocks: ConversationWebBlock[];
+  todos: ConversationWebDocument["todos"];
   extensionNodes: ConversationWebExtensionNode[];
   footer?: {
     totalTokens: string;

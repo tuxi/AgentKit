@@ -27,6 +27,7 @@ struct ConversationWebDocument: Codable, Equatable, Sendable {
         let id: String
         let userPrompt: String?
         let blocks: [Block]
+        let todos: [Todo]
         let extensionNodes: [ExtensionNode]
         let footer: Footer?
         let isLive: Bool
@@ -158,13 +159,9 @@ enum ConversationWebDocumentBuilder {
             protocolVersion: ConversationWebDocument.currentProtocolVersion,
             revision: revision ?? snapshot.generation,
             conversationID: conversationID ?? "unbound",
-            todos: snapshot.latestTodos.map {
-                ConversationWebDocument.Todo(
-                    content: $0.content,
-                    activeForm: $0.activeForm,
-                    status: $0.status.rawValue
-                )
-            },
+            // Compatibility field for an already-loaded v1 shell. Task state
+            // is now owned and rendered by its originating turn.
+            todos: [],
             turns: snapshot.turns.enumerated().map { index, turn in
                 let contributions = extensionContributions[turn.id] ?? []
                 if let reuseSource,
@@ -230,6 +227,13 @@ enum ConversationWebDocumentBuilder {
             userPrompt: turn.userPrompt?.text,
             blocks: turn.blocks.map {
                 makeBlock($0, turn: turn, registerAction: registerAction)
+            },
+            todos: turn.todos.map {
+                ConversationWebDocument.Todo(
+                    content: $0.content,
+                    activeForm: $0.activeForm,
+                    status: $0.status.rawValue
+                )
             },
             extensionNodes: extensionContributions.map {
                 makeExtensionNode($0, turnID: turn.id, registerAction: registerAction)

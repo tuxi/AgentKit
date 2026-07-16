@@ -729,6 +729,11 @@ final class ConversationWebDocumentTests: XCTestCase {
                         .toolGroup(ToolGroup(id: "edit-compact", tools: [compactEditTool])),
                         .childStream(id: "subagent-block", subagent),
                     ],
+                    todos: [
+                        TodoItem(content: "Finished task", activeForm: "Finishing task", status: .completed),
+                        TodoItem(content: "Active task", activeForm: "Working on active task", status: .inProgress),
+                        TodoItem(content: "Pending task", status: .pending),
+                    ],
                     footer: nil,
                     isLive: false
                 ),
@@ -816,7 +821,13 @@ final class ConversationWebDocumentTests: XCTestCase {
                 subagentFits: (() => {
                   const row = document.querySelector('.child-stream');
                   return Boolean(row && row.scrollWidth <= row.clientWidth + 1);
-                })()
+                })(),
+                todoOpen: document.querySelector('.todo-panel')?.open ?? null,
+                todoSummary: document.querySelector('.todo-panel-summary')?.textContent ?? null,
+                todoSticky: document.querySelector('.todo-panel') ? getComputedStyle(document.querySelector('.todo-panel')).position : null,
+                todoProgress: document.querySelector('.todo-progress')?.getAttribute('aria-valuenow') ?? null,
+                activeTodo: document.querySelector('.todo-row[data-status="in_progress"] .todo-row-text')?.textContent ?? null,
+                completedTodo: document.querySelector('.todo-row[data-status="completed"] .todo-row-text')?.textContent ?? null
               };
             })()
             """
@@ -853,6 +864,13 @@ final class ConversationWebDocumentTests: XCTestCase {
         XCTAssertEqual(inspection?["subagentChromeIsClear"] as? Bool, true)
         XCTAssertEqual(inspection?["subagentSingleLine"] as? Bool, true)
         XCTAssertEqual(inspection?["subagentFits"] as? Bool, true)
+        XCTAssertEqual(inspection?["todoOpen"] as? Bool, false)
+        XCTAssertTrue((inspection?["todoSummary"] as? String)?.contains("1/3") == true)
+        XCTAssertTrue((inspection?["todoSummary"] as? String)?.contains("1 active") == true)
+        XCTAssertEqual(inspection?["todoSticky"] as? String, "static")
+        XCTAssertEqual(inspection?["todoProgress"] as? String, "1")
+        XCTAssertEqual(inspection?["activeTodo"] as? String, "Working on active task")
+        XCTAssertEqual(inspection?["completedTodo"] as? String, "Finished task")
 
         let selectionBefore = try await webView.evaluateJavaScript(
             """

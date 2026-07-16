@@ -18,14 +18,22 @@ public struct ConversationTurn: Identifiable, Sendable, Equatable {
     public let id: String                  // = turnID
     public let userPrompt: MessageNodePayload?
     public let blocks: [TurnBlock]
+    public let plans: [TurnPlan]
+    /// The latest task checklist produced while this turn was active. It is
+    /// owned by the turn (not the conversation) so later turns cannot move an
+    /// old checklist into a global sticky header.
+    public let todos: [TodoItem]
     public let footer: TurnStats?          // nil while no model_finished yet
     public let isLive: Bool                // this turn is still streaming
 
     public init(id: String, userPrompt: MessageNodePayload?,
-                blocks: [TurnBlock], footer: TurnStats?, isLive: Bool) {
+                blocks: [TurnBlock], plans: [TurnPlan] = [], todos: [TodoItem] = [],
+                footer: TurnStats?, isLive: Bool) {
         self.id = id
         self.userPrompt = userPrompt
         self.blocks = blocks
+        self.plans = plans
+        self.todos = todos
         self.footer = footer
         self.isLive = isLive
     }
@@ -33,7 +41,30 @@ public struct ConversationTurn: Identifiable, Sendable, Equatable {
     /// Nothing worth rendering — skip (e.g. a stray leading run with only
     /// demoted meta events).
     public var isEmpty: Bool {
-        userPrompt == nil && blocks.isEmpty && footer == nil
+        userPrompt == nil && blocks.isEmpty && plans.isEmpty && todos.isEmpty && footer == nil
+    }
+}
+
+public struct TurnPlan: Identifiable, Sendable, Equatable {
+    public enum Status: String, Sendable, Equatable {
+        case pending
+        case approved
+        case rejected
+    }
+
+    public let id: String
+    public let requestID: String?
+    public let title: String
+    public let content: String
+    public let status: Status
+
+    public init(id: String, requestID: String? = nil, title: String = "Plan",
+                content: String, status: Status) {
+        self.id = id
+        self.requestID = requestID
+        self.title = title
+        self.content = content
+        self.status = status
     }
 }
 

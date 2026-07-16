@@ -139,6 +139,13 @@ public actor RuntimeEngine {
 
     /// Latest todo list from the agent.
     private var _latestTodos: [TodoItem] = []
+    private struct PendingTodoToolUpdate {
+        let turnID: String?
+        let items: [TodoItem]
+        let canonicalRevisionAtStart: UInt64
+    }
+    private var pendingTodoToolUpdates: [String: PendingTodoToolUpdate] = [:]
+    private var canonicalTodoRevision: UInt64 = 0
 
     /// Stats aggregated across the active turn's model invocations.
     private var _modelStats: ModelStats?
@@ -191,10 +198,9 @@ public actor RuntimeEngine {
         if case .planApprovalRequest(_, let plan) = event {
             _pendingPlanApproval = plan
         }
-        // Track todos
-        if case .todoUpdated(_, let todos) = event {
-            _latestTodos = todos
-        }
+        if case .planApproved = event { _pendingPlanApproval = nil }
+        if case .planRejected = event { _pendingPlanApproval = nil }
+        let todoFallback = trackTodoState(event)
         // Track model started
         if case .modelStarted(_, _) = event {
             _modelStartedAt = Date()
@@ -257,6 +263,9 @@ public actor RuntimeEngine {
 
         // Reduce into graph
         let _ = reducer.reduce(event, into: &graph)
+        if let todoFallback {
+            let _ = reducer.reduce(todoFallback, into: &graph)
+        }
 
         // Notify UI — coalesce deltas, immediate for terminal events
         switch event {
@@ -270,8 +279,15 @@ public actor RuntimeEngine {
     /// Import historical events (from HTTP GET /events).
     /// Replays all events through the reducer, then projects the final graph.
     public func importHistory(_ events: [AgentEvent]) {
+        _latestTodos = []
+        pendingTodoToolUpdates.removeAll()
+        canonicalTodoRevision = 0
         for event in events {
+            let todoFallback = trackTodoState(event)
             let _ = reducer.reduce(event, into: &graph)
+            if let todoFallback {
+                let _ = reducer.reduce(todoFallback, into: &graph)
+            }
 
             // Track side-effects that ingest() normally handles:
             // pending approvals (tool + plan) must survive conversation switching
@@ -281,6 +297,8 @@ public actor RuntimeEngine {
             if case .planApprovalRequest(_, let plan) = event {
                 _pendingPlanApproval = plan
             }
+            if case .planApproved = event { _pendingPlanApproval = nil }
+            if case .planRejected = event { _pendingPlanApproval = nil }
             if case .turnPaused = event {
                 _turnStartedAt = nil
                 _modelStartedAt = nil
@@ -328,6 +346,43 @@ public actor RuntimeEngine {
         _pendingApproval = nil
         isLive = false
         yieldSnapshot()
+    }
+
+    /// `todo_updated` is authoritative. A successful Todo tool call is used
+    /// only when no canonical update arrived while that call was executing.
+    private func trackTodoState(_ event: AgentEvent) -> AgentEvent? {
+        switch event {
+        case .todoUpdated(_, let todos):
+            canonicalTodoRevision &+= 1
+            _latestTodos = todos
+            return nil
+
+        case .toolStarted(let turnID, let callID, let tool):
+            guard let items = TodoToolPayload.items(
+                toolName: tool.toolName,
+                arguments: tool.toolArgs
+            ) else { return nil }
+            pendingTodoToolUpdates[callID] = PendingTodoToolUpdate(
+                turnID: turnID,
+                items: items,
+                canonicalRevisionAtStart: canonicalTodoRevision
+            )
+            return nil
+
+        case .toolFinished(_, let callID, let result):
+            guard let pending = pendingTodoToolUpdates.removeValue(forKey: callID),
+                  result.error?.isEmpty ?? true,
+                  pending.canonicalRevisionAtStart == canonicalTodoRevision else { return nil }
+            _latestTodos = pending.items
+            return .todoUpdated(turnID: pending.turnID, todos: pending.items)
+
+        case .turnFinished, .turnFailed, .turnCancelled:
+            pendingTodoToolUpdates.removeAll()
+            return nil
+
+        default:
+            return nil
+        }
     }
 
     /// Mark the engine as connected to live stream.
@@ -379,6 +434,12 @@ public actor RuntimeEngine {
 
     /// Resolve a plan approval.
     public func resolvePlanApproval(requestID: String, approved: Bool) {
+        if let plan = _pendingPlanApproval, plan.id == requestID {
+            let resolution: AgentEvent = approved
+                ? .planApproved(turnID: plan.turnId, planID: plan.planID)
+                : .planRejected(turnID: plan.turnId, planID: plan.planID)
+            let _ = reducer.reduce(resolution, into: &graph)
+        }
         _pendingPlanApproval = nil
         yieldSnapshot()
     }

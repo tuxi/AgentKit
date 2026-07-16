@@ -1087,6 +1087,80 @@ function ChangeSummary({ value }: { value: string }): React.JSX.Element {
   );
 }
 
+function TodoPanel({
+  todos,
+  turnID,
+  isLive,
+}: {
+  todos: ConversationWebDocument["todos"];
+  turnID: string;
+  isLive: boolean;
+}): React.JSX.Element {
+  const completed = todos.filter((todo) => todo.status === "completed").length;
+  const active = todos.filter((todo) => todo.status === "in_progress").length;
+  const isComplete = completed === todos.length;
+  const [isExpanded, setIsExpanded] = useState(isLive && !isComplete);
+  const activeTodo = todos.find((todo) => todo.status === "in_progress");
+  const progress = todos.length ? (completed / todos.length) * 100 : 0;
+
+  useEffect(() => {
+    if (isLive && !isComplete) setIsExpanded(true);
+    if (!isLive && isComplete) setIsExpanded(false);
+  }, [isComplete, isLive]);
+
+  return (
+    <details
+      className="todo-panel"
+      data-anchor-id={`todo:${turnID}`}
+      data-disclosure-id={`todo:${turnID}`}
+      open={isExpanded}
+      onToggle={(event) => setIsExpanded(event.currentTarget.open)}
+    >
+      <summary
+        className="interactive todo-panel-summary"
+        data-focus-id={`todo:${turnID}`}
+        onClick={(event) => {
+          if (!window.getSelection()?.isCollapsed) event.preventDefault();
+        }}
+      >
+        <span className="todo-panel-title">Tasks</span>
+        <span className="todo-count">{completed}/{todos.length}</span>
+        {active ? <span className="todo-active">{active} active</span> : null}
+        <span className="todo-panel-current">
+          {activeTodo ? (activeTodo.activeForm || activeTodo.content) : null}
+        </span>
+        <span className="disclosure-chevron" aria-hidden="true">›</span>
+      </summary>
+      <div
+        className="todo-progress"
+        role="progressbar"
+        aria-label="Task progress"
+        aria-valuemin={0}
+        aria-valuemax={todos.length}
+        aria-valuenow={completed}
+      >
+        <span style={{ width: `${progress}%` }} />
+      </div>
+      <div className="todo-list">
+        {todos.map((todo, index) => {
+          const text = todo.status === "in_progress" && todo.activeForm
+            ? todo.activeForm
+            : todo.content;
+          return (
+            <div className="todo-row" data-status={todo.status} key={`${index}-${todo.content}`}>
+              <span className="todo-status-marker" aria-hidden="true">
+                {todo.status === "completed" ? "✓" : ""}
+              </span>
+              <span className="todo-row-text">{text}</span>
+              <span className="visually-hidden">{todo.status}</span>
+            </div>
+          );
+        })}
+      </div>
+    </details>
+  );
+}
+
 function Tool({ tool }: { tool: ConversationWebTool }): React.JSX.Element {
   const statusText = visibleExecutionStatus(tool.status, tool.statusText);
   return (
@@ -1422,6 +1496,9 @@ const Turn = memo(function Turn({ turn }: { turn: ConversationWebTurn }) {
             <Block block={block} />
           </div>
         ))}
+        {turn.todos.length ? (
+          <TodoPanel todos={turn.todos} turnID={turn.id} isLive={turn.isLive} />
+        ) : null}
         {footer ? (
           <footer className="turn-footer" data-selection-id={`turn:${turn.id}:footer`}>
             <span>{footer.totalTokens} tokens</span>
@@ -1638,17 +1715,6 @@ function App(): React.JSX.Element {
 
   return (
     <main className="conversation-shell" aria-label="Conversation">
-      {conversation.todos.length ? (
-        <section className="todo-panel" aria-label="Plan" data-anchor-id="todo-panel">
-          {conversation.todos.map((todo, index) => (
-            <div className="todo-row" data-status={todo.status} key={`${index}-${todo.content}`}>
-              <span className="status-dot" aria-hidden="true" />
-              <span>{todo.activeForm && todo.status === "in_progress" ? todo.activeForm : todo.content}</span>
-              <span className="visually-hidden">{todo.status}</span>
-            </div>
-          ))}
-        </section>
-      ) : null}
       {conversation.turns.map((turn) => <Turn key={turn.id} turn={turn} />)}
       {conversation.live ? (
         <div

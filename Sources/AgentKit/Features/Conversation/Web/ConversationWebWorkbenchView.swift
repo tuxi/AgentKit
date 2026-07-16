@@ -27,7 +27,7 @@ struct ConversationWebWorkbenchView: NSViewRepresentable {
         Coordinator()
     }
 
-    func makeNSView(context: Context) -> WKWebView {
+    func makeNSView(context: Context) -> ConversationWebWorkbenchHostView {
         let configuration = WKWebViewConfiguration()
         configuration.websiteDataStore = .nonPersistent()
         configuration.defaultWebpagePreferences.allowsContentJavaScript = true
@@ -49,7 +49,10 @@ struct ConversationWebWorkbenchView: NSViewRepresentable {
         webView.allowsLinkPreview = false
         webView.underPageBackgroundColor = .clear
 
+        let hostView = ConversationWebWorkbenchHostView(webView: webView)
+
         context.coordinator.attach(
+            hostView: hostView,
             webView: webView,
             messageProxy: messageProxy,
             schemeHandler: schemeHandler,
@@ -65,10 +68,10 @@ struct ConversationWebWorkbenchView: NSViewRepresentable {
         )
         context.coordinator.setVisible(isVisible)
         context.coordinator.loadShell()
-        return webView
+        return hostView
     }
 
-    func updateNSView(_ webView: WKWebView, context: Context) {
+    func updateNSView(_ hostView: ConversationWebWorkbenchHostView, context: Context) {
         context.coordinator.replaceSnapshot(
             snapshot,
             conversationID: conversationID,
@@ -80,7 +83,11 @@ struct ConversationWebWorkbenchView: NSViewRepresentable {
         context.coordinator.setVisible(isVisible)
     }
 
-    static func dismantleNSView(_ webView: WKWebView, coordinator: Coordinator) {
+    static func dismantleNSView(
+        _ hostView: ConversationWebWorkbenchHostView,
+        coordinator: Coordinator
+    ) {
+        let webView = hostView.webView
         webView.configuration.userContentController.removeScriptMessageHandler(
             forName: Coordinator.messageHandlerName
         )
@@ -96,6 +103,7 @@ struct ConversationWebWorkbenchView: NSViewRepresentable {
             category: "ConversationWebWorkbench"
         )
 
+        private weak var hostView: ConversationWebWorkbenchHostView?
         private weak var webView: WKWebView?
         private var messageProxy: WeakScriptMessageHandler?
         private var schemeHandler: ConversationWebSchemeHandler?
@@ -136,11 +144,13 @@ struct ConversationWebWorkbenchView: NSViewRepresentable {
         private static let maximumStreamingIntervalMilliseconds = 160
 
         fileprivate func attach(
+            hostView: ConversationWebWorkbenchHostView,
             webView: WKWebView,
             messageProxy: WeakScriptMessageHandler,
             schemeHandler: ConversationWebSchemeHandler,
             onFatalFailure: @escaping @MainActor () -> Void
         ) {
+            self.hostView = hostView
             self.webView = webView
             self.messageProxy = messageProxy
             self.schemeHandler = schemeHandler
@@ -148,6 +158,7 @@ struct ConversationWebWorkbenchView: NSViewRepresentable {
         }
 
         func detach() {
+            hostView = nil
             webView = nil
             messageProxy = nil
             schemeHandler = nil
@@ -232,6 +243,7 @@ struct ConversationWebWorkbenchView: NSViewRepresentable {
             let indexURL = ConversationWebSchemeHandler.indexURL
             shellURL = indexURL
             isPageReady = false
+            hostView?.concealWebView()
             webView?.load(URLRequest(url: indexURL))
         }
 
@@ -489,6 +501,7 @@ struct ConversationWebWorkbenchView: NSViewRepresentable {
             inFlightExtensionContributions = nil
             shouldRestoreViewportAfterReload = false
             actionRegistry.retainRevisions([revision])
+            hostView?.revealWebView()
 
             if let duration = body["applyDurationMilliseconds"] as? Double {
                 lastApplyDurationMilliseconds = duration
@@ -587,6 +600,39 @@ struct ConversationWebWorkbenchView: NSViewRepresentable {
             Self.logger.fault("\(message, privacy: .public)")
             onFatalFailure?()
         }
+    }
+}
+
+/// Keeps WebKit's provisional white backing surface out of the presentation.
+/// The transparent host lets the SwiftUI timeline background remain the single
+/// source of truth before and after the first document acknowledgement.
+@MainActor
+final class ConversationWebWorkbenchHostView: NSView {
+    let webView: WKWebView
+
+    init(webView: WKWebView) {
+        self.webView = webView
+        super.init(frame: .zero)
+        addSubview(webView)
+        webView.alphaValue = 0
+    }
+
+    @available(*, unavailable)
+    required init?(coder: NSCoder) {
+        fatalError("init(coder:) has not been implemented")
+    }
+
+    override func layout() {
+        super.layout()
+        webView.frame = bounds
+    }
+
+    func concealWebView() {
+        webView.alphaValue = 0
+    }
+
+    func revealWebView() {
+        webView.alphaValue = 1
     }
 }
 

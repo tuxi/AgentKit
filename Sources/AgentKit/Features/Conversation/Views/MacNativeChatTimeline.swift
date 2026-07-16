@@ -96,10 +96,6 @@ struct MacNativeChatTimeline: NSViewRepresentable {
     private func makeRows() -> [TimelineRow] {
         var rows: [TimelineRow] = []
 
-        if !snapshot.latestTodos.isEmpty {
-            rows.append(.todo(snapshot.latestTodos))
-        }
-
         for turn in snapshot.turns {
             rows.append(.turn(turn))
             for timelineExtension in timelineExtensions {
@@ -128,7 +124,6 @@ struct MacNativeChatTimeline: NSViewRepresentable {
     // MARK: - Table rows
 
     fileprivate enum TimelineRow {
-        case todo([TodoItem])
         case turn(ConversationTurn)
         // Extension views are host-owned and do not expose an equality
         // contract. Generation intentionally invalidates these rows whenever
@@ -138,8 +133,6 @@ struct MacNativeChatTimeline: NSViewRepresentable {
 
         var identity: String {
             switch self {
-            case .todo:
-                return "todo-panel"
             case .turn(let turn):
                 return "turn.\(turn.id)"
             case .extensionContent(let turnID, let extensionID, _, _):
@@ -151,8 +144,6 @@ struct MacNativeChatTimeline: NSViewRepresentable {
 
         func hasSameContent(as other: TimelineRow) -> Bool {
             switch (self, other) {
-            case (.todo(let lhs), .todo(let rhs)):
-                return lhs == rhs
             case (.turn(let lhs), .turn(let rhs)):
                 return lhs == rhs
             case (.extensionContent(_, _, let lhs, _), .extensionContent(_, _, let rhs, _)):
@@ -171,8 +162,6 @@ struct MacNativeChatTimeline: NSViewRepresentable {
         func hostedView(workspaceStore: WorkspaceStore, openURL: OpenURLAction) -> AnyView {
             let content: AnyView
             switch self {
-            case .todo(let todos):
-                content = AnyView(TodoPanel(todos: todos))
             case .turn(let turn):
                 content = AnyView(TurnView(turn: turn).equatable())
             case .extensionContent(_, _, _, let extensionContent):
@@ -211,16 +200,12 @@ struct MacNativeChatTimeline: NSViewRepresentable {
         }
 
         private var topPadding: CGFloat {
-            switch row {
-            case .todo: return 16
-            default: return 6
-            }
+            6
         }
 
         private var bottomPadding: CGFloat {
             switch row {
             case .thinking: return 16
-            case .todo: return 6
             default: return 6
             }
         }

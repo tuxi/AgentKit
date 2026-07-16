@@ -240,6 +240,7 @@ enum ConversationWebDocumentDiffer {
     ) -> Bool {
         lhs.id == rhs.id
             && lhs.userPrompt == rhs.userPrompt
+            && lhs.todos == rhs.todos
             && lhs.extensionNodes == rhs.extensionNodes
             && lhs.footer == rhs.footer
             && lhs.isLive == rhs.isLive

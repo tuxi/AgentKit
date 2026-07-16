@@ -254,7 +254,7 @@ enum ToolTranscriptPresenter {
         let name = tool.toolName.lowercased()
         // Agent self-orchestration — exact match before keyword rules.
         // (todo_write contains "write" which would otherwise hit .create.)
-        if name == "todo_write" { return .todo }
+        if TodoToolPayload.isTodoWriteTool(name) { return .todo }
         if name == "enter_plan_mode" || name == "propose_plan" { return .plan }
         if name == "plan_workflow" { return .workflow }
         // download_file — pulls external content, semantically read.

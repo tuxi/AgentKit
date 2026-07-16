@@ -12,6 +12,21 @@ import XCTest
 
 final class ExecutionReducerTests: XCTestCase {
 
+    private func todoArguments(
+        content: String = "Create skill",
+        activeFormKey: String = "activeForm"
+    ) -> JSONValue {
+        .object([
+            "todos": .array([
+                .object([
+                    "content": .string(content),
+                    activeFormKey: .string("Creating skill"),
+                    "status": .string("in_progress"),
+                ]),
+            ]),
+        ])
+    }
+
     private func assistantTexts(_ graph: ExecutionGraph) -> [String] {
         graph.linearWalk().compactMap { node in
             if case .assistantMessage(let t, _) = node.payload { return t }
@@ -125,6 +140,121 @@ final class ExecutionReducerTests: XCTestCase {
         await engine.ingest(.turnStarted(turnID: "t2", text: "new turn"))
         let nextStats = await engine.currentSnapshot().modelStats
         XCTAssertNil(nextStats)
+    }
+
+    func testSuccessfulTodoToolProvidesFallbackWhenCanonicalEventIsMissing() async {
+        let engine = RuntimeEngine(sessionID: "session_1")
+        await engine.ingest(.turnStarted(turnID: "t1", text: "plan"))
+        await engine.ingest(.toolStarted(
+            turnID: "t1",
+            callID: "todo_1",
+            tool: ToolCall(
+                callID: "todo_1",
+                toolName: "todo_write",
+                toolArgs: todoArguments()
+            )
+        ))
+        await engine.ingest(.toolFinished(
+            turnID: "t1",
+            callID: "todo_1",
+            result: ToolResult(
+                callID: "todo_1",
+                toolName: "todo_write",
+                observation: "ok",
+                error: nil
+            )
+        ))
+
+        let snapshot = await engine.currentSnapshot()
+        let todos = snapshot.latestTodos
+        XCTAssertEqual(todos, [
+            TodoItem(content: "Create skill", activeForm: "Creating skill", status: .inProgress),
+        ])
+        XCTAssertEqual(snapshot.turns.first?.todos, todos)
+    }
+
+    func testCanonicalTodoEventWinsOverToolFallback() async {
+        let engine = RuntimeEngine(sessionID: "session_1")
+        await engine.ingest(.turnStarted(turnID: "t1", text: "plan"))
+        await engine.ingest(.toolStarted(
+            turnID: "t1",
+            callID: "todo_1",
+            tool: ToolCall(
+                callID: "todo_1",
+                toolName: "TodoWrite",
+                toolArgs: todoArguments(content: "Stale", activeFormKey: "active_form")
+            )
+        ))
+        let canonical = [TodoItem(content: "Canonical", status: .pending)]
+        await engine.ingest(.todoUpdated(turnID: "t1", todos: canonical))
+        await engine.ingest(.toolFinished(
+            turnID: "t1",
+            callID: "todo_1",
+            result: ToolResult(
+                callID: "todo_1",
+                toolName: "TodoWrite",
+                observation: "ok",
+                error: nil
+            )
+        ))
+
+        let todos = await engine.currentSnapshot().latestTodos
+        XCTAssertEqual(todos, canonical)
+    }
+
+    func testTodoStateRestoresFromHistory() async {
+        let engine = RuntimeEngine(sessionID: "session_1")
+        let historical = [
+            TodoItem(content: "Done", status: .completed),
+            TodoItem(content: "Next", activeForm: "Doing next", status: .inProgress),
+        ]
+
+        await engine.importHistory([
+            .turnStarted(turnID: "t1", text: "plan"),
+            .todoUpdated(turnID: "t1", todos: historical),
+            .turnFinished(turnID: "t1", text: "planned", textAnnotations: []),
+        ])
+
+        let snapshot = await engine.currentSnapshot()
+        let todos = snapshot.latestTodos
+        XCTAssertEqual(todos, historical)
+        XCTAssertEqual(snapshot.turns.first?.todos, historical)
+
+        await engine.ingest(.turnStarted(turnID: "t2", text: "next question"))
+        let nextSnapshot = await engine.currentSnapshot()
+        XCTAssertEqual(nextSnapshot.turns.first?.todos, historical)
+        XCTAssertTrue(nextSnapshot.turns.last?.todos.isEmpty == true)
+    }
+
+    func testPlanStaysWithOwningTurnAndRecordsDecision() async {
+        let engine = RuntimeEngine(sessionID: "session_1")
+        await engine.ingest(.turnStarted(turnID: "t1", text: "make a plan"))
+        await engine.ingest(.planApprovalRequest(
+            turnID: "t1",
+            request: PlanApprovalRequest(
+                id: "approval_1",
+                planID: "plan_1",
+                title: "Implementation plan",
+                content: "1. Inspect\n2. Implement",
+                deadlineMs: nil,
+                sessionId: "session_1",
+                turnId: "t1"
+            )
+        ))
+
+        var snapshot = await engine.currentSnapshot()
+        XCTAssertEqual(snapshot.turns.first?.plans.first?.status, .pending)
+        XCTAssertEqual(snapshot.turns.first?.plans.first?.requestID, "approval_1")
+
+        await engine.resolvePlanApproval(requestID: "approval_1", approved: true)
+        snapshot = await engine.currentSnapshot()
+        XCTAssertEqual(snapshot.turns.first?.plans.first?.status, .approved)
+        XCTAssertNil(snapshot.pendingPlanApproval)
+
+        await engine.ingest(.turnStarted(turnID: "t2", text: "continue"))
+        snapshot = await engine.currentSnapshot()
+        XCTAssertEqual(snapshot.turns.first?.plans.first?.status, .approved)
+        XCTAssertTrue(snapshot.turns.last?.plans.isEmpty == true)
     }
 
     // Live: text → tool → text across two invocations → two segments, interleaved.

@@ -291,7 +291,6 @@ struct ConversationWebDocument: Codable, Equatable {
     let conversationID: String
     let revision: UInt64
     let turns: [WebTurn]
-    let todo: WebTodo?
     let liveIndicator: WebLiveIndicator?
 }
 
@@ -299,6 +298,7 @@ struct WebTurn: Codable, Equatable, Identifiable {
     let id: String
     let userPrompt: WebMessage?
     let blocks: [WebTurnBlock]
+    let todos: [WebTodo]
     let footer: WebTurnFooter?
     let actions: [WebActionReference]
 }
@@ -531,7 +531,7 @@ and logged.
 
 ### 13.1 Native interactions that stay outside the page
 
-- plan approval bar;
+- plan approval bar (renders the complete proposed plan exactly once);
 - tool approval bar;
 - pause/archive/resume bars;
 - composer and stop/send controls;
@@ -539,9 +539,13 @@ and logged.
 - inspector panes;
 - toolbar and global pending-approval navigation.
 
-Todo content and the live thinking/timer indicator move into the Web document so they
-participate in the same scroll geometry. Their clocks run locally in JS from Swift-provided
-timestamps instead of requiring a Swift snapshot every second.
+Todo content is owned by the turn that produced it and renders at that turn's bottom. An
+active Todo is expanded; a completed historical Todo is collapsed and never sticks above
+a later turn. Plan approval remains a native blocking surface outside the Web transcript:
+the bar renders `PlanApprovalRequest.content` as Markdown and owns Approve/Reject. The
+transcript must not duplicate the pending plan. The live thinking/timer indicator lives in
+the Web document; local clocks run in JS from Swift-provided timestamps instead of requiring
+a Swift snapshot every second.
 
 ## 14. Timeline extension migration
 

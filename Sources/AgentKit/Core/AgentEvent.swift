@@ -83,6 +83,9 @@ public enum AgentEvent: Sendable {
     // ── 审批 ──
     case approvalRequest(turnID: String?, request: ApprovalRequest)
     case planApprovalRequest(turnID: String?, request: PlanApprovalRequest)
+    case planProposed(turnID: String?, planID: String, content: String)
+    case planApproved(turnID: String?, planID: String)
+    case planRejected(turnID: String?, planID: String)
 }
 
 // MARK: - WireFrame → AgentEvent conversion
@@ -224,6 +227,19 @@ extension AgentEvent {
                 )
             }
             return .todoUpdated(turnID: turnID, todos: items)
+
+        case "plan_proposed":
+            return .planProposed(
+                turnID: turnID,
+                planID: wire.planId ?? "plan_\(turnID ?? "unknown")",
+                content: wire.text ?? wire.content ?? ""
+            )
+
+        case "plan_approved":
+            return .planApproved(turnID: turnID, planID: wire.planId ?? wire.text ?? "")
+
+        case "plan_rejected":
+            return .planRejected(turnID: turnID, planID: wire.planId ?? wire.text ?? "")
 
         case "task_started":
             return .taskStarted(

@@ -618,20 +618,132 @@ summary:active {
 .extension-footer { margin-top: 8px; overflow-wrap: anywhere; }
 
 .todo-panel {
-  margin-bottom: 18px;
-  padding: 7px;
+  margin: 8px 0 4px;
+  padding: 0;
+  overflow: hidden;
+  background: var(--subtle);
+}
+
+.todo-panel > summary::marker {
+  content: "";
+}
+
+.todo-panel-summary {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  gap: 7px;
+  padding: 8px 10px;
+  user-select: text;
+  -webkit-user-select: text;
+}
+
+.todo-panel-title {
+  flex: 0 0 auto;
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.todo-count {
+  flex: 0 0 auto;
+  padding: 1px 6px;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--focus) 12%, transparent);
+  color: var(--focus);
+  font-size: 11px;
+  font-weight: 600;
+}
+
+.todo-active {
+  flex: 0 0 auto;
+  color: var(--secondary);
+  font-size: 11px;
+}
+
+.todo-panel-current {
+  min-width: 0;
+  flex: 1 1 auto;
+  overflow: hidden;
+  color: var(--secondary);
+  font-size: 11px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.todo-panel-current:empty,
+.todo-panel[open] > .todo-panel-summary > .todo-panel-current {
+  display: none;
+}
+
+.todo-progress {
+  height: 3px;
+  margin: 0 10px 7px;
+  overflow: hidden;
+  border-radius: 999px;
+  background: var(--hover-fill);
+}
+
+.todo-progress > span {
+  display: block;
+  height: 100%;
+  border-radius: inherit;
+  background: var(--focus);
+  transition: width 160ms ease-out;
+}
+
+.todo-list {
+  padding: 0 6px 7px;
 }
 
 .todo-row {
   display: flex;
-  align-items: center;
+  min-width: 0;
+  align-items: flex-start;
   gap: 8px;
-  padding: 5px;
+  padding: 4px;
+  font-size: 12px;
+  line-height: 1.4;
 }
 
-.todo-row[data-status="completed"] {
+.todo-status-marker {
+  position: relative;
+  width: 14px;
+  height: 14px;
+  flex: 0 0 14px;
+  margin-top: 1px;
+  border: 1.5px solid var(--secondary);
+  border-radius: 50%;
+  color: white;
+  font-size: 10px;
+  font-weight: 700;
+  line-height: 11px;
+  text-align: center;
+}
+
+.todo-row[data-status="in_progress"] > .todo-status-marker {
+  border-color: var(--focus);
+}
+
+.todo-row[data-status="in_progress"] > .todo-status-marker::after {
+  position: absolute;
+  inset: 3px;
+  border-radius: 50%;
+  background: var(--focus);
+  content: "";
+}
+
+.todo-row[data-status="completed"] > .todo-status-marker {
+  border-color: light-dark(rgb(24 139 62), rgb(68 195 106));
+  background: light-dark(rgb(24 139 62), rgb(68 195 106));
+}
+
+.todo-row[data-status="completed"] > .todo-row-text {
   color: var(--secondary);
   text-decoration: line-through;
+}
+
+.todo-panel[open] > .todo-panel-summary > .disclosure-chevron {
+  transform: rotate(90deg);
 }
 
 .live-indicator {

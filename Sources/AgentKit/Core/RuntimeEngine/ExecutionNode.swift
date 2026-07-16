@@ -41,6 +41,8 @@ public enum ExecutionNodeKind: Sendable, Equatable {
     case artifact(ArtifactNodePayload)
     case system(SystemNodePayload)
     case childStream(ChildStreamNodePayload)
+    case todo([TodoItem])
+    case plan(TurnPlan)
 }
 
 // MARK: - Payloads

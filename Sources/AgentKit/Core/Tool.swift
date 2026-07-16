@@ -96,3 +96,40 @@ public enum TodoStatus: String, Sendable, Hashable, Codable {
     case inProgress = "in_progress"
     case completed
 }
+
+/// Normalizes structured Todo tool arguments for runtimes that do not emit
+/// the canonical `todo_updated` event. Human-readable tool output is
+/// deliberately not parsed.
+enum TodoToolPayload {
+    static func items(toolName: String, arguments: JSONValue?) -> [TodoItem]? {
+        guard isTodoWriteTool(toolName),
+              case .object(let object)? = arguments,
+              case .array(let values)? = object["todos"] else { return nil }
+
+        return values.compactMap { value in
+            guard case .object(let todo) = value else { return nil }
+            let content = todo["content"]?.stringValue
+                .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+            guard !content.isEmpty else { return nil }
+            let activeForm = (todo["activeForm"] ?? todo["active_form"])?
+                .stringValue
+                .trimmingCharacters(in: .whitespacesAndNewlines)
+            let rawStatus = todo["status"]?.stringValue ?? ""
+            return TodoItem(
+                content: content,
+                activeForm: activeForm?.isEmpty == false ? activeForm : nil,
+                status: TodoStatus(rawValue: rawStatus) ?? .pending
+            )
+        }
+    }
+
+    static func isTodoWriteTool(_ toolName: String) -> Bool {
+        let normalized = toolName
+            .lowercased()
+            .replacingOccurrences(of: "-", with: "_")
+            .replacingOccurrences(of: ".", with: "_")
+        return normalized == "todo_write"
+            || normalized == "write_todos"
+            || normalized == "todowrite"
+    }
+}
