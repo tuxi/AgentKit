@@ -333,9 +333,9 @@ public struct TimelineProjection: Sendable {
             ))
 
         case .approval(let payload):
-            if payload.approved == true {
-                break // 已授权同意的权限不现实Approved，只显示Rejected
-            }
+//            if payload.approved == true {
+//                break // 已授权同意的权限不现实Approved，只显示Rejected
+//            }
             let statusText = payload.resolved
                 ? (payload.approved == true ? "Approved" : "Rejected")
                 : "Awaiting approval"

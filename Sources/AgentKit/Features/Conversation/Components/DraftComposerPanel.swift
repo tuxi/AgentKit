@@ -82,7 +82,91 @@ struct DraftComposerPanel: View {
                     Spacer(minLength: 12)
 
                     // ── Model Selector ──
-                    modelSelector()
+                    Menu {
+                        // 优雅的 Popover 内部视图
+                        VStack(alignment: .leading, spacing: 4) {
+                            #if os(macOS)
+                            // 顶部类别标题 (类似原生)
+                            Text("Models")
+                                .font(.system(size: 11, weight: .medium))
+                                .foregroundStyle(.secondary)
+                                .padding(.horizontal, 10)
+                                .padding(.top, 6)
+                                .padding(.bottom, 2)
+                            
+                            #endif
+                            
+                            ForEach(modelSettings.availableModelIDs, id: \.self) { modelID in
+                                let isSelected = modelID == selectedModel
+                                let isHovered = hoveredID == modelID
+                                
+                                Button {
+                                    selectedModel = modelID
+                                    viewModel?.selectedModel = modelID
+                                    modelSettings.didUseModel(modelID, conversation: viewModel?.conversation?.id ?? "")
+                                    persistModel(modelID)
+                                    onModelChange?(modelID)
+                                    isMenuPresented = false
+                                } label: {
+                                    HStack(spacing: 8) {
+                                        // 1. 模型名称
+                                        Text(modelSettings.displayName(for: modelID))
+                                            .font(.system(size: 13))
+                                            .foregroundColor(isHovered ? .white : .primary) // 悬停时文字变白更清晰
+                                            .lineLimit(1)
+                                        
+                                        // 2. 这里可以预留像截图那样的 "Included until..." 标签空间 (可选)
+                                        
+                                        Spacer()
+                                        
+                                        // 3. 勾选状态
+                                        if isSelected {
+                                            Image(systemName: "checkmark")
+                                                .font(.system(size: 11, weight: .bold))
+                                                .foregroundColor(isHovered ? .white : .accentColor)
+                                        }
+                                    }
+                                    // 核心支撑：撑满整行，让整行都能响应点击和高亮
+                                    .frame(maxWidth: .infinity, alignment: .leading)
+                                    .contentShape(Rectangle())
+                                }
+                                .buttonStyle(.plain)
+                                .padding(.horizontal, 8)
+                                .padding(.vertical, 6)
+                                // 悬停高亮背景：苹果经典的蓝底或者灰色半透明
+                                .background(
+                                    RoundedRectangle(cornerRadius: 5)
+                                        .fill(isHovered ? Color.accentColor : Color.clear)
+                                )
+                                .padding(.horizontal, 4) // 给高亮圆角留出一点点边缘呼吸感
+                                #if os(macOS)
+                                .onHover { hovering in
+                                    // 鼠标移入移出时切换状态
+                                    withAnimation(.easeOut(duration: 0.08)) {
+                                        hoveredID = hovering ? modelID : nil
+                                    }
+                                }
+                                #endif
+                            }
+                        }
+                        .padding(.vertical, 4)
+                        #if os(macOS)
+                        .frame(width: 200) // 固定宽度，防止长短文字抖动
+                        #endif
+                    } label: {
+                        // 触发按钮增加一个微小的背景反馈，让点击体验更好
+                        HStack(spacing: 4) {
+                            Text(modelSettings.displayName(for: selectedModel ?? ""))
+                                .font(.system(size: 13, weight: .medium))
+                                .lineLimit(1)
+                            Image(systemName: "chevron.up")
+                                .font(.system(size: 9, weight: .semibold))
+                        }
+                        .padding(.horizontal, 6)
+                        .padding(.vertical, 3)
+                        .background(isMenuPresented ? Color.primary.opacity(0.05) : Color.clear)
+                        .cornerRadius(4)
+                    }
 
                     Button { } label: {
                         Image(systemName: "mic")
@@ -160,93 +244,6 @@ struct DraftComposerPanel: View {
         }
         .onDisappear {
             persistCurrentText()
-        }
-    }
-
-
-    func modelSelector() -> some View {
-        Button {
-            isMenuPresented.toggle()
-        } label: {
-            // 触发按钮增加一个微小的背景反馈，让点击体验更好
-            HStack(spacing: 4) {
-                Text(modelSettings.displayName(for: selectedModel ?? ""))
-                    .font(.system(size: 13, weight: .medium))
-                    .lineLimit(1)
-                Image(systemName: "chevron.up")
-                    .font(.system(size: 9, weight: .semibold))
-            }
-            .padding(.horizontal, 6)
-            .padding(.vertical, 3)
-            .background(isMenuPresented ? Color.primary.opacity(0.05) : Color.clear)
-            .cornerRadius(4)
-        }
-        .buttonStyle(.plain)
-        .foregroundStyle(.secondary)
-        .popover(isPresented: $isMenuPresented, attachmentAnchor: .rect(.bounds), arrowEdge: .top) {
-            // 优雅的 Popover 内部视图
-            VStack(alignment: .leading, spacing: 4) {
-                // 顶部类别标题 (类似原生)
-                Text("Models")
-                    .font(.system(size: 11, weight: .medium))
-                    .foregroundStyle(.secondary)
-                    .padding(.horizontal, 10)
-                    .padding(.top, 6)
-                    .padding(.bottom, 2)
-                
-                ForEach(modelSettings.availableModelIDs, id: \.self) { modelID in
-                    let isSelected = modelID == selectedModel
-                    let isHovered = hoveredID == modelID
-                    
-                    Button {
-                        selectedModel = modelID
-                        viewModel?.selectedModel = modelID
-                        modelSettings.didUseModel(modelID, conversation: viewModel?.conversation?.id ?? "")
-                        persistModel(modelID)
-                        onModelChange?(modelID)
-                        isMenuPresented = false
-                    } label: {
-                        HStack(spacing: 8) {
-                            // 1. 模型名称
-                            Text(modelSettings.displayName(for: modelID))
-                                .font(.system(size: 13))
-                                .foregroundColor(isHovered ? .white : .primary) // 悬停时文字变白更清晰
-                                .lineLimit(1)
-                            
-                            // 2. 这里可以预留像截图那样的 "Included until..." 标签空间 (可选)
-                            
-                            Spacer()
-                            
-                            // 3. 勾选状态
-                            if isSelected {
-                                Image(systemName: "checkmark")
-                                    .font(.system(size: 11, weight: .bold))
-                                    .foregroundColor(isHovered ? .white : .accentColor)
-                            }
-                        }
-                        // 核心支撑：撑满整行，让整行都能响应点击和高亮
-                        .frame(maxWidth: .infinity, alignment: .leading)
-                        .contentShape(Rectangle())
-                    }
-                    .buttonStyle(.plain)
-                    .padding(.horizontal, 8)
-                    .padding(.vertical, 6)
-                    // 悬停高亮背景：苹果经典的蓝底或者灰色半透明
-                    .background(
-                        RoundedRectangle(cornerRadius: 5)
-                            .fill(isHovered ? Color.accentColor : Color.clear)
-                    )
-                    .padding(.horizontal, 4) // 给高亮圆角留出一点点边缘呼吸感
-                    .onHover { hovering in
-                        // 鼠标移入移出时切换状态
-                        withAnimation(.easeOut(duration: 0.08)) {
-                            hoveredID = hovering ? modelID : nil
-                        }
-                    }
-                }
-            }
-            .padding(.vertical, 4)
-            .frame(width: 200) // 固定宽度，防止长短文字抖动
         }
     }
 
