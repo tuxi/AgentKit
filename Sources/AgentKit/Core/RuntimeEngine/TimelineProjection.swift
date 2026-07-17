@@ -248,7 +248,7 @@ public struct TimelineProjection: Sendable {
 
     /// Convert a single GraphNode to an ExecutionNode.
     private func projectNode(_ graphNode: GraphNode) -> ExecutionNode? {
-        let kind: ExecutionNodeKind
+        var kind: ExecutionNodeKind?
 
         switch graphNode.payload {
         case .userInput(let text):
@@ -291,15 +291,22 @@ public struct TimelineProjection: Sendable {
             ))
 
         case .observation(let text):
-            kind = .system(SystemNodePayload(kind: .observation, text: text))
+            // agent的观测信息不显示，因为工具本身的outout有显示了，这里重叠了
+//            kind = .system(SystemNodePayload(kind: .observation, text: text))
+            break
 
         case .reflection(let text):
             kind = .system(SystemNodePayload(kind: .reflection, text: text))
 
         case .system(let payload):
+            if payload.kind == .modelActivity,
+               payload.metadata["type"] == "approval" {
+                break // 不生成 TurnBlock，屏蔽啰嗦的：modelActivity Approval: run_command — Approved
+            }
             let nodeKind: SystemNodeKind = {
                 switch payload.kind {
-                case .modelActivity: return .modelActivity
+                case .modelActivity:
+                    return .modelActivity
                 case .contextCompact: return .contextCompact
                 case .skillLoaded: return .skillLoaded
                 case .error: return .error
@@ -326,6 +333,9 @@ public struct TimelineProjection: Sendable {
             ))
 
         case .approval(let payload):
+            if payload.approved == true {
+                break // 已授权同意的权限不现实Approved，只显示Rejected
+            }
             let statusText = payload.resolved
                 ? (payload.approved == true ? "Approved" : "Rejected")
                 : "Awaiting approval"
@@ -346,6 +356,7 @@ public struct TimelineProjection: Sendable {
             ))
         }
 
+        guard let kind else { return nil }
         return ExecutionNode(
             id: graphNode.id, kind: kind,
             timestamp: graphNode.timestamp, turnID: graphNode.turnID,

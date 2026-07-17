@@ -293,11 +293,19 @@ final class ConversationWebDocumentTests: XCTestCase {
         )
 
         let stableToken = try XCTUnwrap(first.turns[0].copyActionID)
+        let stableShareToken = try XCTUnwrap(first.turns[0].shareActionID)
         XCTAssertNil(first.turns[1].copyActionID)
+        XCTAssertNil(first.turns[1].shareActionID)
         XCTAssertNil(second.turns[1].copyActionID)
+        XCTAssertNil(second.turns[1].shareActionID)
         XCTAssertEqual(second.turns[0], first.turns[0])
         XCTAssertEqual(second.turns[0].copyActionID, stableToken)
+        XCTAssertEqual(second.turns[0].shareActionID, stableShareToken)
         XCTAssertNotNil(registry.resolve(stableToken, revision: 2))
+        XCTAssertEqual(
+            registry.resolve(stableShareToken, revision: 2),
+            .shareTurn(turnID: "stable")
+        )
 
         let completedSnapshot = RuntimeSnapshot(
             timeline: [],
@@ -329,8 +337,13 @@ final class ConversationWebDocumentTests: XCTestCase {
         )
 
         let completedTailToken = try XCTUnwrap(completed.turns[1].copyActionID)
+        let completedTailShareToken = try XCTUnwrap(completed.turns[1].shareActionID)
         XCTAssertNotNil(registry.resolve(stableToken, revision: 3))
         XCTAssertNotNil(registry.resolve(completedTailToken, revision: 3))
+        XCTAssertEqual(
+            registry.resolve(completedTailShareToken, revision: 3),
+            .shareTurn(turnID: "tail")
+        )
     }
 
     @MainActor

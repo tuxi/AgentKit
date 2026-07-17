@@ -5,7 +5,6 @@
 //  Serves the immutable bundled renderer from a same-origin private scheme.
 //
 
-#if os(macOS)
 import Foundation
 import WebKit
 
@@ -91,4 +90,3 @@ final class ConversationWebSchemeHandler: NSObject, WKURLSchemeHandler {
         task.didFailWithError(CocoaError(code))
     }
 }
-#endif

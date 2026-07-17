@@ -32,6 +32,7 @@ struct ConversationWebDocument: Codable, Equatable, Sendable {
         let footer: Footer?
         let isLive: Bool
         let copyActionID: String?
+        let shareActionID: String?
         let assetsActionID: String?
         let assetCount: Int
     }
@@ -195,6 +196,7 @@ enum ConversationWebDocumentBuilder {
         var tokens = Set<String>()
         for turn in document.turns {
             if let token = turn.copyActionID { tokens.insert(token) }
+            if let token = turn.shareActionID { tokens.insert(token) }
             if let token = turn.assetsActionID { tokens.insert(token) }
             for block in turn.blocks {
                 if let token = block.actionID { tokens.insert(token) }
@@ -286,6 +288,9 @@ enum ConversationWebDocumentBuilder {
             },
             isLive: turn.isLive,
             copyActionID: copyActionID,
+            shareActionID: turn.isLive ? nil : registerAction.map {
+                $0(.shareTurn(turnID: turn.id))
+            },
             assetsActionID: turn.isLive || assets.isEmpty ? nil : registerAction.map {
                 $0(.showTurnAssets(turnID: turn.id))
             },

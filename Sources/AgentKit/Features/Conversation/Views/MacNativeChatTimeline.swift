@@ -807,6 +807,7 @@ private final class NativeTurnTableCellView: NSTableCellView {
 
     private let transcriptView = NativeTranscriptTextView(onAction: { _ in })
     private lazy var copyButton = NSButton(frame: .zero)
+    private lazy var shareButton = NSButton(frame: .zero)
     private lazy var assetsButton = NSButton(frame: .zero)
     private var representedTurnID: String?
     private var turn: ConversationTurn?
@@ -827,6 +828,12 @@ private final class NativeTurnTableCellView: NSTableCellView {
         copyButton.action = #selector(copyReply)
         addSubview(copyButton)
         copyButton.title = ""
+
+        configureButton(shareButton, imageName: "square.and.arrow.up", toolTip: "分享本轮对话")
+        shareButton.target = self
+        shareButton.action = #selector(showShareMenu)
+        addSubview(shareButton)
+        shareButton.title = ""
 
         configureButton(assetsButton, imageName: "tray.full", toolTip: "查看本轮资产")
         assetsButton.target = self
@@ -867,11 +874,15 @@ private final class NativeTurnTableCellView: NSTableCellView {
             height: textHeight
         )
 
-        guard !copyButton.isHidden || !assetsButton.isHidden else { return }
+        guard !copyButton.isHidden || !shareButton.isHidden || !assetsButton.isHidden else { return }
         let controlsY = Self.verticalPadding + textHeight + 4
         var x = Self.horizontalPadding
         if !copyButton.isHidden {
             copyButton.frame = NSRect(x: x, y: controlsY, width: 22, height: 20)
+            x += 30
+        }
+        if !shareButton.isHidden {
+            shareButton.frame = NSRect(x: x, y: controlsY, width: 22, height: 20)
             x += 30
         }
         if !assetsButton.isHidden {
@@ -914,6 +925,7 @@ private final class NativeTurnTableCellView: NSTableCellView {
         )
 
         copyButton.isHidden = transcript.copyText.isEmpty || Self.isAnswerStreaming(turn)
+        shareButton.isHidden = copyButton.isHidden
         let assetCount = Self.assets(in: turn).count
         assetsButton.isHidden = assetCount == 0
         assetsButton.title = assetCount == 0 ? "" : "\(assetCount)"
@@ -940,6 +952,32 @@ private final class NativeTurnTableCellView: NSTableCellView {
                 accessibilityDescription: nil
             )
         }
+    }
+
+    @objc private func showShareMenu() {
+        let menu = NSMenu(title: "分享本轮对话")
+        for format in ConversationShareFormat.allCases {
+            let item = NSMenuItem(
+                title: format.title,
+                action: #selector(shareTurn(_:)),
+                keyEquivalent: ""
+            )
+            item.target = self
+            item.representedObject = format.rawValue
+            item.image = NSImage(systemSymbolName: format.systemImage, accessibilityDescription: nil)
+            menu.addItem(item)
+        }
+        menu.popUp(
+            positioning: nil,
+            at: NSPoint(x: 0, y: shareButton.bounds.maxY + 2),
+            in: shareButton
+        )
+    }
+
+    @objc private func shareTurn(_ sender: NSMenuItem) {
+        guard let raw = sender.representedObject as? String,
+              let format = ConversationShareFormat(rawValue: raw) else { return }
+        dispatcher?.shareTurn(as: format, sourceView: shareButton)
     }
 
     @objc private func showAssets() {

@@ -67,6 +67,7 @@ export interface ConversationWebTurn {
   };
   isLive: boolean;
   copyActionID?: string;
+  shareActionID?: string;
   assetsActionID?: string;
   assetCount: number;
 }

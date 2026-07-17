@@ -245,6 +245,7 @@ enum ConversationWebDocumentDiffer {
             && lhs.footer == rhs.footer
             && lhs.isLive == rhs.isLive
             && lhs.copyActionID == rhs.copyActionID
+            && lhs.shareActionID == rhs.shareActionID
             && lhs.assetsActionID == rhs.assetsActionID
             && lhs.assetCount == rhs.assetCount
     }

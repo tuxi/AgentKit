@@ -617,7 +617,7 @@ public final class WorkspaceStore {
                 baseWorkspaceID: workspace.id,
                 worktree: managedRequest
             ))
-            ref.name = firstMessage.trimmingCharacters(in: .whitespacesAndNewlines)
+            ref.name = String(firstMessage.trimmingCharacters(in: .whitespacesAndNewlines).prefix(18))
             let vm = supervisor.controller(
                 for: ref,
                 workspace: workspace,

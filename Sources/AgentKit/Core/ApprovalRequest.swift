@@ -103,12 +103,21 @@ public struct PlanApprovalRequest: Sendable, Identifiable, Hashable {
     public let deadlineMs: Int?
     public let sessionId: String?
     public let turnId: String?
+    public let planPath: String?
+    public let filePath: String?
 
     public var deadlineSeconds: Int? { deadlineMs.map { $0 / 1000 } }
 
     public init(
-        id: String, planID: String, title: String, content: String,
-        deadlineMs: Int?, sessionId: String?, turnId: String?
+        id: String,
+        planID: String,
+        title: String,
+        content: String,
+        deadlineMs: Int?,
+        sessionId: String?,
+        turnId: String?,
+        planPath: String?,
+        filePath: String?
     ) {
         self.id = id
         self.planID = planID
@@ -117,6 +126,8 @@ public struct PlanApprovalRequest: Sendable, Identifiable, Hashable {
         self.deadlineMs = deadlineMs
         self.sessionId = sessionId
         self.turnId = turnId
+        self.filePath = filePath
+        self.planPath = planPath
     }
 
     /// 从 WireFrame 构造 plan_approval_request。
@@ -129,7 +140,9 @@ public struct PlanApprovalRequest: Sendable, Identifiable, Hashable {
             content: wire.content ?? "",
             deadlineMs: wire.deadlineMs,
             sessionId: wire.sessionId,
-            turnId: wire.turnId
+            turnId: wire.turnId,
+            planPath: wire.planPath,
+            filePath: wire.filePath,
         )
     }
 }

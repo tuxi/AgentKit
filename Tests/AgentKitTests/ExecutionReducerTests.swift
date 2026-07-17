@@ -238,7 +238,9 @@ final class ExecutionReducerTests: XCTestCase {
                 content: "1. Inspect\n2. Implement",
                 deadlineMs: nil,
                 sessionId: "session_1",
-                turnId: "t1"
+                turnId: "t1",
+                planPath: nil,
+                filePath: nil,
             )
         ))
 

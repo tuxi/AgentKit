@@ -59,6 +59,7 @@ struct TurnView: View, Equatable {
             HStack(spacing: 12) {
                 if canCopy {
                     TurnCopyButton(text: copyText)
+                    TurnShareButton(turn: turn, title: conversationShareTitle)
                 }
                 if !assets.isEmpty {
                     Button {
@@ -80,6 +81,12 @@ struct TurnView: View, Equatable {
             }
             .padding(.top, 2)
         }
+    }
+
+    private var conversationShareTitle: String {
+        let name = store.activeConversationViewModel?.conversation?.name?
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        return name.flatMap { $0.isEmpty ? nil : $0 } ?? "Conversation"
     }
 
     /// True while the latest text block is still streaming in.
@@ -297,5 +304,30 @@ private struct TurnCopyButton: View {
         }
         .buttonStyle(.plain)
         .help("复制回复")
+    }
+}
+
+private struct TurnShareButton: View {
+    let turn: ConversationTurn
+    let title: String
+
+    var body: some View {
+        Menu {
+            ForEach(ConversationShareFormat.allCases) { format in
+                Button {
+                    let document = ConversationShareService.document(for: turn, title: title)
+                    ConversationShareService.share(document, as: format)
+                } label: {
+                    Label(format.title, systemImage: format.systemImage)
+                }
+            }
+        } label: {
+            Image(systemName: "square.and.arrow.up")
+                .font(.caption2)
+                .foregroundStyle(Color.secondary)
+        }
+        .menuStyle(.borderlessButton)
+        .menuIndicator(.hidden)
+        .help("分享本轮对话")
     }
 }

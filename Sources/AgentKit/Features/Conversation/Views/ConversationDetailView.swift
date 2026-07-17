@@ -301,6 +301,24 @@ public struct ConversationDetailView: View {
         //            }
         //        }
         ToolbarItem {
+            Menu {
+                Button {
+                    shareConversation(as: .pdf)
+                } label: {
+                    Label(ConversationShareFormat.pdf.title, systemImage: ConversationShareFormat.pdf.systemImage)
+                }
+                Button {
+                    shareConversation(as: .markdown)
+                } label: {
+                    Label(ConversationShareFormat.markdown.title, systemImage: ConversationShareFormat.markdown.systemImage)
+                }
+            } label: {
+                Label("分享", systemImage: "square.and.arrow.up")
+            }
+            .disabled(store.activeConversationViewModel?.snapshot.turns.isEmpty ?? true)
+            .help("分享完整会话")
+        }
+        ToolbarItem {
             Button {
                 guard let vm = store.activeConversationViewModel else { return }
                 store.showInspector(.assets(AssetPanelPayload(
@@ -322,6 +340,14 @@ public struct ConversationDetailView: View {
             }
             .disabled(store.selectedConversation == nil)
         }
+    }
+
+    private func shareConversation(as format: ConversationShareFormat) {
+        guard let vm = store.activeConversationViewModel, !vm.snapshot.turns.isEmpty else { return }
+        let rawTitle = vm.conversation?.name?.trimmingCharacters(in: .whitespacesAndNewlines)
+        let title = rawTitle.flatMap { $0.isEmpty ? nil : $0 } ?? "Conversation"
+        let document = ConversationShareService.document(for: vm.snapshot, title: title)
+        ConversationShareService.share(document, as: format)
     }
 }
 

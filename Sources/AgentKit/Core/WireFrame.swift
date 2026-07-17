@@ -70,6 +70,10 @@ struct WireFrame: Decodable {
     let turnStatus: String?         // v1.2 lifecycle status
     let pausedAt: Int64?            // v1.2 unix seconds
     let exitCode: Int?              // P8.7 §8.5（golden 已冻结）：仅失败时出现；>0 = 非零退出，-1 = 启动失败/被信号杀死
+    
+    // Plan 审批的内容
+    let planPath: String?
+    let filePath: String?
 
     enum CodingKeys: String, CodingKey {
         case type, kind, at, step, id, server, seq
@@ -105,6 +109,8 @@ struct WireFrame: Decodable {
         case deadlineMs = "deadline_ms"
         case executor
         case capabilities
+        case planPath = "plan_path"
+        case filePath = "file_path"
     }
 }
 

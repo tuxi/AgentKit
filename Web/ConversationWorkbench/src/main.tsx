@@ -1508,7 +1508,7 @@ const Turn = memo(function Turn({ turn }: { turn: ConversationWebTurn }) {
             {footer.contextTokens ? <span>ctx {footer.contextTokens}</span> : null}
           </footer>
         ) : null}
-        {!turn.isLive && (turn.copyActionID || turn.assetsActionID) ? (
+        {!turn.isLive && (turn.copyActionID || turn.shareActionID || turn.assetsActionID) ? (
           <div className="turn-actions" aria-label="Turn actions">
             {turn.copyActionID ? (
               <ActionButton
@@ -1516,6 +1516,13 @@ const Turn = memo(function Turn({ turn }: { turn: ConversationWebTurn }) {
                 focusID={`turn-copy:${turn.id}`}
                 tooltip="Copy turn"
               >Copy</ActionButton>
+            ) : null}
+            {turn.shareActionID ? (
+              <ActionButton
+                actionID={turn.shareActionID}
+                focusID={`turn-share:${turn.id}`}
+                tooltip="Share turn"
+              >Share</ActionButton>
             ) : null}
             {turn.assetsActionID ? (
               <ActionButton

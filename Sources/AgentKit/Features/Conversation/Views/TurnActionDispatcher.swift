@@ -1,4 +1,5 @@
 #if os(macOS)
+import AppKit
 import SwiftUI
 
 /// AppKit timeline counterpart of TurnView's action routing. Keeping this
@@ -54,6 +55,14 @@ final class TurnActionDispatcher {
             conversationID: store.activeConversationViewModel?.conversation?.id,
             workspace: store.activeConversationViewModel?.workspaceAnchor
         )))
+    }
+
+    func shareTurn(as format: ConversationShareFormat, sourceView: NSView? = nil) {
+        let rawTitle = store.activeConversationViewModel?.conversation?.name?
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        let title = rawTitle.flatMap { $0.isEmpty ? nil : $0 } ?? "Conversation"
+        let document = ConversationShareService.document(for: turn, title: title)
+        ConversationShareService.share(document, as: format, sourceView: sourceView)
     }
 
     var turnAssets: [AgentAssetRef] {

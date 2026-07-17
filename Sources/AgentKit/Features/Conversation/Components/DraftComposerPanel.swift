@@ -455,6 +455,10 @@ struct PlanApprovalBar: View {
     let plan: PlanApprovalRequest
     let onApprove: () -> Void
     let onReject: () -> Void
+    
+    private var displayPath: String? {
+        plan.planPath ?? plan.filePath
+    }
 
     var body: some View {
         VStack(spacing: 0) {
@@ -462,29 +466,10 @@ struct PlanApprovalBar: View {
 
             VStack(alignment: .leading, spacing: 10) {
                 // Header
-                HStack(spacing: 8) {
-                    Image(systemName: "text.document.fill")
-                        .foregroundStyle(.blue)
-
-                    VStack(alignment: .leading, spacing: 2) {
-                        Text(plan.title)
-                            .font(.subheadline.weight(.semibold))
-                        Text("Proposed Plan")
-                            .font(.caption)
-                            .foregroundStyle(.secondary)
-                    }
-
-                    Spacer()
-
-                    if let deadline = plan.deadlineSeconds {
-                        Text("\(deadline)s")
-                            .font(.caption2.weight(.medium))
-                            .foregroundStyle(.secondary)
-                            .padding(.horizontal, 6)
-                            .padding(.vertical, 2)
-                            .background(.quaternary)
-                            .clipShape(Capsule())
-                    }
+                header
+                
+                if let path = displayPath, !path.isEmpty {
+                    planPathRow(path)
                 }
 
                 // Plan content — markdown rendered in a scrollable area
@@ -518,6 +503,101 @@ struct PlanApprovalBar: View {
             .padding(.vertical, 10)
         }
     }
+    
+    private var header: some View {
+        HStack(spacing: 8) {
+            Image(systemName: "text.document.fill")
+                .foregroundStyle(.blue)
+            
+            VStack(alignment: .leading, spacing: 2) {
+                Text(plan.title)
+                    .font(.subheadline.weight(.semibold))
+                
+                Text("Proposed Plan")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+            
+            Spacer()
+            
+            if let deadline = plan.deadlineSeconds {
+                Text("\(deadline)s")
+                    .font(.caption2.weight(.medium))
+                    .foregroundStyle(.secondary)
+                    .padding(.horizontal, 6)
+                    .padding(.vertical, 2)
+                    .background(.quaternary)
+                    .clipShape(Capsule())
+            }
+        }
+    }
+    
+    private var actionButtons: some View {
+        HStack(spacing: 8) {
+            Button(action: onApprove) {
+                Label("Approve Plan", systemImage: "checkmark.circle.fill")
+                    .frame(maxWidth: .infinity)
+            }
+            .buttonStyle(.borderedProminent)
+            .controlSize(.large)
+            
+            Button(role: .destructive, action: onReject) {
+                Label("Reject", systemImage: "xmark.circle.fill")
+                    .frame(maxWidth: .infinity)
+            }
+            .buttonStyle(.bordered)
+            .controlSize(.large)
+        }
+    }
+    
+    private func planPathRow(_ path: String) -> some View {
+        HStack(spacing: 6) {
+            Image(systemName: "doc.text")
+                .foregroundStyle(.secondary)
+            
+            Text(path)
+                .font(.caption.monospaced())
+                .foregroundStyle(.secondary)
+                .lineLimit(1)
+                .truncationMode(.middle)
+                .textSelection(.enabled)
+            
+            Spacer()
+            
+#if os(macOS)
+            if canOpenPlanFile {
+                Button {
+                    openPlanFile()
+                } label: {
+                    Image(systemName: "arrow.up.forward.app")
+                }
+                .buttonStyle(.plain)
+                .help("Open plan file")
+            }
+#endif
+        }
+        .padding(.horizontal, 10)
+        .padding(.vertical, 7)
+        .background(.quaternary.opacity(0.25))
+        .clipShape(RoundedRectangle(cornerRadius: 7))
+    }
+    
+#if os(macOS)
+    private var canOpenPlanFile: Bool {
+        guard let filePath = plan.filePath, !filePath.isEmpty else {
+            return false
+        }
+        return FileManager.default.fileExists(atPath: filePath)
+    }
+    
+    private func openPlanFile() {
+        guard let filePath = plan.filePath else { return }
+        
+        NSWorkspace.shared.open(
+            URL(fileURLWithPath: filePath)
+        )
+    }
+#endif
 }
 
 

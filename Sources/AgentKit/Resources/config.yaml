@@ -9,15 +9,40 @@
 #
 # 注意：api_key_env 只引用环境变量名，key 由 secretsJSON 注入（走 Keychain），此文件不含明文密钥。
 
-default_model: deepseek-pro
+default_model: gateway
+
+credentials:
+  gateway:
+    default:
+      source: injected
+  llm:
+    deepseek:
+      source: env
+      env: DEEPSEEK_API_KEY
+    qwen:
+      source: env
+      env: DASHSCOPE_API_KEY
+    glm:
+      source: env
+      env: GLM_API_KEY
 
 models:
+  gateway:
+    provider: openai
+    base_url: "http://192.168.1.13:12221/api/v1/agent"
+    model: ""                                       # Gateway 服务端选择默认模型
+    credential:
+      namespace: gateway
+      name: default
+    context_window: 128000
+
   deepseek:
     provider: openai
     base_url: "https://api.deepseek.com"
-    # model must support function calling
     model: "deepseek-v4-flash"
-    api_key_env: DEEPSEEK_API_KEY
+    credential:
+      namespace: llm
+      name: deepseek
     temperature: 0.2
     context_window: 128000
     input_price_per_million: 0.27
@@ -28,29 +53,37 @@ models:
     provider: openai
     base_url: "https://api.deepseek.com"
     model: "deepseek-v4-pro"
-    api_key_env: DEEPSEEK_API_KEY
+    credential:
+      namespace: llm
+      name: deepseek
     context_window: 128000
-web:
-  search:
-    provider: tavily
-    tavily_api_key_env: TAVILY_API_KEY
-    searxng_base_url: ""
-    top_k: 5
-    timeout_seconds: 10
-  fetch:
-    timeout_seconds: 30
-    cache_ttl_seconds: 600
     
 agent:
-  max_steps: 32
-  compact_ratio: 0.5
+  max_steps: 33
+  max_parallel_tools: 4
+  compact_ratio: 0.75
   subagent_model: deepseek
-  max_parallel_tools: 3
+  client_tool_timeout_seconds: 900
+
 
 provider:
   request_timeout_seconds: 600
   max_retries: 5
   backoff_millis: 500
   max_backoff_seconds: 8
+
+web:
+  search:
+    provider: gateway
+    gateway_base_url: "http://localhost:12221/api/v1/agent"
+    credential:
+      namespace: gateway
+      name: default
+    top_k: 5
+    # Local debugger override; production can use the 120s example default.
+    gateway_timeout_seconds: 600
+
+runtime:
+  max_concurrent_turns: 5
 
 currency: "$"

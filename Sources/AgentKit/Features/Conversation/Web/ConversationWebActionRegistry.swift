@@ -9,6 +9,7 @@ import Foundation
 
 enum ConversationWebAction: Hashable {
     case transcript(turnID: String, action: TranscriptAction)
+    case shareTurn(turnID: String)
     case showTurnAssets(turnID: String)
     case timelineExtension(extensionID: String, turnID: String, actionID: String)
     case timelineDocument(TimelineWebDocument)
@@ -110,6 +111,11 @@ enum ConversationWebActionDispatcher {
             guard let turn = turns.first(where: { $0.id == turnID }) else { return }
             TurnActionDispatcher(turn: turn, store: store, openURL: openURL)
                 .showTurnAssets()
+
+        case .shareTurn(let turnID):
+            guard let turn = turns.first(where: { $0.id == turnID }) else { return }
+            TurnActionDispatcher(turn: turn, store: store, openURL: openURL)
+                .shareTurn(as: .image)
 
         case .timelineExtension(let extensionID, let turnID, let actionID):
             guard let timelineExtension = timelineExtensions.first(where: { $0.id == extensionID })
