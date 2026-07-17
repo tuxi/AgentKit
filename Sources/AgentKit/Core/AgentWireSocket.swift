@@ -42,7 +42,7 @@ public final class AgentWireSocket: @unchecked Sendable {
     /// 底层 WebSocket（来自 CoreKit，处理重连/心跳/前后台）。
     private let wsClient: WebSocketClient
 
-    /// 可选的 credential store（macOS 远端 Runtime 路径）。
+    /// 可选的 credential store（远端或 iOS 内嵌 Runtime 路径）。
     private let credentialStore: (any CredentialStore)?
     private let credentialTarget: CredentialTarget
 
@@ -92,7 +92,7 @@ public final class AgentWireSocket: @unchecked Sendable {
     ///   - since: 续传游标初值 = 调用方已回放事件里最大的 `seq`（0 = 无历史）。
     ///   - streamKind: 目标分区。`.job` 走 `/v1/jobs/{id}/stream`（只读子流），
     ///     不发任何入站帧、不注册工具。默认 `.conversation`（主会话双向流）。
-    ///   - credentialStore: 可选的 credential store（macOS 远端 Runtime 路径）。
+    ///   - credentialStore: 可选的 credential store（远端或 iOS 内嵌 Runtime 路径）。
     ///     非 nil 时，WS 握手请求会注入 `Authorization: Bearer <jwt>` header。
     public init(environment: RuntimeEnvironment, conversationID: String,
                 since: Int = 0, streamKind: WireStreamKind = .conversation,
@@ -151,10 +151,16 @@ public final class AgentWireSocket: @unchecked Sendable {
                       let url = URL(string: "\(wsBase)/\(streamKind.streamPath(id: conversationID))")
                 else { return nil }
                 var request = URLRequest(url: url)
-                // 同步注入 credential header（macOS 路径，Keychain 操作同步）
-                if let store,
-                   let cred = store.resolveSync(target),
-                   !cred.secret.isEmpty, cred.kind == .bearer {
+                // validator 本身是 async：每次首连/重连都先走异步 resolver，
+                // 允许宿主刷新临近过期的 token，再创建 WebSocket upgrade request。
+                if let store {
+                    guard let cred = try? await store.resolve(target),
+                          !cred.secret.isEmpty,
+                          cred.kind == .bearer else {
+                        // 已配置认证的连接禁止降级成匿名 WS；返回 nil 交给
+                        // WebSocketClient 的 preflight backoff 重试。
+                        return nil
+                    }
                     request.setValue("Bearer \(cred.secret)", forHTTPHeaderField: "Authorization")
                 }
                 DeviceContext.apply(to: &request)

@@ -50,15 +50,39 @@ public struct CredentialMap: Codable, Sendable {
     /// 转为 Runtime 能理解的 secretsJSON 格式。
     ///
     /// key = `CredentialTarget.id`（url.PathEscape 编码）。
-    /// value = stripped `Credential` JSON（不含 metadata）。
+    /// value = Go credential wire JSON 的字符串（`type` / `secret` /
+    /// `expires_at`，不含 metadata）。顶层保持 `[String:String]`，兼容
+    /// `MobileStart` 的 gomobile 边界；Go Runtime 会再解析字符串内的对象。
     ///
     /// **关键：`refresh_token` 永不进入 Runtime**。
     public func toSecretsJSON() -> String {
-        var dict: [String: Credential] = [:]
-        for (target, cred) in entries {
-            dict[target.id] = cred.strippedForInjection()
+        struct RuntimeCredential: Encodable {
+            let type: String
+            let secret: String
+            let expiresAt: Int64?
+
+            enum CodingKeys: String, CodingKey {
+                case type
+                case secret
+                case expiresAt = "expires_at"
+            }
         }
-        guard let data = try? JSONEncoder().encode(dict),
+
+        let encoder = JSONEncoder()
+        var dict: [String: String] = [:]
+        for (target, cred) in entries {
+            let wire = RuntimeCredential(
+                type: cred.kind.rawValue,
+                secret: cred.secret,
+                expiresAt: cred.expiresAt.map { Int64($0.timeIntervalSince1970) }
+            )
+            guard let data = try? encoder.encode(wire),
+                  let value = String(data: data, encoding: .utf8) else {
+                continue
+            }
+            dict[target.id] = value
+        }
+        guard let data = try? encoder.encode(dict),
               let json = String(data: data, encoding: .utf8) else {
             return "{}"
         }

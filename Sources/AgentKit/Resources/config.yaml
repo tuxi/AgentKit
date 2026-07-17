@@ -75,7 +75,7 @@ provider:
 web:
   search:
     provider: gateway
-    gateway_base_url: "http://localhost:12221/api/v1/agent"
+    gateway_base_url: "http://192.168.1.13:12221/api/v1/agent"
     credential:
       namespace: gateway
       name: default

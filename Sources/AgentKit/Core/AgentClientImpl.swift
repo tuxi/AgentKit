@@ -430,6 +430,18 @@ public final class DefaultAgentClient: RuntimeClient, @unchecked Sendable {
     public static func fromRuntime() -> DefaultAgentClient {
         DefaultAgentClient(environment: .fromRuntime())
     }
+
+    /// 从内嵌 Runtime 读取动态端口，并为 HTTP / Agent Wire 握手注入凭证。
+    public static func fromRuntime(
+        credentialStore: any CredentialStore,
+        credentialTarget: CredentialTarget = .gateway
+    ) -> DefaultAgentClient {
+        DefaultAgentClient(
+            environment: .fromRuntime(),
+            credentialStore: credentialStore,
+            credentialTarget: credentialTarget
+        )
+    }
     #endif
 
     // MARK: - RuntimeClient conformance

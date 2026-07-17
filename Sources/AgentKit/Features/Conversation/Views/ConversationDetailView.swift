@@ -47,7 +47,9 @@ public struct ConversationDetailView: View {
         .frame(maxWidth: 800)
         .frame(minWidth: 230)
         .toolbar { toolbarContent }
+        #if os(macOS)
         .navigationTitle(store.activeConversationViewModel?.conversation?.name ?? "")
+        #endif
     }
     
     // MARK: - Draft (no session yet)
@@ -149,7 +151,9 @@ public struct ConversationDetailView: View {
             
             residentTimelines(activeViewModel: vm)
         }
-        .padding(.horizontal)
+        #if os(macOS)
+        .padding(.horizontal, 20)
+        #endif
         .safeAreaInset(edge: .bottom, spacing: 8) {
             VStack(spacing: 0) {
                 // Plan 是阻塞输入的审批状态，不是对话消息。完整规划只在

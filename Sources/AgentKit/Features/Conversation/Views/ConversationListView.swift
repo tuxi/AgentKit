@@ -225,8 +225,8 @@ public struct ConversationListView: View {
                     .listRowBackground(Color.clear)
             }
 
+            projectGroupHeader
             if !conversationGroups.isEmpty {
-                projectGroupHeader
 
                 if isProjectsExpanded {
                     ForEach(conversationGroups) { group in
@@ -397,14 +397,14 @@ public struct ConversationListView: View {
         Button {
             isArchivedExpanded.toggle()
         } label: {
-            HStack(spacing: 9) {
-                Image(systemName: "archivebox")
-                    .font(.system(size: 15, weight: .medium))
-                    .foregroundStyle(.secondary)
-                    .frame(width: 18)
+            HStack(spacing: 7) {
+//                Image(systemName: "archivebox")
+//                    .font(.system(size: 15, weight: .medium))
+//                    .foregroundStyle(.secondary)
+//                    .frame(width: 18)
                 Text("已归档")
-                    .font(.system(size: 15, weight: .medium))
-                    .foregroundStyle(.primary)
+                    .font(.system(size: 13, weight: .semibold))
+                    .foregroundStyle(.secondary)
                 if !viewModel.archivedConversations.isEmpty {
                     Text("\(viewModel.archivedConversations.count)")
                         .font(.caption2.monospacedDigit())
@@ -413,13 +413,14 @@ public struct ConversationListView: View {
                 if viewModel.isLoadingArchived {
                     ProgressView().controlSize(.mini)
                 }
-                Spacer(minLength: 0)
                 Image(systemName: isArchivedExpanded ? "chevron.down" : "chevron.right")
                     .font(.system(size: 10, weight: .bold))
                     .foregroundStyle(.tertiary)
+                Spacer()
             }
-            .padding(.horizontal, 8)
-            .padding(.vertical, 6)
+            .padding(.horizontal, 6)
+            .padding(.top, 13)
+            .padding(.bottom, 7)
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)

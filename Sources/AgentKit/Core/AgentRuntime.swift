@@ -48,6 +48,12 @@ public final class AgentRuntime: @unchecked Sendable {
     static public let shared = AgentRuntime()
 
     private var server: MobileServer?      // 前缀 Mobile 来自 Go 包名
+    /// 最近一次由宿主注入的凭证。listener 健康恢复需要重建 server 时继续使用。
+    private var injectedSecretsJSON: String?
+    /// CredentialStore 路径由 bundled config 的 default_model 决定，不能复用旧的
+    /// AgentSettings.model（它可能是 BYOK alias 或 Gateway 原生 model ID）。
+    /// nil = legacy settings；"" = config.default_model。
+    private var startupModelNameOverride: String?
 
     /// runtime 是否在本进程内存活。用作「同进程 suspend/thaw」与「jetsam 冷启动」的判据（见契约 §3.2）：
     /// - `server != nil` ⇒ 同进程（可能刚被 OS thaw）→ 复用现有端口，WS 直接重连；
@@ -106,6 +112,9 @@ public final class AgentRuntime: @unchecked Sendable {
     public func reconfigure(secretsJSON: String = "", modelName: String = "") throws {
         guard let server else { return }
         try server.reconfigure(secretsJSON, modelName: modelName)
+        if !secretsJSON.isEmpty {
+            injectedSecretsJSON = secretsJSON
+        }
     }
 
     /// 实际冷启动一个 runtime server。启动前先 `stop()` 任何残留实例，杜绝覆盖泄漏。
@@ -123,8 +132,8 @@ public final class AgentRuntime: @unchecked Sendable {
         Self.applyDataProtection(to: support)
         // secrets / model 从用户设置读取（Keychain + UserDefaults）——不再硬编码进源码。
         // 无 key 时 secretsJSON() 返回 "{}"，runtime 缺凭证；设置页引导用户填入后 restart()。
-        let secrets = AgentSettings.secretsJSON()
-        let model = AgentSettings.model
+        let secrets = injectedSecretsJSON ?? AgentSettings.secretsJSON()
+        let model = startupModelNameOverride ?? AgentSettings.model
         // 模型路由 config（裁剪版，随 bundle 打包）。读不到则传 ""，回退 runtime 内置默认。
         let configYAML = Self.bundledConfigYAML()
         
@@ -220,16 +229,31 @@ public final class AgentRuntime: @unchecked Sendable {
 
     // MARK: - CredentialStore Integration
 
-    /// 使用 CredentialStore 启动 Runtime（替代直接传 secretsJSON）。
-    /// 向后兼容：CredentialStore 为空时回退到旧的 AgentSettings.secretsJSON()。
+    /// 使用 CredentialStore 幂等启动 Runtime。已有 listener 时只热更新凭证，
+    /// 不执行 stop/start，也不会更换 Agent Wire 端口。
     @discardableResult
-    public func launch(with credentialStore: any CredentialStore) async throws -> Int {
+    public func ensureStarted(with credentialStore: any CredentialStore) async throws -> Int {
         let map = (try? await credentialStore.all()) ?? CredentialMap()
         let secretsJSON = map.toSecretsJSON()
         let finalSecrets = secretsJSON == "{}"
             ? AgentSettings.secretsJSON()
             : secretsJSON
+        // AppCredentialStore 注入的是 gateway/default；基础 provider 必须从
+        // config.default_model 启动。每条消息的具体 Gateway model 仍走 wire model。
+        startupModelNameOverride = ""
+
+        if let server {
+            try server.reconfigure(finalSecrets, modelName: "")
+            injectedSecretsJSON = finalSecrets
+            return server.port()
+        }
         return try launch(secretsJSON: finalSecrets)
+    }
+
+    /// 兼容旧宿主；语义已改为幂等启动。显式重建请调用 restart()。
+    @discardableResult
+    public func launch(with credentialStore: any CredentialStore) async throws -> Int {
+        try await ensureStarted(with: credentialStore)
     }
 
     /// 热更新 credential（用户登录/切换 BYOK key/Token 刷新后）。
@@ -238,7 +262,10 @@ public final class AgentRuntime: @unchecked Sendable {
     public func reconfigure(with credentialStore: any CredentialStore) async throws {
         guard let server else { return }
         let map = (try? await credentialStore.all()) ?? CredentialMap()
-        try server.reconfigure(map.toSecretsJSON(), modelName: "")
+        let secretsJSON = map.toSecretsJSON()
+        try server.reconfigure(secretsJSON, modelName: "")
+        injectedSecretsJSON = secretsJSON
+        startupModelNameOverride = ""
     }
 
     // MARK: - Accessors
@@ -256,6 +283,7 @@ public final class AgentRuntime: @unchecked Sendable {
     private func launch(secretsJSON: String = "") throws -> Int {
         stop()
         let finalSecrets = secretsJSON.isEmpty ? AgentSettings.secretsJSON() : secretsJSON
+        injectedSecretsJSON = finalSecrets
         return try _launch(secretsJSON: finalSecrets)
     }
 
@@ -266,7 +294,7 @@ public final class AgentRuntime: @unchecked Sendable {
         let support = fm.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
         try? fm.createDirectory(at: support, withIntermediateDirectories: true)
         Self.applyDataProtection(to: support)
-        let model = AgentSettings.model
+        let model = startupModelNameOverride ?? AgentSettings.model
         let configYAML = Self.bundledConfigYAML()
         Self.installBundledSkillsIfNeeded()
         var error: NSError?
