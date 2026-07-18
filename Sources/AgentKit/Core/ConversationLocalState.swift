@@ -207,8 +207,9 @@ public final class SQLiteConversationLocalStateStore: ConversationLocalStateStor
     public static func defaultDatabaseURL() -> URL {
         let base = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first
             ?? FileManager.default.temporaryDirectory
+        let appNamespace = Bundle.main.bundleIdentifier ?? "AgentKit"
         return base
-            .appendingPathComponent("CodeAgent", isDirectory: true)
+            .appendingPathComponent(appNamespace, isDirectory: true)
             .appendingPathComponent("conversation-local-state-v1.sqlite", isDirectory: false)
     }
 

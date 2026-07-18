@@ -77,7 +77,7 @@ struct DraftComposerPanel: View {
                     }
                     .menuStyle(.borderlessButton)
                     .fixedSize()
-                    .foregroundStyle(.secondary)
+//                    .foregroundStyle(.secondary)
 
                     Spacer(minLength: 12)
 
@@ -169,7 +169,7 @@ struct DraftComposerPanel: View {
                     }
                     .menuStyle(.borderlessButton)
                     .fixedSize()
-                    .foregroundStyle(.secondary)
+//                    .foregroundStyle(.secondary)
 
                     Button { } label: {
                         Image(systemName: "mic")
@@ -630,6 +630,12 @@ private enum ApprovalScope: String, CaseIterable, Hashable {
 // 扩展三态选择的回调
 struct ApprovalBar: View {
     let request: ApprovalRequest
+
+    private var appDisplayName: String {
+        Bundle.main.object(forInfoDictionaryKey: "CFBundleDisplayName") as? String
+            ?? Bundle.main.object(forInfoDictionaryKey: "CFBundleName") as? String
+            ?? "the agent"
+    }
     
     // 三态回调映射图中的按钮
     let onDeny: () -> Void          // Deny 1
@@ -651,7 +657,7 @@ struct ApprovalBar: View {
                         .fill(Color.orange)
                         .frame(width: 6, height: 6)
                     
-                    Text("Allow CodeAgent to run \(request.displayToolName)?")
+                    Text("Allow \(appDisplayName) to run \(request.displayToolName)?")
                         .font(.system(size: 13, weight: .semibold))
                         .foregroundStyle(.primary)
                     
