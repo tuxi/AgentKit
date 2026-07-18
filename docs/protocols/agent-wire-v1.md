@@ -3,7 +3,7 @@
 > 状态：v1（正式）。CodeAgent 从 CLI 迈向 CLI / macOS / iOS / Web 多前端架构的第一份传输契约。
 > 实现位置：`internal/server`（Layer 2）。core（`internal/agent`，Layer 1）不感知本协议。
 >
-> **版本链**：v1（本文，基准）→ [v1.1 客户端工具执行](agent-wire-v1.1-client-tool-execution.md) → [v1.2 生命周期 Suspend/Resume/Reconfigure](agent-wire-v1.2-lifecycle-suspend-resume.md)。同一 major 内只增不改（见 §5）。
+> **版本链**：v1（本文，基准）→ [v1.1 客户端工具执行](agent-wire-v1.1-client-tool-execution.md) → [v1.2 生命周期 Suspend/Resume/Reconfigure](agent-wire-v1.2-lifecycle-suspend-resume.md) → [v1.3 Tool Assets](agent-wire-v1.3-tool-assets.md) → [v1.5 User Assets](agent-wire-v1.5-user-assets.md)。同一 major 内只增不改（见 §5）。
 
 ---
 

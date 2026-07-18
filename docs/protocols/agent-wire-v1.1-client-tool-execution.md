@@ -689,7 +689,7 @@ func (r Router) Route(ctx context.Context, data []byte) {
 | `subagents` | 支持 `task_started` / `task_finished` 子代理事件 | ✅ |
 | `session_resume` | 支持 `GET /events` 恢复历史 | ✅ |
 | `client_tool_execution` | 支持 `executor:"client"` + `tool_result` 回传 | ✅ v1.1 |
-| `image_input` | 图能力 | ❌ 未实现 |
+| `image_input` | 用户图片输入；见 [Agent Wire v1.5](agent-wire-v1.5-user-assets.md) | v1.5 契约已冻结，实现方完成端到端能力后发布 |
 
 ### 7.3 Go 侧改动
 

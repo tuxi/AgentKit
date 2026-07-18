@@ -141,13 +141,23 @@ User input starts a new turn.
 ```json
 {
   "kind": "turn_started",
-  "text": "分析 src/auth/ 目录的代码结构"
+  "text": "解释这张截图里的错误",
+  "user_assets": [
+    {
+      "asset_id": 10001,
+      "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "kind": "image",
+      "mime_type": "image/jpeg",
+      "filename": "build-error.jpg"
+    }
+  ]
 }
 ```
 
 | Field | Type | Description |
 |-------|------|-------------|
 | `text` | string | 用户输入的文本 |
+| `user_assets` | array | since v1.5 — Gateway 托管的用户图片引用；可选，且不同于 v1.3 `tool_finished.assets`，见 [Agent Wire v1.5](agent-wire-v1.5-user-assets.md) |
 
 #### `turn_finished` (since v1.0)
 
@@ -219,6 +229,12 @@ Turn terminated due to unrecoverable error.
 | `quota_exceeded` | Gateway quota exhausted | Show quota UI |
 | `subscription_required` | Tier insufficient | Show upgrade UI |
 | `request_failed` | Generic non-retryable error | Show error message |
+| `asset_unavailable` | User asset missing, deleted, or unauthorized | Keep failure generic; never reveal ownership |
+| `asset_not_ready` | Upload has not reached active state | Ask user to finish/retry upload |
+| `invalid_assets` | Gateway rejected authoritative asset metadata or policy | Fix or re-upload the asset |
+| `asset_integrity_mismatch` | Supplied SHA does not match Gateway metadata | Re-upload asset |
+| `image_input_unsupported` | Selected model and vision bridge cannot process images | Select another model |
+| `image_processing_failed` | Asset signing/decoding/vision processing failed | Retry as a new turn |
 | *(any unknown)* | Future error type | Graceful degrade — show generic error |
 
 ### 5.2 Model Interaction Events
@@ -821,6 +837,7 @@ Job 子流（`GET /v1/jobs/{id}/stream`）使用**相同的事件信封**（§4�
 | `plan_approval_request` | server → client | v1.0 |
 | `plan_approval_response` | client → server | v1.0 |
 | `agent_input` | client → server | v1.1 |
+| `agent_input_rejected` | server → client | v1.5 |
 | `send_message` | client → server | v1.0 (legacy) |
 | `cancel_turn` | client → server | v1.0 |
 | `register_tools` | client → server | v1.1 |
