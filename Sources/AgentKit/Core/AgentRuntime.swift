@@ -183,11 +183,16 @@ public final class AgentRuntime: @unchecked Sendable {
 
     /// 读取随 bundle 打包的裁剪版 config.yaml 内容；缺失则返回 ""（回退 runtime 内置默认）。
     private static func bundledConfigYAML() -> String {
+        #if DEBUG
+        let gatewayBaseURL = "http://192.168.1.13:12221/api/v1/agent"
+        #else
+        let gatewayBaseURL = "https://api.objc.com/api/v1/agent"
+        #endif
         guard let url = Bundle.module.url(forResource: "config", withExtension: "yaml"),
               let text = try? String(contentsOf: url, encoding: .utf8) else {
             return ""
         }
-        return text
+        return text.replacingOccurrences(of: "__GATEWAY_BASE_URL__", with: gatewayBaseURL)
     }
     
     // copy into Application Support/skills (global/user-level)

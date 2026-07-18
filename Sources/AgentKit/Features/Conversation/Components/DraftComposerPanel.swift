@@ -167,6 +167,9 @@ struct DraftComposerPanel: View {
                         .background(isMenuPresented ? Color.primary.opacity(0.05) : Color.clear)
                         .cornerRadius(4)
                     }
+                    .menuStyle(.borderlessButton)
+                    .fixedSize()
+                    .foregroundStyle(.secondary)
 
                     Button { } label: {
                         Image(systemName: "mic")
