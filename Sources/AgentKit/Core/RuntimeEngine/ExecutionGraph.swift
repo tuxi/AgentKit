@@ -175,7 +175,7 @@ public enum GraphNodeKind: String, Sendable, CaseIterable {
 
 /// Typed payload per GraphNodeKind. Uses existing ArtifactPayload for artifact-kind nodes.
 public enum NodePayload: Sendable {
-    case userInput(text: String)
+    case userInput(UserInputPayload)
     case thinking(text: String)
     case toolCall(ToolExecPayload)
     case observation(text: String)
@@ -186,6 +186,16 @@ public enum NodePayload: Sendable {
     case approval(ApprovalExecPayload)
     case todo([TodoItem])
     case plan(PlanExecPayload)
+}
+
+public struct UserInputPayload: Sendable {
+    public let text: String
+    public let userAssets: [UserAssetRef]
+
+    public init(text: String, userAssets: [UserAssetRef] = []) {
+        self.text = text
+        self.userAssets = userAssets
+    }
 }
 
 // MARK: - Payload structs

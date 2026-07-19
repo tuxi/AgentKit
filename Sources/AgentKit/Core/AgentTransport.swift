@@ -280,6 +280,10 @@ private final class LegacyAgentTransportSessionChannel: RuntimeSessionChannel, @
         try await transport.attach(sessionID: sessionID, since: since)
     }
     func send(input: AgentInput) async { await transport.send(input: input) }
+    func submit(input: AgentInput) async -> AgentInputSubmissionTicket {
+        await transport.send(input: input)
+        return .terminal(requestID: input.requestID ?? "", state: .dispatched)
+    }
     func registerTools(_ tools: [ClientToolInfo]) async { await transport.registerTools(tools) }
     func sendApproval(id: String, approved: Bool) async {
         await transport.approve(id: id, value: approved)

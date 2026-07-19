@@ -20,8 +20,10 @@ public enum AgentEvent: Sendable {
     case turnAccepted(turnID: String, requestID: String?, text: String?)
     /// Accepted turn is waiting for a scheduler/workspace slot.
     case turnQueued(turnID: String, reason: String?, position: Int?)
+    /// Non-persisted control response for an input that did not create a turn.
+    case agentInputRejected(requestID: String?, rejection: AgentInputRejection)
     /// `turn_started`：新 turn 开始。`turnID` 是 grouping key。
-    case turnStarted(turnID: String, text: String)
+    case turnStarted(turnID: String, text: String, userAssets: [UserAssetRef] = [])
     /// `turn_finished`：当前 turn 结束。
     case turnFinished(turnID: String, text: String, textAnnotations: [AgentTextAnnotation])
     /// `turn_paused`：当前 turn 已 checkpoint 并暂停，等待 ResumeSession。
@@ -113,7 +115,11 @@ extension AgentEvent {
             )
 
         case "turn_started":
-            return .turnStarted(turnID: turnID ?? "", text: wire.text ?? "")
+            return .turnStarted(
+                turnID: turnID ?? "",
+                text: wire.text ?? "",
+                userAssets: wire.userAssets ?? []
+            )
 
         case "turn_finished":
             return .turnFinished(

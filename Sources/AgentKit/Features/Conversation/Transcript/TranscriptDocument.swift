@@ -59,7 +59,7 @@ enum TurnTranscriptBuilder {
         var builder = TranscriptAttributedBuilder(assetIndex: assetIndex)
 
         if let user = turn.userPrompt {
-            builder.appendUserPrompt(user.text)
+            builder.appendUserPrompt(user.displayTextWithUserAssets)
             builder.appendBlankLine()
         }
 
@@ -275,6 +275,15 @@ enum TurnTranscriptBuilder {
             return false
         }
         return payload.isTranscriptError
+    }
+}
+
+extension MessageNodePayload {
+    var displayTextWithUserAssets: String {
+        let labels = userAssets.map { "[图片] \($0.filename)" }
+        if text.isEmpty { return labels.joined(separator: "\n") }
+        guard !labels.isEmpty else { return text }
+        return ([text] + labels).joined(separator: "\n")
     }
 }
 

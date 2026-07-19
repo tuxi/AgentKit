@@ -6,6 +6,11 @@
 //
 
 import SwiftUI
+#if os(macOS)
+import AppKit
+#else
+import UIKit
+#endif
 
 
 // MARK: - DraftComposerPanel
@@ -23,7 +28,8 @@ struct DraftComposerPanel: View {
     let isDraft: Bool
     var isTurnRunning: Bool = false
     var onStop: (() -> Void)? = nil
-    let onSend: (_ text: String, _ model: String) async -> Bool
+    let onSend: (_ text: String, _ model: String, _ assets: [UserAssetRef]) async -> Bool
+    var onAddAttachment: (() -> Void)? = nil
 
     let viewModel: ConversationViewModel?
     /// 草稿代次（WorkspaceStore.draftNavigationRevision）。草稿模式下 viewModel 为 nil，
@@ -36,6 +42,8 @@ struct DraftComposerPanel: View {
     var onModelChange: ((String) -> Void)? = nil
 
     @State private var text = ""
+    @State private var attachments: [DraftAttachmentReference] = []
+    @State private var submittedTextSnapshot: String?
     @State private var isSending = false
     @State private var loadedStateKey: ConversationLocalStateKey?
     @State private var pendingSaveTask: Task<Void, Never>?
@@ -53,18 +61,33 @@ struct DraftComposerPanel: View {
     var body: some View {
         VStack(spacing: 0) {
             VStack(spacing: 8) {
+                if !attachments.isEmpty {
+                    attachmentStrip
+                        .padding(.horizontal, 16)
+                        .padding(.top, 12)
+                }
                 inputField
                     .padding(.horizontal, 16)
-                    .padding(.top, 14)
+                    .padding(.top, attachments.isEmpty ? 14 : 2)
 
                 HStack(spacing: 12) {
-                    Button { } label: {
+                    Button {
+                        if let onAddAttachment {
+                            onAddAttachment()
+                        } else {
+                            pickAndUploadAttachments()
+                        }
+                    } label: {
                         Image(systemName: "plus")
                             .font(.system(size: 17, weight: .medium))
                     }
                     .buttonStyle(.plain)
                     .foregroundStyle(.secondary)
                     .accessibilityLabel("添加")
+                    .disabled(
+                        attachments.count >= 4
+                            || (onAddAttachment == nil && !workspaceStore.canSelectUserAssets)
+                    )
 
                     Menu {
                         Button("请求批准") { }
@@ -239,6 +262,13 @@ struct DraftComposerPanel: View {
             guard !isRestoringLocalState, let key = loadedStateKey else { return }
             scheduleTextSave(newValue, for: key)
         }
+        .onChange(of: viewModel?.lastAcceptedSubmissionRequestID) { _, _ in
+            reconcileAcceptedSubmission()
+        }
+        .onChange(of: viewModel?.lastInputRejection) { _, _ in
+            submittedTextSnapshot = nil
+            refreshAttachmentsFromLocalState()
+        }
         .onChange(of: scenePhase) { _, phase in
             if phase == .background || phase == .inactive {
                 persistCurrentText()
@@ -283,21 +313,29 @@ struct DraftComposerPanel: View {
         text.trimmingCharacters(in: .whitespacesAndNewlines)
     }
 
+    private var readyAssets: [UserAssetRef] {
+        attachments.compactMap { attachment in
+            guard attachment.state == .ready else { return nil }
+            return attachment.readyAsset
+        }
+    }
+
     private var canSend: Bool {
-        isEnabled && !trimmed.isEmpty && !isSending && !isTurnRunning && !(selectedModel ?? "").isEmpty
+        let hasContent = !trimmed.isEmpty || !readyAssets.isEmpty
+        let attachmentsReady = attachments.allSatisfy { $0.state == .ready }
+        return isEnabled && hasContent && attachmentsReady && !isSending
+            && !isTurnRunning && !(selectedModel ?? "").isEmpty
     }
 
     private func send() {
         guard canSend else { return }
         let toSend = text
+        submittedTextSnapshot = toSend
+        persistCurrentDraft()
         isSending = true
         Task {
-            let ok = await onSend(toSend, selectedModel ?? "")
+            _ = await onSend(toSend, selectedModel ?? "", readyAssets)
             isSending = false
-            if ok {
-                text = ""
-                persistCurrentText()
-            }
         }
     }
 
@@ -311,9 +349,9 @@ struct DraftComposerPanel: View {
         return nil
     }
 
-    private func restoreLocalState() {
+    private func restoreLocalState(persistOutgoingText: Bool = true) {
         pendingSaveTask?.cancel()
-        if let oldKey = loadedStateKey {
+        if persistOutgoingText, let oldKey = loadedStateKey {
             persist(text: text, for: oldKey)
         }
         let key = persistenceKey
@@ -323,6 +361,8 @@ struct DraftComposerPanel: View {
 
         let state = key.flatMap { try? workspaceStore.localStateStore.state(for: $0) }
         text = state?.composerDraft.text ?? ""
+        attachments = state?.composerDraft.attachments ?? []
+        submittedTextSnapshot = state?.composerDraft.pendingSubmission?.text
         selectedModel = state?.selectedModelID
             ?? modelSettings.getModel(with: viewModel?.conversation?.id)
     }
@@ -342,6 +382,62 @@ struct DraftComposerPanel: View {
         persist(text: text, for: key)
     }
 
+    private func persistCurrentDraft() {
+        pendingSaveTask?.cancel()
+        guard let key = loadedStateKey else { return }
+        let textSnapshot = text
+        let attachmentSnapshot = attachments
+        try? workspaceStore.localStateStore.updateState(for: key) { state in
+            state.composerDraft.text = textSnapshot
+            state.composerDraft.attachments = attachmentSnapshot
+            state.composerDraft.revision += 1
+        }
+    }
+
+    /// Applies the accepted snapshot to the current editor value without writing
+    /// the stale pre-accept text back over the durable state. Text entered while
+    /// acknowledgement was pending remains in the composer.
+    private func reconcileAcceptedSubmission() {
+        pendingSaveTask?.cancel()
+        if let submittedTextSnapshot, !submittedTextSnapshot.isEmpty {
+            if text == submittedTextSnapshot {
+                text = ""
+            } else if text.hasPrefix(submittedTextSnapshot) {
+                text.removeFirst(submittedTextSnapshot.count)
+                text = text.trimmingCharacters(in: .whitespacesAndNewlines)
+            }
+            self.submittedTextSnapshot = nil
+            refreshAttachmentsFromLocalState()
+            persistCurrentText()
+        } else {
+            // Covers process-restart recovery where the UI did not originate the
+            // submission but the persisted pending snapshot has now been accepted.
+            restoreLocalState(persistOutgoingText: false)
+        }
+    }
+
+    private func refreshAttachmentsFromLocalState() {
+        guard let key = loadedStateKey,
+              let state = try? workspaceStore.localStateStore.state(for: key) else { return }
+        attachments = state.composerDraft.attachments
+    }
+
+    private var attachmentStrip: some View {
+        ScrollView(.horizontal, showsIndicators: false) {
+            HStack(spacing: 8) {
+                ForEach(attachments) { attachment in
+                    DraftAttachmentThumbnail(
+                        attachment: attachment,
+                        resolver: workspaceStore.userAssetDraftPreviewResolver,
+                        onRemove: { removeAttachment(attachment.id) },
+                        onRetry: { retryUpload(attachment.id) }
+                    )
+                }
+            }
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+    }
+
     private func persist(text: String, for key: ConversationLocalStateKey) {
         try? workspaceStore.localStateStore.updateState(for: key) { state in
             state.composerDraft.text = text
@@ -357,6 +453,189 @@ struct DraftComposerPanel: View {
             if state.recentModelIDs.count > 8 {
                 state.recentModelIDs.removeLast(state.recentModelIDs.count - 8)
             }
+        }
+    }
+
+    private func pickAndUploadAttachments() {
+        guard let key = persistenceKey else { return }
+        Task {
+            await workspaceStore.selectAndUploadUserAssets(
+                for: key,
+                remainingSlots: 4 - attachments.count
+            ) {
+                refreshAttachmentsFromLocalState()
+            }
+        }
+    }
+
+    private func removeAttachment(_ id: String) {
+        attachments.removeAll { $0.id == id }
+        persistCurrentDraft()
+    }
+
+    private func retryUpload(_ id: String) {
+        guard let key = persistenceKey else { return }
+        Task {
+            await workspaceStore.retryUserAssetUpload(id: id, for: key) {
+                refreshAttachmentsFromLocalState()
+            }
+        }
+    }
+}
+
+private struct DraftAttachmentThumbnail: View {
+    let attachment: DraftAttachmentReference
+    let resolver: (any UserAssetDraftPreviewResolving)?
+    let onRemove: () -> Void
+    let onRetry: () -> Void
+
+    var body: some View {
+        ZStack(alignment: .topTrailing) {
+            DraftAttachmentPreview(attachment: attachment, resolver: resolver)
+                .frame(width: 96, height: 76)
+
+            stateOverlay
+
+            if attachment.state != .sending {
+                Button(action: onRemove) {
+                    Image(systemName: "xmark")
+                        .font(.system(size: 10, weight: .bold))
+                        .foregroundStyle(.white)
+                        .frame(width: 22, height: 22)
+                        .background(.black.opacity(0.72), in: Circle())
+                }
+                .buttonStyle(.plain)
+                .padding(5)
+                .accessibilityLabel("移除 \(attachment.displayName)")
+            }
+        }
+        .frame(width: 96, height: 76)
+        .background(Color.secondary.opacity(0.12))
+        .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
+        .overlay {
+            RoundedRectangle(cornerRadius: 10, style: .continuous)
+                .stroke(borderColor, lineWidth: attachment.state == .failed ? 1.5 : 0.5)
+        }
+        .help(attachment.displayName)
+        .accessibilityElement(children: .combine)
+        .accessibilityLabel(accessibilityLabel)
+    }
+
+    @ViewBuilder
+    private var stateOverlay: some View {
+        switch attachment.state {
+        case .local, .preparing:
+            statusOverlay(title: "处理中", progress: nil)
+        case .uploading:
+            statusOverlay(
+                title: "上传中 \(Int((attachment.progress ?? 0) * 100))%",
+                progress: attachment.progress
+            )
+        case .failed:
+            Button(action: onRetry) {
+                VStack(spacing: 4) {
+                    Image(systemName: "exclamationmark.arrow.triangle.2.circlepath")
+                        .font(.system(size: 18, weight: .semibold))
+                    Text("上传失败 · 重试")
+                        .font(.caption2.weight(.semibold))
+                }
+                .foregroundStyle(.white)
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+                .background(.black.opacity(0.58))
+            }
+            .buttonStyle(.plain)
+            .accessibilityHint(attachment.failure?.message ?? "点击重新上传")
+        case .ready, .sending:
+            EmptyView()
+        }
+    }
+
+    private func statusOverlay(title: String, progress: Double?) -> some View {
+        VStack(spacing: 6) {
+            if let progress {
+                ProgressView(value: progress)
+                    .tint(.white)
+                    .frame(width: 54)
+            } else {
+                ProgressView()
+                    .tint(.white)
+                    .controlSize(.small)
+            }
+            Text(title)
+                .font(.caption2.weight(.medium))
+                .foregroundStyle(.white)
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .background(.black.opacity(0.42))
+    }
+
+    private var borderColor: Color {
+        attachment.state == .failed ? .red.opacity(0.8) : .white.opacity(0.12)
+    }
+
+    private var accessibilityLabel: String {
+        switch attachment.state {
+        case .local, .preparing: return "\(attachment.displayName)，处理中"
+        case .uploading: return "\(attachment.displayName)，上传中"
+        case .failed: return "\(attachment.displayName)，上传失败"
+        case .ready: return "\(attachment.displayName)，上传完成"
+        case .sending: return "\(attachment.displayName)，发送中"
+        }
+    }
+}
+
+private struct DraftAttachmentPreview: View {
+    let attachment: DraftAttachmentReference
+    let resolver: (any UserAssetDraftPreviewResolving)?
+    @State private var previewImage: Image?
+
+    var body: some View {
+        Group {
+            if let previewImage {
+                previewImage
+                    .resizable()
+                    .scaledToFill()
+            } else {
+                ZStack {
+                    Color.secondary.opacity(0.08)
+                    Image(systemName: "photo")
+                        .font(.system(size: 22))
+                        .foregroundStyle(.secondary)
+                }
+            }
+        }
+        .clipped()
+        .task(id: "\(attachment.id)|\(attachment.resourceURI)") {
+            await loadPreview()
+        }
+    }
+
+    private func loadPreview() async {
+        let url: URL
+        do {
+            if let resolver {
+                url = try await resolver.previewURL(for: attachment)
+            } else if attachment.resourceURI.hasPrefix("/") {
+                url = URL(fileURLWithPath: attachment.resourceURI)
+            } else if let directURL = URL(string: attachment.resourceURI),
+                      directURL.isFileURL || directURL.scheme == "https" || directURL.scheme == "http" {
+                url = directURL
+            } else {
+                return
+            }
+
+            let data = try await Task.detached(priority: .utility) {
+                try Data(contentsOf: url, options: [.mappedIfSafe])
+            }.value
+#if os(macOS)
+            guard let image = NSImage(data: data) else { return }
+            previewImage = Image(nsImage: image)
+#else
+            guard let image = UIImage(data: data) else { return }
+            previewImage = Image(uiImage: image)
+#endif
+        } catch {
+            // Keep the neutral placeholder. Upload state remains independently visible.
         }
     }
 }

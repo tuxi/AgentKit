@@ -38,6 +38,7 @@ public final class AgentWireSocket: @unchecked Sendable {
     private let conversationID: String
     private let streamKind: WireStreamKind
     private let decoder = JSONDecoder()
+    private let submissionCoordinator: AgentInputSubmissionCoordinator
 
     /// 底层 WebSocket（来自 CoreKit，处理重连/心跳/前后台）。
     private let wsClient: WebSocketClient
@@ -94,15 +95,36 @@ public final class AgentWireSocket: @unchecked Sendable {
     ///     不发任何入站帧、不注册工具。默认 `.conversation`（主会话双向流）。
     ///   - credentialStore: 可选的 credential store（远端或 iOS 内嵌 Runtime 路径）。
     ///     非 nil 时，WS 握手请求会注入 `Authorization: Bearer <jwt>` header。
-    public init(environment: RuntimeEnvironment, conversationID: String,
-                since: Int = 0, streamKind: WireStreamKind = .conversation,
-                credentialStore: (any CredentialStore)? = nil,
-                credentialTarget: CredentialTarget = .gateway) {
+    public convenience init(
+        environment: RuntimeEnvironment,
+        conversationID: String,
+        since: Int = 0,
+        streamKind: WireStreamKind = .conversation,
+        credentialStore: (any CredentialStore)? = nil,
+        credentialTarget: CredentialTarget = .gateway
+    ) {
+        self.init(
+            environment: environment,
+            conversationID: conversationID,
+            since: since,
+            streamKind: streamKind,
+            credentialStore: credentialStore,
+            submissionCoordinator: AgentInputSubmissionCoordinator(),
+            credentialTarget: credentialTarget
+        )
+    }
+
+    init(environment: RuntimeEnvironment, conversationID: String,
+         since: Int = 0, streamKind: WireStreamKind = .conversation,
+         credentialStore: (any CredentialStore)? = nil,
+         submissionCoordinator: AgentInputSubmissionCoordinator,
+         credentialTarget: CredentialTarget = .gateway) {
         self.environment = environment
         self.conversationID = conversationID
         self.streamKind = streamKind
         self.maxSeq = since
         self.credentialStore = credentialStore
+        self.submissionCoordinator = submissionCoordinator
         self.credentialTarget = credentialTarget
         let tag = streamKind == .job ? "job" : "agent-wire"
         self.wsClient = WebSocketClient(identifier: "\(tag).\(conversationID)")
@@ -185,6 +207,7 @@ public final class AgentWireSocket: @unchecked Sendable {
                 // 丢弃进行中的 backfill：缓冲帧都已持久化在服务端，游标未被它们推进，
                 // 重连后的下一次 backfill 会从同一 maxSeq 重新补齐，不丢事件。
                 self.abandonBackfill()
+                Task { await self.submissionCoordinator.markReconnecting() }
                 guard self.isExplicitDisconnect else { return }
                 self.continuation?.finish()
                 self.continuation = nil
@@ -196,15 +219,57 @@ public final class AgentWireSocket: @unchecked Sendable {
     }
 
     /// 发送结构化输入（fire-and-forget）。响应来自 event stream。
-    public func send(input: AgentInput) {
-        let outgoing = OutgoingAgentInput.from(input: input)
-        send(outgoing: outgoing)
+    public func send(input: AgentInput) async {
+        _ = await submit(input: input)
+    }
+
+    /// Registers an immutable turn payload before sending it. The coordinator owns
+    /// the pending lifetime even when the returned stream has no active subscriber.
+    public func submit(input: AgentInput) async -> AgentInputSubmissionTicket {
+        let requestID = input.requestID ?? ""
+        do {
+            try input.validateForSubmission(
+                supportsImageInput: serverCapabilities.contains("image_input")
+            )
+        } catch let rejection as AgentInputRejection {
+            return .terminal(requestID: requestID, state: .rejected(rejection))
+        } catch {
+            return .terminal(
+                requestID: requestID,
+                state: .rejected(AgentInputRejection(
+                    code: error is UserAssetValidationError && input.assets.count > 4
+                        ? "too_many_assets"
+                        : "invalid_assets",
+                    message: error.localizedDescription
+                ))
+            )
+        }
+
+        // Tool/system continuations do not create turns and are not held in the
+        // v1.5 durable-submission registry.
+        guard case .text = input.kind else {
+            send(outgoing: OutgoingAgentInput.from(input: input))
+            return .terminal(requestID: requestID, state: .dispatched)
+        }
+        guard !requestID.isEmpty else {
+            return .terminal(
+                requestID: requestID,
+                state: .rejected(AgentInputRejection(code: "invalid_input", message: "request_id is required"))
+            )
+        }
+
+        let ticket = await submissionCoordinator.register(input)
+        if isConnected {
+            send(outgoing: OutgoingAgentInput.from(input: input))
+            await submissionCoordinator.markDispatched(requestID: requestID)
+        }
+        return ticket
     }
 
     /// 发送消息（fire-and-forget）。响应来自 event stream。
     @available(*, deprecated, message: "Use send(input:)")
     public func sendMessage(_ text: String) {
-        send(input: .text(text))
+        Task { await send(input: .text(text)) }
     }
 
     /// 发送审批回复（两态兼容）。
@@ -289,6 +354,19 @@ public final class AgentWireSocket: @unchecked Sendable {
             // §5.8-8：每次握手（首连 + 自动重连）都先补缺口再放行直播帧。
             // 首连覆盖「历史 GET 与 WS attach 之间」的窗口；重连覆盖断线期间的缺口。
             startBackfill()
+            let supportsImageInput = serverCapabilities.contains("image_input")
+            Task { [weak self] in
+                guard let self else { return }
+                let inputs = await self.submissionCoordinator.replayableInputs(
+                    supportsImageInput: supportsImageInput
+                )
+                for input in inputs {
+                    self.send(outgoing: OutgoingAgentInput.from(input: input))
+                    if let requestID = input.requestID {
+                        await self.submissionCoordinator.markDispatched(requestID: requestID)
+                    }
+                }
+            }
             // hello 帧是内部握手，不暴露给 UI
 
         case "approval_request":
@@ -298,6 +376,19 @@ public final class AgentWireSocket: @unchecked Sendable {
         case "plan_approval_request":
             guard let plan = PlanApprovalRequest.from(wire: frame) else { return }
             continuation?.yield(.planApprovalRequest(turnID: frame.turnId, request: plan))
+
+        case "agent_input_rejected":
+            let rejection = AgentInputRejection(
+                code: frame.error?.code ?? "request_failed",
+                message: frame.error?.message ?? "Input was rejected"
+            )
+            Task {
+                await submissionCoordinator.reject(
+                    requestID: frame.requestId,
+                    rejection: rejection
+                )
+            }
+            continuation?.yield(.agentInputRejected(requestID: frame.requestId, rejection: rejection))
 
         default:
             // 未知控制帧类型：忽略（前向兼容）
@@ -327,6 +418,12 @@ public final class AgentWireSocket: @unchecked Sendable {
             maxSeq = seq
         }
         if let event = AgentEvent.from(wire: frame) {
+            if case .turnAccepted(let turnID, let requestID, _) = event,
+               let requestID {
+                Task {
+                    await submissionCoordinator.accept(requestID: requestID, turnID: turnID)
+                }
+            }
             continuation?.yield(event)
         }
         // 未知 kind → AgentEvent.from 返回 nil → 忽略（前向兼容）

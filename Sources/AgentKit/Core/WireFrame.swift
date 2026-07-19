@@ -42,6 +42,8 @@ struct WireFrame: Decodable {
     let observation: String?
     let output: JSONValue?
     let assets: [AgentAssetRef]?
+    /// Agent Wire v1.5 user attachments. Never decode these as v1.3 tool assets.
+    let userAssets: [UserAssetRef]?
     let textAnnotations: [AgentTextAnnotation]?
     let failure: String?
     let planId: String?
@@ -78,6 +80,7 @@ struct WireFrame: Decodable {
     enum CodingKeys: String, CodingKey {
         case type, kind, at, step, id, server, seq
         case text, observation, output, assets, failure, err, error, ratio, todos, chunk
+        case userAssets = "user_assets"
         case reason, position
         case queuePosition = "queue_position"
         case textAnnotations = "text_annotations"
@@ -147,13 +150,14 @@ struct OutgoingAgentInput: Encodable {
     let model: String?              // per-message model selection (v1.4)
     let metadata: [String: String]?
     let requestID: String?
+    let assets: [UserAssetRef]?
     // system command fields
     let command: String?            // system command name
     let commandKey: String?
     let commandValue: String?
 
     enum CodingKeys: String, CodingKey {
-        case type, kind, text, metadata, command, model
+        case type, kind, text, metadata, command, model, assets
         case requestID = "request_id"
         case toolResult = "tool_result"
         case commandKey = "command_key"
@@ -167,6 +171,7 @@ struct OutgoingAgentInput: Encodable {
             return OutgoingAgentInput(
                 kind: "text", text: input.text, toolResult: nil, model: input.model,
                 metadata: input.metadata, requestID: input.requestID,
+                assets: input.assets.isEmpty ? nil : input.assets,
                 command: nil, commandKey: nil, commandValue: nil
             )
         case .toolResult:
@@ -181,13 +186,13 @@ struct OutgoingAgentInput: Encodable {
             }
             return OutgoingAgentInput(
                 kind: "tool_result", text: nil, toolResult: tr, model: input.model,
-                metadata: input.metadata, requestID: input.requestID,
+                metadata: input.metadata, requestID: input.requestID, assets: nil,
                 command: nil, commandKey: nil, commandValue: nil
             )
         case .command:
             return OutgoingAgentInput(
                 kind: "command", text: input.text, toolResult: nil, model: input.model,
-                metadata: input.metadata, requestID: input.requestID,
+                metadata: input.metadata, requestID: input.requestID, assets: nil,
                 command: nil, commandKey: nil, commandValue: nil
             )
         case .system(let cmd):
@@ -195,19 +200,19 @@ struct OutgoingAgentInput: Encodable {
             case .patchContext(let key, let value):
                 return OutgoingAgentInput(
                     kind: "system", text: nil, toolResult: nil, model: input.model,
-                    metadata: input.metadata, requestID: input.requestID,
+                    metadata: input.metadata, requestID: input.requestID, assets: nil,
                     command: "patch_context", commandKey: key, commandValue: value
                 )
             case .updateMemory(let key, let value):
                 return OutgoingAgentInput(
                     kind: "system", text: nil, toolResult: nil, model: input.model,
-                    metadata: input.metadata, requestID: input.requestID,
+                    metadata: input.metadata, requestID: input.requestID, assets: nil,
                     command: "update_memory", commandKey: key, commandValue: value
                 )
             case .overridePlan(let planID):
                 return OutgoingAgentInput(
                     kind: "system", text: nil, toolResult: nil, model: input.model,
-                    metadata: input.metadata, requestID: input.requestID,
+                    metadata: input.metadata, requestID: input.requestID, assets: nil,
                     command: "override_plan", commandKey: nil, commandValue: planID
                 )
             }

@@ -154,7 +154,10 @@ final class MultiConversationTests: XCTestCase {
             "workspace_execution_policy_v1": true,
         ])
         let client = MultiSessionRuntimeClient(capabilitySnapshot: capabilities)
-        let store = WorkspaceStore(client: client)
+        let store = WorkspaceStore(
+            client: client,
+            localStateStore: InMemoryConversationLocalStateStore()
+        )
         let a = ConversationRef(id: "a", workspacePath: "/tmp/a")
         let b = ConversationRef(id: "b", workspacePath: "/tmp/b")
 
@@ -392,7 +395,7 @@ final class MultiConversationTests: XCTestCase {
     }
 
     @MainActor
-    func testDraftCommitMigratesStateAndClearsOnlySubmittedText() async throws {
+    func testDraftCommitMigratesStateAndRetainsSubmittedSnapshotUntilAccepted() async throws {
         let localState = InMemoryConversationLocalStateStore()
         let client = MultiSessionRuntimeClient()
         let store = WorkspaceStore(client: client, localStateStore: localState)
@@ -413,7 +416,9 @@ final class MultiConversationTests: XCTestCase {
         XCTAssertNil(store.draft)
         XCTAssertNil(try localState.state(for: .draft(draftID)))
         let session = try XCTUnwrap(localState.state(for: .session(sessionID)))
-        XCTAssertEqual(session.composerDraft.text, "")
+        XCTAssertEqual(session.composerDraft.text, "persist while sending")
+        XCTAssertEqual(session.composerDraft.pendingSubmission?.text, "persist while sending")
+        XCTAssertFalse(session.composerDraft.pendingSubmission?.requestID.isEmpty ?? true)
         XCTAssertEqual(session.selectedModelID, "model-a")
 
         // A disappearing draft composer may still attempt one final write.

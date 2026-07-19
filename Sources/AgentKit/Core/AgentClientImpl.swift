@@ -28,6 +28,7 @@ public final class CodeAgentSessionChannel: RuntimeSessionChannel, @unchecked Se
     private let credentialTarget: CredentialTarget
     private var socket: AgentWireSocket?
     private var pendingTools: [ClientToolInfo] = []
+    private let submissionCoordinator = AgentInputSubmissionCoordinator()
 
     init(
         sessionID: String,
@@ -53,6 +54,7 @@ public final class CodeAgentSessionChannel: RuntimeSessionChannel, @unchecked Se
             conversationID: sessionID,
             since: since,
             credentialStore: credentialStore,
+            submissionCoordinator: submissionCoordinator,
             credentialTarget: credentialTarget
         )
         let http = self.http
@@ -71,7 +73,17 @@ public final class CodeAgentSessionChannel: RuntimeSessionChannel, @unchecked Se
         return newSocket.connect()
     }
 
-    public func send(input: AgentInput) async { socket?.send(input: input) }
+    public func send(input: AgentInput) async { await socket?.send(input: input) }
+
+    public func submit(input: AgentInput) async -> AgentInputSubmissionTicket {
+        guard let socket else {
+            return .terminal(
+                requestID: input.requestID ?? "",
+                state: .rejected(AgentInputRejection(code: "request_failed", message: "Session is not connected"))
+            )
+        }
+        return await socket.submit(input: input)
+    }
 
     public func registerTools(_ tools: [ClientToolInfo]) async {
         pendingTools = tools
@@ -103,11 +115,14 @@ public final class CodeAgentSessionChannel: RuntimeSessionChannel, @unchecked Se
         Self.flags(from: socket?.serverCapabilities ?? [])
     }
 
-    fileprivate static func flags(from capabilities: [String]) -> AgentCapabilityFlags {
+    static func flags(from capabilities: [String]) -> AgentCapabilityFlags {
         let values = Set(capabilities)
         var flags = AgentCapabilityFlags.default
         if values.contains("client_tool_execution") {
             flags.insert(.clientToolExecution)
+        }
+        if values.contains("image_input") {
+            flags.insert(.imageInput)
         }
         if values.contains("multi_session_execution_v1") {
             flags.insert(.multiSessionExecution)
@@ -142,6 +157,7 @@ public final class CodeAgentTransport: AgentTransport, @unchecked Sendable {
 
     /// 待注册的客户端工具列表。在握手后自动发送。
     private var pendingTools: [ClientToolInfo] = []
+    private let submissionCoordinator = AgentInputSubmissionCoordinator()
 
     // MARK: - Init
 
@@ -231,6 +247,7 @@ public final class CodeAgentTransport: AgentTransport, @unchecked Sendable {
             conversationID: sessionID,
             since: since,
             credentialStore: credentialStore,
+            submissionCoordinator: submissionCoordinator,
             credentialTarget: credentialTarget
         )
 
@@ -275,7 +292,7 @@ public final class CodeAgentTransport: AgentTransport, @unchecked Sendable {
     // MARK: - AgentTransport: Input
 
     public func send(input: AgentInput) async {
-        socket?.send(input: input)
+        await socket?.send(input: input)
     }
 
     // MARK: - AgentTransport: Control plane

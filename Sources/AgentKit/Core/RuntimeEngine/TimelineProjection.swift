@@ -251,8 +251,12 @@ public struct TimelineProjection: Sendable {
         var kind: ExecutionNodeKind?
 
         switch graphNode.payload {
-        case .userInput(let text):
-            kind = .message(MessageNodePayload(role: .user, text: text))
+        case .userInput(let payload):
+            kind = .message(MessageNodePayload(
+                role: .user,
+                text: payload.text,
+                userAssets: payload.userAssets
+            ))
 
         case .thinking(let text):
             let isStreaming = graphNode.status == .running

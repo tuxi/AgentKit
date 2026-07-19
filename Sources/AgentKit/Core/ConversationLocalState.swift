@@ -30,12 +30,126 @@ public struct DraftAttachmentReference: Codable, Sendable, Equatable, Identifiab
     public var id: String
     public var displayName: String
     public var resourceURI: String
+    public var state: DraftAttachmentState
+    public var progress: Double?
+    public var readyAsset: UserAssetRef?
+    public var failure: DraftAttachmentFailure?
 
-    public init(id: String, displayName: String, resourceURI: String) {
+    public init(
+        id: String,
+        displayName: String,
+        resourceURI: String,
+        state: DraftAttachmentState = .local,
+        progress: Double? = nil,
+        readyAsset: UserAssetRef? = nil,
+        failure: DraftAttachmentFailure? = nil
+    ) {
         self.id = id
         self.displayName = displayName
         self.resourceURI = resourceURI
+        self.state = state
+        self.progress = progress
+        self.readyAsset = readyAsset
+        self.failure = failure
     }
+
+    private enum CodingKeys: String, CodingKey {
+        case id, displayName, resourceURI, state, progress, readyAsset, failure
+    }
+
+    public init(from decoder: Decoder) throws {
+        let values = try decoder.container(keyedBy: CodingKeys.self)
+        id = try values.decode(String.self, forKey: .id)
+        displayName = try values.decode(String.self, forKey: .displayName)
+        resourceURI = try values.decode(String.self, forKey: .resourceURI)
+        let decodedState = try values.decodeIfPresent(DraftAttachmentState.self, forKey: .state) ?? .local
+        readyAsset = try values.decodeIfPresent(UserAssetRef.self, forKey: .readyAsset)
+        switch decodedState {
+        case .preparing, .uploading, .sending:
+            state = .failed
+            progress = nil
+            failure = DraftAttachmentFailure(message: "上次操作已中断，请重试", retryable: true)
+        case .ready where readyAsset == nil:
+            state = .failed
+            progress = nil
+            failure = DraftAttachmentFailure(message: "远端资产引用缺失，请重新上传", retryable: true)
+        default:
+            state = decodedState
+            progress = decodedState == .uploading
+                ? try values.decodeIfPresent(Double.self, forKey: .progress)
+                : nil
+            failure = try values.decodeIfPresent(DraftAttachmentFailure.self, forKey: .failure)
+        }
+    }
+}
+
+public enum DraftAttachmentState: String, Codable, Sendable, Equatable {
+    case local
+    case preparing
+    case uploading
+    case ready
+    case sending
+    case failed
+}
+
+public struct DraftAttachmentFailure: Codable, Sendable, Equatable {
+    public var message: String
+    public var retryable: Bool
+
+    public init(message: String, retryable: Bool) {
+        self.message = message
+        self.retryable = retryable
+    }
+}
+
+public struct ComposerSubmissionSnapshot: Codable, Sendable, Equatable {
+    public var requestID: String
+    public var revision: Int64
+    public var text: String
+    public var attachmentIDs: [String]
+    public var model: String?
+    public var assets: [UserAssetRef]
+
+    public init(
+        requestID: String,
+        revision: Int64,
+        text: String,
+        attachmentIDs: [String],
+        model: String? = nil,
+        assets: [UserAssetRef] = []
+    ) {
+        self.requestID = requestID
+        self.revision = revision
+        self.text = text
+        self.attachmentIDs = attachmentIDs
+        self.model = model
+        self.assets = assets
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case requestID, revision, text, attachmentIDs, model, assets
+    }
+
+    public init(from decoder: Decoder) throws {
+        let values = try decoder.container(keyedBy: CodingKeys.self)
+        requestID = try values.decode(String.self, forKey: .requestID)
+        revision = try values.decodeIfPresent(Int64.self, forKey: .revision) ?? 0
+        text = try values.decodeIfPresent(String.self, forKey: .text) ?? ""
+        attachmentIDs = try values.decodeIfPresent([String].self, forKey: .attachmentIDs) ?? []
+        model = try values.decodeIfPresent(String.self, forKey: .model)
+        assets = try values.decodeIfPresent([UserAssetRef].self, forKey: .assets) ?? []
+    }
+}
+
+/// Host boundary for CoreKit/Talkify upload integration. AgentKit never receives
+/// OSS credentials or depends on a concrete upload SDK.
+public protocol UserAssetUploading: Sendable {
+    func upload(
+        attachment: DraftAttachmentReference,
+        progress: @escaping @Sendable (Double) -> Void
+    ) async throws -> UserAssetRef
+
+    func revalidate(_ asset: UserAssetRef) async throws -> UserAssetRef
 }
 
 public struct ComposerDraft: Codable, Sendable, Equatable {
@@ -49,6 +163,8 @@ public struct ComposerDraft: Codable, Sendable, Equatable {
     public var managedWorktreeBaseRef: String?
     public var managedWorktreeSuggestedName: String?
     public var clientRequestID: String?
+    public var revision: Int64
+    public var pendingSubmission: ComposerSubmissionSnapshot?
     public var updatedAt: Date
 
     public init(
@@ -62,6 +178,8 @@ public struct ComposerDraft: Codable, Sendable, Equatable {
         managedWorktreeBaseRef: String? = nil,
         managedWorktreeSuggestedName: String? = nil,
         clientRequestID: String? = nil,
+        revision: Int64 = 0,
+        pendingSubmission: ComposerSubmissionSnapshot? = nil,
         updatedAt: Date = .now
     ) {
         self.text = text
@@ -74,13 +192,15 @@ public struct ComposerDraft: Codable, Sendable, Equatable {
         self.managedWorktreeBaseRef = managedWorktreeBaseRef
         self.managedWorktreeSuggestedName = managedWorktreeSuggestedName
         self.clientRequestID = clientRequestID
+        self.revision = revision
+        self.pendingSubmission = pendingSubmission
         self.updatedAt = updatedAt
     }
 
     private enum CodingKeys: String, CodingKey {
         case text, attachments, workspaceID, workspacePath, workspaceBranch
         case executionPolicy, wantsManagedWorktree, managedWorktreeBaseRef
-        case managedWorktreeSuggestedName, clientRequestID, updatedAt
+        case managedWorktreeSuggestedName, clientRequestID, revision, pendingSubmission, updatedAt
     }
 
     public init(from decoder: Decoder) throws {
@@ -95,6 +215,8 @@ public struct ComposerDraft: Codable, Sendable, Equatable {
         managedWorktreeBaseRef = try values.decodeIfPresent(String.self, forKey: .managedWorktreeBaseRef)
         managedWorktreeSuggestedName = try values.decodeIfPresent(String.self, forKey: .managedWorktreeSuggestedName)
         clientRequestID = try values.decodeIfPresent(String.self, forKey: .clientRequestID)
+        revision = try values.decodeIfPresent(Int64.self, forKey: .revision) ?? 0
+        pendingSubmission = try values.decodeIfPresent(ComposerSubmissionSnapshot.self, forKey: .pendingSubmission)
         updatedAt = try values.decodeIfPresent(Date.self, forKey: .updatedAt) ?? .distantPast
     }
 }

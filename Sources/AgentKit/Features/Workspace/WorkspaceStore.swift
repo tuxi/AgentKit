@@ -92,6 +92,14 @@ public final class WorkspaceStore {
 
     /// Device-local durable state for drafts, model choices and read cursors.
     public let localStateStore: any ConversationLocalStateStore
+    private let userAssetPicker: UserAssetPicking?
+    private let userAssetDraftCoordinator: UserAssetDraftCoordinator?
+    public let userAssetDraftPreviewResolver: (any UserAssetDraftPreviewResolving)?
+    public let userAssetPreviewResolver: (any UserAssetPreviewResolving)?
+
+    public var canSelectUserAssets: Bool {
+        userAssetPicker != nil && userAssetDraftCoordinator != nil
+    }
 
     /// 客户端工具注册表。
     private let toolRegistry: ToolRegistry
@@ -168,6 +176,10 @@ public final class WorkspaceStore {
         conversationRendererMode: ConversationRendererMode = .auto,
         onAuthExpired: (@MainActor () async -> Void)? = nil,
         localStateStore: any ConversationLocalStateStore = SQLiteConversationLocalStateStore.shared,
+        userAssetPicker: UserAssetPicking? = nil,
+        userAssetUploader: (any UserAssetUploading)? = nil,
+        userAssetDraftPreviewResolver: (any UserAssetDraftPreviewResolving)? = nil,
+        userAssetPreviewResolver: (any UserAssetPreviewResolving)? = nil,
         attentionReadStore: (any ConversationAttentionReadStore)? = nil,
         onAttentionEvent: (@MainActor (ConversationAttentionEvent) -> Void)? = nil,
         recentWorkspaces: RecentWorkspacesStore = RecentWorkspacesStore(),
@@ -175,6 +187,12 @@ public final class WorkspaceStore {
     ) {
         self.client = client
         self.localStateStore = localStateStore
+        self.userAssetPicker = userAssetPicker
+        self.userAssetDraftCoordinator = userAssetUploader.map {
+            UserAssetDraftCoordinator(store: localStateStore, uploader: $0)
+        }
+        self.userAssetDraftPreviewResolver = userAssetDraftPreviewResolver
+        self.userAssetPreviewResolver = userAssetPreviewResolver
         self.recentWorkspaces = recentWorkspaces
         self.projects = projects
         self.toolRegistry = toolRegistry
@@ -189,9 +207,53 @@ public final class WorkspaceStore {
             toolRegistry: toolRegistry,
             timelineExtensions: timelineExtensions,
             onAuthExpired: onAuthExpired,
+            localStateStore: localStateStore,
             attentionReadStore: resolvedAttentionStore,
             onAttentionEvent: onAttentionEvent
         )
+    }
+
+    /// Host-driven picker/upload bridge. Selection tokens and upload credentials
+    /// remain outside AgentKit; only local draft state and ready UserAssetRef values
+    /// are persisted here.
+    public func selectAndUploadUserAssets(
+        for key: ConversationLocalStateKey,
+        remainingSlots: Int,
+        onStateChange: @escaping @MainActor @Sendable () -> Void = {}
+    ) async {
+        guard remainingSlots > 0,
+              let userAssetPicker,
+              let coordinator = userAssetDraftCoordinator else { return }
+        do {
+            let selected = Array(try await userAssetPicker().prefix(remainingSlots))
+            guard !selected.isEmpty else { return }
+            try localStateStore.updateState(for: key) { state in
+                let existingIDs = Set(state.composerDraft.attachments.map(\.id))
+                state.composerDraft.attachments.append(
+                    contentsOf: selected.filter { !existingIDs.contains($0.id) }
+                )
+                state.composerDraft.revision += 1
+            }
+            onStateChange()
+            for attachment in selected {
+                try? await coordinator.upload(
+                    id: attachment.id,
+                    in: key,
+                    onStateChange: onStateChange
+                )
+            }
+        } catch {
+            onStateChange()
+        }
+    }
+
+    public func retryUserAssetUpload(
+        id: String,
+        for key: ConversationLocalStateKey,
+        onStateChange: @escaping @MainActor @Sendable () -> Void = {}
+    ) async {
+        guard let coordinator = userAssetDraftCoordinator else { return }
+        try? await coordinator.upload(id: id, in: key, onStateChange: onStateChange)
     }
 
     // MARK: - Conversation Management
@@ -592,7 +654,11 @@ public final class WorkspaceStore {
 
     /// 提交草稿（发送首条消息）：创建真实 Session → 连接 → 发送首条消息 → 替换为活跃会话。
     /// 这是唯一的 Session 创建点。失败时草稿进入 `.failed`，保留用户输入以便重试。
-    public func commitDraft(firstMessage: String, model: String = "") async {
+    public func commitDraft(
+        firstMessage: String,
+        model: String = "",
+        assets: [UserAssetRef] = []
+    ) async {
         guard let current = draft, let workspace = current.workspace else { return }
         if current.usesManagedWorktree && !supportsManagedWorktreeCreation {
             draft?.state = .failed("当前 Runtime 暂不支持托管 Worktree。")
@@ -624,18 +690,14 @@ public final class WorkspaceStore {
                 model: model
             )
             await vm.connect(to: ref)
-            guard await vm.send(input: .text(firstMessage, model: model)) else {
-                throw ConversationLocalDraftError.turnNotAccepted
-            }
-
             try localStateStore.migrateDraft(current.id, to: ref.id)
-            try localStateStore.updateState(for: .session(ref.id)) { state in
-                state.composerDraft.text = ""
-                if !model.isEmpty {
-                    state.selectedModelID = model
-                    state.recentModelIDs.removeAll { $0 == model }
-                    state.recentModelIDs.insert(model, at: 0)
-                }
+            let firstInput = AgentInput.text(firstMessage, model: model, assets: assets)
+            _ = try localStateStore.markSubmissionPending(
+                key: .session(ref.id),
+                input: firstInput
+            )
+            guard await vm.send(input: firstInput) else {
+                throw ConversationLocalDraftError.turnNotAccepted
             }
             // 草稿 → 真实会话
             listViewModel.prepend(ref)

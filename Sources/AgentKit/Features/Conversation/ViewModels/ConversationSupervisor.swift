@@ -60,6 +60,7 @@ public final class ConversationSupervisor {
     private let timelineExtensions: [any TimelineExtension]
     private let onAuthExpired: (@MainActor () async -> Void)?
     private let attentionReadStore: any ConversationAttentionReadStore
+    private let localStateStore: any ConversationLocalStateStore
     private let onAttentionEvent: (@MainActor (ConversationAttentionEvent) -> Void)?
     private let turnCoordinator = ConversationTurnCoordinator()
     private let capabilityRegistry = RuntimeCapabilityRegistry()
@@ -81,6 +82,7 @@ public final class ConversationSupervisor {
         toolRegistry: ToolRegistry,
         timelineExtensions: [any TimelineExtension],
         onAuthExpired: (@MainActor () async -> Void)?,
+        localStateStore: any ConversationLocalStateStore = SQLiteConversationLocalStateStore.shared,
         attentionReadStore: any ConversationAttentionReadStore = ConversationLocalStateAttentionReadStore.shared,
         onAttentionEvent: (@MainActor (ConversationAttentionEvent) -> Void)? = nil
     ) {
@@ -88,6 +90,7 @@ public final class ConversationSupervisor {
         self.toolRegistry = toolRegistry
         self.timelineExtensions = timelineExtensions
         self.onAuthExpired = onAuthExpired
+        self.localStateStore = localStateStore
         self.attentionReadStore = attentionReadStore
         self.onAttentionEvent = onAttentionEvent
     }
@@ -111,6 +114,7 @@ public final class ConversationSupervisor {
             timelineExtensions: timelineExtensions,
             turnCoordinator: turnCoordinator,
             capabilityRegistry: capabilityRegistry,
+            localStateStore: localStateStore,
             onAuthExpired: onAuthExpired,
             onActivityInvalidated: { [weak self] in
                 self?.scheduleActivityRefresh()

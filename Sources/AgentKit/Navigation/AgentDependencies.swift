@@ -34,6 +34,10 @@ public struct AgentDependencies {
     /// GUI-owned durable composer/model/read state. Hosts may inject an encrypted
     /// implementation; the default uses Application Support SQLite.
     public let localStateStore: any ConversationLocalStateStore
+    public let userAssetPicker: UserAssetPicking?
+    public let userAssetUploader: (any UserAssetUploading)?
+    public let userAssetDraftPreviewResolver: (any UserAssetDraftPreviewResolving)?
+    public let userAssetPreviewResolver: (any UserAssetPreviewResolving)?
 
     /// Host hook for local notifications or other out-of-conversation alerts.
     public let onAttentionEvent: (@MainActor (ConversationAttentionEvent) -> Void)?
@@ -45,6 +49,10 @@ public struct AgentDependencies {
         conversationRendererMode: ConversationRendererMode = .auto,
         onAuthExpired: (@MainActor () async -> Void)? = nil,
         localStateStore: any ConversationLocalStateStore = SQLiteConversationLocalStateStore.shared,
+        userAssetPicker: UserAssetPicking? = nil,
+        userAssetUploader: (any UserAssetUploading)? = nil,
+        userAssetDraftPreviewResolver: (any UserAssetDraftPreviewResolving)? = nil,
+        userAssetPreviewResolver: (any UserAssetPreviewResolving)? = nil,
         attentionReadStore: (any ConversationAttentionReadStore)? = nil,
         onAttentionEvent: (@MainActor (ConversationAttentionEvent) -> Void)? = nil
     ) {
@@ -54,6 +62,10 @@ public struct AgentDependencies {
         self.conversationRendererMode = conversationRendererMode
         self.onAuthExpired = onAuthExpired
         self.localStateStore = localStateStore
+        self.userAssetPicker = userAssetPicker
+        self.userAssetUploader = userAssetUploader
+        self.userAssetDraftPreviewResolver = userAssetDraftPreviewResolver
+        self.userAssetPreviewResolver = userAssetPreviewResolver
         self.attentionReadStore = attentionReadStore
             ?? ConversationLocalStateAttentionReadStore(localStateStore: localStateStore)
         self.onAttentionEvent = onAttentionEvent

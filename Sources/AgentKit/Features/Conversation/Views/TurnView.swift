@@ -33,6 +33,12 @@ struct TurnView: View, Equatable {
             state: documentState
         )
         VStack(alignment: .leading, spacing: 6) {
+            if let userAssets = turn.userPrompt?.userAssets, !userAssets.isEmpty {
+                UserAssetPreviewStrip(
+                    assets: userAssets,
+                    resolver: store.userAssetPreviewResolver
+                )
+            }
             NativeTranscriptView(transcript: transcript) { action in
                 handleTranscriptAction(action)
             }
@@ -281,6 +287,56 @@ struct TurnView: View, Equatable {
             store.showInspector(.diff(payload))
         case .terminal(let payload):
             store.showInspector(.terminal(payload))
+        }
+    }
+}
+
+private struct UserAssetPreviewStrip: View {
+    let assets: [UserAssetRef]
+    let resolver: (any UserAssetPreviewResolving)?
+
+    var body: some View {
+        ScrollView(.horizontal, showsIndicators: false) {
+            HStack(spacing: 8) {
+                ForEach(assets) { asset in
+                    UserAssetThumbnail(asset: asset, resolver: resolver)
+                }
+            }
+        }
+        .frame(maxWidth: .infinity, alignment: .trailing)
+    }
+}
+
+private struct UserAssetThumbnail: View {
+    let asset: UserAssetRef
+    let resolver: (any UserAssetPreviewResolving)?
+    @State private var previewURL: URL?
+
+    var body: some View {
+        Group {
+            if let previewURL {
+                AsyncImage(url: previewURL) { image in
+                    image.resizable().scaledToFill()
+                } placeholder: {
+                    ProgressView()
+                }
+            } else {
+                VStack(spacing: 5) {
+                    Image(systemName: "photo")
+                    Text(asset.filename)
+                        .font(.caption2)
+                        .lineLimit(1)
+                }
+                .foregroundStyle(.secondary)
+            }
+        }
+        .frame(width: 104, height: 76)
+        .background(Color.secondary.opacity(0.1))
+        .clipShape(RoundedRectangle(cornerRadius: 10))
+        .help(asset.filename)
+        .task(id: asset.assetID) {
+            guard let resolver else { return }
+            previewURL = try? await resolver.previewURL(for: asset)
         }
     }
 }

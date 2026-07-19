@@ -49,11 +49,19 @@ public struct AgentInput: Sendable {
     public var metadata: [String: String]?
     /// Stable client identity for accepted/queued acknowledgement and idempotent retry.
     public var requestID: String?
+    /// Gateway-managed user image references from Agent Wire v1.5.
+    /// Valid only for `kind == .text` and kept distinct from tool-result assets.
+    public var assets: [UserAssetRef]
 
     // MARK: - Convenience factories
 
-    public static func text(_ text: String, model: String? = nil) -> AgentInput {
-        AgentInput(kind: .text, text: text, model: model, requestID: UUID().uuidString)
+    public static func text(
+        _ text: String,
+        model: String? = nil,
+        assets: [UserAssetRef] = [],
+        requestID: String = UUID().uuidString
+    ) -> AgentInput {
+        AgentInput(kind: .text, text: text, model: model, requestID: requestID, assets: assets)
     }
 
     public static func toolResult(_ result: ToolResultContent) -> AgentInput {
@@ -76,7 +84,8 @@ public struct AgentInput: Sendable {
         toolResult: ToolResultContent? = nil,
         model: String? = nil,
         metadata: [String: String]? = nil,
-        requestID: String? = nil
+        requestID: String? = nil,
+        assets: [UserAssetRef] = []
     ) {
         self.kind = kind
         self.text = text
@@ -84,6 +93,52 @@ public struct AgentInput: Sendable {
         self.model = model
         self.metadata = metadata
         self.requestID = requestID
+        self.assets = assets
+    }
+
+    /// Deterministic client-side checks. Gateway remains the final trust boundary.
+    public func validateForSubmission(supportsImageInput: Bool) throws {
+        if kind.isText {
+            let hasText = !(text ?? "")
+                .trimmingCharacters(in: .whitespacesAndNewlines)
+                .isEmpty
+            guard hasText || !assets.isEmpty else {
+                throw AgentInputRejection(code: "invalid_input", message: "Text and assets cannot both be empty")
+            }
+        } else if !assets.isEmpty {
+            throw AgentInputRejection(code: "invalid_assets", message: "Assets are only valid for text input")
+        }
+
+        guard assets.count <= 4 else { throw UserAssetValidationError.tooManyAssets(assets.count) }
+        if !assets.isEmpty {
+            guard supportsImageInput else {
+                throw AgentInputRejection(
+                    code: "image_input_unsupported",
+                    message: "当前服务不支持图片"
+                )
+            }
+            guard let requestID,
+                  !requestID.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+                throw AgentInputRejection(
+                    code: "invalid_input",
+                    message: "Image input requires a request_id"
+                )
+            }
+            var seen = Set<Int64>()
+            for asset in assets {
+                try asset.validate()
+                guard seen.insert(asset.assetID).inserted else {
+                    throw UserAssetValidationError.duplicateAssetID(asset.assetID)
+                }
+            }
+        }
+    }
+}
+
+private extension AgentInput.Kind {
+    var isText: Bool {
+        if case .text = self { return true }
+        return false
     }
 }
 

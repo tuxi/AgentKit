@@ -43,6 +43,8 @@ public final class ConversationViewModel {
     /// not advertised safe multi-session execution yet.
     public private(set) var isLocallyQueued = false
     public private(set) var isAwaitingTurnAcceptance = false
+    public private(set) var lastInputRejection: AgentInputRejection?
+    public private(set) var lastAcceptedSubmissionRequestID: String?
 
     public var isTurnActive: Bool {
         isLocallyQueued || isAwaitingTurnAcceptance
@@ -124,11 +126,13 @@ public final class ConversationViewModel {
     private var channel: (any RuntimeSessionChannel)?
     private let turnCoordinator: ConversationTurnCoordinator?
     private let capabilityRegistry: RuntimeCapabilityRegistry?
+    private let localStateStore: any ConversationLocalStateStore
     private let toolRegistry: ToolRegistry
     let timelineExtensions: [any TimelineExtension]
     private var streamTask: Task<Void, Never>?
     private var snapshotTask: Task<Void, Never>?
     private var turnDispatchTask: Task<Void, Never>?
+    private var pendingRestoreTask: Task<Void, Never>?
     private var queuedTicket: UUID?
 
     /// Host 注入的 auth 恢复钩子。收到 `turn_failed(code: auth_expired)` 时调用
@@ -149,6 +153,7 @@ public final class ConversationViewModel {
         timelineExtensions: [any TimelineExtension] = [],
         turnCoordinator: ConversationTurnCoordinator? = nil,
         capabilityRegistry: RuntimeCapabilityRegistry? = nil,
+        localStateStore: any ConversationLocalStateStore = SQLiteConversationLocalStateStore.shared,
         onAuthExpired: (@MainActor () async -> Void)? = nil,
         onActivityInvalidated: (@MainActor () -> Void)? = nil
     ) {
@@ -159,6 +164,7 @@ public final class ConversationViewModel {
         self.timelineExtensions = timelineExtensions
         self.turnCoordinator = turnCoordinator
         self.capabilityRegistry = capabilityRegistry
+        self.localStateStore = localStateStore
         self.onAuthExpired = onAuthExpired
         self.onActivityInvalidated = onActivityInvalidated
     }
@@ -237,6 +243,8 @@ public final class ConversationViewModel {
         // 返回值 = 历史批最大 seq（v1.2 §4 续传游标）。
         let sinceCursor = await fetchHistory(conversationID: conversation.id, engine: eng)
         reconcileRuntimeActivityBaseline(historyCursor: sinceCursor)
+        let pendingAtConnect = try? localStateStore.state(for: .session(conversation.id))?
+            .composerDraft.pendingSubmission
 
         // Archived history remains fully readable, but Runtime rejects new turns.
         // Do not retain a control socket or input channel until restore completes.
@@ -270,6 +278,15 @@ public final class ConversationViewModel {
                     await self.handleEvent(event, engine: eng)
                 }
                 await self.setDisconnected()
+            }
+            if let pendingAtConnect {
+                pendingRestoreTask?.cancel()
+                pendingRestoreTask = Task { @MainActor [weak self, channel] in
+                    await self?.restorePendingSubmissionIfNeeded(
+                        pendingAtConnect,
+                        channel: channel
+                    )
+                }
             }
         } catch {
             isConnected = false
@@ -313,7 +330,16 @@ public final class ConversationViewModel {
                     self?.isLocallyQueued = false
                     self?.queuedTicket = nil
                     self?.isAwaitingTurnAcceptance = true
-                    await channel.send(input: input)
+                    if case .text = input.kind {
+                        _ = try? self?.localStateStore.markSubmissionPending(
+                            key: .session(channel.sessionID),
+                            input: input
+                        )
+                    }
+                    let submission = await channel.submit(input: input)
+                    Task { @MainActor [weak self] in
+                        await self?.observeSubmission(submission)
+                    }
                     return
                 }
                 try? await Task.sleep(for: .milliseconds(75))
@@ -392,6 +418,8 @@ public final class ConversationViewModel {
         isAwaitingTurnAcceptance = false
         streamTask?.cancel()
         streamTask = nil
+        pendingRestoreTask?.cancel()
+        pendingRestoreTask = nil
         snapshotTask?.cancel()
         snapshotTask = nil
         engine = nil
@@ -430,6 +458,10 @@ public final class ConversationViewModel {
             // v2: import into engine (replays through reducer → projects timeline)
             await engine.importHistory(batch.events)
             for event in batch.events {
+                if case .turnAccepted(let turnID, let requestID, _) = event,
+                   let requestID {
+                    handleSubmissionAccepted(requestID: requestID, turnID: turnID)
+                }
                 await forwardToTimelineExtensions(event)
             }
         }
@@ -470,6 +502,69 @@ public final class ConversationViewModel {
         }
     }
 
+    private func observeSubmission(_ ticket: AgentInputSubmissionTicket) async {
+        for await state in ticket.states {
+            switch state {
+            case .accepted(let turnID):
+                handleSubmissionAccepted(requestID: ticket.requestID, turnID: turnID)
+            case .rejected(let rejection):
+                handleSubmissionRejected(requestID: ticket.requestID, rejection: rejection)
+            case .blocked(let rejection):
+                lastInputRejection = rejection
+            case .pending, .dispatched, .reconnecting:
+                break
+            }
+        }
+    }
+
+    private func restorePendingSubmissionIfNeeded(
+        _ pending: ComposerSubmissionSnapshot,
+        channel: any RuntimeSessionChannel
+    ) async {
+        // connect() returns its AsyncStream before hello. Wait for the new
+        // connection-level capability snapshot instead of using stale state.
+        for _ in 0..<100 where !Task.isCancelled {
+            if channel.isConnected { break }
+            try? await Task.sleep(for: .milliseconds(50))
+        }
+        guard !Task.isCancelled, channel.isConnected,
+              let stored = try? localStateStore.state(for: .session(channel.sessionID)),
+              stored.composerDraft.pendingSubmission?.requestID == pending.requestID else { return }
+
+        let input = AgentInput.text(
+            pending.text,
+            model: pending.model,
+            assets: pending.assets,
+            requestID: pending.requestID
+        )
+        let ticket = await channel.submit(input: input)
+        await observeSubmission(ticket)
+    }
+
+    private func handleSubmissionAccepted(requestID: String, turnID: String) {
+        guard let sessionID = conversation?.id else { return }
+        let matchingPendingRequestID = try? localStateStore
+            .state(for: .session(sessionID))?
+            .composerDraft.pendingSubmission?.requestID
+        try? localStateStore.acceptSubmission(key: .session(sessionID), requestID: requestID)
+        if matchingPendingRequestID == requestID {
+            lastAcceptedSubmissionRequestID = requestID
+        }
+        lastInputRejection = nil
+        isAwaitingTurnAcceptance = false
+        currentTurnID = currentTurnID ?? turnID
+    }
+
+    private func handleSubmissionRejected(requestID: String?, rejection: AgentInputRejection) {
+        if let sessionID = conversation?.id {
+            try? localStateStore.rejectSubmission(key: .session(sessionID), requestID: requestID)
+        }
+        lastInputRejection = rejection
+        isAwaitingTurnAcceptance = false
+        lifecycleStatus = nil
+        releaseTurnPermit()
+    }
+
     private func recoverFromAuthExpiry() async {
         guard let onAuthExpired, !isRecoveringAuth else { return }
         isRecoveringAuth = true
@@ -486,17 +581,22 @@ public final class ConversationViewModel {
     private func updateLifecycle(from event: AgentEvent) {
         var shouldRefreshActivity = false
         switch event {
-        case .turnAccepted:
+        case .turnAccepted(let turnID, let requestID, _):
             isAwaitingTurnAcceptance = false
             lifecycleStatus = "accepted"
             queueReason = nil
             queuePosition = nil
+            if let requestID {
+                handleSubmissionAccepted(requestID: requestID, turnID: turnID)
+            }
+        case .agentInputRejected(let requestID, let rejection):
+            handleSubmissionRejected(requestID: requestID, rejection: rejection)
         case .turnQueued(_, let reason, let position):
             isAwaitingTurnAcceptance = false
             lifecycleStatus = "queued"
             queueReason = reason
             queuePosition = position
-        case .turnStarted(let turnID, _):
+        case .turnStarted(let turnID, _, _):
             isAwaitingTurnAcceptance = false
             currentTurnID = turnID
             lifecycleStatus = "running"

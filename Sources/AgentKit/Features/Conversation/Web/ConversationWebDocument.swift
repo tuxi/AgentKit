@@ -247,7 +247,7 @@ enum ConversationWebDocumentBuilder {
         }
         return ConversationWebDocument.Turn(
             id: turn.id,
-            userPrompt: turn.userPrompt?.text,
+            userPrompt: turn.userPrompt?.displayTextWithUserAssets,
             blocks: turn.blocks.enumerated().map { blockIndex, block in
                 let previousBlock = previousTurn.flatMap {
                     blockIndex < $0.blocks.count ? $0.blocks[blockIndex] : nil

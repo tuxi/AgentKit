@@ -17,6 +17,7 @@ public protocol RuntimeSessionChannel: Sendable {
 
     func connect(since: Int) async throws -> AsyncStream<AgentEvent>
     func send(input: AgentInput) async
+    func submit(input: AgentInput) async -> AgentInputSubmissionTicket
     func registerTools(_ tools: [ClientToolInfo]) async
     func sendApproval(id: String, approved: Bool) async
     func sendApproval(id: String, decision: String, scope: String?) async
@@ -24,6 +25,15 @@ public protocol RuntimeSessionChannel: Sendable {
     func cancelTurn() async
     func disconnect() async
     func capabilities() async -> AgentCapabilityFlags
+}
+
+public extension RuntimeSessionChannel {
+    /// Source-compatible fallback for third-party channels. CodeAgentSessionChannel
+    /// overrides this with durable pending submission semantics.
+    func submit(input: AgentInput) async -> AgentInputSubmissionTicket {
+        await send(input: input)
+        return .terminal(requestID: input.requestID ?? "", state: .dispatched)
+    }
 }
 
 /// Compatibility channel for third-party `RuntimeClient` implementations that have
@@ -49,6 +59,10 @@ final class LegacyRuntimeSessionChannel: RuntimeSessionChannel, @unchecked Senda
     }
 
     func send(input: AgentInput) async { await client.send(input: input) }
+    func submit(input: AgentInput) async -> AgentInputSubmissionTicket {
+        await client.send(input: input)
+        return .terminal(requestID: input.requestID ?? "", state: .dispatched)
+    }
     func registerTools(_ tools: [ClientToolInfo]) async { await client.registerTools(tools) }
     func sendApproval(id: String, approved: Bool) async {
         await client.sendApproval(id: id, approved: approved)
@@ -68,4 +82,3 @@ final class LegacyRuntimeSessionChannel: RuntimeSessionChannel, @unchecked Senda
 
     func capabilities() async -> AgentCapabilityFlags { .default }
 }
-

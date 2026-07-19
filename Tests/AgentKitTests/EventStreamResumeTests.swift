@@ -137,7 +137,7 @@ private final class StreamReader: @unchecked Sendable {
         var labels: [String] = []
         while labels.count < count, let event = await iterator.next() {
             switch event {
-            case .turnStarted(_, let text): labels.append(text)
+            case .turnStarted(_, let text, _): labels.append(text)
             case .tokenDelta(_, let text): labels.append(text)
             default: break
             }

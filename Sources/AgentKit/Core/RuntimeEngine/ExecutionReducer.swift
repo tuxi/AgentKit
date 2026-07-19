@@ -29,11 +29,17 @@ public struct ExecutionReducer: Sendable {
 
         switch event {
         // ── Turn lifecycle ──
-        case .turnAccepted, .turnQueued:
+        case .turnAccepted, .turnQueued, .agentInputRejected:
             return []
 
-        case .turnStarted(let turnID, let text):
-            return handleTurnStarted(turnID: turnID, text: text, ts: ts, graph: &graph)
+        case .turnStarted(let turnID, let text, let userAssets):
+            return handleTurnStarted(
+                turnID: turnID,
+                text: text,
+                userAssets: userAssets,
+                ts: ts,
+                graph: &graph
+            )
 
         case .turnFinished(let turnID, let text, let textAnnotations):
             return handleTurnFinished(
@@ -213,7 +219,8 @@ public struct ExecutionReducer: Sendable {
 
     // MARK: - Turn lifecycle handlers
 
-    private mutating func handleTurnStarted(turnID: String, text: String, ts: TimeInterval,
+    private mutating func handleTurnStarted(turnID: String, text: String,
+                                             userAssets: [UserAssetRef], ts: TimeInterval,
                                              graph: inout ExecutionGraph) -> [NodeID] {
         internalState.currentTurnID = turnID
         internalState.currentInvocationID = nil  // turn boundaries reset invocation tracking
@@ -234,7 +241,7 @@ public struct ExecutionReducer: Sendable {
         }
         let node = GraphNode(
             id: nodeID, kind: .userInput,
-            payload: .userInput(text: text),
+            payload: .userInput(UserInputPayload(text: text, userAssets: userAssets)),
             status: .completed, timestamp: ts, turnID: turnID
         )
         appendNode(node, to: &graph)

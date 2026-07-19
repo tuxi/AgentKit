@@ -71,8 +71,8 @@ public struct ConversationDetailView: View {
                     placeholder: store.isPreparingWorkspace ? "正在准备工作区…" : "随心输入",
                     isEnabled: (store.draft?.canCommit ?? false) && !store.isPreparingWorkspace,
                     isDraft: true,
-                    onSend: { text, model in
-                        await store.commitDraft(firstMessage: text, model: model)
+                    onSend: { text, model, assets in
+                        await store.commitDraft(firstMessage: text, model: model, assets: assets)
                         return store.draft == nil
                     },
                     viewModel: viewModel,
@@ -211,9 +211,9 @@ public struct ConversationDetailView: View {
                     isDraft: false,
                     isTurnRunning: vm.isTurnActive,
                     onStop: { Task { await vm.cancelTurn() } },
-                    onSend: { text, model in
+                    onSend: { text, model, assets in
                         let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
-                        return await vm.send(input: .text(trimmed, model: model))
+                        return await vm.send(input: .text(trimmed, model: model, assets: assets))
                     },
                     viewModel: vm,
                     onModelChange: { newID in
