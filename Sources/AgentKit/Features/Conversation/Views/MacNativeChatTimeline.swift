@@ -933,11 +933,16 @@ private final class NativeTurnTableCellView: NSTableCellView {
     }
 
     private func handle(_ action: TranscriptAction) {
-        if case .toggleTool(let callID) = action {
+        switch action {
+        case .toggleTool(let callID):
             state.toggleTool(callID: callID)
             rebuildTranscript()
             onStateChange?(state)
-        } else {
+        case .toggleThinking(let id):
+            state.toggleThinking(id: id)
+            rebuildTranscript()
+            onStateChange?(state)
+        default:
             dispatcher?.handle(action)
         }
     }

@@ -119,6 +119,9 @@ struct TurnView: View, Equatable {
         case .toggleTool(let callID):
             documentState.toggleTool(callID: callID)
 
+        case .toggleThinking(let id):
+            documentState.toggleThinking(id: id)
+
         case .openArtifact(let callID):
             guard let artifact = artifact(callID: callID) else { return }
             openInInspector(artifact)

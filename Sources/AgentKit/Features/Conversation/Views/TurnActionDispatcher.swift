@@ -21,6 +21,8 @@ final class TurnActionDispatcher {
         switch action {
         case .toggleTool:
             break // NativeTurnTableCellView owns expand/collapse state.
+        case .toggleThinking:
+            break // Thinking expand/collapse handled by the owning view.
         case .openArtifact(let callID):
             guard let artifact = artifact(callID: callID) else { return }
             openInInspector(artifact)

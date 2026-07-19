@@ -21,6 +21,7 @@ private typealias PlatformFont = UIFont
 
 enum TranscriptAction: Hashable {
     case toggleTool(callID: String)
+    case toggleThinking(id: String)
     case openArtifact(callID: String)
     case openAsset(AssetReference)
     case openURL(String)
@@ -31,12 +32,21 @@ enum TranscriptAction: Hashable {
 
 struct TranscriptDocumentState: Hashable {
     var expandedToolIDs: Set<String> = []
+    var expandedThinkingIDs: Set<String> = []
 
     mutating func toggleTool(callID: String) {
         if expandedToolIDs.contains(callID) {
             expandedToolIDs.remove(callID)
         } else {
             expandedToolIDs.insert(callID)
+        }
+    }
+
+    mutating func toggleThinking(id: String) {
+        if expandedThinkingIDs.contains(id) {
+            expandedThinkingIDs.remove(id)
+        } else {
+            expandedThinkingIDs.insert(id)
         }
     }
 }
@@ -81,8 +91,10 @@ enum TurnTranscriptBuilder {
                 builder.appendMarkdown(payload.text, textAnnotations: payload.textAnnotations)
                 previousRenderedBlockWasFailedTool = false
 
-            case .thinking(_, let payload):
-                builder.appendThinkingCard(payload)
+            case .thinking(let id, let payload):
+                // Auto-expand during streaming; otherwise respect user toggle.
+                let isExpanded = payload.isStreaming || state.expandedThinkingIDs.contains(id)
+                builder.appendThinkingCard(id: id, payload: payload, isExpanded: isExpanded)
                 previousRenderedBlockWasFailedTool = false
 
             case .toolGroup(let group):
@@ -389,18 +401,26 @@ private struct TranscriptAttributedBuilder {
 
     /// Renders a thinking card — collapsible model reasoning block.
     /// Muted, indented, left-bordered style distinct from the spoken reply.
-    mutating func appendThinkingCard(_ payload: ThinkingNodePayload) {
+    /// Streaming blocks auto-expand; completed blocks default to collapsed.
+    mutating func appendThinkingCard(id: String, payload: ThinkingNodePayload, isExpanded: Bool) {
+        let actionID = register(.toggleThinking(id: id))
         let block = makeBlock(.thinking)
+        let indicator = isExpanded ? "⌄" : "›"
         let label = payload.isStreaming ? "Thinking…" : "Thought"
-        var labelAttrs = thinkingLabelAttributes
-        labelAttrs[.transcriptBlock] = block
-        var bodyAttrs = thinkingBodyAttributes
-        bodyAttrs[.transcriptBlock] = block
 
-        append("◉ ", attributes: labelAttrs)
-        append(label, attributes: labelAttrs)
-        append("\n", attributes: labelAttrs)
-        append(payload.text, attributes: bodyAttrs)
+        // Header row — always visible, clickable to toggle.
+        var headerAttrs = thinkingLabelAttributes
+        headerAttrs[.transcriptBlock] = block
+        appendLinked("◉ ", id: actionID, attributes: headerAttrs)
+        appendLinked("\(label) \(indicator)", id: actionID, attributes: thinkingLabelAttributes)
+        append("\n", attributes: thinkingLabelAttributes)
+
+        // Body — only visible when expanded.
+        if isExpanded {
+            var bodyAttrs = thinkingBodyAttributes
+            bodyAttrs[.transcriptBlock] = block
+            append(payload.text, attributes: bodyAttrs)
+        }
         copyParts.append(payload.text)
     }
 
