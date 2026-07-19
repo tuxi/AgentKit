@@ -22,11 +22,13 @@ struct MarkdownBlockView: View {
                 TranscriptImageView(urlString: image.source, altText: image.altText)
             } else {
                 Text(MarkdownInlineRenderer.render(inlines, baseFont: baseFont))
+                    .textSelection(.enabled)
                     .frame(maxWidth: .infinity, alignment: .leading)
             }
 
         case .heading(let level, let inlines):
             Text(MarkdownInlineRenderer.render(inlines, baseFont: baseFont))
+                .textSelection(.enabled)
                 .font(headingFont(level))
                 .foregroundStyle(.primary)
                 .padding(.top, level <= 2 ? 6 : 2)
@@ -142,14 +144,24 @@ private struct MarkdownListItemView: View {
 private struct MarkdownTableView: View {
     let head: [TableCell]
     let rows: [[TableCell]]
+    @State private var showCopied = false
 
     private var columnCount: Int {
         max(head.count, rows.map(\.count).max() ?? 0)
     }
 
     var body: some View {
-        ScrollView(.horizontal, showsIndicators: true) {
-            Grid(horizontalSpacing: 0, verticalSpacing: 1) {
+        VStack(alignment: .leading, spacing: 0) {
+            // Copy button header
+            HStack {
+                Spacer()
+                copyButton
+            }
+            .padding(.horizontal, 8)
+            .padding(.vertical, 4)
+
+            ScrollView(.horizontal, showsIndicators: true) {
+                Grid(horizontalSpacing: 0, verticalSpacing: 1) {
                 // Header
                 if !head.isEmpty {
                     GridRow {
@@ -187,7 +199,8 @@ private struct MarkdownTableView: View {
                 }
             }
             .padding(8)
-        }
+        } // ScrollView
+        } // VStack
         .frame(minWidth: 200)
         .background(Color.codeBlockBackground)
         .clipShape(RoundedRectangle(cornerRadius: 8))
@@ -202,11 +215,48 @@ private struct MarkdownTableView: View {
     private func cellView(_ cell: TableCell, isHeader: Bool) -> some View {
         let rendered = MarkdownInlineRenderer.render(cell.content, baseFont: .caption)
         return Text(rendered)
+            .textSelection(.enabled)
             .font(isHeader ? .caption.weight(.semibold) : .caption)
             .foregroundStyle(isHeader ? .secondary : .primary)
             .frame(minWidth: 52, maxWidth: 220, alignment: cell.alignment.swiftAlignment)
             .padding(.horizontal, 10)
             .padding(.vertical, 8)
+    }
+
+    // MARK: - Copy
+
+    private var tablePlainText: String {
+        var lines: [String] = []
+        let allRows = head.isEmpty ? rows : [head] + rows
+        for row in allRows {
+            let parts = row.map { $0.plainText }
+            lines.append(parts.joined(separator: "\t"))
+        }
+        return lines.joined(separator: "\n")
+    }
+
+    private var copyButton: some View {
+        Button {
+            #if os(macOS)
+            NSPasteboard.general.clearContents()
+            NSPasteboard.general.setString(tablePlainText, forType: .string)
+            #else
+            UIPasteboard.general.string = tablePlainText
+            #endif
+            showCopied = true
+            DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) {
+                showCopied = false
+            }
+        } label: {
+            Label(
+                showCopied ? "Copied" : "Copy",
+                systemImage: showCopied ? "checkmark" : "doc.on.doc"
+            )
+            .font(.caption2)
+            .labelStyle(.iconOnly)
+        }
+        .buttonStyle(.plain)
+        .foregroundStyle(.secondary)
     }
 
     // MARK: - Padding helper
@@ -231,6 +281,28 @@ private extension TableCellAlignment {
         case .left: return .leading
         case .center: return .center
         case .right: return .trailing
+        }
+    }
+}
+
+private extension TableCell {
+    var plainText: String {
+        content.compactMap { $0.plainText }.joined()
+    }
+}
+
+private extension InlineContent {
+    var plainText: String {
+        switch self {
+        case .text(let s): return s
+        case .strong(let c): return c.compactMap(\.plainText).joined()
+        case .emphasis(let c): return c.compactMap(\.plainText).joined()
+        case .strikethrough(let c): return c.compactMap(\.plainText).joined()
+        case .inlineCode(let s): return s
+        case .link(_, let c): return c.compactMap(\.plainText).joined()
+        case .image(_, let alt): return alt
+        case .softBreak: return " "
+        case .lineBreak: return " "
         }
     }
 }
