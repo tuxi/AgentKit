@@ -37,6 +37,7 @@ struct DiffEntry: Identifiable {
 /// and continuous text selection within flow chunks.
 struct StreamingMarkdownRenderer: View {
     let text: String
+    var baseFont: Font = .body
 
     @State private var previousEntries: [DiffEntry] = []
 
@@ -52,10 +53,10 @@ struct StreamingMarkdownRenderer: View {
             ForEach(entries) { entry in
                 switch entry.chunk {
                 case .flow(let flowBlocks):
-                    FlowTextBlock(blocks: flowBlocks)
+                    FlowTextBlock(blocks: flowBlocks, baseFont: baseFont)
                         .id(entry.id)
                 case .structural(let block):
-                    MarkdownBlockView(block: block)
+                    MarkdownBlockView(block: block, baseFont: baseFont)
                         .id(entry.id)
                 }
             }

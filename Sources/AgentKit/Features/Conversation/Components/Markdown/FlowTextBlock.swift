@@ -13,6 +13,7 @@ import SwiftUI
 /// enabling continuous text selection across block boundaries.
 struct FlowTextBlock: View {
     let blocks: [MarkdownBlock]
+    var baseFont: Font = .body
 
     var body: some View {
         flowText
@@ -24,7 +25,6 @@ struct FlowTextBlock: View {
 
     @ViewBuilder
     private var flowText: some View {
-        // Build concatenated Text using reduce
         if blocks.isEmpty {
             EmptyView()
         } else {
@@ -32,8 +32,7 @@ struct FlowTextBlock: View {
         }
     }
 
-    private var concatenatedText: Text {
-        // Start with the first block, then append separator + each subsequent block
+    var concatenatedText: Text {
         var text = blockToText(blocks[0])
         for block in blocks.dropFirst() {
             text = text + Text("\n") + blockToText(block)
@@ -43,21 +42,18 @@ struct FlowTextBlock: View {
 
     // MARK: - Block to Text Conversion
 
-    /// Converts a single flow block into a styled Text segment.
-    /// SwiftUI Text concatenation preserves per-segment styling: bold, italic, font, color, etc.
     private func blockToText(_ block: MarkdownBlock) -> Text {
         switch block {
         case .paragraph(let inlines):
-            return Text(MarkdownInlineRenderer.render(inlines))
+            return Text(MarkdownInlineRenderer.render(inlines, baseFont: baseFont))
 
         case .heading(let level, let inlines):
-            return Text(MarkdownInlineRenderer.render(inlines))
+            return Text(MarkdownInlineRenderer.render(inlines, baseFont: baseFont))
                 .font(headingFont(level))
                 .foregroundColor(.primary)
 
         case .blockquote(let innerBlocks):
-            // Recursively flatten inner blocks
-            let innerText = FlowTextBlock(blocks: innerBlocks).concatenatedText
+            let innerText = FlowTextBlock(blocks: innerBlocks, baseFont: baseFont).concatenatedText
             return innerText
                 .italic()
                 .foregroundColor(.secondary)
@@ -69,12 +65,10 @@ struct FlowTextBlock: View {
             return listItemsToText(items, marker: { i in "\(Int(startIndex) + i)." })
 
         default:
-            // Non-flow blocks should not reach here
             return Text("")
         }
     }
 
-    /// Renders list items as text with markers.
     private func listItemsToText(_ items: [MarkdownListItem], marker: (Int) -> String) -> Text {
         guard !items.isEmpty else { return Text("") }
 
@@ -89,7 +83,7 @@ struct FlowTextBlock: View {
         let innerBlocks = item.blocks
         guard !innerBlocks.isEmpty else { return Text(marker) }
 
-        let contentText = FlowTextBlock(blocks: innerBlocks).concatenatedText
+        let contentText = FlowTextBlock(blocks: innerBlocks, baseFont: baseFont).concatenatedText
 
         let fullText = Text(marker + " ").foregroundColor(.secondary) + contentText
 

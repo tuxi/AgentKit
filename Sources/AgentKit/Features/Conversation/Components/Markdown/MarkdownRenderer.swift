@@ -13,10 +13,15 @@ import SwiftUI
 /// Delegates to StreamingMarkdownRenderer for stable-prefix caching:
 /// already-parsed blocks retain their SwiftUI identity across re-renders,
 /// so only the actively-streaming suffix re-renders on each token.
+///
+/// - Parameter baseFont: The font used for body/paragraph text. Headings,
+///   code blocks, and tables use their own fonts scaled relative to this.
+///   Defaults to `.body` (17pt on iOS).
 struct MarkdownRenderer: View {
     let text: String
+    var baseFont: Font = .body
 
     var body: some View {
-        StreamingMarkdownRenderer(text: text)
+        StreamingMarkdownRenderer(text: text, baseFont: baseFont)
     }
 }

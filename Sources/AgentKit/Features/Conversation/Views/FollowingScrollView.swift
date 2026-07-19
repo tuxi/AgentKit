@@ -53,6 +53,7 @@ struct FollowingScrollView<Content: View>: View {
         ScrollView {
             content()
         }
+        .scrollDismissesKeyboard(.immediately)
         .scrollPosition($scrollPosition)
         .defaultScrollAnchor(.bottom, for: .initialOffset)
         // Content-growth following is delegated to the framework: sizeChanges

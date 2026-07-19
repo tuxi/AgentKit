@@ -28,11 +28,71 @@ struct TurnView: View, Equatable {
     // the user's text selection while a tool was running. The running state
     // is shown with a static glyph instead.
     var body: some View {
+        #if os(iOS)
+        iosBody
+        #else
+        macOSBody
+        #endif
+    }
+
+    #if os(iOS)
+    /// iOS: SwiftUI block-based layout — user prompt as standalone bubble,
+    /// each turn block as its own view, no TextKit NSAttributedString.
+    private var iosBody: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            // User prompt as a right-aligned markdown bubble
+            if let userPrompt = turn.userPrompt {
+                UserPromptBubble(prompt: userPrompt)
+            }
+            // User-attached images / files
+            if let userAssets = turn.userPrompt?.userAssets, !userAssets.isEmpty {
+                UserAssetPreviewStrip(
+                    assets: userAssets,
+                    resolver: store.userAssetPreviewResolver
+                )
+            }
+            // Agent response blocks rendered as typed SwiftUI views
+            AgentResponseView(
+                turn: turn,
+                documentState: $documentState,
+                onAction: handleTranscriptAction
+            )
+
+            if !turn.todos.isEmpty {
+                TodoPanel(todos: turn.todos, isLive: turn.isLive)
+            }
+
+            bottomRow(copyText: turnCopyText)
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+    }
+
+    /// Plain-text extract for clipboard copy on iOS (no NSAttributedString).
+    private var turnCopyText: String {
+        var parts: [String] = []
+        if let prompt = turn.userPrompt?.text, !prompt.isEmpty {
+            parts.append(prompt)
+        }
+        for block in turn.blocks {
+            switch block {
+            case .text(_, let payload):
+                if !payload.text.isEmpty { parts.append(payload.text) }
+            case .thinking(_, let payload):
+                if !payload.text.isEmpty { parts.append(payload.text) }
+            default:
+                break
+            }
+        }
+        return parts.joined(separator: "\n")
+    }
+    #else
+    /// macOS: TextKit NSAttributedString path, unchanged.
+    private var macOSBody: some View {
         let transcript = TranscriptCache.shared.transcript(
             for: turn,
             state: documentState
         )
-        VStack(alignment: .leading, spacing: 6) {
+        return VStack(alignment: .leading, spacing: 6) {
             if let userAssets = turn.userPrompt?.userAssets, !userAssets.isEmpty {
                 UserAssetPreviewStrip(
                     assets: userAssets,
@@ -51,6 +111,7 @@ struct TurnView: View, Equatable {
         }
         .frame(maxWidth: .infinity, alignment: .leading)
     }
+    #endif
 
     /// One copy button per turn. The selectable transcript already contains the
     /// turn footer, so this row stays quiet.
@@ -79,6 +140,7 @@ struct TurnView: View, Equatable {
                         Label("\(assets.count)", systemImage: "tray.full")
                             .font(.caption2)
                             .foregroundStyle(Color.secondary)
+                            .padding(5)
                     }
                     .buttonStyle(.plain)
                     .help("查看本轮资产")
@@ -360,6 +422,7 @@ private struct TurnCopyButton: View {
             Image(systemName: copied ? "checkmark" : "doc.on.doc")
                 .font(.caption2)
                 .foregroundStyle(copied ? Color.green : Color.secondary)
+                .padding(5)
         }
         .buttonStyle(.plain)
         .help("复制回复")
