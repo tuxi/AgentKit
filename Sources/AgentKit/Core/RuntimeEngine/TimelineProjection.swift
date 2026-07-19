@@ -182,10 +182,10 @@ public struct TimelineProjection: Sendable {
                         if let e = p.metadata["elapsedMs"], let v = Int(e) { footerElapsed += v }
                     }
                 } else if p.kind == .modelActivity,
-                          p.metadata["type"] == "todos" {
-                    // The current task plan is projected once through
-                    // RuntimeSnapshot.latestTodos. Do not duplicate its lossy
-                    // status text as an ordinary system block in the turn.
+                          p.metadata["type"] == "todos" || p.metadata["type"] == "approval" {
+                    // todos → projected through RuntimeSnapshot.latestTodos.
+                    // approval → approval bar is the canonical UI; don't render
+                    // a redundant "[modelActivity] Approval: …" system block.
                     break
                 } else if p.kind == .contextCompact || p.kind == .skillLoaded {
                     // Demoted meta — not rendered in the main flow for now.
