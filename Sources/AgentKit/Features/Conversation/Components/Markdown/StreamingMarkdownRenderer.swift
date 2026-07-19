@@ -38,6 +38,7 @@ struct DiffEntry: Identifiable {
 struct StreamingMarkdownRenderer: View {
     let text: String
     var baseFont: Font = .body
+    var fillWidth: Bool = true
 
     @State private var previousEntries: [DiffEntry] = []
 
@@ -53,10 +54,10 @@ struct StreamingMarkdownRenderer: View {
             ForEach(entries) { entry in
                 switch entry.chunk {
                 case .flow(let flowBlocks):
-                    FlowTextBlock(blocks: flowBlocks, baseFont: baseFont)
+                    FlowTextBlock(blocks: flowBlocks, baseFont: baseFont, fillWidth: fillWidth)
                         .id(entry.id)
                 case .structural(let block):
-                    MarkdownBlockView(block: block, baseFont: baseFont)
+                    MarkdownBlockView(block: block, baseFont: baseFont, fillWidth: fillWidth)
                         .id(entry.id)
                 }
             }

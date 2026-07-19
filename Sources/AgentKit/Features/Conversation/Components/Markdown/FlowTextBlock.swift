@@ -14,12 +14,16 @@ import SwiftUI
 struct FlowTextBlock: View {
     let blocks: [MarkdownBlock]
     var baseFont: Font = .body
+    var fillWidth: Bool = true
 
     var body: some View {
         flowText
             .textSelection(.enabled)
             .lineSpacing(4)
-            .frame(maxWidth: .infinity, alignment: .leading)
+            .frame(
+                maxWidth: fillWidth ? .infinity : nil,
+                alignment: fillWidth ? .leading : .center
+            )
     }
 
     // MARK: - Text Concatenation
@@ -54,7 +58,7 @@ struct FlowTextBlock: View {
                 .foregroundColor(.primary)
 
         case .blockquote(let innerBlocks):
-            let innerText = FlowTextBlock(blocks: innerBlocks, baseFont: baseFont).concatenatedText
+            let innerText = FlowTextBlock(blocks: innerBlocks, baseFont: baseFont, fillWidth: fillWidth).concatenatedText
             return innerText
                 .italic()
                 .foregroundColor(.secondary)
@@ -84,7 +88,7 @@ struct FlowTextBlock: View {
         let innerBlocks = item.blocks
         guard !innerBlocks.isEmpty else { return Text(marker) }
 
-        let contentText = FlowTextBlock(blocks: innerBlocks, baseFont: baseFont).concatenatedText
+        let contentText = FlowTextBlock(blocks: innerBlocks, baseFont: baseFont, fillWidth: fillWidth).concatenatedText
 
         let fullText = Text(marker + " ").foregroundColor(.secondary) + contentText
 

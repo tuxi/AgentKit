@@ -17,11 +17,15 @@ import SwiftUI
 /// - Parameter baseFont: The font used for body/paragraph text. Headings,
 ///   code blocks, and tables use their own fonts scaled relative to this.
 ///   Defaults to `.body` (17pt on iOS).
+/// - Parameter fillWidth: When true (default), text fills the container width.
+///   Set to false for content that should size to its natural width
+///   (e.g. user prompt bubbles).
 struct MarkdownRenderer: View {
     let text: String
     var baseFont: Font = .body
+    var fillWidth: Bool = true
 
     var body: some View {
-        StreamingMarkdownRenderer(text: text, baseFont: baseFont)
+        StreamingMarkdownRenderer(text: text, baseFont: baseFont, fillWidth: fillWidth)
     }
 }

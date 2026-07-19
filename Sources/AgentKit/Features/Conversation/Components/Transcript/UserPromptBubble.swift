@@ -7,24 +7,34 @@
 //
 
 import SwiftUI
+#if os(iOS)
+import UIKit
+#endif
 
 /// Right-aligned bubble showing the user's prompt text, rendered as markdown.
 /// User-attached images are handled by `UserAssetPreviewStrip` above this bubble.
 struct UserPromptBubble: View {
     let prompt: MessageNodePayload
 
+    private var bubbleMaxWidth: CGFloat {
+        #if os(iOS)
+        UIScreen.main.bounds.width * 0.72
+        #else
+        400
+        #endif
+    }
+
     var body: some View {
-        HStack {
-            Spacer(minLength: 60)
-            MarkdownRenderer(text: prompt.text)
-                .padding(.horizontal, 14)
-                .padding(.vertical, 8)
-                .background(
-                    RoundedRectangle(cornerRadius: 12)
-                        .fill(Color.userBubbleBackground)
-                )
-        }
-        .padding(.horizontal, 4)
+        MarkdownRenderer(text: prompt.text, fillWidth: false)
+            .frame(maxWidth: bubbleMaxWidth)
+            .padding(.horizontal, 14)
+            .padding(.vertical, 8)
+            .background(
+                RoundedRectangle(cornerRadius: 12)
+                    .fill(Color.userBubbleBackground)
+            )
+            .frame(maxWidth: .infinity, alignment: .trailing)
+            .padding(.horizontal, 4)
     }
 }
 

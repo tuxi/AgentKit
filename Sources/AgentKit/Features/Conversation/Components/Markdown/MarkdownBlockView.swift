@@ -14,6 +14,7 @@ import SwiftUI
 struct MarkdownBlockView: View {
     let block: MarkdownBlock
     var baseFont: Font = .body
+    var fillWidth: Bool = true
 
     var body: some View {
         switch block {
@@ -23,7 +24,10 @@ struct MarkdownBlockView: View {
             } else {
                 Text(MarkdownInlineRenderer.render(inlines, baseFont: baseFont))
                     .textSelection(.enabled)
-                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .frame(
+                        maxWidth: fillWidth ? .infinity : nil,
+                        alignment: fillWidth ? .leading : .center
+                    )
             }
 
         case .heading(let level, let inlines):
@@ -43,7 +47,7 @@ struct MarkdownBlockView: View {
                     .frame(width: 3)
                 VStack(alignment: .leading, spacing: 4) {
                     ForEach(Array(blocks.enumerated()), id: \.offset) { _, innerBlock in
-                        MarkdownBlockView(block: innerBlock, baseFont: baseFont)
+                        MarkdownBlockView(block: innerBlock, baseFont: baseFont, fillWidth: fillWidth)
                     }
                 }
                 .foregroundStyle(Color.blockquoteText)
@@ -54,14 +58,14 @@ struct MarkdownBlockView: View {
         case .unorderedList(let items):
             VStack(alignment: .leading, spacing: 2) {
                 ForEach(Array(items.enumerated()), id: \.offset) { _, item in
-                    MarkdownListItemView(item: item, index: nil, baseFont: baseFont)
+                    MarkdownListItemView(item: item, index: nil, baseFont: baseFont, fillWidth: fillWidth)
                 }
             }
 
         case .orderedList(let items, let startIndex):
             VStack(alignment: .leading, spacing: 2) {
                 ForEach(Array(items.enumerated()), id: \.offset) { i, item in
-                    MarkdownListItemView(item: item, index: Int(startIndex) + i, baseFont: baseFont)
+                    MarkdownListItemView(item: item, index: Int(startIndex) + i, baseFont: baseFont, fillWidth: fillWidth)
                 }
             }
 
@@ -112,6 +116,7 @@ private struct MarkdownListItemView: View {
     /// The item number for ordered lists (nil → use bullet).
     let index: Int?
     var baseFont: Font = .body
+    var fillWidth: Bool = true
 
     var body: some View {
         HStack(alignment: .top, spacing: 4) {
