@@ -11,7 +11,11 @@ import SwiftUI
 import UIKit
 #endif
 
-/// Right-aligned bubble showing the user's prompt text, rendered as markdown.
+/// Right-aligned bubble showing the user's prompt text.
+/// Uses plain Text (not MarkdownRenderer) so the bubble naturally
+/// shrink-wraps to the content width — short prompts stay snug,
+/// long prompts wrap at 72% screen width.
+///
 /// User-attached images are handled by `UserAssetPreviewStrip` above this bubble.
 struct UserPromptBubble: View {
     let prompt: MessageNodePayload
@@ -25,14 +29,16 @@ struct UserPromptBubble: View {
     }
 
     var body: some View {
-        MarkdownRenderer(text: prompt.text, fillWidth: false)
-            .frame(maxWidth: bubbleMaxWidth)
+        Text(prompt.text)
+            .font(.body)
+            .foregroundStyle(.primary)
             .padding(.horizontal, 14)
             .padding(.vertical, 8)
             .background(
                 RoundedRectangle(cornerRadius: 12)
                     .fill(Color.userBubbleBackground)
             )
+            .frame(maxWidth: bubbleMaxWidth, alignment: .leading)
             .frame(maxWidth: .infinity, alignment: .trailing)
             .padding(.horizontal, 4)
     }
