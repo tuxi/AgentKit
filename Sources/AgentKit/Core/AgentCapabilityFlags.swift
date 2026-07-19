@@ -32,7 +32,7 @@ public struct AgentCapabilityFlags: OptionSet, Sendable {
 
     /// 支持 `token_delta` 实时流式推送。
     public static let streaming = AgentCapabilityFlags(rawValue: 1 << 0)
-    /// 支持 `thinking` 独立流。
+    /// 支持 `thinking` 完整推理快照事件（持久化、REPLACE 语义）。
     public static let thinking = AgentCapabilityFlags(rawValue: 1 << 1)
     /// 支持 `tool_stdout` / `tool_stderr` 实时 IO。
     public static let toolStreaming = AgentCapabilityFlags(rawValue: 1 << 2)
@@ -64,9 +64,11 @@ public struct AgentCapabilityFlags: OptionSet, Sendable {
     public static let conversationArchive = AgentCapabilityFlags(rawValue: 1 << 15)
     /// Runtime can safely clone unauthenticated public HTTPS Git repositories.
     public static let publicGitClone = AgentCapabilityFlags(rawValue: 1 << 16)
+    /// 支持 `reasoning_delta` 实时推理流式推送。
+    public static let reasoningStreaming = AgentCapabilityFlags(rawValue: 1 << 17)
 
     // MARK: - Presets
 
     /// CodeAgent v1 默认能力集。
-    public static let `default`: AgentCapabilityFlags = [.streaming, .thinking]
+    public static let `default`: AgentCapabilityFlags = [.streaming, .thinking, .reasoningStreaming]
 }

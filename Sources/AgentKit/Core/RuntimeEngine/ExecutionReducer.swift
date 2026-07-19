@@ -75,7 +75,12 @@ public struct ExecutionReducer: Sendable {
             return handleTokenDelta(turnID: turnID ?? internalState.currentTurnID ?? "",
                                     text: text, ts: ts, graph: &graph)
 
-        // ── Thinking ──
+        // ── Reasoning delta (transient, streaming) ──
+        case .reasoningDelta(let turnID, let text):
+            return handleReasoningDelta(turnID: turnID ?? internalState.currentTurnID ?? "",
+                                        text: text, ts: ts, graph: &graph)
+
+        // ── Thinking (complete snapshot, authoritative) ──
         case .thinking(let turnID, let text):
             return handleThinking(turnID: turnID ?? internalState.currentTurnID ?? "",
                                   text: text, ts: ts, graph: &graph)
@@ -462,8 +467,10 @@ public struct ExecutionReducer: Sendable {
         internalState.nextAssistantSeq += 1
     }
 
-    private mutating func handleThinking(turnID: String, text: String, ts: TimeInterval,
-                                          graph: inout ExecutionGraph) -> [NodeID] {
+    /// Real-time reasoning delta — append to streaming buffer, create/update a
+    /// running thinking node for live display. Transient, not persisted.
+    private mutating func handleReasoningDelta(turnID: String, text: String, ts: TimeInterval,
+                                                graph: inout ExecutionGraph) -> [NodeID] {
         internalState.streamingThinking += text
 
         if let prevID = internalState.lastNodeOfKind[.thinking],
@@ -482,6 +489,36 @@ public struct ExecutionReducer: Sendable {
                 status: .running, timestamp: ts, turnID: turnID
             )
             internalState.lastNodeOfKind[.thinking] = nodeID
+            appendNode(node, to: &graph)
+            return [nodeID]
+        }
+    }
+
+    /// Complete reasoning snapshot — REPLACE streaming buffer with authoritative
+    /// text and mark the thinking node as completed.
+    private mutating func handleThinking(turnID: String, text: String, ts: TimeInterval,
+                                          graph: inout ExecutionGraph) -> [NodeID] {
+        // REPLACE: thinking is the authoritative complete snapshot, not a delta.
+        internalState.streamingThinking = text
+
+        if let prevID = internalState.lastNodeOfKind[.thinking],
+           var prevNode = graph.nodes[prevID] {
+            prevNode.payload = .thinking(text: internalState.streamingThinking)
+            prevNode.status = .completed
+            prevNode.timestamp = ts
+            graph.upsertNode(prevNode)
+            // Clear tracking so next reasoning_delta starts a fresh node.
+            internalState.lastNodeOfKind[.thinking] = nil
+            return [prevID]
+        } else {
+            // Cold replay / no prior reasoning_delta — create the completed node.
+            let nodeID = "\(turnID)_think_\(internalState.nextThinkingSeq)"
+            internalState.nextThinkingSeq += 1
+            let node = GraphNode(
+                id: nodeID, kind: .thinking,
+                payload: .thinking(text: internalState.streamingThinking),
+                status: .completed, timestamp: ts, turnID: turnID
+            )
             appendNode(node, to: &graph)
             return [nodeID]
         }
@@ -646,14 +683,16 @@ public struct ExecutionReducer: Sendable {
                                                ts: TimeInterval,
                                                graph: inout ExecutionGraph) -> [NodeID] {
         // Finalize the thinking block from this model invocation.
-        // Without this, thinking from the next invocation merges into
-        // the old node, corrupting both content and timeline position.
+        // If the node is still .running, no authoritative `thinking` snapshot
+        // arrived — clear the orphaned reasoning_delta preview.
+        // If already .completed (thinking event arrived), leave it alone.
         if !internalState.streamingThinking.isEmpty {
             if let prevID = internalState.lastNodeOfKind[.thinking],
-               var prevNode = graph.nodes[prevID] {
-                prevNode.status = .completed
-                prevNode.payload = .thinking(text: internalState.streamingThinking)
-                graph.upsertNode(prevNode)
+               let prevNode = graph.nodes[prevID] {
+                if prevNode.status == .running {
+                    // Orphaned preview — remove the node entirely.
+                    graph.nodes.removeValue(forKey: prevID)
+                }
             }
             internalState.streamingThinking = ""
             internalState.lastNodeOfKind[.thinking] = nil

@@ -1081,7 +1081,7 @@ private final class NativeThinkingTableCellView: NSTableCellView {
             if stats.totalTokens > 0 { parts.append("累计 \(stats.formattedTotalTokens) tokens") }
             if stats.contextTokens > 0 { parts.append("ctx \(stats.formattedContextTokens)") }
         }
-        if isThinking { parts.append("thinkig…") }
+        if isThinking { parts.append("thinking…") }
         label.stringValue = parts.joined(separator: " · ")
     }
 

@@ -267,9 +267,11 @@ public actor RuntimeEngine {
             let _ = reducer.reduce(todoFallback, into: &graph)
         }
 
-        // Notify UI — coalesce deltas, immediate for terminal events
+        // Notify UI — coalesce deltas, immediate for terminal events.
+        // `thinking` is a terminal complete snapshot, not a delta — yield immediately.
+        // `reasoningDelta` is coalesced like `tokenDelta` for smooth streaming.
         switch event {
-        case .tokenDelta, .thinking, .toolStdout, .toolStderr, .jobOutput:
+        case .tokenDelta, .reasoningDelta, .toolStdout, .toolStderr, .jobOutput:
             scheduleFlush()
         default:
             yieldSnapshot()

@@ -40,6 +40,7 @@ struct ConversationWebDocument: Codable, Equatable, Sendable {
     struct Block: Codable, Equatable, Sendable {
         enum Kind: String, Codable, Sendable {
             case markdown
+            case thinking
             case toolGroup
             case artifact
             case system
@@ -386,6 +387,22 @@ enum ConversationWebDocumentBuilder {
                     turnID: turn.id,
                     registerAction: registerAction
                 )
+            )
+
+        case .thinking(let id, let payload):
+            return .init(
+                id: id,
+                kind: .thinking,
+                text: payload.text,
+                title: payload.isStreaming ? "Thinking…" : "Thought",
+                status: payload.isStreaming ? "streaming" : nil,
+                elapsed: nil,
+                tools: [],
+                childStreamKind: nil,
+                actionID: nil,
+                actionTooltip: nil,
+                inlineActions: [],
+                codeCopyActionIDs: []
             )
 
         case .toolGroup(let group):

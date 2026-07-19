@@ -44,6 +44,11 @@ public enum AgentEvent: Sendable {
 
     // ── 流式文本 ──
     case tokenDelta(turnID: String?, text: String)
+    /// 模型推理/思考的实时增量（瞬态、不持久化、无 seq）。
+    /// 用于实时展示推理过程；完整快照由 `thinking` 事件提供。
+    case reasoningDelta(turnID: String?, text: String)
+    /// 模型推理/思考的完整、持久化快照（REPLACE 语义，非 append）。
+    /// 来自 provider 的 `ReasoningContent`，不是助理正文。
     case thinking(turnID: String?, text: String)
 
     // ── 工具（call_id 是 tool identity）──
@@ -168,6 +173,9 @@ extension AgentEvent {
 
         case "token_delta":
             return .tokenDelta(turnID: turnID, text: wire.text ?? "")
+
+        case "reasoning_delta":
+            return .reasoningDelta(turnID: turnID, text: wire.text ?? "")
 
         case "thinking":
             return .thinking(turnID: turnID, text: wire.text ?? "")

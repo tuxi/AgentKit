@@ -46,6 +46,8 @@ enum TranscriptBlockKind: Int {
     case divider
     /// User prompt bubble — right-anchored snug fill, not full width.
     case userPrompt
+    /// Model reasoning/thinking card — muted, indented, left-bordered.
+    case thinking
 }
 
 enum TranscriptChipKind: Int {
@@ -190,6 +192,17 @@ enum TranscriptTheme {
         dark: color(0.92, 0.90, 0.84, alpha: 0.10)
     )
 
+    /// Thinking card accent and background.
+    static let thinkingAccent: TranscriptPlatformColor = dynamic(
+        light: color(0.50, 0.36, 0.62),
+        dark: color(0.72, 0.60, 0.82)
+    )
+
+    static let thinkingBackground: TranscriptPlatformColor = dynamic(
+        light: color(0.50, 0.36, 0.62, alpha: 0.06),
+        dark: color(0.72, 0.60, 0.82, alpha: 0.08)
+    )
+
     /// Thematic breaks and the rule under table headers.
     static let hairline: TranscriptPlatformColor = dynamic(
         light: color(0.15, 0.15, 0.14, alpha: 0.16),
@@ -330,6 +343,7 @@ enum TranscriptTheme {
         case .diffContext: return codeBlockBackground
         case .divider: return nil // renderer draws a centered hairline
         case .userPrompt: return userBubble
+        case .thinking: return thinkingBackground
         }
     }
 
@@ -339,6 +353,7 @@ enum TranscriptTheme {
         case .diffAdded, .diffRemoved, .diffHunk, .diffContext: return 3
         case .quote, .divider: return 0
         case .userPrompt: return 12
+        case .thinking: return 6
         }
     }
 

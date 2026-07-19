@@ -38,7 +38,7 @@ struct ThinkingTimerView: View {
                                 if stats.invocationCount > 0 { Text("· \(stats.invocationCount)x") }
                             }
                             if isThinking {
-                                Text("· 思考中…")
+                                Text("· thinking…")
                             }
                         }
                         if let stats = modelStats, stats.invocationCount > 0 {

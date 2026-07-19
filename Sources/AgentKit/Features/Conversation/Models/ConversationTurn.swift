@@ -71,10 +71,11 @@ public struct TurnPlan: Identifiable, Sendable, Equatable {
 // MARK: - TurnBlock
 
 /// One ordered block inside a turn. Text can repeat (interleaved with tools).
-/// Note: `thinking` events project into `.text` (assistant narration), so there
-/// is no separate thinking block — see TimelineProjection.buildTurn.
+/// `thinking` blocks carry the model's reasoning/thinking content and render as
+/// collapsible cards, distinct from the assistant's spoken reply (`text` blocks).
 public enum TurnBlock: Identifiable, Sendable, Equatable {
     case text(id: String, MessageNodePayload)
+    case thinking(id: String, ThinkingNodePayload)
     case toolGroup(ToolGroup)
     case artifact(id: String, ArtifactNode)
     case system(id: String, SystemNodePayload)   // observation / reflection / error only
@@ -83,6 +84,7 @@ public enum TurnBlock: Identifiable, Sendable, Equatable {
     public var id: String {
         switch self {
         case .text(let id, _): return id
+        case .thinking(let id, _): return id
         case .toolGroup(let g): return g.id
         case .artifact(let id, _): return id
         case .system(let id, _): return id

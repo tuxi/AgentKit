@@ -120,13 +120,10 @@ public struct TimelineProjection: Sendable {
                 flushTools()
                 blocks.append(.text(id: node.id, p))
             case .thinking(let p):
-                // This agent uses `thinking` events as the assistant's spoken
-                // narration between tools ("let me expand each commit…"), not
-                // hidden reasoning. Render it as an assistant reply so the turn
-                // reads as reply → tool → reply → … → answer (Claude Code style).
+                // Model reasoning/thinking content — a separate collapsible card,
+                // NOT assistant narration. Distinct from the spoken reply (text).
                 flushTools()
-                blocks.append(.text(id: node.id,
-                    MessageNodePayload(role: .assistant, text: p.text, isStreaming: p.isStreaming)))
+                blocks.append(.thinking(id: node.id, p))
             case .tool(let p):
                 // `propose_plan` has a dedicated semantic Plan node. Keeping
                 // its raw tool row would show the same proposal twice.
@@ -213,11 +210,11 @@ public struct TimelineProjection: Sendable {
     }
 
     /// Collapse adjacent assistant-text blocks when one is a prefix of the other.
-    /// The server emits the same narration on both the `thinking` and
-    /// `token_delta` channels; without this the conversation shows each reply
-    /// twice. Prefix (not just equality) handles the two channels streaming at
-    /// different rates — the shorter is folded into the longer, keeping the first
-    /// block's identity stable.
+    /// Handles the case where `token_delta` and `turn_finished` (or replayed
+    /// deltas) deliver overlapping text at different rates — the shorter is
+    /// folded into the longer, keeping the first block's identity stable.
+    /// Note: `thinking` blocks carry reasoning (different from assistant text),
+    /// so they no longer participate in this merge.
     private func mergeAdjacentNarration(_ blocks: [TurnBlock]) -> [TurnBlock] {
         var result: [TurnBlock] = []
         for block in blocks {
@@ -294,9 +291,8 @@ public struct TimelineProjection: Sendable {
                 isAutoApproved: payload.isAutoApproved, artifact: artifact
             ))
 
-        case .observation(let text):
-            // agent的观测信息不显示，因为工具本身的outout有显示了，这里重叠了
-//            kind = .system(SystemNodePayload(kind: .observation, text: text))
+        case .observation:
+            // agent的观测信息不显示，因为工具本身的output有显示了，这里重叠了
             break
 
         case .reflection(let text):

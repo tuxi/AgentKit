@@ -30,6 +30,7 @@ final class TimelineProjectionTurnsTests: XCTestCase {
         blocks.map { block in
             switch block {
             case .text: return "text"
+            case .thinking: return "thinking"
             case .toolGroup: return "tools"
             case .artifact: return "artifact"
             case .system: return "system"
@@ -39,11 +40,15 @@ final class TimelineProjectionTurnsTests: XCTestCase {
     }
 
     // Live turn: thinking → text → tool → text. Lifecycle → footer, not blocks.
+    // After backend fix: `thinking` carries reasoning (not assistant narration),
+    // so it appears as a separate collapsible thinking block, not inline text.
     func testInterleavedTurnFoldsBlocksAndFooter() {
         let turn = "t1"
         let graph = reduce([
             .turnStarted(turnID: turn, text: "do it"),
             .modelStarted(turnID: turn, invocationID: "inv1"),
+            .reasoningDelta(turnID: turn, text: "let me "),
+            .reasoningDelta(turnID: turn, text: "look"),
             .thinking(turnID: turn, text: "let me look"),
             .tokenDelta(turnID: turn, text: "Checking"),
             .toolStarted(turnID: turn, callID: "c1", tool: tool("c1", "grep")),
@@ -60,9 +65,9 @@ final class TimelineProjectionTurnsTests: XCTestCase {
         let t = turns[0]
 
         XCTAssertEqual(t.userPrompt?.text, "do it")
-        // No "model invoked/finished" blocks. Thinking renders as an assistant
-        // reply (text), interleaved with tools.
-        XCTAssertEqual(tags(t.blocks), ["text", "text", "tools", "text"])
+        // Thinking renders as a separate collapsible card, not inline text.
+        // Block order: thinking → text → tools → text.
+        XCTAssertEqual(tags(t.blocks), ["thinking", "text", "tools", "text"])
 
         // Footer aggregates the two invocations.
         XCTAssertNotNil(t.footer)
@@ -71,11 +76,17 @@ final class TimelineProjectionTurnsTests: XCTestCase {
         XCTAssertEqual(t.footer?.contextTokens, 1500) // last invocation context
         XCTAssertEqual(t.footer?.totalTokens, 2700)
 
-        // Narration ("let me look") + replies, in arrival order.
+        // Assistant replies only (no reasoning).
         let texts: [String] = t.blocks.compactMap {
             if case .text(_, let p) = $0 { return p.text }; return nil
         }
-        XCTAssertEqual(texts, ["let me look", "Checking", "Done"])
+        XCTAssertEqual(texts, ["Checking", "Done"])
+
+        // Thinking block content is the reasoning text.
+        let thinkingTexts: [String] = t.blocks.compactMap {
+            if case .thinking(_, let p) = $0 { return p.text }; return nil
+        }
+        XCTAssertEqual(thinkingTexts, ["let me look"])
     }
 
     func testFooterAccumulatesUsageAndDeduplicatesReplayedInvocation() {
@@ -102,24 +113,31 @@ final class TimelineProjectionTurnsTests: XCTestCase {
         XCTAssertEqual(footer?.elapsedMs, 8_500)
     }
 
-    // Same narration on both `thinking` and `token_delta` shows once, not twice.
-    func testDuplicateThinkingAndTokenMergeToOne() {
+    // Reasoning and assistant text are distinct content types — `thinking`
+    // blocks carry reasoning, `text` blocks carry the assistant's spoken reply.
+    // They never merge, even if their text happens to overlap.
+    func testThinkingAndTextAreDistinctBlocks() {
         let turn = "t1"
         let graph = reduce([
             .turnStarted(turnID: turn, text: "q"),
             .modelStarted(turnID: turn, invocationID: "inv1"),
-            .tokenDelta(turnID: turn, text: "Let me trace the data flow"),
-            .thinking(turnID: turn, text: "Let me trace the data flow"),
+            .reasoningDelta(turnID: turn, text: "I need to search"),
+            .thinking(turnID: turn, text: "I need to search"),
+            .tokenDelta(turnID: turn, text: "Let me look that up"),
             .toolStarted(turnID: turn, callID: "c1", tool: tool("c1", "grep")),
             .toolFinished(turnID: turn, callID: "c1", result: result("c1", "grep")),
         ])
         let turns = TimelineProjection().projectTurns(graph, isLive: true)
-        // One narration block, not two identical ones.
-        XCTAssertEqual(tags(turns[0].blocks), ["text", "tools"])
+        // Thinking and text are separate blocks.
+        XCTAssertEqual(tags(turns[0].blocks), ["thinking", "text", "tools"])
+        let thinkingTexts = turns[0].blocks.compactMap { block -> String? in
+            if case .thinking(_, let p) = block { return p.text }; return nil
+        }
+        XCTAssertEqual(thinkingTexts, ["I need to search"])
         let texts = turns[0].blocks.compactMap { block -> String? in
             if case .text(_, let p) = block { return p.text }; return nil
         }
-        XCTAssertEqual(texts, ["Let me trace the data flow"])
+        XCTAssertEqual(texts, ["Let me look that up"])
     }
 
     func testTodoUpdateDoesNotDuplicateAsModelActivityBlock() {
@@ -220,6 +238,28 @@ final class TimelineProjectionTurnsTests: XCTestCase {
         XCTAssertEqual(turns.map { $0.userPrompt?.text }, ["first", "second", "third"])
         // All ids distinct → SwiftUI ForEach won't drop/reorder.
         XCTAssertEqual(Set(turns.map(\.id)).count, 3)
+    }
+
+    // Reasoning deltas stream into a running thinking node; the authoritative
+    // `thinking` event replaces it with the complete text, marked completed.
+    func testReasoningDeltaAndThinkingReplace() {
+        let turn = "t1"
+        let graph = reduce([
+            .turnStarted(turnID: turn, text: "analyze"),
+            .modelStarted(turnID: turn, invocationID: "inv1"),
+            .reasoningDelta(turnID: turn, text: "partial"),
+            .reasoningDelta(turnID: turn, text: " stream"),
+            .thinking(turnID: turn, text: "complete reasoning"),
+            .tokenDelta(turnID: turn, text: "Answer"),
+            .modelFinished(turnID: turn, promptTokens: 10, completionTokens: 0, totalTokens: nil, billingUnits: nil, elapsedMs: 1, invocationID: nil, err: nil),
+        ])
+        let turns = TimelineProjection().projectTurns(graph, isLive: true)
+        // thinking replaces, not appends — one thinking block with the complete text.
+        XCTAssertEqual(tags(turns[0].blocks), ["thinking", "text"])
+        let thinkingTexts = turns[0].blocks.compactMap { block -> String? in
+            if case .thinking(_, let p) = block { return p.text }; return nil
+        }
+        XCTAssertEqual(thinkingTexts, ["complete reasoning"])
     }
 
     // Live and cold-history of the SAME turn converge on the same block tags.

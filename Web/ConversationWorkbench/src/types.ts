@@ -2,6 +2,7 @@ export const protocolVersion = 1;
 
 export type BlockKind =
   | "markdown"
+  | "thinking"
   | "toolGroup"
   | "artifact"
   | "system"

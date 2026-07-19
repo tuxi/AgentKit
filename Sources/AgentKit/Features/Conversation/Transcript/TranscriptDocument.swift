@@ -81,6 +81,10 @@ enum TurnTranscriptBuilder {
                 builder.appendMarkdown(payload.text, textAnnotations: payload.textAnnotations)
                 previousRenderedBlockWasFailedTool = false
 
+            case .thinking(_, let payload):
+                builder.appendThinkingCard(payload)
+                previousRenderedBlockWasFailedTool = false
+
             case .toolGroup(let group):
                 appendToolGroup(group, state: state, to: &builder)
                 previousRenderedBlockWasFailedTool = group.containsFailedTool
@@ -381,6 +385,23 @@ private struct TranscriptAttributedBuilder {
             }
         }
         copyParts.append(text)
+    }
+
+    /// Renders a thinking card — collapsible model reasoning block.
+    /// Muted, indented, left-bordered style distinct from the spoken reply.
+    mutating func appendThinkingCard(_ payload: ThinkingNodePayload) {
+        let block = makeBlock(.thinking)
+        let label = payload.isStreaming ? "Thinking…" : "Thought"
+        var labelAttrs = thinkingLabelAttributes
+        labelAttrs[.transcriptBlock] = block
+        var bodyAttrs = thinkingBodyAttributes
+        bodyAttrs[.transcriptBlock] = block
+
+        append("◉ ", attributes: labelAttrs)
+        append(label, attributes: labelAttrs)
+        append("\n", attributes: labelAttrs)
+        append(payload.text, attributes: bodyAttrs)
+        copyParts.append(payload.text)
     }
 
     mutating func appendMeta(_ text: String) {
@@ -1143,6 +1164,22 @@ private struct TranscriptAttributedBuilder {
             .font: PlatformFont.systemFont(ofSize: metaFontSize),
             .foregroundColor: tertiaryColor,
             .paragraphStyle: paragraphStyle(spacingAfter: 2)
+        ]
+    }
+
+    private var thinkingLabelAttributes: [NSAttributedString.Key: Any] {
+        [
+            .font: PlatformFont.systemFont(ofSize: toolTitleFontSize, weight: .semibold),
+            .foregroundColor: TranscriptTheme.thinkingAccent,
+            .paragraphStyle: paragraphStyle(spacingAfter: 1, blockInset: true)
+        ]
+    }
+
+    private var thinkingBodyAttributes: [NSAttributedString.Key: Any] {
+        [
+            .font: PlatformFont.systemFont(ofSize: bodyFontSize),
+            .foregroundColor: secondaryColor,
+            .paragraphStyle: paragraphStyle(spacingAfter: bodySpacingAfter, blockInset: true)
         ]
     }
 
