@@ -49,7 +49,7 @@ struct StreamingMarkdownRenderer: View {
             previousEntries: previousEntries
         )
 
-        VStack(alignment: .leading, spacing: 6) {
+        VStack(alignment: .leading, spacing: 8) {
             ForEach(entries) { entry in
                 switch entry.chunk {
                 case .flow(let flowBlocks):
@@ -61,6 +61,7 @@ struct StreamingMarkdownRenderer: View {
                 }
             }
         }
+        .textSelection(.enabled)
         .onChange(of: entries.map(\.id)) { _, _ in
             previousEntries = entries
         }

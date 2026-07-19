@@ -18,6 +18,7 @@ struct FlowTextBlock: View {
     var body: some View {
         flowText
             .textSelection(.enabled)
+            .lineSpacing(4)
             .frame(maxWidth: .infinity, alignment: .leading)
     }
 
