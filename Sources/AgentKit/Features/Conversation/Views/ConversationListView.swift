@@ -107,7 +107,7 @@ public struct ConversationListView: View {
         var seenPaths: Set<String> = []
 
         for workspace in store.recentWorkspaces.workspaces + store.projects.projects {
-            let path = workspace.url.standardizedFileURL.path
+            let path = workspace.url.canonicalPathForGrouping
             guard seenPaths.insert(path).inserted else { continue }
             guard query.isEmpty || workspace.name.localizedCaseInsensitiveContains(query) else {
                 continue
@@ -695,7 +695,7 @@ private struct ConversationWorkspaceGroup: Identifiable {
         }
 
         init(workspace: Workspace) {
-            id = "path:\(workspace.url.standardizedFileURL.path)"
+            id = "path:\(workspace.url.canonicalPathForGrouping)"
             title = workspace.name
             systemImage = "folder"
         }

@@ -130,21 +130,25 @@ public struct ConversationRef: Identifiable, Hashable, Sendable, Codable {
         // checkout conversations often only have WorkspaceAnchor.rootPath,
         // while managed worktrees carry base_workspace_id. Normalizing both to
         // `path:` keeps old and new sessions in the same sidebar group.
+        //
+        // Use `canonicalPathForGrouping` instead of `standardizedFileURL.path`
+        // so that the /var → /private/var symlink is handled on iOS where the
+        // sandbox prevents standardizedFileURL from resolving it.
         if let baseWorkspaceID, baseWorkspaceID.hasPrefix("/") {
-            return "path:\(URL(fileURLWithPath: baseWorkspaceID).standardizedFileURL.path)"
+            return "path:\(URL(fileURLWithPath: baseWorkspaceID).canonicalPathForGrouping)"
         }
         if let rootPath = workspace?.localRootPath, !rootPath.isEmpty {
-            return "path:\(URL(fileURLWithPath: rootPath).standardizedFileURL.path)"
+            return "path:\(URL(fileURLWithPath: rootPath).canonicalPathForGrouping)"
         }
         if let basePath = inferredBaseWorkspacePath {
-            return "path:\(URL(fileURLWithPath: basePath).standardizedFileURL.path)"
+            return "path:\(URL(fileURLWithPath: basePath).canonicalPathForGrouping)"
         }
         if let baseWorkspaceID, !baseWorkspaceID.isEmpty {
             return "base:\(baseWorkspaceID)"
         }
         if let workspace { return "workspace:\(workspace.id)" }
         guard !workspacePath.isEmpty else { return "chat" }
-        return "path:\(URL(fileURLWithPath: workspacePath).standardizedFileURL.path)"
+        return "path:\(URL(fileURLWithPath: workspacePath).canonicalPathForGrouping)"
     }
 
     public var workspaceGroupingName: String {
