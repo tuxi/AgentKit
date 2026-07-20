@@ -20,7 +20,7 @@ public struct ApprovalRequest: Sendable, Identifiable, Hashable {
     /// v1 可能缺省（审批器当前无 turn 上下文），按可选处理。
     public let sessionId: String?
     public let turnId: String?
-
+    
     public init(
         id: String,
         toolName: String,
@@ -54,7 +54,7 @@ public struct ApprovalRequest: Sendable, Identifiable, Hashable {
 
     /// 是否为 MCP 外部工具（`tool_name` 以 `mcp__` 开头）。
     public var isMCP: Bool { toolName.hasPrefix("mcp__") }
-
+    
     /// MCP server 名（第一个 `__` 之前的字符串），非 MCP 工具返回 nil。
     /// 例：`mcp__github__list_issues` → `"github"`。
     public var mcpServer: String? {
@@ -63,7 +63,7 @@ public struct ApprovalRequest: Sendable, Identifiable, Hashable {
         guard let separatorRange = withoutPrefix.range(of: "__") else { return nil }
         return String(withoutPrefix[..<separatorRange.lowerBound])
     }
-
+    
     /// MCP 工具裸名（去掉 `mcp__<server>__` 前缀），非 MCP 工具返回原始 toolName。
     /// 例：`mcp__github__list_issues` → `"list_issues"`。
     public var mcpBareToolName: String {
@@ -71,11 +71,36 @@ public struct ApprovalRequest: Sendable, Identifiable, Hashable {
         let prefix = "mcp__\(server)__"
         return String(toolName.dropFirst(prefix.count))
     }
-
+    
     /// UI 展示用的工具名：MCP 工具显示为 `"MCP: server → tool"`，内置工具显示原始名。
     public var displayToolName: String {
         guard let server = mcpServer else { return toolName }
         return "MCP: \(server) → \(mcpBareToolName)"
+    }
+    
+    /// 是否为外部路径访问审批（`tool_name == "external_path_access"`）。
+    public var isExternalPathAccess: Bool {
+        toolName == "external_path_access"
+    }
+    
+    /// 外部路径访问操作的中文描述。
+    public var externalPathOperation: String {
+        guard isExternalPathAccess,
+              case .object(let dict) = toolArgs,
+              case .string(let op) = dict["operation"] else { return "访问" }
+        switch op {
+        case "list": return "列出目录"
+        case "read": return "读取文件"
+        default: return "访问"
+        }
+    }
+    
+    /// 外部路径访问的目标路径。
+    public var externalPathTarget: String {
+        guard isExternalPathAccess,
+              case .object(let dict) = toolArgs,
+              case .string(let path) = dict["path"] else { return "未知路径" }
+        return path
     }
 
     /// "Always allow" 按钮的提示文案。

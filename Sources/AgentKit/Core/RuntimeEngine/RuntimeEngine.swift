@@ -20,7 +20,8 @@ public struct RuntimeSnapshot: Sendable {
     /// Turn → Block projection consumed by the timeline UI. Projected once
     /// per snapshot on the engine actor — views must not re-project.
     public let turns: [ConversationTurn]
-    public let pendingApproval: ApprovalRequest?
+    public let pendingApproval: ApprovalRequest? // 保留兼容：取队列第一个
+    public let pendingApprovals: [ApprovalRequest]  // 新增：完整审批队列
     public let pendingPlanApproval: PlanApprovalRequest?
     public let latestTodos: [TodoItem]
     /// Aggregated token, billing, and timing statistics for the active turn.
@@ -37,7 +38,7 @@ public struct RuntimeSnapshot: Sendable {
   
     public init(timeline: [ExecutionNode],
                 turns: [ConversationTurn] = [],
-                pendingApproval: ApprovalRequest? = nil,
+                pendingApprovals: [ApprovalRequest] = [],
                 pendingPlanApproval: PlanApprovalRequest? = nil,
                 latestTodos: [TodoItem] = [],
                 modelStats: ModelStats? = nil,
@@ -47,7 +48,8 @@ public struct RuntimeSnapshot: Sendable {
                 turnStartedAt: Date? = nil) {
         self.timeline = timeline
         self.turns = turns
-        self.pendingApproval = pendingApproval
+        self.pendingApproval = pendingApprovals.first
+        self.pendingApprovals = pendingApprovals
         self.pendingPlanApproval = pendingPlanApproval
         self.latestTodos = latestTodos
         self.modelStats = modelStats
@@ -128,8 +130,10 @@ public actor RuntimeEngine {
     private let timelineProjection: TimelineProjection
     private let presenter: ExecutionPresenter
 
-    /// Pending approval (mirrors ConversationState for backward compat).
-    private var _pendingApproval: ApprovalRequest?
+    /// Pending approval queue. Order reflects arrival order from the server;
+    /// the protocol guarantees serial tool execution, so concurrent approvals
+    /// are not expected. First-in-first-out via `pendingApproval()`.
+    private var _pendingApprovals: [ApprovalRequest] = []
 
     /// v1.2 三态审批去重：已回复过的审批请求 ID（重连后直接忽略）。
     private var resolvedApprovalIDs: Set<String> = []
@@ -192,7 +196,7 @@ public actor RuntimeEngine {
         // Track pending approval (v1.2 去重：已回复过的 id 忽略)
         if case .approvalRequest(_, let request) = event,
            !resolvedApprovalIDs.contains(request.id) {
-            _pendingApproval = request
+            _pendingApprovals.append(request)
         }
         // Track plan approval
         if case .planApprovalRequest(_, let plan) = event {
@@ -226,7 +230,7 @@ public actor RuntimeEngine {
         // Turn lifecycle: a turn is "active" from turn_started to turn_finished.
         // Drives the live working indicator (and its turn-level timer).
         if case .turnStarted(let turnID, _, _) = event {
-            _pendingApproval = nil
+            _pendingApprovals.removeAll()
             _modelStats = nil
             countedInvocationIDs.removeAll()
             _modelStartedAt = nil
@@ -250,7 +254,7 @@ public actor RuntimeEngine {
         if case .turnCancelled = event {
             _turnStartedAt = nil
             _modelStartedAt = nil
-            _pendingApproval = nil
+            _pendingApprovals.removeAll()
             _pendingPlanApproval = nil
             activeTurnID = nil
         }
@@ -293,8 +297,9 @@ public actor RuntimeEngine {
 
             // Track side-effects that ingest() normally handles:
             // pending approvals (tool + plan) must survive conversation switching
-            if case .approvalRequest(_, let request) = event {
-                _pendingApproval = request
+            if case .approvalRequest(_, let request) = event,
+               !resolvedApprovalIDs.contains(request.id) {
+                _pendingApprovals.append(request)
             }
             if case .planApprovalRequest(_, let plan) = event {
                 _pendingPlanApproval = plan
@@ -312,7 +317,7 @@ public actor RuntimeEngine {
             if case .turnCancelled = event {
                 _turnStartedAt = nil
                 _modelStartedAt = nil
-                _pendingApproval = nil
+                _pendingApprovals.removeAll()
                 _pendingPlanApproval = nil
                 activeTurnID = nil
             }
@@ -330,7 +335,7 @@ public actor RuntimeEngine {
         for node in graph.nodes.values {
             if case .approval(let payload) = node.payload, payload.resolved {
                 resolvedApprovalIDs.insert(payload.requestID)
-                _pendingApproval = nil
+                _pendingApprovals.removeAll { $0.id == payload.requestID }
                 if payload.approved == false {
                     for (_, var toolNode) in graph.nodes where toolNode.status == .running {
                         if case .toolCall(let tp) = toolNode.payload, tp.toolName == payload.toolName {
@@ -345,7 +350,7 @@ public actor RuntimeEngine {
         // History events reflect past state — they should not block the UI
         // with a pending approval bar. If an approval is genuinely still pending,
         // the server will re-send it through the live stream after reconnect.
-        _pendingApproval = nil
+        _pendingApprovals.removeAll()
         isLive = false
         yieldSnapshot()
     }
@@ -400,13 +405,13 @@ public actor RuntimeEngine {
 
     /// Get current pending approval (for backward compat with ConversationState).
     public func pendingApproval() -> ApprovalRequest? {
-        _pendingApproval
+        _pendingApprovals.first
     }
 
     /// Resolve an approval (called by ViewModel when user approves/rejects).
     public func resolveApproval(requestID: String, approved: Bool) {
         resolvedApprovalIDs.insert(requestID)
-        _pendingApproval = nil
+        _pendingApprovals.removeAll { $0.id == requestID }
         let approvalNodeID = "approval_\(requestID)"
         var rejectedToolName: String?
 
@@ -467,7 +472,7 @@ public actor RuntimeEngine {
         self.activeTurnID = nil
         _turnStartedAt = nil
         _modelStartedAt = nil
-        _pendingApproval = nil
+        _pendingApprovals.removeAll()
         _pendingPlanApproval = nil
         yieldSnapshot()
     }
@@ -486,7 +491,7 @@ public actor RuntimeEngine {
         return RuntimeSnapshot(
             timeline: timeline,
             turns: turns,
-            pendingApproval: _pendingApproval,
+            pendingApprovals: _pendingApprovals,
             pendingPlanApproval: _pendingPlanApproval,
             latestTodos: _latestTodos,
             modelStats: _modelStats,

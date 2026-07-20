@@ -916,6 +916,14 @@ struct ApprovalBar: View {
             ?? "the agent"
     }
     
+    private var approvalHeaderText: String {
+        if request.isExternalPathAccess {
+            return "\(appDisplayName) 请求访问工作区外的文件"
+        }
+        return "Allow \(appDisplayName) to run \(request.displayToolName)?"
+    }
+
+    
     // 三态回调映射图中的按钮
     let onDeny: () -> Void          // Deny 1
     let onAlwaysAllow: (String) -> Void    // Always allow 2 — 参数为 scope ("local" | "user")
@@ -936,36 +944,58 @@ struct ApprovalBar: View {
                         .fill(Color.orange)
                         .frame(width: 6, height: 6)
                     
-                    Text("Allow \(appDisplayName) to run \(request.displayToolName)?")
+                    Text(approvalHeaderText)
                         .font(.system(size: 13, weight: .semibold))
                         .foregroundStyle(.primary)
                     
                     Spacer()
                     
-                    // 右侧 scope 选择标签（点击切换）
-                    Menu {
-                        Picker("Scope", selection: $scope) {
-                            ForEach(ApprovalScope.allCases, id: \.self) { s in
-                                Text(s.label).tag(s)
+                    // 右侧 scope 选择标签（点击切换）— 外部路径访问无需 scope
+                    if !request.isExternalPathAccess {
+                        Menu {
+                            Picker("Scope", selection: $scope) {
+                                ForEach(ApprovalScope.allCases, id: \.self) { s in
+                                    Text(s.label).tag(s)
+                                }
                             }
+                        } label: {
+                            Text(scope.label)
+                                .font(.system(size: 11))
+                                .foregroundStyle(.secondary)
+                                .padding(.horizontal, 6)
+                                .padding(.vertical, 2)
+                                .background(Color.approvalPanelBackground.opacity(0.5))
+                                .cornerRadius(4)
                         }
-                    } label: {
-                        Text(scope.label)
-                            .font(.system(size: 11))
-                            .foregroundStyle(.secondary)
-                            .padding(.horizontal, 6)
-                            .padding(.vertical, 2)
-                            .background(Color.approvalPanelBackground.opacity(0.5))
-                            .cornerRadius(4)
+                        .menuStyle(.borderlessButton)
+                        .fixedSize()
                     }
-                    .menuStyle(.borderlessButton)
-                    .fixedSize()
                 }
                 .padding(.horizontal, 14)
                 .padding(.vertical, 10)
                 
                 // 2. 中间工具与参数内容区 (类似代码块容器)
                 VStack(alignment: .leading, spacing: 8) {
+                    // 外部路径访问：显示路径卡片
+                    if request.isExternalPathAccess {
+                        HStack(spacing: 6) {
+                            Image(systemName: "folder")
+                                .foregroundStyle(.secondary)
+                            Text(request.externalPathTarget)
+                                .font(.system(.caption, design: .monospaced))
+                                .foregroundStyle(.primary)
+                                .lineLimit(2)
+                                .truncationMode(.middle)
+                            Spacer(minLength: 0)
+                            Text(request.externalPathOperation)
+                                .font(.system(.caption))
+                                .foregroundStyle(.secondary)
+                                .padding(.horizontal, 6)
+                                .padding(.vertical, 2)
+                                .background(Color.secondary.opacity(0.15), in: Capsule())
+                        }
+                        .frame(maxWidth: .infinity)
+                    }
                     // MCP 工具：显示 server → tool 解析结果
                     if request.isMCP, let server = request.mcpServer {
                         HStack(spacing: 4) {
@@ -985,7 +1015,7 @@ struct ApprovalBar: View {
                         .frame(maxWidth: .infinity)
                     }
                     
-                    if let args = request.toolArgs, case .object(let dict) = args, !dict.isEmpty {
+                    if let args = request.toolArgs, case .object(let dict) = args, !dict.isEmpty, !request.isExternalPathAccess {
                         // 测量文本真实高度：≤10行自适应；>10行固定180pt可滚动
                         ScrollView(.vertical, showsIndicators: true) {
                             argsText(dict)
@@ -1001,7 +1031,7 @@ struct ApprovalBar: View {
                         .frame(height: contentHeight > 0 ? min(contentHeight, 180) : nil)
                         .animation(.none, value: contentHeight)
                         
-                    } else if !request.isMCP {
+                    } else if !request.isMCP, !request.isExternalPathAccess {
                         Text("No arguments provided.")
                             .font(.system(.caption, design: .monospaced))
                             .foregroundStyle(.tertiary)
@@ -1024,19 +1054,21 @@ struct ApprovalBar: View {
                     Spacer()
                     
                     // Always allow 2 — MCP 工具显示 server 级提示
-                    Button(action: { onAlwaysAllow(scope.rawValue) }) {
-                        VStack(alignment: .center, spacing: 1) {
-                            Text("Always allow ") + Text("2").foregroundStyle(.tertiary)
+                    if !request.isExternalPathAccess {
+                        Button(action: { onAlwaysAllow(scope.rawValue) }) {
+                            VStack(alignment: .center, spacing: 1) {
+                                Text("Always allow ") + Text("2").foregroundStyle(.tertiary)
+                            }
                         }
-                    }
-                    .buttonStyle(.bordered)
-                    .controlSize(.small)
-                    .overlay(alignment: .top) {
-                        if request.isMCP, let server = request.mcpServer {
-                            Text("all from \"\(server)\"")
-                                .font(.system(size: 9))
-                                .foregroundStyle(.tertiary)
-                                .offset(CGSizeMake(0, 20))
+                        .buttonStyle(.bordered)
+                        .controlSize(.small)
+                        .overlay(alignment: .top) {
+                            if request.isMCP, let server = request.mcpServer {
+                                Text("all from \"\(server)\"")
+                                    .font(.system(size: 9))
+                                    .foregroundStyle(.tertiary)
+                                    .offset(CGSizeMake(0, 20))
+                            }
                         }
                     }
                     
