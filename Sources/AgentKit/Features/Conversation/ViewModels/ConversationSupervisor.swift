@@ -33,6 +33,7 @@ public enum RuntimeCapabilityDiscoveryState: Sendable, Equatable {
 public enum PendingConversationApprovalKind: Sendable, Equatable {
     case tool
     case plan
+    case askUser
 }
 
 public struct PendingConversationApproval: Identifiable, Sendable, Equatable {
@@ -154,7 +155,9 @@ public final class ConversationSupervisor {
         if let controller = controllers[sessionID] {
             if controller.isLocallyQueued { return .queued }
             if controller.isAwaitingTurnAcceptance { return .connecting }
-            if controller.snapshot.pendingApproval != nil || controller.snapshot.pendingPlanApproval != nil {
+            if controller.snapshot.pendingApproval != nil
+                || controller.snapshot.pendingPlanApproval != nil
+                || controller.snapshot.pendingAskUser != nil {
                 return .waitingForApproval
             }
             if controller.isConnecting {
@@ -470,6 +473,14 @@ public final class ConversationSupervisor {
         controllers.values.compactMap { controller -> PendingConversationApproval? in
             guard let conversation = controller.conversation else { return nil }
             let name = conversation.name ?? conversation.id
+            if let request = controller.snapshot.pendingAskUser {
+                return PendingConversationApproval(
+                    sessionID: conversation.id,
+                    requestID: request.id,
+                    conversationName: name,
+                    kind: .askUser
+                )
+            }
             if let request = controller.snapshot.pendingApproval {
                 return PendingConversationApproval(
                     sessionID: conversation.id,

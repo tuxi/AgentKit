@@ -291,6 +291,14 @@ public final class AgentWireSocket: @unchecked Sendable {
         send(outgoing: OutgoingPlanApprovalResponse(id: id, approved: approved))
     }
 
+    /// 发送 ask_user 回复。
+    public func sendAskUserResponse(id: String, selected: [String], notes: String?) {
+        send(outgoing: OutgoingAskUserResponse(
+            id: id,
+            answer: OutgoingAskUserAnswer(selected: selected, notes: notes)
+        ))
+    }
+
     /// 取消当前 turn。
     public func cancelTurn() {
         send(outgoing: OutgoingCancelTurn())
@@ -376,6 +384,10 @@ public final class AgentWireSocket: @unchecked Sendable {
         case "plan_approval_request":
             guard let plan = PlanApprovalRequest.from(wire: frame) else { return }
             continuation?.yield(.planApprovalRequest(turnID: frame.turnId, request: plan))
+
+        case "ask_user_request":
+            guard let askReq = AskUserRequest.from(wire: frame) else { return }
+            continuation?.yield(.askUserRequest(turnID: frame.turnId, request: askReq))
 
         case "agent_input_rejected":
             let rejection = AgentInputRejection(

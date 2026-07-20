@@ -763,18 +763,19 @@ struct PlanApprovalBar: View {
 
                 // Action buttons
                 HStack(spacing: 8) {
-                    Button(action: onApprove) {
-                        Label("Approve Plan", systemImage: "checkmark.circle.fill")
-                            .frame(maxWidth: .infinity)
-                    }
-                    .buttonStyle(.borderedProminent)
-                    .controlSize(.large)
 
                     Button(role: .destructive, action: onReject) {
                         Label("Reject", systemImage: "xmark.circle.fill")
                             .frame(maxWidth: .infinity)
                     }
                     .buttonStyle(.bordered)
+                    .controlSize(.large)
+                    
+                    Button(action: onApprove) {
+                        Label("Approve Plan", systemImage: "checkmark.circle.fill")
+                            .frame(maxWidth: .infinity)
+                    }
+                    .buttonStyle(.borderedProminent)
                     .controlSize(.large)
                 }
             }
@@ -1101,6 +1102,240 @@ struct ApprovalBar: View {
             .font(.system(.caption, design: .monospaced))
             .foregroundStyle(.secondary)
             .frame(maxWidth: .infinity, alignment: .leading)
+    }
+}
+
+// MARK: - AskUserBar
+
+/// ask_user 卡片 — 显示在输入框上方，阻断 input pipeline。
+/// 模型遇到歧义时展示选项供用户选择。优先级：AskUser > Plan > Approval。
+struct AskUserBar: View {
+    let request: AskUserRequest
+    let onSubmit: ([String], String?) -> Void
+    let onSkip: () -> Void
+
+    @State private var selectedLabels: Set<String> = []
+    @State private var customText: String = ""
+    @State private var isExpanded: Bool = true
+
+    /// 推荐项 label（含 `(Recommended)` 或 `（推荐）` 后缀），自动预选。
+    private var recommendedLabel: String? {
+        request.options.first { request.isRecommended($0) }?.label
+    }
+
+    var body: some View {
+        VStack(spacing: 0) {
+            Divider()
+
+            VStack(alignment: .leading, spacing: 10) {
+                // Header
+                headerRow
+
+                // Question text
+                Text(request.question)
+                    .font(.callout)
+                    .foregroundStyle(.primary)
+                    .fixedSize(horizontal: false, vertical: true)
+
+                // Options list
+                if isExpanded {
+                    optionsList
+                }
+
+                // Custom input (only when allowCustom)
+                if request.allowCustom, isExpanded {
+                    customInputRow
+                }
+
+                // Action buttons
+                if isExpanded {
+                    actionButtons
+                }
+            }
+            .padding(.horizontal, 14)
+            .padding(.vertical, 12)
+        }
+        .background(Color.approvalPanelBackground)
+        .layerBorder()
+        .padding(12)
+        .onAppear {
+            // Auto-select recommended option
+            if let rec = recommendedLabel {
+                selectedLabels = [rec]
+            }
+        }
+    }
+
+    // MARK: - Header
+
+    private var headerRow: some View {
+        HStack(spacing: 8) {
+            Image(systemName: "questionmark.bubble.fill")
+                .foregroundStyle(.blue)
+
+            VStack(alignment: .leading, spacing: 2) {
+                Text(request.header)
+                    .font(.subheadline.weight(.semibold))
+
+                Text(request.multiSelect ? "可多选" : "请选择一个选项")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+
+            Spacer()
+
+            // Deadline badge
+            if let deadline = request.deadlineSeconds {
+                Text("\(deadline)s")
+                    .font(.caption2.weight(.medium))
+                    .foregroundStyle(.secondary)
+                    .padding(.horizontal, 6)
+                    .padding(.vertical, 2)
+                    .background(.quaternary)
+                    .clipShape(Capsule())
+            }
+
+            // Collapse/expand toggle
+            Button {
+                withAnimation(.easeOut(duration: 0.2)) {
+                    isExpanded.toggle()
+                }
+            } label: {
+                Image(systemName: isExpanded ? "chevron.down" : "chevron.up")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+            .buttonStyle(.plain)
+            .help(isExpanded ? "收起" : "展开")
+
+            // Skip button
+            Button(action: onSkip) {
+                Image(systemName: "xmark.circle.fill")
+                    .foregroundStyle(.secondary)
+            }
+            .buttonStyle(.plain)
+            .help("跳过此问题")
+        }
+    }
+
+    // MARK: - Options
+
+    private var optionsList: some View {
+        VStack(spacing: 6) {
+            ForEach(request.options) { option in
+                optionRow(option)
+            }
+        }
+    }
+
+    private func optionRow(_ option: AskUserOption) -> some View {
+        let isSelected = selectedLabels.contains(option.label)
+        let isRecommended = request.isRecommended(option)
+
+        return Button {
+            if request.multiSelect {
+                if isSelected {
+                    selectedLabels.remove(option.label)
+                } else {
+                    selectedLabels.insert(option.label)
+                }
+            } else {
+                selectedLabels = [option.label]
+            }
+        } label: {
+            HStack(alignment: .top, spacing: 10) {
+                // Selection indicator
+                Group {
+                    if request.multiSelect {
+                        Image(systemName: isSelected ? "checkmark.square.fill" : "square")
+                            .foregroundStyle(isSelected ? .blue : .secondary)
+                    } else {
+                        Image(systemName: isSelected ? "largecircle.fill.circle" : "circle")
+                            .foregroundStyle(isSelected ? .blue : .secondary)
+                    }
+                }
+                .font(.system(size: 16))
+
+                VStack(alignment: .leading, spacing: 3) {
+                    HStack(spacing: 4) {
+                        Text(option.label)
+                            .font(.subheadline.weight(isSelected ? .semibold : .regular))
+                            .foregroundStyle(.primary)
+
+                        if isRecommended {
+                            Text("推荐")
+                                .font(.system(size: 9))
+                                .foregroundStyle(.blue)
+                                .padding(.horizontal, 4)
+                                .padding(.vertical, 1)
+                                .background(.blue.opacity(0.1))
+                                .clipShape(Capsule())
+                        }
+                    }
+
+                    if !option.description.isEmpty {
+                        Text(option.description)
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
+                }
+
+                Spacer(minLength: 0)
+            }
+            .padding(10)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .background(
+                RoundedRectangle(cornerRadius: 8)
+                    .fill(isSelected ? Color.blue.opacity(0.08) : Color.clear)
+            )
+            .overlay(
+                RoundedRectangle(cornerRadius: 8)
+                    .stroke(isSelected ? Color.blue.opacity(0.3) : Color.gray.opacity(0.15), lineWidth: 1)
+            )
+        }
+        .buttonStyle(.plain)
+    }
+
+    // MARK: - Custom input
+
+    private var customInputRow: some View {
+        HStack(spacing: 8) {
+            Image(systemName: "pencil.line")
+                .foregroundStyle(.secondary)
+                .font(.caption)
+
+            TextField("自定义输入（可选）…", text: $customText)
+                .textFieldStyle(.plain)
+                .font(.subheadline)
+        }
+        .padding(10)
+        .background(.quaternary.opacity(0.3))
+        .clipShape(RoundedRectangle(cornerRadius: 8))
+    }
+
+    // MARK: - Actions
+
+    private var actionButtons: some View {
+        HStack(spacing: 8) {
+            Button(action: onSkip) {
+                Label("跳过", systemImage: "forward.fill")
+                    .frame(maxWidth: .infinity)
+            }
+            .buttonStyle(.bordered)
+            .controlSize(.regular)
+
+            Button {
+                let notes = customText.trimmingCharacters(in: .whitespacesAndNewlines)
+                onSubmit(Array(selectedLabels), notes.isEmpty ? nil : notes)
+            } label: {
+                Label("确认选择", systemImage: "checkmark.circle.fill")
+                    .frame(maxWidth: .infinity)
+            }
+            .buttonStyle(.borderedProminent)
+            .controlSize(.regular)
+            .disabled(selectedLabels.isEmpty && customText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+        }
     }
 }
 

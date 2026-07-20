@@ -22,6 +22,7 @@ public protocol RuntimeSessionChannel: Sendable {
     func sendApproval(id: String, approved: Bool) async
     func sendApproval(id: String, decision: String, scope: String?) async
     func sendPlanApproval(id: String, approved: Bool) async
+    func sendAskUserResponse(id: String, selected: [String], notes: String?) async
     func cancelTurn() async
     func disconnect() async
     func capabilities() async -> AgentCapabilityFlags
@@ -72,6 +73,9 @@ final class LegacyRuntimeSessionChannel: RuntimeSessionChannel, @unchecked Senda
     }
     func sendPlanApproval(id: String, approved: Bool) async {
         await client.sendPlanApproval(id: id, approved: approved)
+    }
+    func sendAskUserResponse(id: String, selected: [String], notes: String?) async {
+        await client.sendAskUserResponse(id: id, selected: selected, notes: notes)
     }
     func cancelTurn() async { await client.cancelTurn() }
 

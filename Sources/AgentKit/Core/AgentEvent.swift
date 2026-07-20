@@ -93,6 +93,9 @@ public enum AgentEvent: Sendable {
     case planProposed(turnID: String?, planID: String, content: String)
     case planApproved(turnID: String?, planID: String)
     case planRejected(turnID: String?, planID: String)
+
+    // ── ask_user ──
+    case askUserRequest(turnID: String?, request: AskUserRequest)
 }
 
 // MARK: - WireFrame → AgentEvent conversion

@@ -156,6 +156,20 @@ public struct ConversationDetailView: View {
         #endif
         .safeAreaInset(edge: .bottom, spacing: 8) {
             VStack(spacing: 0) {
+                // ── ask_user 卡片（优先级最高：AskUser > Plan > Approval）──
+                if let askUser = vm.snapshot.pendingAskUser {
+                    AskUserBar(
+                        request: askUser,
+                        onSubmit: { selected, notes in
+                            Task { await vm.resolveAskUser(id: askUser.id, selected: selected, notes: notes) }
+                        },
+                        onSkip: {
+                            Task { await vm.resolveAskUser(id: askUser.id, selected: [], notes: nil) }
+                        }
+                    )
+                    .transition(.move(edge: .bottom).combined(with: .opacity))
+                }
+
                 // Plan 是阻塞输入的审批状态，不是对话消息。完整规划只在
                 // 这里展示一次，批准后才进入后续执行阶段。
                 if let plan = vm.snapshot.pendingPlanApproval {
@@ -204,10 +218,15 @@ public struct ConversationDetailView: View {
                     ? "会话已暂停 — 点击继续"
                     : isArchived
                     ? "会话已归档 — 恢复后可继续"
+                    : (vm.snapshot.pendingAskUser != nil)
+                    ? "请回答以下问题以继续…"
                     : (vm.snapshot.pendingApproval != nil || vm.snapshot.pendingPlanApproval != nil)
                     ? "审批中 — 请选择「允许」或「拒绝」"
                     : "输入消息…",
-                    isEnabled: !isArchived && !isPaused && !vm.isTurnActive && vm.snapshot.pendingApproval == nil && vm.snapshot.pendingPlanApproval == nil,
+                    isEnabled: !isArchived && !isPaused && !vm.isTurnActive
+                        && vm.snapshot.pendingAskUser == nil
+                        && vm.snapshot.pendingApproval == nil
+                        && vm.snapshot.pendingPlanApproval == nil,
                     isDraft: false,
                     isTurnRunning: vm.isTurnActive,
                     onStop: { Task { await vm.cancelTurn() } },
@@ -230,6 +249,7 @@ public struct ConversationDetailView: View {
                 .environment(modelSettings)
             }
             .background(.bar)
+            .animation(.easeOut(duration: 0.25), value: vm.snapshot.pendingAskUser != nil)
             .animation(.easeOut(duration: 0.25), value: vm.snapshot.pendingApproval != nil)
             .animation(.easeOut(duration: 0.25), value: vm.snapshot.pendingPlanApproval != nil)
             .animation(.easeOut(duration: 0.25), value: isPaused)
@@ -284,7 +304,11 @@ public struct ConversationDetailView: View {
                         } label: {
                             Label(
                                 approval.conversationName,
-                                systemImage: approval.kind == .plan ? "list.clipboard" : "hand.raised"
+                                systemImage: approval.kind == .plan
+				        ? "list.clipboard"
+				        : approval.kind == .askUser
+				        ? "questionmark.bubble"
+				        : "hand.raised"
                             )
                         }
                     }

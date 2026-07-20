@@ -104,6 +104,10 @@ public final class CodeAgentSessionChannel: RuntimeSessionChannel, @unchecked Se
         socket?.sendPlanApproval(id: id, approved: approved)
     }
 
+    public func sendAskUserResponse(id: String, selected: [String], notes: String?) async {
+        socket?.sendAskUserResponse(id: id, selected: selected, notes: notes)
+    }
+
     public func cancelTurn() async { socket?.cancelTurn() }
 
     public func disconnect() async {
@@ -307,6 +311,10 @@ public final class CodeAgentTransport: AgentTransport, @unchecked Sendable {
 
     public func approvePlan(id: String, value: Bool) async {
         socket?.sendPlanApproval(id: id, approved: value)
+    }
+
+    public func sendAskUserResponse(id: String, selected: [String], notes: String?) async {
+        socket?.sendAskUserResponse(id: id, selected: selected, notes: notes)
     }
 
     public func cancelTurn() async {
@@ -540,6 +548,10 @@ public final class DefaultAgentClient: RuntimeClient, @unchecked Sendable {
 
     public func sendPlanApproval(id: String, approved: Bool) async {
         await transport.approvePlan(id: id, value: approved)
+    }
+
+    public func sendAskUserResponse(id: String, selected: [String], notes: String?) async {
+        await transport.sendAskUserResponse(id: id, selected: selected, notes: notes)
     }
 
     public func cancelTurn() async {

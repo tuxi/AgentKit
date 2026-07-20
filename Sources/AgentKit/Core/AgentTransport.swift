@@ -115,6 +115,9 @@ public protocol AgentTransport: Sendable {
     /// 回复 Plan Mode 审批请求。`id` 对应 `plan_approval_request.id`。
     func approvePlan(id: String, value: Bool) async
 
+    /// 回复 ask_user 请求。`id` 对应 `ask_user_request.id`。
+    func sendAskUserResponse(id: String, selected: [String], notes: String?) async
+
     /// 取消当前正在执行的 turn。
     func cancelTurn() async
 
@@ -293,6 +296,9 @@ private final class LegacyAgentTransportSessionChannel: RuntimeSessionChannel, @
     }
     func sendPlanApproval(id: String, approved: Bool) async {
         await transport.approvePlan(id: id, value: approved)
+    }
+    func sendAskUserResponse(id: String, selected: [String], notes: String?) async {
+        await transport.sendAskUserResponse(id: id, selected: selected, notes: notes)
     }
     func cancelTurn() async { await transport.cancelTurn() }
     func disconnect() async { await transport.disconnect() }

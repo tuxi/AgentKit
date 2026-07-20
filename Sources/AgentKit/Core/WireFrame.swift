@@ -77,6 +77,9 @@ struct WireFrame: Decodable {
     let planPath: String?
     let filePath: String?
 
+    // ask_user 请求的嵌套 question 对象
+    let question: WireAskUserQuestion?
+
     enum CodingKeys: String, CodingKey {
         case type, kind, at, step, id, server, seq
         case text, observation, output, assets, failure, err, error, ratio, todos, chunk
@@ -114,6 +117,7 @@ struct WireFrame: Decodable {
         case capabilities
         case planPath = "plan_path"
         case filePath = "file_path"
+        case question
     }
 }
 
@@ -316,4 +320,38 @@ struct OutgoingPlanApprovalResponse: Encodable {
     let type = "plan_approval_response"
     let id: String
     let approved: Bool
+}
+
+// MARK: - Wire ask_user question (nested in ask_user_request)
+
+struct WireAskUserQuestion: Decodable {
+    let id: String
+    let question: String
+    let header: String
+    let options: [WireAskOption]
+    let multiSelect: Bool?
+    let allowCustom: Bool?
+
+    enum CodingKeys: String, CodingKey {
+        case id, question, header, options
+        case multiSelect = "multi_select"
+        case allowCustom = "allow_custom"
+    }
+}
+
+struct WireAskOption: Decodable {
+    let label: String
+    let description: String
+}
+
+/// 出站：ask_user 回复。
+struct OutgoingAskUserResponse: Encodable {
+    let type = "ask_user_response"
+    let id: String
+    let answer: OutgoingAskUserAnswer
+}
+
+struct OutgoingAskUserAnswer: Encodable {
+    let selected: [String]
+    let notes: String?
 }

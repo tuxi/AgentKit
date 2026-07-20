@@ -219,6 +219,10 @@ public struct ExecutionReducer: Sendable {
         case .approvalRequest(let turnID, let request):
             return handleApprovalRequest(turnID: turnID ?? internalState.currentTurnID ?? "",
                                          request: request, ts: ts, graph: &graph)
+
+        // ── ask_user ── (UI-only: no execution graph node)
+        case .askUserRequest:
+            return []
         }
     }
 

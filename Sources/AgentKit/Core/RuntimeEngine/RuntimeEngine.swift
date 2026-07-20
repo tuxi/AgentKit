@@ -23,6 +23,8 @@ public struct RuntimeSnapshot: Sendable {
     public let pendingApproval: ApprovalRequest? // 保留兼容：取队列第一个
     public let pendingApprovals: [ApprovalRequest]  // 新增：完整审批队列
     public let pendingPlanApproval: PlanApprovalRequest?
+    public let pendingAskUser: AskUserRequest?  // 保留兼容：取队列第一个
+    public let pendingAskUsers: [AskUserRequest]  // 完整 ask_user 队列
     public let latestTodos: [TodoItem]
     /// Aggregated token, billing, and timing statistics for the active turn.
     public let modelStats: ModelStats?
@@ -40,6 +42,7 @@ public struct RuntimeSnapshot: Sendable {
                 turns: [ConversationTurn] = [],
                 pendingApprovals: [ApprovalRequest] = [],
                 pendingPlanApproval: PlanApprovalRequest? = nil,
+                pendingAskUsers: [AskUserRequest] = [],
                 latestTodos: [TodoItem] = [],
                 modelStats: ModelStats? = nil,
                 isLive: Bool = false,
@@ -51,6 +54,8 @@ public struct RuntimeSnapshot: Sendable {
         self.pendingApproval = pendingApprovals.first
         self.pendingApprovals = pendingApprovals
         self.pendingPlanApproval = pendingPlanApproval
+        self.pendingAskUser = pendingAskUsers.first
+        self.pendingAskUsers = pendingAskUsers
         self.latestTodos = latestTodos
         self.modelStats = modelStats
         self.isLive = isLive
@@ -141,6 +146,13 @@ public actor RuntimeEngine {
     /// Pending plan approval (Plan Mode).
     private var _pendingPlanApproval: PlanApprovalRequest?
 
+    /// Pending ask_user queue. Dictionary keyed by request.id for O(1) dedup.
+    /// Model may call ask_user multiple times in one turn.
+    private var _pendingAskUsers: [String: AskUserRequest] = [:]
+
+    /// ask_user 去重：已回复过的请求 ID（重连后直接忽略）。
+    private var resolvedAskUserIDs: Set<String> = []
+
     /// Latest todo list from the agent.
     private var _latestTodos: [TodoItem] = []
     private struct PendingTodoToolUpdate {
@@ -204,6 +216,11 @@ public actor RuntimeEngine {
         }
         if case .planApproved = event { _pendingPlanApproval = nil }
         if case .planRejected = event { _pendingPlanApproval = nil }
+        // Track ask_user (dedup: skip already resolved IDs)
+        if case .askUserRequest(_, let request) = event,
+           !resolvedAskUserIDs.contains(request.id) {
+            _pendingAskUsers[request.id] = request
+        }
         let todoFallback = trackTodoState(event)
         // Track model started
         if case .modelStarted(_, _) = event {
@@ -231,6 +248,7 @@ public actor RuntimeEngine {
         // Drives the live working indicator (and its turn-level timer).
         if case .turnStarted(let turnID, _, _) = event {
             _pendingApprovals.removeAll()
+            _pendingAskUsers.removeAll()
             _modelStats = nil
             countedInvocationIDs.removeAll()
             _modelStartedAt = nil
@@ -256,6 +274,7 @@ public actor RuntimeEngine {
             _modelStartedAt = nil
             _pendingApprovals.removeAll()
             _pendingPlanApproval = nil
+            _pendingAskUsers.removeAll()
             activeTurnID = nil
         }
         if case .turnResumed = event {
@@ -306,6 +325,10 @@ public actor RuntimeEngine {
             }
             if case .planApproved = event { _pendingPlanApproval = nil }
             if case .planRejected = event { _pendingPlanApproval = nil }
+            if case .askUserRequest(_, let request) = event,
+               !resolvedAskUserIDs.contains(request.id) {
+                _pendingAskUsers[request.id] = request
+            }
             if case .turnPaused = event {
                 _turnStartedAt = nil
                 _modelStartedAt = nil
@@ -319,6 +342,7 @@ public actor RuntimeEngine {
                 _modelStartedAt = nil
                 _pendingApprovals.removeAll()
                 _pendingPlanApproval = nil
+                _pendingAskUsers.removeAll()
                 activeTurnID = nil
             }
             if case .turnResumed = event {
@@ -351,6 +375,7 @@ public actor RuntimeEngine {
         // with a pending approval bar. If an approval is genuinely still pending,
         // the server will re-send it through the live stream after reconnect.
         _pendingApprovals.removeAll()
+        _pendingAskUsers.removeAll()
         isLive = false
         yieldSnapshot()
     }
@@ -451,6 +476,18 @@ public actor RuntimeEngine {
         yieldSnapshot()
     }
 
+    /// Resolve an ask_user request.
+    public func resolveAskUser(requestID: String) {
+        resolvedAskUserIDs.insert(requestID)
+        _pendingAskUsers.removeValue(forKey: requestID)
+        yieldSnapshot()
+    }
+
+    /// Get current pending ask_user request (for backward compat).
+    public func pendingAskUserRequest() -> AskUserRequest? {
+        _pendingAskUsers.values.first
+    }
+
     /// Create an AsyncStream of RuntimeSnapshots for the UI.
     /// Only one stream per engine instance.
     public nonisolated func stateStream() -> AsyncStream<RuntimeSnapshot> {
@@ -474,6 +511,7 @@ public actor RuntimeEngine {
         _modelStartedAt = nil
         _pendingApprovals.removeAll()
         _pendingPlanApproval = nil
+        _pendingAskUsers.removeAll()
         yieldSnapshot()
     }
 
@@ -493,6 +531,7 @@ public actor RuntimeEngine {
             turns: turns,
             pendingApprovals: _pendingApprovals,
             pendingPlanApproval: _pendingPlanApproval,
+            pendingAskUsers: Array(_pendingAskUsers.values),
             latestTodos: _latestTodos,
             modelStats: _modelStats,
             isLive: isLive,

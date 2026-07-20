@@ -1221,6 +1221,7 @@ private final class MultiSessionChannelDouble: RuntimeSessionChannel, @unchecked
     func sendApproval(id: String, approved: Bool) async {}
     func sendApproval(id: String, decision: String, scope: String?) async {}
     func sendPlanApproval(id: String, approved: Bool) async {}
+    func sendAskUserResponse(id: String, selected: [String], notes: String?) async {}
     func cancelTurn() async { cancelCount += 1 }
     func disconnect() async {
         disconnectCount += 1
@@ -1403,6 +1404,7 @@ private final class MultiSessionRuntimeClient: RuntimeClient, @unchecked Sendabl
     func sendApproval(id: String, approved: Bool) async {}
     func sendApproval(id: String, decision: String, scope: String?) async {}
     func sendPlanApproval(id: String, approved: Bool) async {}
+    func sendAskUserResponse(id: String, selected: [String], notes: String?) async {}
     func cancelTurn() async {}
     func disconnect() async {}
 

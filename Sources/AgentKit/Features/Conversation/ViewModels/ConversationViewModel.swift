@@ -379,6 +379,16 @@ public final class ConversationViewModel {
         onActivityInvalidated?()
     }
 
+    /// 回复 ask_user 请求。
+    /// - Parameters:
+    ///   - selected: 用户选中的选项 label 列表。跳过/取消时为空数组。
+    ///   - notes: 用户自由文本输入。跳过/取消时为 nil。
+    public func resolveAskUser(id: String, selected: [String], notes: String?) async {
+        await channel?.sendAskUserResponse(id: id, selected: selected, notes: notes)
+        await engine?.resolveAskUser(requestID: id)
+        onActivityInvalidated?()
+    }
+
     /// 取消当前 turn。
     public func cancelTurn() async {
         if let queuedTicket {

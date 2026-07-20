@@ -104,6 +104,12 @@ public protocol RuntimeClient: Sendable {
     /// 计划审批回复 — 对应某条 `plan_approval_request`。
     func sendPlanApproval(id: String, approved: Bool) async
 
+    /// ask_user 回复 — 对应某条 `ask_user_request`。
+    /// - Parameters:
+    ///   - selected: 用户选中的选项 label 列表。取消时为空。
+    ///   - notes: 用户自由文本输入。取消时为 nil。
+    func sendAskUserResponse(id: String, selected: [String], notes: String?) async
+
     /// 取消当前正在执行的 turn。
     func cancelTurn() async
 

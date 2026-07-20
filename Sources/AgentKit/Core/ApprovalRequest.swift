@@ -171,3 +171,98 @@ public struct PlanApprovalRequest: Sendable, Identifiable, Hashable {
         )
     }
 }
+
+// MARK: - AskUserRequest
+
+/// ask_user 请求：模型遇到歧义时，服务端推送给客户端，要求用户选择或输入。
+/// `id` 是关联键 — 回复 `ask_user_response` 时必须原样带回。
+public struct AskUserRequest: Sendable, Identifiable, Hashable {
+    public let id: String
+    /// 问题文本。
+    public let question: String
+    /// 简短标题（最多 12 字符）。
+    public let header: String
+    /// 可选项列表。
+    public let options: [AskUserOption]
+    /// 是否允许多选。
+    public let multiSelect: Bool
+    /// 是否允许用户自定义输入。
+    public let allowCustom: Bool
+    /// 超时毫秒数。
+    public let deadlineMs: Int?
+    public let sessionId: String?
+    public let turnId: String?
+
+    public var deadlineSeconds: Int? { deadlineMs.map { $0 / 1000 } }
+
+    public init(
+        id: String,
+        question: String,
+        header: String,
+        options: [AskUserOption],
+        multiSelect: Bool,
+        allowCustom: Bool,
+        deadlineMs: Int?,
+        sessionId: String?,
+        turnId: String?
+    ) {
+        self.id = id
+        self.question = question
+        self.header = header
+        self.options = options
+        self.multiSelect = multiSelect
+        self.allowCustom = allowCustom
+        self.deadlineMs = deadlineMs
+        self.sessionId = sessionId
+        self.turnId = turnId
+    }
+
+    /// 是否为推荐项（label 包含 `(Recommended)` 后缀）。
+    public func isRecommended(_ option: AskUserOption) -> Bool {
+        option.label.hasSuffix("(Recommended)") || option.label.hasSuffix("（推荐）")
+    }
+
+    /// 从 WireFrame 构造 ask_user_request。
+    static func from(wire: WireFrame) -> AskUserRequest? {
+        guard wire.type == "ask_user_request",
+              let id = wire.id,
+              let q = wire.question else { return nil }
+        return AskUserRequest(
+            id: id,
+            question: q.question,
+            header: q.header,
+            options: q.options.map { AskUserOption(label: $0.label, description: $0.description) },
+            multiSelect: q.multiSelect ?? false,
+            allowCustom: q.allowCustom ?? false,
+            deadlineMs: wire.deadlineMs,
+            sessionId: wire.sessionId,
+            turnId: wire.turnId
+        )
+    }
+}
+
+public struct AskUserOption: Sendable, Identifiable, Hashable {
+    public var id: String { label }
+    public let label: String
+    public let description: String
+
+    public init(label: String, description: String) {
+        self.label = label
+        self.description = description
+    }
+}
+
+/// ask_user 用户的回答。
+public struct AskUserAnswer: Sendable, Hashable {
+    /// 用户选中的选项 label 列表。取消时为空。
+    public let selected: [String]
+    /// 用户自由文本输入。取消时为空。
+    public let notes: String?
+
+    public init(selected: [String], notes: String?) {
+        self.selected = selected
+        self.notes = notes
+    }
+
+    public var isSkipped: Bool { selected.isEmpty && (notes?.isEmpty ?? true) }
+}
