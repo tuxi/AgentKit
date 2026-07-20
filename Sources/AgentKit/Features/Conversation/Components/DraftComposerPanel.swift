@@ -89,17 +89,17 @@ struct DraftComposerPanel: View {
                             || (onAddAttachment == nil && !workspaceStore.canSelectUserAssets)
                     )
 
-                    Menu {
-                        Button("请求批准") { }
-                    } label: {
-                        Label("请求批准", systemImage: "hand.raised")
-                            .font(.system(size: 13, weight: .medium))
-                            .labelStyle(.titleAndIcon)
-                        Image(systemName: "chevron.down")
-                            .font(.system(size: 9, weight: .semibold))
-                    }
-                    .menuStyle(.borderlessButton)
-                    .fixedSize()
+//                    Menu {
+//                        Button("请求批准") { }
+//                    } label: {
+//                        Label("请求批准", systemImage: "hand.raised")
+//                            .font(.system(size: 13, weight: .medium))
+//                            .labelStyle(.titleAndIcon)
+//                        Image(systemName: "chevron.down")
+//                            .font(.system(size: 9, weight: .semibold))
+//                    }
+//                    .menuStyle(.borderlessButton)
+//                    .fixedSize()
 //                    .foregroundStyle(.secondary)
 
                     Spacer(minLength: 12)
