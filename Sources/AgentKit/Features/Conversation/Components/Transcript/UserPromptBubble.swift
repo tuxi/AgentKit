@@ -29,18 +29,21 @@ struct UserPromptBubble: View {
     }
 
     var body: some View {
-        Text(prompt.text)
-            .font(.body)
-            .foregroundStyle(.primary)
-            .padding(.horizontal, 14)
-            .padding(.vertical, 8)
-            .background(
-                RoundedRectangle(cornerRadius: 12)
-                    .fill(Color.userBubbleBackground)
-            )
-            .frame(maxWidth: bubbleMaxWidth, alignment: .leading)
-            .frame(maxWidth: .infinity, alignment: .trailing)
-            .padding(.horizontal, 4)
+        HStack {
+            Spacer()
+            Text(prompt.text)
+                .font(.body)
+                .foregroundStyle(.primary)
+                .padding(.horizontal, 14)
+                .padding(.vertical, 8)
+                .background(
+                    RoundedRectangle(cornerRadius: 12)
+                        .fill(Color.userBubbleBackground)
+                )
+                .frame(maxWidth: bubbleMaxWidth, alignment: .trailing)
+                .frame(maxWidth: .infinity, alignment: .trailing)
+                .padding(.horizontal, 4)
+        }
     }
 }
 

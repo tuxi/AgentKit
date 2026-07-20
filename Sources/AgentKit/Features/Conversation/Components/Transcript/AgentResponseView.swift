@@ -20,10 +20,10 @@ struct AgentResponseView: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
             // Agent heading
-            Text("Agent")
-                .font(.caption.weight(.semibold))
-                .foregroundStyle(.secondary)
-                .padding(.bottom, 2)
+//            Text("Agent")
+//                .font(.caption.weight(.semibold))
+//                .foregroundStyle(.secondary)
+//                .padding(.bottom, 2)
 
             // Ordered blocks
             ForEach(visibleBlocks) { block in
