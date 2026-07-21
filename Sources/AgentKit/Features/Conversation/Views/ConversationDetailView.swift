@@ -321,52 +321,48 @@ public struct ConversationDetailView: View {
                 .help("查看所有会话的待审批请求")
             }
         }
-        //        ToolbarItem {
-        //            Button {
-        //                store.beginDraft()
-        //            } label: {
-        //                Label("新建", systemImage: "square.and.pencil")
-        //            }
-        //        }
-        ToolbarItem {
-            Menu {
-                Button {
-                    shareConversation(as: .pdf)
+     
+        if viewModel != nil || store.activeConversationViewModel != nil {
+            ToolbarItem {
+                Menu {
+                    Button {
+                        shareConversation(as: .pdf)
+                    } label: {
+                        Label(ConversationShareFormat.pdf.title, systemImage: ConversationShareFormat.pdf.systemImage)
+                    }
+                    Button {
+                        shareConversation(as: .markdown)
+                    } label: {
+                        Label(ConversationShareFormat.markdown.title, systemImage: ConversationShareFormat.markdown.systemImage)
+                    }
                 } label: {
-                    Label(ConversationShareFormat.pdf.title, systemImage: ConversationShareFormat.pdf.systemImage)
+                    Label("分享", systemImage: "square.and.arrow.up")
                 }
+                .disabled(store.activeConversationViewModel?.snapshot.turns.isEmpty ?? true)
+                .help("分享完整会话")
+            }
+            ToolbarItem {
                 Button {
-                    shareConversation(as: .markdown)
+                    guard let vm = store.activeConversationViewModel else { return }
+                    store.showInspector(.assets(AssetPanelPayload(
+                        title: "Conversation Assets",
+                        assets: vm.assetRefs,
+                        conversationID: vm.conversation?.id,
+                        workspace: vm.workspaceAnchor
+                    )))
                 } label: {
-                    Label(ConversationShareFormat.markdown.title, systemImage: ConversationShareFormat.markdown.systemImage)
+                    Label("资产", systemImage: "tray.full")
                 }
-            } label: {
-                Label("分享", systemImage: "square.and.arrow.up")
+                .disabled(store.activeConversationViewModel?.assetRefs.isEmpty ?? true)
             }
-            .disabled(store.activeConversationViewModel?.snapshot.turns.isEmpty ?? true)
-            .help("分享完整会话")
-        }
-        ToolbarItem {
-            Button {
-                guard let vm = store.activeConversationViewModel else { return }
-                store.showInspector(.assets(AssetPanelPayload(
-                    title: "Conversation Assets",
-                    assets: vm.assetRefs,
-                    conversationID: vm.conversation?.id,
-                    workspace: vm.workspaceAnchor
-                )))
-            } label: {
-                Label("资产", systemImage: "tray.full")
+            ToolbarItem {
+                Button {
+                    store.isInspectorPresented.toggle()
+                } label: {
+                    Label("详情", systemImage: "sidebar.right")
+                }
+                .disabled(store.selectedConversation == nil)
             }
-            .disabled(store.activeConversationViewModel?.assetRefs.isEmpty ?? true)
-        }
-        ToolbarItem {
-            Button {
-                store.isInspectorPresented.toggle()
-            } label: {
-                Label("详情", systemImage: "sidebar.right")
-            }
-            .disabled(store.selectedConversation == nil)
         }
     }
 
