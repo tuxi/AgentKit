@@ -168,10 +168,13 @@ struct FileArtifactBody: View {
     }
 
     private func scrollToFocusLine(_ proxy: ScrollViewProxy) {
-        guard let focusLine, focusLine > 0 else { return }
         DispatchQueue.main.async {
             withAnimation(.easeOut(duration: 0.18)) {
-                proxy.scrollTo(focusLine, anchor: .center)
+                if let focusLine, focusLine > 0 {
+                    proxy.scrollTo(focusLine, anchor: .leading)
+                } else {
+                    proxy.scrollTo(0, anchor: .leading) // 防止滚动到内容的右边或者中间了
+                }
             }
         }
     }

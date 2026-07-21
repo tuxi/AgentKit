@@ -20,6 +20,7 @@ private typealias PlatformImage = UIImage
 struct AssetListInspectorView: View {
     let payload: AssetPanelPayload
     @Environment(WorkspaceStore.self) private var store
+    @Environment(\.inspectorPathState) private var inspectorPath
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
@@ -32,11 +33,16 @@ struct AssetListInspectorView: View {
                     LazyVStack(alignment: .leading, spacing: 0) {
                         ForEach(payload.assets) { asset in
                             Button {
-                                store.showInspector(.asset(AssetPreviewPayload(
+                                let detailPayload = AssetPreviewPayload(
                                     asset: asset,
                                     conversationID: payload.conversationID,
                                     workspace: payload.workspace
-                                )))
+                                )
+                                if inspectorPath.isActive {
+                                    inspectorPath.push(.assetDetail(detailPayload))
+                                } else {
+                                    store.showInspector(.asset(detailPayload))
+                                }
                             } label: {
                                 AssetRow(asset: asset)
                             }
