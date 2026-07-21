@@ -14,6 +14,7 @@
 //
 
 import Foundation
+import ClientToolProtocol
 
 // MARK: - RuntimeClient protocol
 

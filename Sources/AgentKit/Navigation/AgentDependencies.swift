@@ -8,6 +8,7 @@
 //
 
 import Foundation
+import ClientToolProtocol
 
 /// UI 层依赖容器。ViewModel 通过此结构拿到协议实例，不感知具体实现。
 public struct AgentDependencies {

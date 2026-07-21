@@ -7,6 +7,7 @@
 //
 
 import Foundation
+import ClientToolProtocol
 
 /// 审批请求：服务端推给客户端，要求用户确认副作用操作。
 /// `id` 是关联键 — 回复 `approval_response` 时必须原样带回。

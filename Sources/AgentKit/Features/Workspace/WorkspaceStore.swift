@@ -12,6 +12,7 @@
 import SwiftUI
 #if os(iOS)
 import Network
+import ClientToolProtocol
 #endif
 
 /// 三栏工作区的 UI 选中态。
@@ -691,6 +692,14 @@ public final class WorkspaceStore {
             )
             await vm.connect(to: ref)
             try localStateStore.migrateDraft(current.id, to: ref.id)
+            // 加固：显式写入 selectedModelID 到 session state。
+            // migrateDraft 已从 draft state merge，此处提供第二条恢复路径，
+            // 防止因 WAL 时序或状态覆盖导致 active view 显示回退到默认模型（Bug 1）。
+            if !model.isEmpty {
+                try? localStateStore.updateState(for: .session(ref.id)) { state in
+                    state.selectedModelID = model
+                }
+            }
             let firstInput = AgentInput.text(firstMessage, model: model, assets: assets)
             _ = try localStateStore.markSubmissionPending(
                 key: .session(ref.id),
@@ -711,17 +720,21 @@ public final class WorkspaceStore {
 
     private func persistDraftMetadata() {
         guard let draft else { return }
-        try? localStateStore.updateState(for: .draft(draft.id)) { state in
-            state.composerDraft.workspaceID = draft.workspace?.id
-            state.composerDraft.workspacePath = draft.workspace?.url.path
-            state.composerDraft.workspaceBranch = draft.workspace?.branch
-            state.composerDraft.executionPolicy = draft.usesManagedWorktree
-                ? WorkspaceExecutionPolicy.isolatedWorktree.rawValue
-                : WorkspaceExecutionPolicy.sharedWorkspace.rawValue
-            state.composerDraft.wantsManagedWorktree = draft.usesManagedWorktree
-            state.composerDraft.managedWorktreeBaseRef = draft.managedWorktreeBaseRef.rawValue
-            state.composerDraft.managedWorktreeSuggestedName = draft.managedWorktreeSuggestedName
-            state.composerDraft.clientRequestID = draft.clientRequestID
+        do {
+            try localStateStore.updateState(for: .draft(draft.id)) { state in
+                state.composerDraft.workspaceID = draft.workspace?.id
+                state.composerDraft.workspacePath = draft.workspace?.url.path
+                state.composerDraft.workspaceBranch = draft.workspace?.branch
+                state.composerDraft.executionPolicy = draft.usesManagedWorktree
+                    ? WorkspaceExecutionPolicy.isolatedWorktree.rawValue
+                    : WorkspaceExecutionPolicy.sharedWorkspace.rawValue
+                state.composerDraft.wantsManagedWorktree = draft.usesManagedWorktree
+                state.composerDraft.managedWorktreeBaseRef = draft.managedWorktreeBaseRef.rawValue
+                state.composerDraft.managedWorktreeSuggestedName = draft.managedWorktreeSuggestedName
+                state.composerDraft.clientRequestID = draft.clientRequestID
+            }
+        } catch {
+            DLLog("Failed to harden selectedModelID after migration: \(error)")
         }
     }
 

@@ -17,6 +17,7 @@ let package = Package(
         ),
     ],
     dependencies: [
+        .package(url: "https://github.com/tuxi/ClientToolProtocol", from: "0.1.0"),
         .package(url: "https://github.com/swiftlang/swift-markdown", branch: "main"),
     ],
     targets: [
@@ -30,6 +31,7 @@ let package = Package(
         .target(
             name: "AgentKit",
             dependencies: [
+                .product(name: "ClientToolProtocol", package: "ClientToolProtocol"),
                 .product(name: "Markdown", package: "swift-markdown"),
                 .target(name: "CodeAgentRuntime", condition: .when(platforms: [.iOS])),
             ],

@@ -12,6 +12,7 @@
 //
 
 import Foundation
+import ClientToolProtocol
 
 // MARK: - AgentTransport
 

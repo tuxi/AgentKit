@@ -6,6 +6,7 @@
 //
 
 import SwiftUI
+import ClientToolProtocol
 
 public enum ConversationActivityState: String, Sendable, Equatable {
     case connecting

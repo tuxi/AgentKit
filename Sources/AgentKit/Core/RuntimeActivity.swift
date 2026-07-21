@@ -6,6 +6,7 @@
 //
 
 import Foundation
+import ClientToolProtocol
 
 /// Stable Runtime scheduler explanations. Unknown future values remain decodable
 /// because wire/activity models continue storing their raw String.

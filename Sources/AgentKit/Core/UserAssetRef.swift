@@ -7,6 +7,7 @@
 //
 
 import Foundation
+import ClientToolProtocol
 
 public struct UserAssetRef: Sendable, Hashable, Codable, Identifiable {
     public let assetID: Int64

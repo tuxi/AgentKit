@@ -1,4 +1,5 @@
 import Foundation
+import ClientToolProtocol
 
 /// 工具调用项 — call_id 是协议级 tool identity。
 /// `tool_started` + `tool_finished` = 同一个 ToolCallItem 的状态变化。

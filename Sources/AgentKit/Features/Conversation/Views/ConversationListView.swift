@@ -9,6 +9,7 @@
 //
 
 import SwiftUI
+import ClientToolProtocol
 
 public struct ConversationListView: View {
 

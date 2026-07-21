@@ -9,6 +9,7 @@
 //
 
 import Foundation
+import ClientToolProtocol
 
 // MARK: - AgentEvent
 

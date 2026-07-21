@@ -6,6 +6,7 @@
 //
 
 import Foundation
+import ClientToolProtocol
 
 public enum InspectorSelection: Hashable {
     case file(FilePayload)

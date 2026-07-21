@@ -7,6 +7,7 @@
 //
 
 import Foundation
+import ClientToolProtocol
 
 // MARK: - Raw wire frame
 

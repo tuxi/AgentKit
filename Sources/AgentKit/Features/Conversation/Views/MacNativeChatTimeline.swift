@@ -9,6 +9,7 @@
 #if os(macOS)
 import AppKit
 import SwiftUI
+import ClientToolProtocol
 
 /// A view-based `NSTableView` timeline whose bottom-pinning happens only after
 /// AppKit has calculated the updated document height. This avoids scrolling to

@@ -13,6 +13,7 @@ private typealias PlatformColor = NSColor
 private typealias PlatformFont = NSFont
 #else
 import UIKit
+import ClientToolProtocol
 private typealias PlatformColor = UIColor
 private typealias PlatformFont = UIFont
 #endif

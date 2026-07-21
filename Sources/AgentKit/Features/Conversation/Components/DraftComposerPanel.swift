@@ -10,6 +10,7 @@ import SwiftUI
 import AppKit
 #else
 import UIKit
+import ClientToolProtocol
 #endif
 
 
@@ -278,6 +279,16 @@ struct DraftComposerPanel: View {
         .onDisappear {
             persistCurrentText()
         }
+        .onChange(of: modelSettings.availableModelIDs) { _, newIDs in
+            // 模型列表延迟到达时自动恢复 selectedModel（Bug 2）。
+            // 若 UI 先于网络渲染，.task(id:) 恢复时 gatewayModels 尚为 nil，
+            // selectedModel 被设为空串。列表到达后此处重新解析并回填。
+            guard !newIDs.isEmpty, let current = selectedModel, current.isEmpty else { return }
+            let resolved = modelSettings.getModel(with: viewModel?.conversation?.id)
+            if let resolved, !resolved.isEmpty {
+                selectedModel = resolved
+            }
+        }
     }
 
     // MARK: - Input Field
@@ -444,6 +455,9 @@ struct DraftComposerPanel: View {
         }
     }
 
+    /// 持久化当前对话/草稿的模型选择到 local state。
+    /// 与 ModelSettingsStore.setUserModel() 互补：setUserModel 只写 .session(id)，
+    /// 草稿（无 session）依赖此方法写 .draft(uuid)，保证多草稿间模型选择隔离。
     private func persistModel(_ modelID: String) {
         guard let key = loadedStateKey, !modelID.isEmpty else { return }
         try? workspaceStore.localStateStore.updateState(for: key) { state in

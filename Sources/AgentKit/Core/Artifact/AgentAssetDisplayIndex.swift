@@ -6,6 +6,7 @@
 //
 
 import Foundation
+import ClientToolProtocol
 
 enum AgentAssetDisplayIndex {
     static func unique(_ assets: [AgentAssetRef]) -> [AgentAssetRef] {

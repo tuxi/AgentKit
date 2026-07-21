@@ -8,6 +8,7 @@
 //
 
 import SwiftUI
+import ClientToolProtocol
 
 /// Renders a group of same-name tool calls as an expandable block.
 struct ToolCallGroupView: View {

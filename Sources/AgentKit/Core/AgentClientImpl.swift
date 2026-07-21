@@ -13,6 +13,7 @@
 //
 
 import Foundation
+import ClientToolProtocol
 
 // MARK: - CodeAgentSessionChannel
 

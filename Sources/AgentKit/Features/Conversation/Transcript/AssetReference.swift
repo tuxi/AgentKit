@@ -6,6 +6,7 @@
 //
 
 import Foundation
+import ClientToolProtocol
 
 struct AssetReference: Identifiable, Hashable, Sendable {
     enum Kind: String, Sendable {

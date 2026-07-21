@@ -13,6 +13,7 @@ import AppKit
 private typealias PlatformImage = NSImage
 #elseif os(iOS)
 import UIKit
+import ClientToolProtocol
 private typealias PlatformImage = UIImage
 #endif
 

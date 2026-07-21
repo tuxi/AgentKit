@@ -6,6 +6,7 @@
 //
 
 import Foundation
+import ClientToolProtocol
 
 public struct AgentAssetPreviewResponse: Sendable, Hashable, Decodable {
     public let asset: AgentAssetRef

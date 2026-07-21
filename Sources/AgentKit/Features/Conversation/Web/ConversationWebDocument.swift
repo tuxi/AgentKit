@@ -6,6 +6,7 @@
 //
 
 import Foundation
+import ClientToolProtocol
 
 struct ConversationWebDocument: Codable, Equatable, Sendable {
     static let currentProtocolVersion = 1

@@ -8,6 +8,7 @@
 //
 
 import Foundation
+import ClientToolProtocol
 
 // MARK: - Wire stream kind
 

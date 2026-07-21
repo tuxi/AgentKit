@@ -1,6 +1,7 @@
 #if os(macOS)
 import AppKit
 import SwiftUI
+import ClientToolProtocol
 
 /// AppKit timeline counterpart of TurnView's action routing. Keeping this
 /// outside the cell makes reuse model-driven and prevents closures from an old

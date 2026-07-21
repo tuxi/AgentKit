@@ -6,6 +6,7 @@
 //
 
 import Foundation
+import ClientToolProtocol
 
 // MARK: - ToolCall
 

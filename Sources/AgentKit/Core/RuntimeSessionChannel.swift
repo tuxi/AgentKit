@@ -6,6 +6,7 @@
 //
 
 import Foundation
+import ClientToolProtocol
 
 /// A bidirectional runtime channel permanently bound to one server-owned session.
 ///

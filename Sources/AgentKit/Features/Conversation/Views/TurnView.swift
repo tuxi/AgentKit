@@ -8,6 +8,7 @@
 //
 
 import SwiftUI
+import ClientToolProtocol
 
 struct TurnView: View, Equatable {
     let turn: ConversationTurn

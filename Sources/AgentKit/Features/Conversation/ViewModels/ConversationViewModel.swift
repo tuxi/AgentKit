@@ -9,6 +9,7 @@
 //
 
 import SwiftUI
+import ClientToolProtocol
 
 // MARK: - ConversationViewModel
 
