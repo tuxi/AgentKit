@@ -55,39 +55,34 @@ public struct ConversationDetailView: View {
     // MARK: - Draft (no session yet)
     
     private var draftView: some View {
-        ScrollView {
-            VStack(spacing: 18) {
-                Spacer(minLength: 120)
-                
-                Text(draftTitle)
-                    .font(.system(size: 28, weight: .medium))
-                    .foregroundStyle(.primary)
-                    .multilineTextAlignment(.center)
-                    .lineLimit(2)
-                    .minimumScaleFactor(0.82)
-                    .padding(.horizontal, 24)
-                
-                DraftComposerPanel(
-                    placeholder: store.isPreparingWorkspace ? "正在准备工作区…" : "随心输入",
-                    isEnabled: (store.draft?.canCommit ?? false) && !store.isPreparingWorkspace,
-                    isDraft: true,
-                    onSend: { text, model, assets in
-                        await store.commitDraft(firstMessage: text, model: model, assets: assets)
-                        return store.draft == nil
-                    },
-                    viewModel: viewModel,
-                    draftRevision: store.draftNavigationRevision,
-                )
-                .environment(modelSettings)
-                
-                if case .failed(let message) = store.draft?.state {
-                    failureBanner(message)
-                    //                        .frame(maxWidth: 760)
+        Group {
+            #if os(iOS)
+            ScrollView {
+                VStack(spacing: 18) {
+                    Spacer(minLength: 150)
+                    draftTitleView
+                    draftFailureBanner
+                    Spacer(minLength: 240)
                 }
-                
-                Spacer(minLength: 180)
+                .frame(maxWidth: .infinity)
             }
-            .frame(maxWidth: .infinity)
+            .scrollDisabled(true)
+            .scrollIndicators(.hidden)
+            .safeAreaInset(edge: .bottom, spacing: 6) {
+                draftComposer
+            }
+            #else
+            ScrollView {
+                VStack(spacing: 18) {
+                    Spacer(minLength: 120)
+                    draftTitleView
+                    draftComposer
+                    draftFailureBanner
+                    Spacer(minLength: 180)
+                }
+                .frame(maxWidth: .infinity)
+            }
+            #endif
         }
         .scrollDismissesKeyboard(.interactively)
         .background(.bar)
@@ -100,10 +95,41 @@ public struct ConversationDetailView: View {
             }
         }
     }
+
+    private var draftTitleView: some View {
+        Text(draftTitle)
+            .font(.system(size: 28, weight: .medium))
+            .foregroundStyle(.primary)
+            .multilineTextAlignment(.center)
+            .lineLimit(2)
+            .minimumScaleFactor(0.82)
+            .padding(.horizontal, 24)
+    }
+
+    @ViewBuilder
+    private var draftFailureBanner: some View {
+        if case .failed(let message) = store.draft?.state {
+            failureBanner(message)
+        }
+    }
+
+    private var draftComposer: some View {
+        DraftComposerPanel(
+            placeholder: store.isPreparingWorkspace ? "正在准备工作区…" : "描述你想构建什么…",
+            isEnabled: (store.draft?.canCommit ?? false) && !store.isPreparingWorkspace,
+            isDraft: true,
+            onSend: { text, model, assets in
+                await store.commitDraft(firstMessage: text, model: model, assets: assets)
+                return store.draft == nil
+            },
+            viewModel: viewModel,
+            draftRevision: store.draftNavigationRevision,
+        )
+        .environment(modelSettings)
+    }
     
     private var draftTitle: AttributedString {
         let workspace = store.draft?.workspace ?? store.recentWorkspaces.mostRecent
-        let name = store.draft?.workspace?.name ?? store.recentWorkspaces.mostRecent?.name
         guard let name = workspace?.name, !name.isEmpty else {
             return AttributedString("我们应该构建什么？")
         }
@@ -125,7 +151,6 @@ public struct ConversationDetailView: View {
         highlighted.font = .system(size: 28, weight: .bold)
         highlighted.link = url
         return prefix + highlighted + suffix
-        return AttributedString("我们应该构建什么？")
     }
     
     private func failureBanner(_ message: String) -> some View {
@@ -170,6 +195,7 @@ public struct ConversationDetailView: View {
             
             residentTimelines(activeViewModel: vm)
         }
+        .background(.bar)
         #if os(macOS)
         .padding(.horizontal, 20)
         #endif
@@ -221,8 +247,10 @@ public struct ConversationDetailView: View {
                     .transition(.move(edge: .bottom).combined(with: .opacity))
                 }
                 
-                WorkspaceChipBar()          // 冻结：只读 chip
+                #if os(macOS)
+                WorkspaceChipBar()          // macOS 保持独立的只读工作区工具栏
                     .padding(.horizontal, 20)
+                #endif
                 
                 DraftComposerPanel(
                     placeholder: vm.isAwaitingTurnAcceptance
@@ -267,7 +295,6 @@ public struct ConversationDetailView: View {
                 )
                 .environment(modelSettings)
             }
-            .background(.bar)
             .animation(.easeOut(duration: 0.25), value: vm.snapshot.pendingAskUser != nil)
             .animation(.easeOut(duration: 0.25), value: vm.snapshot.pendingApproval != nil)
             .animation(.easeOut(duration: 0.25), value: vm.snapshot.pendingPlanApproval != nil)

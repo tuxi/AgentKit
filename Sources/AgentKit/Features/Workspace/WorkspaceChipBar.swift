@@ -30,18 +30,16 @@ struct WorkspaceChipBar: View {
     @State private var cloneError: String?
 
     var body: some View {
-        HStack(spacing: 6) {
-            content
-            if store.isPreparingWorkspace {
-                ProgressView().controlSize(.small)
-                Text("准备工作区…")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
+        Group {
+            #if os(iOS)
+            ScrollView(.horizontal) {
+                chipRow
             }
-            Spacer(minLength: 0)
+            .scrollIndicators(.hidden)
+            #else
+            chipRow
+            #endif
         }
-        .padding(.horizontal, 12)
-        .padding(.vertical, 6)
         .onAppear { store.projects.reload() }
         .fileImporter(
             isPresented: $isImporterPresented,
@@ -91,6 +89,21 @@ struct WorkspaceChipBar: View {
         } message: {
             Text(createError ?? "")
         }
+    }
+
+    private var chipRow: some View {
+        HStack(spacing: 6) {
+            content
+            if store.isPreparingWorkspace {
+                ProgressView().controlSize(.small)
+                Text("准备工作区…")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+            Spacer(minLength: 0)
+        }
+        .padding(.horizontal, 12)
+        .padding(.vertical, 6)
     }
 
     // MARK: - Mode

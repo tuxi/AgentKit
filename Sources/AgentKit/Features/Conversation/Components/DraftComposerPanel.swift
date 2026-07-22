@@ -57,10 +57,20 @@ struct DraftComposerPanel: View {
     
     // MARK: - Model Selector
     @State private var isMenuPresented = false
+    @State private var isIOSModelPickerPresented = false
     @State private var hoveredID: String? = nil // 用于追踪当前鼠标悬停的 Item
 
     var body: some View {
         VStack(spacing: 0) {
+            #if os(iOS)
+            WorkspaceChipBar()
+                .padding(.horizontal, 4)
+                .padding(.top, 3)
+            Divider()
+                .opacity(0.45)
+                .padding(.horizontal, 12)
+            #endif
+
             VStack(spacing: 8) {
                 if !attachments.isEmpty {
                     attachmentStrip
@@ -71,7 +81,7 @@ struct DraftComposerPanel: View {
                     .padding(.horizontal, 16)
                     .padding(.top, attachments.isEmpty ? 14 : 2)
 
-                HStack(spacing: 12) {
+                HStack(spacing: composerControlSpacing) {
                     Button {
                         if let onAddAttachment {
                             onAddAttachment()
@@ -90,22 +100,48 @@ struct DraftComposerPanel: View {
                             || (onAddAttachment == nil && !workspaceStore.canSelectUserAssets)
                     )
 
-//                    Menu {
-//                        Button("请求批准") { }
-//                    } label: {
-//                        Label("请求批准", systemImage: "hand.raised")
-//                            .font(.system(size: 13, weight: .medium))
-//                            .labelStyle(.titleAndIcon)
-//                        Image(systemName: "chevron.down")
-//                            .font(.system(size: 9, weight: .semibold))
-//                    }
-//                    .menuStyle(.borderlessButton)
-//                    .fixedSize()
-//                    .foregroundStyle(.secondary)
+                    #if os(macOS)
+                    Menu {
+                        Button("请求批准") { }
+                    } label: {
+                        Label("请求批准", systemImage: "hand.raised")
+                            .font(.system(size: 13, weight: .medium))
+                            .labelStyle(.titleAndIcon)
+                        Image(systemName: "chevron.down")
+                            .font(.system(size: 9, weight: .semibold))
+                    }
+                    .menuStyle(.borderlessButton)
+                    .fixedSize()
+                    .foregroundStyle(.secondary)
+                    #endif
 
                     Spacer(minLength: 12)
 
                     // ── Model Selector ──
+                    #if os(iOS)
+                    Button {
+                        isIOSModelPickerPresented = true
+                    } label: {
+                        HStack(spacing: 5) {
+                            Text(modelSettings.displayName(for: selectedModel ?? ""))
+                                .font(.system(size: 13, weight: .semibold))
+                                .lineLimit(1)
+                            Image(systemName: "chevron.up")
+                                .font(.system(size: 8, weight: .bold))
+                        }
+                        .foregroundStyle(Color.accentColor)
+                        .padding(.horizontal, 9)
+                        .frame(height: 32)
+                        .background(
+                            Color.accentColor.opacity(0.12),
+                            in: RoundedRectangle(cornerRadius: 10, style: .continuous)
+                        )
+                    }
+                    .buttonStyle(.plain)
+                    .frame(maxWidth: 132)
+                    .disabled(modelSettings.availableModelIDs.isEmpty)
+                    .accessibilityLabel("选择模型")
+                    #else
                     Menu {
                         // 优雅的 Popover 内部视图
                         VStack(alignment: .leading, spacing: 4) {
@@ -125,11 +161,7 @@ struct DraftComposerPanel: View {
                                 let isHovered = hoveredID == modelID
                                 
                                 Button {
-                                    selectedModel = modelID
-                                    viewModel?.selectedModel = modelID
-                                    modelSettings.didUseModel(modelID, conversation: viewModel?.conversation?.id ?? "")
-                                    persistModel(modelID)
-                                    onModelChange?(modelID)
+                                    selectModel(modelID)
                                     isMenuPresented = false
                                 } label: {
                                     HStack(spacing: 8) {
@@ -194,14 +226,17 @@ struct DraftComposerPanel: View {
                     .menuStyle(.borderlessButton)
                     .fixedSize()
 //                    .foregroundStyle(.secondary)
+                    #endif
 
-//                    Button { } label: {
-//                        Image(systemName: "mic")
-//                            .font(.system(size: 15, weight: .medium))
-//                    }
-//                    .buttonStyle(.plain)
-//                    .foregroundStyle(.secondary)
-//                    .accessibilityLabel("语音输入")
+                    #if os(macOS)
+                    Button { } label: {
+                        Image(systemName: "mic")
+                            .font(.system(size: 15, weight: .medium))
+                    }
+                    .buttonStyle(.plain)
+                    .foregroundStyle(.secondary)
+                    .accessibilityLabel("语音输入")
+                    #endif
 
                     // ── Send / Stop button ──
                     if isTurnRunning {
@@ -210,7 +245,7 @@ struct DraftComposerPanel: View {
                         } label: {
                             Image(systemName: "stop.fill")
                                 .font(.system(size: 12, weight: .bold))
-                                .frame(width: 30, height: 30)
+                                .frame(width: sendButtonSize, height: sendButtonSize)
                         }
                         .buttonStyle(.plain)
                         .foregroundStyle(.white)
@@ -223,11 +258,11 @@ struct DraftComposerPanel: View {
                             if isSending {
                                 ProgressView()
                                     .controlSize(.small)
-                                    .frame(width: 30, height: 30)
+                                    .frame(width: sendButtonSize, height: sendButtonSize)
                             } else {
                                 Image(systemName: "arrow.up")
                                     .font(.system(size: 16, weight: .bold))
-                                    .frame(width: 30, height: 30)
+                                    .frame(width: sendButtonSize, height: sendButtonSize)
                             }
                         }
                         .buttonStyle(.plain)
@@ -241,21 +276,31 @@ struct DraftComposerPanel: View {
                 .padding(.bottom, 10)
             }
             
+            #if os(macOS)
             if isDraft {
                 WorkspaceChipBar()
                     .padding(.horizontal, 8)
                     .padding(.vertical, 3)
                     .background(Color.draftPanelFooterBackground)
             }
+            #endif
         }
-        .background(Color.draftPanelBackground)
-        .clipShape(RoundedRectangle(cornerRadius: 20, style: .continuous))
-        .padding()
-//        .overlay {
-//            RoundedRectangle(cornerRadius: 20, style: .continuous)
-//                .stroke(Color.draftPanelStroke, lineWidth: 1)
-//        }
-        .shadow(color: .black.opacity(0.10), radius: 20, y: 10)
+        .modifier(DraftComposerSurfaceModifier())
+        #if os(iOS)
+        .sheet(isPresented: $isIOSModelPickerPresented) {
+            IOSModelPickerSheet(
+                modelIDs: modelSettings.availableModelIDs,
+                selectedModel: selectedModel,
+                displayName: { modelSettings.displayName(for: $0) },
+                onSelect: { modelID in
+                    selectModel(modelID)
+                    isIOSModelPickerPresented = false
+                }
+            )
+            .presentationDetents([.medium, .height(260)])
+            .presentationDragIndicator(.visible)
+        }
+        #endif
         .task(id: persistenceKey?.storageKey ?? "none-\(draftRevision)") {
             restoreLocalState()
         }
@@ -312,8 +357,8 @@ struct DraftComposerPanel: View {
         TextField(placeholder, text: $text, axis: .vertical)
             .textFieldStyle(.plain)
             .font(.body)
-            .lineLimit(2...6)
-            .frame(minHeight: 56, alignment: .topLeading)
+            .lineLimit(1...5)
+            .frame(minHeight: 44, alignment: .topLeading)
             .disabled(!isEnabled)
 #endif
     }
@@ -322,6 +367,30 @@ struct DraftComposerPanel: View {
 
     private var trimmed: String {
         text.trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    private var composerControlSpacing: CGFloat {
+        #if os(macOS)
+        12
+        #else
+        8
+        #endif
+    }
+
+    private var sendButtonSize: CGFloat {
+        #if os(macOS)
+        30
+        #else
+        34
+        #endif
+    }
+
+    private func selectModel(_ modelID: String) {
+        selectedModel = modelID
+        viewModel?.selectedModel = modelID
+        modelSettings.didUseModel(modelID, conversation: viewModel?.conversation?.id ?? "")
+        persistModel(modelID)
+        onModelChange?(modelID)
     }
 
     private var readyAssets: [UserAssetRef] {
@@ -494,6 +563,90 @@ struct DraftComposerPanel: View {
                 refreshAttachmentsFromLocalState()
             }
         }
+    }
+}
+
+#if os(iOS)
+private struct IOSModelPickerSheet: View {
+    @Environment(\.dismiss) private var dismiss
+
+    let modelIDs: [String]
+    let selectedModel: String?
+    let displayName: (String) -> String
+    let onSelect: (String) -> Void
+
+    var body: some View {
+        NavigationStack {
+            Group {
+                if modelIDs.isEmpty {
+                    ContentUnavailableView(
+                        "暂无可用模型",
+                        systemImage: "cpu",
+                        description: Text("模型列表加载完成后会显示在这里")
+                    )
+                } else {
+                    List(modelIDs, id: \.self) { modelID in
+                        Button {
+                            onSelect(modelID)
+                        } label: {
+                            HStack(spacing: 12) {
+                                Image(systemName: "cpu")
+                                    .font(.system(size: 14, weight: .semibold))
+                                    .foregroundStyle(Color.accentColor)
+                                    .frame(width: 32, height: 32)
+                                    .background(
+                                        Color.accentColor.opacity(0.12),
+                                        in: RoundedRectangle(cornerRadius: 9, style: .continuous)
+                                    )
+                                Text(displayName(modelID))
+                                    .foregroundStyle(.primary)
+                                    .lineLimit(1)
+                                Spacer()
+                                if modelID == selectedModel {
+                                    Image(systemName: "checkmark")
+                                        .font(.system(size: 13, weight: .bold))
+                                        .foregroundStyle(Color.accentColor)
+                                }
+                            }
+                            .contentShape(Rectangle())
+                        }
+                        .buttonStyle(.plain)
+                    }
+                    .listStyle(.insetGrouped)
+                }
+            }
+            .navigationTitle("选择模型")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .topBarTrailing) {
+                    Button("完成") { dismiss() }
+                }
+            }
+        }
+    }
+}
+#endif
+
+private struct DraftComposerSurfaceModifier: ViewModifier {
+    func body(content: Content) -> some View {
+        #if os(macOS)
+        content
+            .background(Color.draftPanelBackground)
+            .clipShape(RoundedRectangle(cornerRadius: 20, style: .continuous))
+            .padding()
+            .shadow(color: .black.opacity(0.10), radius: 20, y: 10)
+        #else
+        content
+            .background(Color.draftPanelBackground)
+            .clipShape(RoundedRectangle(cornerRadius: 19, style: .continuous))
+            .overlay {
+                RoundedRectangle(cornerRadius: 19, style: .continuous)
+                    .stroke(Color.draftPanelStroke, lineWidth: 0.5)
+            }
+            .padding(.horizontal, 12)
+            .padding(.vertical, 4)
+            .shadow(color: .black.opacity(0.07), radius: 12, y: 4)
+        #endif
     }
 }
 
@@ -670,7 +823,11 @@ extension Color {
         #if os(macOS)
         Color(NSColor.controlBackgroundColor)
         #else
-        Color(UIColor.secondarySystemBackground)
+        Color(UIColor { traits in
+            traits.userInterfaceStyle == .dark
+                ? UIColor.tertiarySystemBackground
+                : UIColor.secondarySystemBackground
+        })
         #endif
     }
 
@@ -686,7 +843,7 @@ extension Color {
         #if os(macOS)
         Color(NSColor.separatorColor).opacity(0.35)
         #else
-        Color(UIColor.separator).opacity(0.28)
+        Color(UIColor.separator).opacity(0.42)
         #endif
     }
 
@@ -694,7 +851,7 @@ extension Color {
         #if os(macOS)
         Color(NSColor.labelColor)
         #else
-        Color(UIColor.label)
+        Color.accentColor
         #endif
     }
 
@@ -702,7 +859,7 @@ extension Color {
         #if os(macOS)
         Color(NSColor.windowBackgroundColor)
         #else
-        Color(UIColor.systemBackground)
+        Color.white
         #endif
     }
 
