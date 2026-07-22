@@ -38,7 +38,7 @@ extension URL {
     /// > deliberately lossy — the returned string no longer points to a real
     /// > file — so it must only be used for identity comparison and group-key
     /// > construction, never for I/O.
-    var canonicalPathForGrouping: String {
+    public var canonicalPathForGrouping: String {
         var path = self.standardizedFileURL.path
 
         #if os(iOS)
@@ -74,5 +74,50 @@ extension URL {
         #endif
 
         return path
+    }
+}
+
+extension String {
+    /// 将持久化存储中带有旧沙盒 UUID 的绝对路径，修正为当前 App 运行时的真实沙盒绝对路径
+    public var resolvingCurrentSandboxPath: String {
+#if os(iOS)
+        let standardDirectories = ["Documents", "Library", "tmp"]
+        
+        for dir in standardDirectories {
+            // 使用字符串查找 "/Documents/" 或结尾的 "/Documents"
+            if let range = self.range(of: "/\(dir)") {
+                // 确保匹配到的是目录本身，而不是类似 "/DocumentsExtra" 这样的前缀
+                let afterDirIndex = range.upperBound
+                if afterDirIndex == self.endIndex || self[afterDirIndex] == "/" {
+                    
+                    // 提取 dir 之后的内容（例如 "/New Project/file.txt" 或 ""）
+                    let relativePath = String(self[afterDirIndex...])
+                    
+                    // 获取当前进程真正的基准目录
+                    let currentBaseURL: URL
+                    switch dir {
+                    case "Library":
+                        currentBaseURL = FileManager.default.urls(for: .libraryDirectory, in: .userDomainMask).first!
+                    case "tmp":
+                        currentBaseURL = FileManager.default.temporaryDirectory
+                    default: // Documents
+                        currentBaseURL = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask).first!
+                    }
+                    
+                    // 拼接并返回最新真实绝对路径
+                    if relativePath.isEmpty || relativePath == "/" {
+                        return currentBaseURL.path
+                    } else {
+                        // 移除 leading slash 避免 appendingPathComponent 行为异常
+                        let cleanRelative = relativePath.hasPrefix("/") ? String(relativePath.dropFirst()) : relativePath
+                        return currentBaseURL.appendingPathComponent(cleanRelative).path
+                    }
+                }
+            }
+        }
+#endif
+        
+        // 如果路径不包含沙盒标准目录（例如选取的 App 外外部文件），原样返回
+        return self
     }
 }

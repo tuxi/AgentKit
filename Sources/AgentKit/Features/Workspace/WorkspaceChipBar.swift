@@ -14,6 +14,7 @@ import UniformTypeIdentifiers
 
 struct WorkspaceChipBar: View {
 
+    @Environment(\.horizontalSizeClass) private var horizontalSizeClass
     @Environment(WorkspaceStore.self) private var store
     @State private var isImporterPresented = false
     @State private var isNewProjectPresented = false
@@ -145,7 +146,10 @@ struct WorkspaceChipBar: View {
             if let branch = ws.branch {
                 chip(icon: "arrow.triangle.branch", text: branch)
             }
-            managedWorktreeControl
+            if horizontalSizeClass == .regular {
+                
+                managedWorktreeControl
+            }
 
         case .committing(let ws):
             localChip

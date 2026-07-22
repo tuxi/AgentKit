@@ -195,13 +195,13 @@ struct DraftComposerPanel: View {
                     .fixedSize()
 //                    .foregroundStyle(.secondary)
 
-                    Button { } label: {
-                        Image(systemName: "mic")
-                            .font(.system(size: 15, weight: .medium))
-                    }
-                    .buttonStyle(.plain)
-                    .foregroundStyle(.secondary)
-                    .accessibilityLabel("语音输入")
+//                    Button { } label: {
+//                        Image(systemName: "mic")
+//                            .font(.system(size: 15, weight: .medium))
+//                    }
+//                    .buttonStyle(.plain)
+//                    .foregroundStyle(.secondary)
+//                    .accessibilityLabel("语音输入")
 
                     // ── Send / Stop button ──
                     if isTurnRunning {
@@ -887,9 +887,7 @@ struct PlanApprovalBar: View {
     private func openPlanFile() {
         guard let filePath = plan.filePath else { return }
         
-        NSWorkspace.shared.open(
-            URL(fileURLWithPath: filePath)
-        )
+        openFolderInFinder(path: filePath)
     }
 #endif
 }

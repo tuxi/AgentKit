@@ -101,12 +101,31 @@ public struct ConversationDetailView: View {
         }
     }
     
-    private var draftTitle: String {
+    private var draftTitle: AttributedString {
+        let workspace = store.draft?.workspace ?? store.recentWorkspaces.mostRecent
         let name = store.draft?.workspace?.name ?? store.recentWorkspaces.mostRecent?.name
-        if let name, !name.isEmpty {
-            return "我们应该在 \(name) 中构建什么？"
+        guard let name = workspace?.name, !name.isEmpty else {
+            return AttributedString("我们应该构建什么？")
         }
-        return "我们应该构建什么？"
+        
+        // 1. 获取动态校正后的“当前可用真实路径”
+        let rawPath = workspace?.url.path() ?? ""
+        let currentValidPath = rawPath.resolvingCurrentSandboxPath
+        
+        // 中文/特殊字符安全编码
+        guard let encodedPath = currentValidPath.addingPercentEncoding(withAllowedCharacters: .urlHostAllowed),
+              let url = URL(string: "codeagent://workspace?path=\(encodedPath)") else {
+            return AttributedString("我们应该在 \(name) 中构建什么？")
+        }
+        
+        let prefix = AttributedString("我们应该在")
+        let suffix = AttributedString("中构建什么？")
+        var highlighted = AttributedString(name)
+        highlighted.foregroundColor = .accentColor
+        highlighted.font = .system(size: 28, weight: .bold)
+        highlighted.link = url
+        return prefix + highlighted + suffix
+        return AttributedString("我们应该构建什么？")
     }
     
     private func failureBanner(_ message: String) -> some View {
