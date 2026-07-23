@@ -19,6 +19,7 @@ public enum InspectorSelection: Hashable {
     case tool(String)
     case plan(String)
     case childStream(ChildStreamSelection)
+    case workflowDAG(WorkflowDAGSelection)
     case timelineDocument(TimelineWebDocument)
 }
 
@@ -33,6 +34,18 @@ public struct ChildStreamSelection: Sendable, Hashable {
     public init(childID: String, kind: ChildStreamKind, title: String) {
         self.childID = childID
         self.kind = kind
+        self.title = title
+    }
+}
+
+/// v1.3 — Workflow DAG 查看器的选择载荷。
+public struct WorkflowDAGSelection: Sendable, Hashable {
+    public let workflowID: String
+    /// DAG 目标描述，用作面板标题。
+    public let title: String?
+
+    public init(workflowID: String, title: String? = nil) {
+        self.workflowID = workflowID
         self.title = title
     }
 }

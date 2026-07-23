@@ -80,6 +80,7 @@ public enum TurnBlock: Identifiable, Sendable, Equatable {
     case artifact(id: String, ArtifactNode)
     case system(id: String, SystemNodePayload)   // observation / reflection / error only
     case childStream(id: String, ChildStreamNodePayload)  // task 子agent / 后台 job 入口卡
+    case workflow(id: String, WorkflowNodePayload)        // v1.3 Flux DAG 入口卡
 
     public var id: String {
         switch self {
@@ -89,6 +90,7 @@ public enum TurnBlock: Identifiable, Sendable, Equatable {
         case .artifact(let id, _): return id
         case .system(let id, _): return id
         case .childStream(let id, _): return id
+        case .workflow(let id, _): return id
         }
     }
 }

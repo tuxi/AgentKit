@@ -163,7 +163,8 @@ public final class ConversationViewModel {
         capabilityRegistry: RuntimeCapabilityRegistry? = nil,
         localStateStore: any ConversationLocalStateStore = SQLiteConversationLocalStateStore.shared,
         onAuthExpired: (@MainActor () async -> Void)? = nil,
-        onActivityInvalidated: (@MainActor () -> Void)? = nil
+        onActivityInvalidated: (@MainActor () -> Void)? = nil,
+        workflowStore: WorkflowStore? = nil
     ) {
         self.client = client
         self.toolRegistry = toolRegistry
@@ -175,7 +176,11 @@ public final class ConversationViewModel {
         self.localStateStore = localStateStore
         self.onAuthExpired = onAuthExpired
         self.onActivityInvalidated = onActivityInvalidated
+        self.workflowStore = workflowStore
     }
+
+    /// v1.3 — Workflow DAG 状态中心引用（由 WorkspaceStore 注入）。
+    private let workflowStore: WorkflowStore?
 
     /// 本会话用于展示的工作区标签。
     public var workspaceDisplayName: String? {
@@ -461,7 +466,7 @@ public final class ConversationViewModel {
         async let messagesTask = try? client.getMessages(conversationID: conversationID)
         // 用 getEventBatch 而非 getEvents：除事件外还带 nextSince（= 最大 seq）游标。
         async let eventsTask = try? client.getEventBatch(conversationID: conversationID, since: 0)
-
+        
         let (detailResult, messagesResult, eventsResult) = await (detailTask, messagesTask, eventsTask)
 
         self.detail = detailResult
@@ -486,6 +491,7 @@ public final class ConversationViewModel {
                     handleSubmissionAccepted(requestID: requestID, turnID: turnID)
                 }
                 await forwardToTimelineExtensions(event)
+                forwardWorkflowEvent(event)
             }
         }
         return sinceCursor
@@ -511,6 +517,7 @@ public final class ConversationViewModel {
         updateLifecycle(from: event)
         await engine.ingest(event)
         await forwardToTimelineExtensions(event)
+        forwardWorkflowEvent(event)
 
         // auth_expired → Host 恢复流程（刷新 token → Reconfigure Runtime）
         if case .turnFailed(_, _, _, let errorCode) = event,
@@ -602,6 +609,22 @@ public final class ConversationViewModel {
     private func forwardToTimelineExtensions(_ event: AgentEvent) async {
         for timelineExtension in timelineExtensions {
             await timelineExtension.handle(event)
+        }
+    }
+
+    /// v1.3 — 将 workflow 事件转发到 WorkflowStore。
+    private func forwardWorkflowEvent(_ event: AgentEvent) {
+        guard let store = workflowStore else { return }
+        switch event {
+        case .workflowStarted, .workflowPlanReady,
+             .workflowTaskStateChanged, .workflowNodeStateChanged,
+             .workflowSuspended, .workflowFinished, .workflowFailed,
+             .workflowNodeProgress, .workflowTaskProgress,
+             .workflowToolProgress, .workflowToolLog,
+             .workflowToolStream, .workflowToolStreamEnd:
+            store.reduce(event)
+        default:
+            break
         }
     }
 

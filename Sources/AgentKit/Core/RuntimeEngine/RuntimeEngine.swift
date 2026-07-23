@@ -294,7 +294,9 @@ public actor RuntimeEngine {
         // `thinking` is a terminal complete snapshot, not a delta — yield immediately.
         // `reasoningDelta` is coalesced like `tokenDelta` for smooth streaming.
         switch event {
-        case .tokenDelta, .reasoningDelta, .toolStdout, .toolStderr, .jobOutput:
+        case .tokenDelta, .reasoningDelta, .toolStdout, .toolStderr, .jobOutput,
+             .workflowNodeProgress, .workflowTaskProgress, .workflowToolProgress,
+             .workflowToolLog, .workflowToolStream:
             scheduleFlush()
         default:
             yieldSnapshot()

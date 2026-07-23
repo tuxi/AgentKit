@@ -97,6 +97,36 @@ public enum AgentEvent: Sendable {
 
     // ── ask_user ──
     case askUserRequest(turnID: String?, request: AskUserRequest)
+
+    // ── Workflow（v1.3 Flux DAG）──
+    /// Planning started; contains stable `workflow_id`.
+    case workflowStarted(turnID: String?, callID: String, workflowID: String)
+    /// Validated topology persisted; contains nodes, edges, and output mapping.
+    case workflowPlanReady(turnID: String?, callID: String, workflow: WorkflowPlanReadyData)
+    /// Canonical TaskStatus transition.
+    case workflowTaskStateChanged(turnID: String?, workflow: WorkflowTaskStateChange)
+    /// Canonical NodeState transition.
+    case workflowNodeStateChanged(turnID: String?, workflow: WorkflowNodeStateChange)
+    /// Task is resumable and waiting at `node_name`.
+    case workflowSuspended(turnID: String?, workflow: WorkflowSuspendedData)
+    /// Terminal success and final output.
+    case workflowFinished(turnID: String?, workflow: WorkflowFinishedData)
+    /// Planning, registration, execution, or Task terminal failure.
+    case workflowFailed(turnID: String?, workflow: WorkflowFailedData)
+
+    // ── Workflow transient（不 replay，仅实时视觉反馈）──
+    /// Non-authoritative node progress update.
+    case workflowNodeProgress(turnID: String?, workflow: WorkflowProgressData)
+    /// Non-authoritative task progress update.
+    case workflowTaskProgress(turnID: String?, workflow: WorkflowProgressData)
+    /// Transient tool progress.
+    case workflowToolProgress(turnID: String?, workflow: WorkflowProgressData)
+    /// Transient tool log chunk.
+    case workflowToolLog(turnID: String?, workflow: WorkflowToolStreamData)
+    /// Transient tool stream chunk.
+    case workflowToolStream(turnID: String?, workflow: WorkflowToolStreamData)
+    /// Transient tool stream end marker.
+    case workflowToolStreamEnd(turnID: String?, workflowID: String, nodeName: String)
 }
 
 // MARK: - WireFrame → AgentEvent conversion
@@ -245,6 +275,175 @@ extension AgentEvent {
                 )
             }
             return .todoUpdated(turnID: turnID, todos: items)
+
+        // ── Workflow events (v1.3) ──
+
+        case "workflow_started":
+            let wfID = wire.workflow?.workflowId ?? wire.sessionId ?? ""
+            return .workflowStarted(
+                turnID: turnID,
+                callID: callID ?? "",
+                workflowID: wfID
+            )
+
+        case "workflow_plan_ready":
+            guard let wf = wire.workflow else { return nil }
+            let planNodes = (wf.nodes?.values ?? []).map { wn in
+                WorkflowPlanNode(
+                    name: wn.name ?? "?",
+                    type: wn.type ?? "tool",
+                    toolName: wn.config?["tool"].stringValue
+                )
+            }
+            let wfEdges = (wf.edges ?? []).map { we in
+                WorkflowEdge(from: we.from ?? "?", to: we.to ?? "?", type: we.type ?? "normal")
+            }
+            return .workflowPlanReady(
+                turnID: turnID,
+                callID: callID ?? "",
+                workflow: WorkflowPlanReadyData(
+                    workflowID: wf.workflowId ?? "",
+                    parentCallID: wf.parentCallId ?? callID ?? "",
+                    goal: wf.goal,
+                    nodes: planNodes,
+                    edges: wfEdges
+                )
+            )
+
+        case "workflow_task_state_changed":
+            guard let wf = wire.workflow else { return nil }
+            return .workflowTaskStateChanged(
+                turnID: turnID,
+                workflow: WorkflowTaskStateChange(
+                    workflowID: wf.workflowId ?? "",
+                    taskID: wf.taskId,
+                    from: wf.from,
+                    to: wf.to ?? wf.status ?? "unknown",
+                    sequence: wf.sequence ?? 0
+                )
+            )
+
+        case "workflow_node_state_changed":
+            guard let wf = wire.workflow else { return nil }
+            return .workflowNodeStateChanged(
+                turnID: turnID,
+                workflow: WorkflowNodeStateChange(
+                    workflowID: wf.workflowId ?? "",
+                    parentCallID: wf.parentCallId,
+                    taskID: wf.taskId,
+                    nodeName: wf.nodeName ?? "?",
+                    from: wf.from,
+                    to: wf.to ?? "unknown",
+                    terminal: wf.terminal ?? false,
+                    progress: wf.progress ?? 0,
+                    sequence: wf.sequence ?? 0,
+                    error: wf.error
+                )
+            )
+
+        case "workflow_suspended":
+            guard let wf = wire.workflow else { return nil }
+            return .workflowSuspended(
+                turnID: turnID,
+                workflow: WorkflowSuspendedData(
+                    workflowID: wf.workflowId ?? "",
+                    parentCallID: wf.parentCallId,
+                    taskID: wf.taskId,
+                    status: wf.status ?? "suspended",
+                    nodeName: wf.nodeName,
+                    reason: wf.reason,
+                    resumable: wf.resumable ?? true
+                )
+            )
+
+        case "workflow_finished":
+            guard let wf = wire.workflow else { return nil }
+            return .workflowFinished(
+                turnID: turnID,
+                workflow: WorkflowFinishedData(
+                    workflowID: wf.workflowId ?? "",
+                    taskID: wf.taskId,
+                    status: wf.status ?? "success",
+                    output: wf.output
+                )
+            )
+
+        case "workflow_failed":
+            guard let wf = wire.workflow else { return nil }
+            return .workflowFailed(
+                turnID: turnID,
+                workflow: WorkflowFailedData(
+                    workflowID: wf.workflowId ?? "",
+                    taskID: wf.taskId,
+                    status: wf.status ?? "failed",
+                    error: wf.error
+                )
+            )
+
+        // ── Workflow transient events ──
+
+        case "workflow_node_progress":
+            guard let wf = wire.workflow else { return nil }
+            return .workflowNodeProgress(
+                turnID: turnID,
+                workflow: WorkflowProgressData(
+                    workflowID: wf.workflowId ?? "",
+                    nodeName: wf.nodeName,
+                    progress: wf.progress ?? 0
+                )
+            )
+
+        case "workflow_task_progress":
+            guard let wf = wire.workflow else { return nil }
+            return .workflowTaskProgress(
+                turnID: turnID,
+                workflow: WorkflowProgressData(
+                    workflowID: wf.workflowId ?? "",
+                    nodeName: wf.nodeName,
+                    progress: wf.progress ?? 0
+                )
+            )
+
+        case "workflow_tool_progress":
+            guard let wf = wire.workflow else { return nil }
+            return .workflowToolProgress(
+                turnID: turnID,
+                workflow: WorkflowProgressData(
+                    workflowID: wf.workflowId ?? "",
+                    nodeName: wf.nodeName,
+                    progress: wf.progress ?? 0
+                )
+            )
+
+        case "workflow_tool_log":
+            guard let wf = wire.workflow else { return nil }
+            return .workflowToolLog(
+                turnID: turnID,
+                workflow: WorkflowToolStreamData(
+                    workflowID: wf.workflowId ?? "",
+                    nodeName: wf.nodeName ?? "?",
+                    chunk: wire.chunk ?? ""
+                )
+            )
+
+        case "workflow_tool_stream":
+            guard let wf = wire.workflow else { return nil }
+            return .workflowToolStream(
+                turnID: turnID,
+                workflow: WorkflowToolStreamData(
+                    workflowID: wf.workflowId ?? "",
+                    nodeName: wf.nodeName ?? "?",
+                    chunk: wire.chunk ?? ""
+                )
+            )
+
+        case "workflow_tool_stream_end":
+            guard let wf = wire.workflow else { return nil }
+            return .workflowToolStreamEnd(
+                turnID: turnID,
+                workflowID: wf.workflowId ?? "",
+                nodeName: wf.nodeName ?? "?"
+            )
 
         case "plan_proposed":
             return .planProposed(

@@ -572,6 +572,27 @@ enum ConversationWebDocumentBuilder {
                 inlineActions: [],
                 codeCopyActionIDs: []
             )
+
+        case .workflow(let id, let payload):
+            return .init(
+                id: id,
+                kind: .childStream,  // reuse childStream web rendering for now
+                text: nil,
+                title: payload.goal ?? payload.workflowID,
+                status: payload.statusLabel,
+                elapsed: nil,
+                tools: [],
+                childStreamKind: "workflow",
+                actionID: registerAction.map {
+                    $0(.transcript(
+                        turnID: turn.id,
+                        action: .openWorkflow(workflowID: payload.workflowID)
+                    ))
+                },
+                actionTooltip: payload.workflowID,
+                inlineActions: [],
+                codeCopyActionIDs: []
+            )
         }
     }
 

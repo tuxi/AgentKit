@@ -17,7 +17,7 @@ let package = Package(
         ),
     ],
     dependencies: [
-        .package(url: "https://github.com/tuxi/ClientToolProtocol", from: "0.1.0"),
+        .package(path: "../ClientToolProtocol"),
         .package(url: "https://github.com/swiftlang/swift-markdown", branch: "main"),
     ],
     targets: [

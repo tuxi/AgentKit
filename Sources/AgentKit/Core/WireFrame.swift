@@ -81,6 +81,9 @@ struct WireFrame: Decodable {
     // ask_user 请求的嵌套 question 对象
     let question: WireAskUserQuestion?
 
+    // v1.3: workflow 嵌套对象（workflow_* 事件）
+    let workflow: WireWorkflow?
+
     enum CodingKeys: String, CodingKey {
         case type, kind, at, step, id, server, seq
         case text, observation, output, assets, failure, err, error, ratio, todos, chunk
@@ -119,6 +122,7 @@ struct WireFrame: Decodable {
         case planPath = "plan_path"
         case filePath = "file_path"
         case question
+        case workflow
     }
 }
 
@@ -141,6 +145,102 @@ struct WireTodo: Decodable {
         case content, status
         case activeForm = "active_form"
     }
+}
+
+// MARK: - Wire workflow (v1.3)
+
+/// 兼容两种 JSON 格式：数组 `[{name:...}]` 和字典 `{"nodeName": {...}}`。
+enum WireWorkflowNodes: Decodable {
+    case array([WireWorkflowNode])
+    case dictionary([WireWorkflowNode])
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.singleValueContainer()
+        if let arr = try? container.decode([WireWorkflowNode].self) {
+            self = .array(arr)
+        } else if let dict = try? container.decode([String: WireWorkflowNode].self) {
+            // 字典格式：key 为 node name，注入到 node 的 name 字段（如果 name 为空）。
+            let nodes: [WireWorkflowNode] = dict.map { entry in
+                var node = entry.value
+                if node.name?.isEmpty ?? true {
+                    node.name = entry.key
+                }
+                return node
+            }
+            self = .dictionary(nodes)
+        } else {
+            throw DecodingError.typeMismatch(
+                [WireWorkflowNode].self,
+                DecodingError.Context(
+                    codingPath: decoder.codingPath,
+                    debugDescription: "Expected array or dictionary of workflow nodes"
+                )
+            )
+        }
+    }
+
+    var values: [WireWorkflowNode] {
+        switch self {
+        case .array(let arr): return arr
+        case .dictionary(let dict): return dict
+        }
+    }
+}
+
+/// `workflow` 嵌套对象，所有字段可选。
+/// 不同 workflow 事件类型携带不同子集，解码时统一收进这一个 struct。
+struct WireWorkflow: Decodable {
+    let workflowId: String?
+    let parentCallId: String?
+    let taskId: Int64?
+    let rootTaskId: Int64?
+    let stage: String?
+    let goal: String?
+    let status: String?
+    let terminal: Bool?
+    let nodeRuntimeId: Int64?
+    let nodeName: String?
+    let from: String?
+    let to: String?
+    let progress: Double?
+    let sequence: Int64?
+    let reason: String?
+    let resumable: Bool?
+    let nodes: WireWorkflowNodes?
+    let edges: [WireWorkflowEdge]?
+    let output: JSONValue?
+    let error: String?
+
+    enum CodingKeys: String, CodingKey {
+        case stage, goal, status, terminal, progress, sequence
+        case reason, resumable, nodes, edges, output, error
+        case from, to
+        case workflowId = "workflow_id"
+        case parentCallId = "parent_call_id"
+        case taskId = "task_id"
+        case rootTaskId = "root_task_id"
+        case nodeRuntimeId = "node_runtime_id"
+        case nodeName = "node_name"
+    }
+    
+}
+
+struct WireWorkflowNode: Decodable {
+    var name: String?
+    var type: String?
+    var config: JSONValue?   // 任意工具配置
+    var dependsOn: [String]?
+
+    enum CodingKeys: String, CodingKey {
+        case name, type, config
+        case dependsOn = "depends_on"
+    }
+}
+
+struct WireWorkflowEdge: Decodable {
+    let from: String?
+    let to: String?
+    let type: String?
 }
 
 // MARK: - Outgoing message encodable structs

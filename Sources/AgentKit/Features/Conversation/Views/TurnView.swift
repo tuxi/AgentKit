@@ -210,6 +210,12 @@ struct TurnView: View, Equatable {
                 title: payload.title
             )))
 
+        case .openWorkflow(let workflowID):
+            let title = workflowPayload(workflowID: workflowID)?.goal
+            store.showInspector(.workflowDAG(WorkflowDAGSelection(
+                workflowID: workflowID, title: title
+            )))
+
         case .copyBlock(let text):
             Clipboard.copy(text)
         }
@@ -218,6 +224,15 @@ struct TurnView: View, Equatable {
     private func childStreamPayload(childID: String) -> ChildStreamNodePayload? {
         for block in turn.blocks {
             if case .childStream(_, let payload) = block, payload.childID == childID {
+                return payload
+            }
+        }
+        return nil
+    }
+
+    private func workflowPayload(workflowID: String) -> WorkflowNodePayload? {
+        for block in turn.blocks {
+            if case .workflow(_, let payload) = block, payload.workflowID == workflowID {
                 return payload
             }
         }

@@ -71,6 +71,9 @@ public struct PresentationResolver: Sendable {
             return .compact
         case .plan(let plan):
             return plan.status == .pending ? .full : .compact
+        case .workflow(let payload):
+            // 入口卡：running/suspended 全量，结束后折叠。
+            return (payload.status == .running || payload.status == .suspended) ? .full : .compact
         case .system(let payload):
             switch payload.kind {
             case .observation:

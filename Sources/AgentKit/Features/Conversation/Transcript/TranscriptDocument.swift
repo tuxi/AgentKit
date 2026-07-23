@@ -28,6 +28,7 @@ enum TranscriptAction: Hashable {
     case openURL(String)
     case openPath(String)
     case openChildStream(childID: String)
+    case openWorkflow(workflowID: String)
     case copyBlock(text: String)
 }
 
@@ -115,6 +116,10 @@ enum TurnTranscriptBuilder {
                     payload,
                     action: .openChildStream(childID: payload.childID)
                 )
+                previousRenderedBlockWasFailedTool = payload.status == .failed
+
+            case .workflow(let id, let payload):
+                builder.appendWorkflowRow(id: id, payload: payload)
                 previousRenderedBlockWasFailedTool = payload.status == .failed
             }
             renderedBlockCount += 1
@@ -555,6 +560,52 @@ private struct TranscriptAttributedBuilder {
             append("\n", attributes: metaAttributes)
             appendLinked("  \(resultLine)", id: id, attributes: metaAttributes)
             copyParts.append(resultLine)
+        }
+    }
+
+    /// v1.3 — Workflow DAG 入口卡行：图标 + Workflow: goal + 状态，整行可点。
+    mutating func appendWorkflowRow(id: String, payload: WorkflowNodePayload) {
+        let action = TranscriptAction.openWorkflow(workflowID: payload.workflowID)
+        let actionID = register(action)
+        let tone: ToolTranscriptStatusTone = {
+            switch payload.status {
+            case .running, .suspended: return .running
+            case .failed: return .failed
+            case .success, .canceled: return .completed
+            default: return .completed
+            }
+        }()
+
+        let goal = singleLineSummary(payload.goal ?? payload.workflowID, limit: 60)
+        let statusText: String? = {
+            switch payload.status {
+            case .pending: return "pending"
+            case .running: return "running"
+            case .suspended: return "suspended"
+            case .failed: return "failed"
+            case .canceled: return "canceled"
+            case .success: return "done"
+            case .unknown(let v): return v
+            }
+        }()
+
+        appendLinked(toolIcon(for: .workflow, tone: tone), id: actionID,
+                     attributes: toolIconAttributes(for: .workflow, tone: tone))
+        appendLinked(" Workflow", id: actionID, attributes: toolTitleAttributes(for: tone, nested: false))
+        if !goal.isEmpty {
+            appendLinked("  \(goal)", id: actionID, attributes: toolDetailAttributes)
+        }
+        if let statusText {
+            appendLinked("  \(statusText)", id: actionID, attributes: toolStatusTextAttributes(for: tone))
+        }
+        appendLinked(" ›", id: actionID, attributes: toolChevronAttributes)
+        copyParts.append("Workflow: \(goal)")
+
+        if let error = payload.error?.trimmingCharacters(in: .whitespacesAndNewlines), !error.isEmpty {
+            let errLine = singleLineSummary(error, limit: 120)
+            append("\n", attributes: metaAttributes)
+            appendLinked("  \(errLine)", id: actionID, attributes: metaAttributes)
+            copyParts.append(errLine)
         }
     }
 

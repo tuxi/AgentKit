@@ -75,6 +75,8 @@ public final class WorkspaceStore {
 
     /// Documents 下的项目目录（供草稿选择 / 新建）。
     public let projects: ProjectsStore
+    /// v1.3 — Workflow DAG 状态中心。所有 workflow_* 事件汇聚于此。
+    public let workflowStore = WorkflowStore()
 
     /// 是否正在准备草稿的工作区（clone / import 进行中）。
     /// 此间 workspace 尚未就绪 → UI 应禁止再选目录、禁止发消息。
@@ -210,7 +212,8 @@ public final class WorkspaceStore {
             onAuthExpired: onAuthExpired,
             localStateStore: localStateStore,
             attentionReadStore: resolvedAttentionStore,
-            onAttentionEvent: onAttentionEvent
+            onAttentionEvent: onAttentionEvent,
+            workflowStore: workflowStore
         )
     }
 

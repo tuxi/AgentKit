@@ -7,10 +7,26 @@
 
 import SwiftUI
 
+// MARK: - WorkflowStore environment key
+
+public struct WorkflowStoreEnvironmentKey: EnvironmentKey {
+    public static let defaultValue: WorkflowStore? = nil
+}
+
+public extension EnvironmentValues {
+    var workflowStore: WorkflowStore? {
+        get { self[WorkflowStoreEnvironmentKey.self] }
+        set { self[WorkflowStoreEnvironmentKey.self] = newValue }
+    }
+}
+
+// MARK: - InspectorView
+
 public struct InspectorView: View {
 
     public let selection: InspectorSelection?
-    
+    @Environment(\.workflowStore) private var workflowStore
+
     public init(selection: InspectorSelection?) {
         self.selection = selection
     }
@@ -61,6 +77,19 @@ public struct InspectorView: View {
             case .childStream(let selection):
 
                 ChildStreamInspectorView(selection: selection)
+
+            case .workflowDAG(let selection):
+                if let store = workflowStore {
+                    WorkflowDAGDetailView(
+                        store: store,
+                        workflowID: selection.workflowID
+                    )
+                } else {
+                    ContentUnavailableView(
+                        "Workflow Store Unavailable",
+                        systemImage: "flowchart"
+                    )
+                }
 
             case .timelineDocument(let document):
 

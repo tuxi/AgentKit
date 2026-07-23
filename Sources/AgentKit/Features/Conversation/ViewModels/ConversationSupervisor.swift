@@ -66,6 +66,7 @@ public final class ConversationSupervisor {
     private let onAttentionEvent: (@MainActor (ConversationAttentionEvent) -> Void)?
     private let turnCoordinator = ConversationTurnCoordinator()
     private let capabilityRegistry = RuntimeCapabilityRegistry()
+    private let workflowStore: WorkflowStore?
     private var selectedSessionID: String?
     private var knownConversations: [String: ConversationRef] = [:]
     private var isRefreshingActivity = false
@@ -86,7 +87,8 @@ public final class ConversationSupervisor {
         onAuthExpired: (@MainActor () async -> Void)?,
         localStateStore: any ConversationLocalStateStore = SQLiteConversationLocalStateStore.shared,
         attentionReadStore: any ConversationAttentionReadStore = ConversationLocalStateAttentionReadStore.shared,
-        onAttentionEvent: (@MainActor (ConversationAttentionEvent) -> Void)? = nil
+        onAttentionEvent: (@MainActor (ConversationAttentionEvent) -> Void)? = nil,
+        workflowStore: WorkflowStore? = nil
     ) {
         self.client = client
         self.toolRegistry = toolRegistry
@@ -95,6 +97,7 @@ public final class ConversationSupervisor {
         self.localStateStore = localStateStore
         self.attentionReadStore = attentionReadStore
         self.onAttentionEvent = onAttentionEvent
+        self.workflowStore = workflowStore
     }
 
     @discardableResult
@@ -120,7 +123,8 @@ public final class ConversationSupervisor {
             onAuthExpired: onAuthExpired,
             onActivityInvalidated: { [weak self] in
                 self?.scheduleActivityRefresh()
-            }
+            },
+            workflowStore: workflowStore
         )
         controllers[conversation.id] = controller
         touchController(sessionID: conversation.id)

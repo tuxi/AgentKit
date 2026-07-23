@@ -91,6 +91,13 @@ struct AgentResponseView: View {
 
         case .childStream(_, let payload):
             ChildStreamCardView(payload: payload, onAction: onAction)
+
+        case .workflow(let id, let payload):
+            WorkflowCardView(
+                id: id,
+                payload: payload,
+                onAction: onAction
+            )
         }
     }
 }

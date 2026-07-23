@@ -44,6 +44,7 @@ public enum ExecutionNodeKind: Sendable, Equatable {
     case childStream(ChildStreamNodePayload)
     case todo([TodoItem])
     case plan(TurnPlan)
+    case workflow(WorkflowNodePayload)
 }
 
 // MARK: - Payloads
@@ -204,4 +205,45 @@ public enum ChildStreamNodeStatus: String, Sendable, Hashable {
     case failed
     /// job 被主动取消（P8.7 §8.5 `text=="canceled"`）— 样式上区别于失败。
     case canceled
+}
+
+/// Workflow DAG 入口卡（v1.3 Flux DAG）— 父时间线中的卡片，
+/// 点击展开 DAG 详情视图。完整 DAG 状态由 `WorkflowStore` 管理。
+public struct WorkflowNodePayload: Sendable, Hashable {
+    /// Stable workflow identity — 关联 `WorkflowStore`。
+    public let workflowID: String
+    /// 发起 `plan_workflow` 的工具调用 id（合并去重键）。
+    public let originCallID: String?
+    /// DAG 目标描述。
+    public let goal: String?
+    /// 整体 task 状态。
+    public let status: WorkflowTaskStatus
+    /// 节点数量。
+    public let nodeCount: Int
+    /// 失败时的错误信息。
+    public let error: String?
+
+    public init(workflowID: String, originCallID: String? = nil,
+                goal: String? = nil, status: WorkflowTaskStatus = .pending,
+                nodeCount: Int = 0, error: String? = nil) {
+        self.workflowID = workflowID
+        self.originCallID = originCallID
+        self.goal = goal
+        self.status = status
+        self.nodeCount = nodeCount
+        self.error = error
+    }
+
+    /// 人读状态标签。
+    public var statusLabel: String {
+        switch status {
+        case .pending:   return "准备中"
+        case .running:   return "执行中"
+        case .suspended: return "已暂停"
+        case .success:   return "已完成"
+        case .failed:    return "失败"
+        case .canceled:  return "已取消"
+        case .unknown(let v): return v
+        }
+    }
 }

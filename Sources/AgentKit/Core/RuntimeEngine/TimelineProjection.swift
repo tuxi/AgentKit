@@ -101,8 +101,11 @@ public struct TimelineProjection: Sendable {
         // 委派不退化。前台 `run_command`（无 job）call_id 不在此集合里，卡片照常保留。
         let entryCardCallIDs: Set<String> = Set(
             nodes.compactMap { node -> String? in
-                guard case .childStream(let p) = node.kind else { return nil }
-                return p.originCallID
+                switch node.kind {
+                case .childStream(let p): return p.originCallID
+                case .workflow(let p):   return p.originCallID
+                default:                 return nil
+                }
             }
         )
 
@@ -150,6 +153,10 @@ public struct TimelineProjection: Sendable {
                 // 子流入口卡：内嵌在 turn card 中的折叠卡片（Claude Code 式）。
                 flushTools()
                 blocks.append(.childStream(id: node.id, p))
+            case .workflow(let p):
+                // Workflow DAG 入口卡（v1.3）。
+                flushTools()
+                blocks.append(.workflow(id: node.id, p))
             case .todo(let items):
                 // A checklist is the state summary for its owning turn. Keep
                 // only the latest revision and render it at that turn's bottom.
@@ -353,6 +360,16 @@ public struct TimelineProjection: Sendable {
                 title: payload.title,
                 content: payload.content,
                 status: payload.status
+            ))
+
+        case .workflow(let payload):
+            kind = .workflow(WorkflowNodePayload(
+                workflowID: payload.workflowID,
+                originCallID: payload.originCallID,
+                goal: payload.goal,
+                status: payload.status,
+                nodeCount: payload.nodeCount,
+                error: payload.error
             ))
         }
 

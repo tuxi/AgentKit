@@ -170,6 +170,7 @@ public enum GraphNodeKind: String, Sendable, CaseIterable {
     case approval
     case todo
     case plan
+    case workflow
 }
 
 // MARK: - NodePayload
@@ -187,6 +188,7 @@ public enum NodePayload: Sendable {
     case approval(ApprovalExecPayload)
     case todo([TodoItem])
     case plan(PlanExecPayload)
+    case workflow(WorkflowEntryPayload)
 }
 
 public struct UserInputPayload: Sendable {
@@ -322,6 +324,40 @@ public struct ApprovalExecPayload: Sendable {
         self.args = args
         self.resolved = resolved
         self.approved = approved
+    }
+}
+
+// MARK: - Workflow entry payload（v1.3 Flux DAG timeline 入口卡片）──
+
+/// Timeline 中 workflow 入口卡片的轻量数据。完整 DAG 状态由 `WorkflowStore` 管理。
+public struct WorkflowEntryPayload: Sendable {
+    /// Stable workflow identity — 用于关联 WorkflowStore 中的完整 DAG 状态。
+    public let workflowID: String
+    /// 发起 `plan_workflow` 的工具调用 id（与工具卡共享，用于合并去重）。
+    public let originCallID: String?
+    /// DAG 目标描述（来自 `workflow_plan_ready.goal`）。
+    public var goal: String?
+    /// 整体 task 状态。
+    public var status: WorkflowTaskStatus
+    /// 节点数量。
+    public var nodeCount: Int
+    /// 失败时的错误信息。
+    public var error: String?
+
+    public init(
+        workflowID: String,
+        originCallID: String? = nil,
+        goal: String? = nil,
+        status: WorkflowTaskStatus = .pending,
+        nodeCount: Int = 0,
+        error: String? = nil
+    ) {
+        self.workflowID = workflowID
+        self.originCallID = originCallID
+        self.goal = goal
+        self.status = status
+        self.nodeCount = nodeCount
+        self.error = error
     }
 }
 

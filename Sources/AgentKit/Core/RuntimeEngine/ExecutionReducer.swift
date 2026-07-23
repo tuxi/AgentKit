@@ -224,6 +224,46 @@ public struct ExecutionReducer: Sendable {
         // ── ask_user ── (UI-only: no execution graph node)
         case .askUserRequest:
             return []
+
+        // ── Workflow (v1.3) ── Timeline 入口卡片（完整 DAG 状态由 WorkflowStore 管理）
+        case .workflowStarted(let turnID, let callID, let workflowID):
+            return handleWorkflowStarted(
+                turnID: turnID ?? internalState.currentTurnID ?? "",
+                callID: callID, workflowID: workflowID,
+                ts: ts, graph: &graph
+            )
+
+        case .workflowPlanReady(let turnID, let callID, let workflow):
+            return handleWorkflowPlanReady(
+                turnID: turnID ?? internalState.currentTurnID ?? "",
+                callID: callID, data: workflow,
+                ts: ts, graph: &graph
+            )
+
+        case .workflowTaskStateChanged(let turnID, let wf):
+            return handleWorkflowTaskStateChanged(
+                turnID: turnID ?? internalState.currentTurnID ?? "",
+                data: wf, ts: ts, graph: &graph
+            )
+
+        case .workflowFinished(let turnID, let wf):
+            return handleWorkflowFinished(
+                turnID: turnID ?? internalState.currentTurnID ?? "",
+                data: wf, ts: ts, graph: &graph
+            )
+
+        case .workflowFailed(let turnID, let wf):
+            return handleWorkflowFailed(
+                turnID: turnID ?? internalState.currentTurnID ?? "",
+                data: wf, ts: ts, graph: &graph
+            )
+
+        case .workflowNodeStateChanged, .workflowSuspended,
+             .workflowNodeProgress, .workflowTaskProgress,
+             .workflowToolProgress, .workflowToolLog,
+             .workflowToolStream, .workflowToolStreamEnd:
+            // DAG 细节状态由 WorkflowStore 管理，timeline 卡片不需要更新
+            return []
         }
     }
 
@@ -984,6 +1024,123 @@ public struct ExecutionReducer: Sendable {
         let node = GraphNode(id: nodeID, kind: .approval, payload: .approval(payload),
                              status: .running, timestamp: ts, turnID: turnID)
         appendNode(node, to: &graph)
+        return [nodeID]
+    }
+
+    // MARK: - Workflow handlers (v1.3)
+
+    /// `workflow_started` → 在 timeline 中创建入口卡片节点。
+    private mutating func handleWorkflowStarted(
+        turnID: String, callID: String, workflowID: String,
+        ts: TimeInterval, graph: inout ExecutionGraph
+    ) -> [NodeID] {
+        let nodeID = "wf_\(workflowID)"
+        // 幂等：重复 started 不创建第二个节点
+        guard graph.nodes[nodeID] == nil else { return [nodeID] }
+
+        let payload = WorkflowEntryPayload(
+            workflowID: workflowID,
+            originCallID: callID,
+            status: .pending
+        )
+        let node = GraphNode(
+            id: nodeID, kind: .workflow,
+            payload: .workflow(payload),
+            status: .running, timestamp: ts, turnID: turnID
+        )
+        appendNode(node, to: &graph)
+        return [nodeID]
+    }
+
+    /// `workflow_plan_ready` → 更新入口卡片的目标和节点数。
+    private mutating func handleWorkflowPlanReady(
+        turnID: String, callID: String, data: WorkflowPlanReadyData,
+        ts: TimeInterval, graph: inout ExecutionGraph
+    ) -> [NodeID] {
+        let nodeID = "wf_\(data.workflowID)"
+        // 如果 started 尚未到达（replay 乱序），先创建节点
+        if graph.nodes[nodeID] == nil {
+            let payload = WorkflowEntryPayload(
+                workflowID: data.workflowID,
+                originCallID: callID,
+                goal: data.goal,
+                nodeCount: data.nodes.count
+            )
+            let node = GraphNode(
+                id: nodeID, kind: .workflow,
+                payload: .workflow(payload),
+                status: .running, timestamp: ts, turnID: turnID
+            )
+            appendNode(node, to: &graph)
+            return [nodeID]
+        }
+
+        graph.updateNode(nodeID) { node in
+            guard case .workflow(var payload) = node.payload else { return }
+            payload.goal = data.goal
+            payload.nodeCount = data.nodes.count
+            node.payload = .workflow(payload)
+            node.timestamp = ts
+        }
+        return [nodeID]
+    }
+
+    /// Task 状态更新 → 同步到 timeline 卡片。
+    private mutating func handleWorkflowTaskStateChanged(
+        turnID: String, data: WorkflowTaskStateChange,
+        ts: TimeInterval, graph: inout ExecutionGraph
+    ) -> [NodeID] {
+        let nodeID = "wf_\(data.workflowID)"
+        guard graph.nodes[nodeID] != nil else { return [] }
+
+        let newStatus = WorkflowTaskStatus(rawValue: data.to)
+        graph.updateNode(nodeID) { node in
+            guard case .workflow(var payload) = node.payload else { return }
+            payload.status = newStatus
+            node.payload = .workflow(payload)
+            node.timestamp = ts
+            // suspended 不是终态，节点保持 .running
+            if newStatus.isTerminal {
+                node.status = newStatus == .failed ? .failed : .completed
+            }
+        }
+        return [nodeID]
+    }
+
+    /// Workflow 成功结束。
+    private mutating func handleWorkflowFinished(
+        turnID: String, data: WorkflowFinishedData,
+        ts: TimeInterval, graph: inout ExecutionGraph
+    ) -> [NodeID] {
+        let nodeID = "wf_\(data.workflowID)"
+        guard graph.nodes[nodeID] != nil else { return [] }
+
+        graph.updateNode(nodeID) { node in
+            guard case .workflow(var payload) = node.payload else { return }
+            payload.status = .success
+            node.payload = .workflow(payload)
+            node.status = .completed
+            node.timestamp = ts
+        }
+        return [nodeID]
+    }
+
+    /// Workflow 失败。
+    private mutating func handleWorkflowFailed(
+        turnID: String, data: WorkflowFailedData,
+        ts: TimeInterval, graph: inout ExecutionGraph
+    ) -> [NodeID] {
+        let nodeID = "wf_\(data.workflowID)"
+        guard graph.nodes[nodeID] != nil else { return [] }
+
+        graph.updateNode(nodeID) { node in
+            guard case .workflow(var payload) = node.payload else { return }
+            payload.status = .failed
+            payload.error = data.error
+            node.payload = .workflow(payload)
+            node.status = .failed
+            node.timestamp = ts
+        }
         return [nodeID]
     }
 
