@@ -114,7 +114,11 @@ final class ConversationLocalStateTests: XCTestCase {
         defaults.set(["session-a": "model-a"], forKey: "code_agent.model.used_models")
         let store = InMemoryConversationLocalStateStore()
 
-        let settings = ModelSettingsStore(defaults: defaults, localStateStore: store)
+        let settings = ModelSettingsStore(
+            defaults: defaults,
+            service: StubGatewayService(),
+            localStateStore: store
+        )
         XCTAssertEqual(settings.lastSelectedModel, "model-last")
         XCTAssertEqual(settings.getModel(with: "session-a"), "model-a")
         XCTAssertNil(defaults.dictionary(forKey: "code_agent.model.used_models"))
@@ -126,20 +130,26 @@ final class ConversationLocalStateTests: XCTestCase {
     }
 
     @MainActor
-    func testConversationModelChoicesAreIndependentAndMissingChoiceUsesGatewayDefault() throws {
+    func testConversationModelChoicesAreIndependentAndMissingChoiceUsesGatewayDefault() async throws {
         let suite = "ConversationLocalStateTests.\(UUID().uuidString)"
         let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
         defer { defaults.removePersistentDomain(forName: suite) }
         let localState = InMemoryConversationLocalStateStore()
-        let settings = ModelSettingsStore(defaults: defaults, localStateStore: localState)
-        settings.setAvailableModels(
-            [
-                model("model-default", "Default"),
-                model("model-1", "One"),
-                model("model-2", "Two"),
-            ],
-            defaultModel: "model-default"
+        let availableModels = [
+            model("model-default", "Default"),
+            model("model-1", "One"),
+            model("model-2", "Two"),
+        ]
+        let service = StubGatewayService(
+            response: ModelsResponse(models: availableModels, defaultModel: "model-default")
         )
+        let settings = ModelSettingsStore(
+            defaults: defaults,
+            service: service,
+            localStateStore: localState
+        )
+        await settings.refreshModels()
+        await waitForModels(settings)
 
         settings.didUseModel("model-1", conversation: "conversation-a")
 
@@ -149,10 +159,15 @@ final class ConversationLocalStateTests: XCTestCase {
         settings.didUseModel("model-2", conversation: "conversation-b")
         XCTAssertEqual(settings.getModel(with: "conversation-a"), "model-1")
         XCTAssertEqual(settings.getModel(with: "conversation-b"), "model-2")
-        XCTAssertEqual(settings.getModel(with: nil), "model-2", "new drafts may use the app-wide recent model")
+        XCTAssertEqual(settings.getModel(with: nil), "model-default", "new drafts use the Gateway default")
 
-        let reopened = ModelSettingsStore(defaults: defaults, localStateStore: localState)
-        reopened.setAvailableModels(settings.gatewayModels ?? [], defaultModel: "model-default")
+        let reopened = ModelSettingsStore(
+            defaults: defaults,
+            service: service,
+            localStateStore: localState
+        )
+        await reopened.refreshModels()
+        await waitForModels(reopened)
         XCTAssertEqual(reopened.getModel(with: "conversation-a"), "model-1")
         XCTAssertEqual(reopened.getModel(with: "conversation-b"), "model-2")
     }
@@ -174,5 +189,25 @@ final class ConversationLocalStateTests: XCTestCase {
             category: nil,
             available: true
         )
+    }
+
+    @MainActor
+    private func waitForModels(_ settings: ModelSettingsStore) async {
+        for _ in 0..<100 {
+            if settings.isModelListLoaded { return }
+            try? await Task.sleep(nanoseconds: 1_000_000)
+        }
+    }
+}
+
+private struct StubGatewayService: GatewayService {
+    let response: ModelsResponse
+
+    init(response: ModelsResponse = ModelsResponse(models: [], defaultModel: "")) {
+        self.response = response
+    }
+
+    func refreshModels() async throws -> ModelsResponse {
+        response
     }
 }

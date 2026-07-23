@@ -549,17 +549,32 @@ public final class WorkspaceStore {
 
     /// 点击「+」：不调用任何 API，仅创建本地草稿。预选最近使用的工作区。
     public func beginDraft() {
-        selectedConversation = nil          // only clears presentation selection
-        projects.reload()                   // 项目目录可能被「文件」App 改动，开草稿时刷新
+        selectedConversation = nil
+        projects.reload()
+
         if draft == nil {
             if let recovered = try? localStateStore.latestDraft() {
-                draft = makeSessionDraft(from: recovered)
+                let restoredDraft = makeSessionDraft(from: recovered)
+                draft = restoredDraft
+
+                let oldPath = recovered.state.composerDraft.workspacePath
+                let newPath = restoredDraft.workspace?.url.path
+
+                // 只在成功恢复且路径确实发生变化时写回。
+                if let oldPath,
+                   let newPath,
+                   !oldPath.isEmpty,
+                   oldPath != newPath {
+                    persistDraftMetadata()
+                }
             } else {
                 draft = SessionDraft(workspace: recentWorkspaces.mostRecent)
                 persistDraftMetadata()
             }
         }
+
         draftNavigationRevision += 1
+
         if runtimeCapabilityDiscoveryState != .available {
             Task { await refreshRuntimeState() }
         }
@@ -744,8 +759,16 @@ public final class WorkspaceStore {
         let composer = recovered.state.composerDraft
         let workspace = composer.workspacePath.flatMap { path -> Workspace? in
             guard !path.isEmpty else { return nil }
+            let newPath = path.resolvingCurrentSandboxPath
+            var isDirectory: ObjCBool = false
+            guard FileManager.default.fileExists(
+                atPath: newPath,
+                isDirectory: &isDirectory
+            ), isDirectory.boolValue else {
+                return nil
+            }
             return Workspace(
-                url: URL(fileURLWithPath: path),
+                url: URL(fileURLWithPath: newPath),
                 branch: composer.workspaceBranch
             )
         }

@@ -196,6 +196,15 @@ public struct ConversationDetailView: View {
             residentTimelines(activeViewModel: vm)
         }
         .background(.bar)
+        #if os(iOS)
+        .background {
+            ClientToolPresentationHost(
+                presentationCoordinator: vm.clientToolPresentationCoordinator
+            )
+            .frame(width: 0, height: 0)
+            .accessibilityHidden(true)
+        }
+        #endif
         #if os(macOS)
         .padding(.horizontal, 20)
         #endif

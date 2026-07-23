@@ -32,7 +32,7 @@ public struct AgentEventBatch: Sendable {
 /// `open` 产出事件直到子流结束（回放到尾 / 收到 `job_finished`）或调用方取消迭代。
 /// 实现内部决定轮询补齐 / WS 实时 / fixture 回放。
 public protocol ChildStreamTransport: Sendable {
-    func open(childID: String) -> AsyncStream<AgentEvent>
+    func open(childID: String) -> AsyncThrowingStream<AgentEvent, Error>
 }
 
 // MARK: - ConversationReplayChildStreamTransport（subagent，回放-only）
@@ -40,44 +40,66 @@ public protocol ChildStreamTransport: Sendable {
 /// subagent 子流：同步执行，拿到 `task_finished` 时它已结束——没有实时可接的尾巴。
 /// 打开时翻页拉 `GET /v1/conversations/{child}/events` 到尾即完成。
 public struct ConversationReplayChildStreamTransport: ChildStreamTransport {
-    private let client: RuntimeClient
+    private let fetchBatch: @Sendable (String, Int) async throws -> AgentEventBatch
     /// backlog 尚未落库时的空批重试预算（subagent bracket 与子流持久化之间的窗口）。
     private let emptyRetryBudget: Int
     private let retryDelayNs: UInt64
 
     public init(client: RuntimeClient, emptyRetryBudget: Int = 3,
                 retryDelayNs: UInt64 = 400_000_000) {
-        self.client = client
+        self.fetchBatch = { childID, since in
+            try await client.getEventBatch(conversationID: childID, since: since)
+        }
         self.emptyRetryBudget = emptyRetryBudget
         self.retryDelayNs = retryDelayNs
     }
 
-    public func open(childID: String) -> AsyncStream<AgentEvent> {
-        AsyncStream { continuation in
+    init(emptyRetryBudget: Int = 3, retryDelayNs: UInt64 = 400_000_000,
+         fetchBatch: @escaping @Sendable (String, Int) async throws -> AgentEventBatch) {
+        self.fetchBatch = fetchBatch
+        self.emptyRetryBudget = emptyRetryBudget
+        self.retryDelayNs = retryDelayNs
+    }
+
+    public func open(childID: String) -> AsyncThrowingStream<AgentEvent, Error> {
+        AsyncThrowingStream { continuation in
             let task = Task {
                 var since = 0
-                var received = false
-                var emptyRetries = 0
-                while !Task.isCancelled {
-                    let batch = (try? await client.getEventBatch(conversationID: childID, since: since))
-                        ?? AgentEventBatch(events: [], nextSince: since)
-                    for event in batch.events {
-                        received = true
-                        continuation.yield(event)
+                var idleRetries = 0
+                do {
+                    while !Task.isCancelled {
+                        let batch = try await fetchBatch(childID, since)
+                        var reachedTerminal = false
+                        for event in batch.events {
+                            continuation.yield(event)
+                            if case .taskFinished(_, let sessionID, _, _) = event,
+                               sessionID == childID {
+                                reachedTerminal = true
+                            }
+                        }
+                        if reachedTerminal { break }
+
+                        if batch.nextSince > since {
+                            since = batch.nextSince
+                            idleRetries = 0
+                            continue
+                        }
+
+                        // A non-empty batch is not proof that persistence has
+                        // reached the tail. Keep polling for the matching
+                        // task_finished envelope for a bounded quiet period.
+                        idleRetries += 1
+                        if idleRetries > emptyRetryBudget { break }
+                        try await Task.sleep(nanoseconds: retryDelayNs)
                     }
-                    // 游标前进 → 还有更多，继续翻页。
-                    if batch.nextSince > since {
-                        since = batch.nextSince
-                        continue
+                    if Task.isCancelled {
+                        continuation.finish(throwing: CancellationError())
+                    } else {
+                        continuation.finish()
                     }
-                    // 已收到过事件且到尾 → 回放完成。
-                    if received { break }
-                    // 一条都没收到：可能 backlog 还没落库，短暂重试几次后放弃。
-                    emptyRetries += 1
-                    if emptyRetries > emptyRetryBudget { break }
-                    try? await Task.sleep(nanoseconds: retryDelayNs)
+                } catch {
+                    continuation.finish(throwing: error)
                 }
-                continuation.finish()
             }
             continuation.onTermination = { _ in task.cancel() }
         }
@@ -95,8 +117,15 @@ public struct JobLiveChildStreamTransport: ChildStreamTransport {
         self.client = client
     }
 
-    public func open(childID: String) -> AsyncStream<AgentEvent> {
-        client.openJobStream(jobID: childID)
+    public func open(childID: String) -> AsyncThrowingStream<AgentEvent, Error> {
+        let inner = client.openJobStream(jobID: childID)
+        return AsyncThrowingStream { continuation in
+            let task = Task {
+                for await event in inner { continuation.yield(event) }
+                continuation.finish()
+            }
+            continuation.onTermination = { _ in task.cancel() }
+        }
     }
 }
 
@@ -112,8 +141,8 @@ public final class FixtureChildStreamTransport: ChildStreamTransport, @unchecked
         self.batchDelayNs = batchDelayNs
     }
 
-    public func open(childID: String) -> AsyncStream<AgentEvent> {
-        AsyncStream { continuation in
+    public func open(childID: String) -> AsyncThrowingStream<AgentEvent, Error> {
+        AsyncThrowingStream { continuation in
             let task = Task { [batches, batchDelayNs] in
                 for (index, batch) in batches.enumerated() {
                     if index > 0 { try? await Task.sleep(nanoseconds: batchDelayNs) }

@@ -613,7 +613,29 @@ public struct ExecutionReducer: Sendable {
         toolNode.payload = .toolCall(payload)
         toolNode.timestamp = ts
         graph.upsertNode(toolNode)
-        return [callID]
+
+        // `task` is synchronous: its ordinary tool terminal is a reliable
+        // fallback when an older backend omits the parent `task_finished`
+        // bracket. Reconcile by the shared call id so every renderer receives
+        // the same terminal child-stream payload.
+        let childNodeIDs = graph.nodes.compactMap { nodeID, node -> NodeID? in
+            guard node.status == .running,
+                  case .childStream(let child) = node.payload,
+                  child.kind == .task,
+                  child.originCallID == callID else { return nil }
+            return nodeID
+        }
+        for childNodeID in childNodeIDs {
+            graph.updateNode(childNodeID) { childNode in
+                guard case .childStream(var child) = childNode.payload else { return }
+                child.result = error.flatMap { $0.isEmpty ? nil : $0 }
+                    ?? observation.flatMap { $0.isEmpty ? nil : $0 }
+                childNode.payload = .childStream(child)
+                childNode.status = toolNode.status == .failed ? .failed : .completed
+                childNode.timestamp = ts
+            }
+        }
+        return [callID] + childNodeIDs
     }
 
     // MARK: - Observation handler (PREVIOUSLY IGNORED)
@@ -865,10 +887,21 @@ public struct ExecutionReducer: Sendable {
         let nodeID = "sub_\(childID)"
         // Replay can deliver a duplicate started — keep the existing node's identity.
         guard graph.nodes[nodeID] == nil else { return [nodeID] }
-        let payload = ChildStreamPayload(kind: kind, childID: childID, title: title,
-                                         originCallID: originCallID)
+        let pendingTerminal = internalState.pendingChildTerminals.removeValue(forKey: childID)
+            ?? taskToolTerminal(kind: kind, originCallID: originCallID, graph: graph)
+        let payload = ChildStreamPayload(
+            kind: kind,
+            childID: childID,
+            title: title,
+            originCallID: originCallID,
+            result: pendingTerminal?.result,
+            exitCode: pendingTerminal?.exitCode,
+            canceled: pendingTerminal?.canceled ?? false,
+            elapsedMs: pendingTerminal?.elapsedMs
+        )
         let node = GraphNode(id: nodeID, kind: .childStream, payload: .childStream(payload),
-                             status: .running, timestamp: ts, turnID: turnID)
+                             status: pendingTerminal?.nodeStatus ?? .running,
+                             timestamp: ts, turnID: turnID)
         appendNode(node, to: &graph)
         return [nodeID]
     }
@@ -894,7 +927,16 @@ public struct ExecutionReducer: Sendable {
         let nodeID = "sub_\(childID)"
         guard var node = graph.nodes[nodeID],
               case .childStream(var payload) = node.payload else {
-            // finished without started（乱序/部分回放）— 不崩，静默忽略。
+            // Live delivery and replay attachment can expose a terminal before
+            // its start bracket. Preserve it so a later start cannot resurrect
+            // the child stream as permanently running.
+            internalState.pendingChildTerminals[childID] = PendingChildTerminal(
+                result: result,
+                exitCode: exitCode,
+                failed: failed,
+                canceled: canceled,
+                elapsedMs: elapsedMs
+            )
             return []
         }
         payload.result = result
@@ -906,6 +948,27 @@ public struct ExecutionReducer: Sendable {
         node.timestamp = ts
         graph.upsertNode(node)
         return [nodeID]
+    }
+
+    private func taskToolTerminal(
+        kind: ChildStreamKind,
+        originCallID: String?,
+        graph: ExecutionGraph
+    ) -> PendingChildTerminal? {
+        guard kind == .task,
+              let originCallID,
+              let toolNode = graph.nodes[originCallID],
+              case .toolCall(let tool) = toolNode.payload,
+              toolNode.status == .completed || toolNode.status == .failed else {
+            return nil
+        }
+        return PendingChildTerminal(
+            result: tool.output.isEmpty ? nil : tool.output,
+            exitCode: nil,
+            failed: toolNode.status == .failed,
+            canceled: false,
+            elapsedMs: tool.elapsedMs
+        )
     }
 
     // MARK: - Approval handler
@@ -974,4 +1037,17 @@ struct ReducerInternal: Sendable {
     var nextThinkingSeq: Int = 0
     var nextAssistantSeq: Int = 0
     var nextSystemSeq: Int = 0
+    fileprivate var pendingChildTerminals: [String: PendingChildTerminal] = [:]
+}
+
+fileprivate struct PendingChildTerminal: Sendable {
+    let result: String?
+    let exitCode: Int?
+    let failed: Bool
+    let canceled: Bool
+    let elapsedMs: Int?
+
+    var nodeStatus: NodeStatus {
+        failed ? .failed : .completed
+    }
 }

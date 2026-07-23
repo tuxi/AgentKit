@@ -240,6 +240,74 @@ final class ChildStreamTests: XCTestCase {
         XCTAssertEqual(payload.result, "found 3 issues")
     }
 
+    func testTaskTerminalBeforeStartDoesNotResurrectRunningCard() {
+        var reducer = ExecutionReducer()
+        var graph = ExecutionGraph()
+
+        _ = reducer.reduce(.taskFinished(turnID: "t1", sessionId: "sub_sess",
+                                         parentSessionId: "root", text: "done first"), into: &graph)
+        XCTAssertNil(childNode(graph, id: "sub_sess"))
+
+        _ = reducer.reduce(.taskStarted(turnID: "t1", sessionId: "sub_sess",
+                                        parentSessionId: "root", callID: "c1",
+                                        text: "explore repo"), into: &graph)
+
+        guard let (node, payload) = childNode(graph, id: "sub_sess") else {
+            return XCTFail("the delayed start must merge the pending terminal")
+        }
+        XCTAssertEqual(node.status, .completed)
+        XCTAssertEqual(payload.result, "done first")
+    }
+
+    func testTaskToolFinishedCompletesEntryCardWhenFinishBracketIsMissing() {
+        var reducer = ExecutionReducer()
+        var graph = ExecutionGraph()
+        _ = reducer.reduce(.turnStarted(turnID: "t1", text: "delegate"), into: &graph)
+        _ = reducer.reduce(.toolStarted(
+            turnID: "t1",
+            callID: "c1",
+            tool: ToolCall(callID: "c1", toolName: "task",
+                           toolArgs: .object(["prompt": .string("inspect PDF")]))
+        ), into: &graph)
+        _ = reducer.reduce(.taskStarted(turnID: "t1", sessionId: "sub_sess",
+                                        parentSessionId: "root", callID: "c1",
+                                        text: "inspect PDF"), into: &graph)
+
+        _ = reducer.reduce(.toolFinished(
+            turnID: "t1",
+            callID: "c1",
+            result: ToolResult(callID: "c1", toolName: "task",
+                               observation: "PDF summarized", error: nil)
+        ), into: &graph)
+
+        guard let (node, payload) = childNode(graph, id: "sub_sess") else { return XCTFail() }
+        XCTAssertEqual(node.status, .completed)
+        XCTAssertEqual(payload.result, "PDF summarized")
+    }
+
+    func testTaskStartAfterCompletedToolUsesToolTerminalFallback() {
+        var reducer = ExecutionReducer()
+        var graph = ExecutionGraph()
+        _ = reducer.reduce(.toolStarted(
+            turnID: "t1",
+            callID: "c1",
+            tool: ToolCall(callID: "c1", toolName: "task", toolArgs: nil)
+        ), into: &graph)
+        _ = reducer.reduce(.toolFinished(
+            turnID: "t1",
+            callID: "c1",
+            result: ToolResult(callID: "c1", toolName: "task",
+                               observation: "already done", error: nil)
+        ), into: &graph)
+        _ = reducer.reduce(.taskStarted(turnID: "t1", sessionId: "sub_sess",
+                                        parentSessionId: "root", callID: "c1",
+                                        text: "inspect"), into: &graph)
+
+        guard let (node, payload) = childNode(graph, id: "sub_sess") else { return XCTFail() }
+        XCTAssertEqual(node.status, .completed)
+        XCTAssertEqual(payload.result, "already done")
+    }
+
     // MARK: - 投影：入口卡作为独立 TurnBlock 出现在 turn card 内
 
     func testProjectionEmitsChildStreamBlock() {
@@ -418,7 +486,7 @@ final class ChildStreamTests: XCTestCase {
         )
 
         var kinds: [String] = []
-        for await event in transport.open(childID: "j") {
+        for try await event in transport.open(childID: "j") {
             switch event {
             case .jobStarted: kinds.append("started")
             case .jobOutput: kinds.append("output")
@@ -440,10 +508,121 @@ final class ChildStreamTests: XCTestCase {
             batchDelayNs: 50_000_000
         )
         var count = 0
-        for await _ in transport.open(childID: "j") {
+        for try await _ in transport.open(childID: "j") {
             count += 1
             break
         }
         XCTAssertEqual(count, 1)
     }
+
+    func testReplayWaitsForDelayedTerminalAfterPartialNonEmptyBatch() async throws {
+        let script = ReplayBatchScript(batches: [
+            AgentEventBatch(
+                events: [.turnStarted(turnID: "t1", text: "inspect PDF")],
+                nextSince: 1
+            ),
+            AgentEventBatch(events: [], nextSince: 1),
+            AgentEventBatch(
+                events: [
+                    .turnFinished(turnID: "t1", text: "summary", textAnnotations: []),
+                    .taskFinished(turnID: "t1", sessionId: "child", parentSessionId: "root",
+                                  text: "done"),
+                ],
+                nextSince: 3
+            ),
+        ])
+        let transport = ConversationReplayChildStreamTransport(
+            emptyRetryBudget: 3,
+            retryDelayNs: 0
+        ) { _, _ in
+            try await script.next()
+        }
+
+        var events: [AgentEvent] = []
+        for try await event in transport.open(childID: "child") {
+            events.append(event)
+        }
+
+        XCTAssertEqual(events.count, 3)
+        let requestCount = await script.requestCount
+        XCTAssertEqual(requestCount, 3)
+    }
+
+    func testReplayPropagatesFetchFailure() async {
+        let transport = ConversationReplayChildStreamTransport(
+            emptyRetryBudget: 0,
+            retryDelayNs: 0
+        ) { _, _ in
+            throw ReplayTestError.fetchFailed
+        }
+
+        do {
+            for try await _ in transport.open(childID: "child") {}
+            XCTFail("fetch failure must not be converted into successful completion")
+        } catch {
+            XCTAssertTrue(error is ReplayTestError)
+        }
+    }
+
+    @MainActor
+    func testTaskInspectorFiltersOwnEnvelopeAndDoesNotStopOnNestedTask() async throws {
+        let transport = FixtureChildStreamTransport(
+            batches: [[
+                .taskStarted(turnID: "t1", sessionId: "outer", parentSessionId: "root",
+                             callID: "outer_call", text: "inspect PDF"),
+                .turnStarted(turnID: "t1", text: "inspect PDF"),
+                .taskStarted(turnID: "t1", sessionId: "nested", parentSessionId: "outer",
+                             callID: "nested_call", text: "extract text"),
+                .taskFinished(turnID: "t1", sessionId: "nested", parentSessionId: "outer",
+                              text: "text extracted"),
+                .turnFinished(turnID: "t1", text: "final PDF summary", textAnnotations: []),
+                .taskFinished(turnID: "t1", sessionId: "outer", parentSessionId: "root",
+                              text: "done"),
+            ]],
+            batchDelayNs: 0
+        )
+        let viewModel = ChildStreamViewModel(
+            selection: ChildStreamSelection(childID: "outer", kind: .task, title: "inspect PDF"),
+            transport: transport
+        )
+        viewModel.start()
+
+        for _ in 0..<100 where !viewModel.isFinished {
+            try await Task.sleep(nanoseconds: 1_000_000)
+        }
+
+        XCTAssertTrue(viewModel.isFinished)
+        XCTAssertEqual(viewModel.completionStatus, .completed)
+        let childPayloads = viewModel.turns.flatMap(\.blocks).compactMap { block -> ChildStreamNodePayload? in
+            guard case .childStream(_, let payload) = block else { return nil }
+            return payload
+        }
+        XCTAssertEqual(childPayloads.map(\.childID), ["nested"])
+        let assistantTexts = viewModel.turns.flatMap(\.blocks).compactMap { block -> String? in
+            guard case .text(_, let payload) = block else { return nil }
+            return payload.text
+        }
+        XCTAssertEqual(assistantTexts, ["final PDF summary"])
+        viewModel.stop()
+    }
+}
+
+private actor ReplayBatchScript {
+    private var batches: [AgentEventBatch]
+    private(set) var requestCount = 0
+
+    init(batches: [AgentEventBatch]) {
+        self.batches = batches
+    }
+
+    func next() throws -> AgentEventBatch {
+        requestCount += 1
+        guard !batches.isEmpty else { throw ReplayTestError.exhausted }
+        return batches.removeFirst()
+    }
+}
+
+private enum ReplayTestError: Error {
+    case fetchFailed
+    case exhausted
 }

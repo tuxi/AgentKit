@@ -364,9 +364,13 @@ final class MultiConversationTests: XCTestCase {
     func testPersistedDraftRestoresWorkspaceAndStableProvisioningIdentity() throws {
         let localState = InMemoryConversationLocalStateStore()
         let draftID = UUID()
+        let workspaceURL = FileManager.default.temporaryDirectory
+            .appendingPathComponent("AgentKitDraftRestore-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: workspaceURL, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: workspaceURL) }
         try localState.updateState(for: .draft(draftID)) { state in
             state.composerDraft.text = "continue after restart"
-            state.composerDraft.workspacePath = "/tmp/AgentKit"
+            state.composerDraft.workspacePath = workspaceURL.path
             state.composerDraft.workspaceBranch = "main"
             state.composerDraft.clientRequestID = "create-stable"
             state.composerDraft.wantsManagedWorktree = true
@@ -382,7 +386,7 @@ final class MultiConversationTests: XCTestCase {
         store.restoreDraftOrBegin()
 
         XCTAssertEqual(store.draft?.id, draftID)
-        XCTAssertEqual(store.draft?.workspace?.url.path, "/tmp/AgentKit")
+        XCTAssertEqual(store.draft?.workspace?.url.path, workspaceURL.path)
         XCTAssertEqual(store.draft?.workspace?.branch, "main")
         XCTAssertEqual(store.draft?.clientRequestID, "create-stable")
         XCTAssertEqual(store.draft?.managedWorktreeSuggestedName, "steady-turing")

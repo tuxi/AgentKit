@@ -129,12 +129,19 @@ public final class ConversationViewModel {
     private let capabilityRegistry: RuntimeCapabilityRegistry?
     private let localStateStore: any ConversationLocalStateStore
     private let toolRegistry: ToolRegistry
+    #if os(iOS)
+    let clientToolPresentationCoordinator = DefaultClientToolPresentationCoordinator()
+    #endif
     let timelineExtensions: [any TimelineExtension]
     private var streamTask: Task<Void, Never>?
     private var snapshotTask: Task<Void, Never>?
     private var turnDispatchTask: Task<Void, Never>?
     private var pendingRestoreTask: Task<Void, Never>?
     private var queuedTicket: UUID?
+    /// Event backfill/reconnect may replay tool_started. A call identity must
+    /// execute at most once for the lifetime of this session ViewModel.
+    private var inFlightClientToolCallIDs: Set<String> = []
+    private var completedClientToolCallIDs: Set<String> = []
 
     /// Host 注入的 auth 恢复钩子。收到 `turn_failed(code: auth_expired)` 时调用
     /// （契约：credential-injection-v1 §5.2 —— 刷新 token → Reconfigure Runtime）。
@@ -215,9 +222,14 @@ public final class ConversationViewModel {
         if self.conversation?.id == conversation.id, isConnected || isConnecting {
             return
         }
+        let isDifferentConversation = self.conversation?.id != conversation.id
         isConnecting = true
         defer { isConnecting = false }
         self.conversation = conversation
+        if isDifferentConversation {
+            inFlightClientToolCallIDs.removeAll()
+            completedClientToolCallIDs.removeAll()
+        }
         self.snapshot = .empty(sessionID: conversation.id)
         currentTurnID = nil
         detail = nil
@@ -507,9 +519,13 @@ public final class ConversationViewModel {
         }
 
         // P1: 拦截客户端工具执行
-        if case .toolStarted(_, let callID, let tool) = event,
+        if case .toolStarted(let turnID, let callID, let tool) = event,
            tool.executor == .client {
-            Task { await executeClientTool(callID: callID, tool: tool) }
+            scheduleClientToolExecution(turnID: turnID, callID: callID, tool: tool)
+        }
+        if case .toolFinished(_, let callID, _) = event {
+            inFlightClientToolCallIDs.remove(callID)
+            completedClientToolCallIDs.insert(callID)
         }
     }
 
@@ -662,8 +678,26 @@ public final class ConversationViewModel {
 
     // MARK: - Client tool execution
 
+    private func scheduleClientToolExecution(
+        turnID: String?,
+        callID: String,
+        tool: ToolCall
+    ) {
+        guard !callID.isEmpty,
+              !inFlightClientToolCallIDs.contains(callID),
+              !completedClientToolCallIDs.contains(callID) else { return }
+
+        inFlightClientToolCallIDs.insert(callID)
+        Task { [weak self] in
+            guard let self else { return }
+            await self.executeClientTool(turnID: turnID, callID: callID, tool: tool)
+            self.inFlightClientToolCallIDs.remove(callID)
+            self.completedClientToolCallIDs.insert(callID)
+        }
+    }
+
     /// 在本地执行客户端工具，并将结果回传给服务端。
-    private func executeClientTool(callID: String, tool: ToolCall) async {
+    private func executeClientTool(turnID: String?, callID: String, tool: ToolCall) async {
         // 查找已注册的本地工具
         guard let clientTool = await toolRegistry.find(name: tool.toolName) else {
             await channel?.send(input: .toolResult(ToolResultContent(
@@ -673,17 +707,13 @@ public final class ConversationViewModel {
             )))
             return
         }
+        
+        let context = makeClientToolExecutionContext(turnID: turnID ?? "", callID: callID)
 
         // 执行
         let result: ClientToolExecutionResult
         do {
-            if let structuredTool = clientTool as? any StructuredClientTool {
-                result = try await structuredTool.executeResult(args: tool.toolArgs)
-            } else {
-                result = ClientToolExecutionResult(
-                    content: try await clientTool.execute(args: tool.toolArgs)
-                )
-            }
+            result = try await clientTool.execute(args: tool.toolArgs, context: context)
         } catch {
             result = ClientToolExecutionResult(
                 content: error.localizedDescription,
@@ -699,6 +729,36 @@ public final class ConversationViewModel {
             output: result.output,
             assets: result.assets
         )))
+    }
+    
+    private func makeClientToolExecutionContext(
+        turnID: String,
+        callID: String
+    ) -> ClientToolExecutionContext {
+        let workspacePath =
+            detail?.workspace?.runtimeCWD
+            ?? conversation?.workspace?.runtimeCWD
+            ?? detail?.workspacePath
+            ?? conversation?.workspacePath
+            ?? workspace?.url.path
+
+        #if os(iOS)
+        let presentationCoordinator: (any ClientToolPresentationCoordinator)? =
+            clientToolPresentationCoordinator
+        #else
+        let presentationCoordinator: (any ClientToolPresentationCoordinator)? = nil
+        #endif
+
+        return ClientToolExecutionContext(
+            workspaceRoot: workspacePath.map {
+                URL(fileURLWithPath: $0, isDirectory: true)
+            },
+            workspaceID: detail?.workspaceID ?? conversation?.workspaceID,
+            sessionID: conversation?.id ?? "",
+            turnID: turnID,
+            callID: callID,
+            presentationCoordinator: presentationCoordinator
+        )
     }
 
     private func setDisconnected() async {

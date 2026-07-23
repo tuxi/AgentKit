@@ -26,6 +26,8 @@ public final class ChildStreamViewModel {
     public private(set) var snapshot: RuntimeSnapshot
     /// 子流终态：收到终态事件、或事件流自然结束（回放到尾 / socket 关闭）后置位。
     public private(set) var isFinished = false
+    /// 明确区分正常完成、失败和仍在运行，避免把传输错误显示成“已完成”。
+    public private(set) var completionStatus: ChildStreamNodeStatus?
     /// 保留字段（空态展示用）；stream 模型下由传输层内部重试，通常保持 nil。
     public private(set) var lastError: String?
 
@@ -60,12 +62,33 @@ public final class ChildStreamViewModel {
             // 消费一条子流事件流。job 是实时 WS（收到 job_finished 才终态），subagent 是
             // 回放（翻页到尾自然结束）。break / 流结束都会 drop 迭代器 → 传输层 onTermination
             // 断开 socket / 取消翻页。
-            for await event in self.transport.open(childID: self.selection.childID) {
-                if self.isTerminal(event) { self.isFinished = true }
-                await self.engine.ingest(event)
-                if self.isFinished { break }
+            do {
+                for try await event in self.transport.open(childID: self.selection.childID) {
+                    let terminalStatus = self.terminalStatus(for: event)
+                    // The outer task bracket is transport metadata for this
+                    // inspector. Feeding it into the child engine creates a
+                    // self-referential Subagent card. Nested task brackets use
+                    // a different session id and remain visible.
+                    if !self.isOwnTaskEnvelope(event) {
+                        await self.engine.ingest(event)
+                    }
+                    if let terminalStatus {
+                        self.completionStatus = terminalStatus
+                        self.isFinished = true
+                        break
+                    }
+                }
+                if !self.isFinished {
+                    self.completionStatus = self.selection.kind == .task ? .completed : .failed
+                    self.isFinished = true
+                }
+            } catch is CancellationError {
+                return
+            } catch {
+                self.lastError = error.localizedDescription
+                self.completionStatus = .failed
+                self.isFinished = true
             }
-            self.isFinished = true
             await self.engine.markFinished()
         }
     }
@@ -77,10 +100,29 @@ public final class ChildStreamViewModel {
         snapshotTask = nil
     }
 
-    private func isTerminal(_ event: AgentEvent) -> Bool {
+    private func terminalStatus(for event: AgentEvent) -> ChildStreamNodeStatus? {
         switch event {
-        case .jobFinished, .taskFinished:
-            return true
+        case .taskFinished(_, let sessionID, _, _)
+            where selection.kind == .task && sessionID == selection.childID:
+            return .completed
+        case .jobFinished(_, let jobID, let exitCode, let err, _, let text)
+            where selection.kind == .job && jobID == selection.childID:
+            if text == "canceled" { return .canceled }
+            if text == "failed" || (exitCode ?? 0) != 0 || err?.isEmpty == false {
+                return .failed
+            }
+            return .completed
+        default:
+            return nil
+        }
+    }
+
+    private func isOwnTaskEnvelope(_ event: AgentEvent) -> Bool {
+        guard selection.kind == .task else { return false }
+        switch event {
+        case .taskStarted(_, let sessionID, _, _, _),
+             .taskFinished(_, let sessionID, _, _):
+            return sessionID == selection.childID
         default:
             return false
         }
@@ -228,8 +270,10 @@ struct ChildStreamContentView: View {
     }
 
     private var status: ChildStreamNodeStatus {
-        if let payload = viewModel.jobPayload { return payload.status }
-        return viewModel.isFinished ? .completed : .running
+        if let payload = viewModel.jobPayload, payload.status != .running {
+            return payload.status
+        }
+        return viewModel.completionStatus ?? .running
     }
 
     private var statusColor: Color {
@@ -259,10 +303,10 @@ struct ChildStreamContentView: View {
 
     private var emptyState: some View {
         VStack(spacing: 8) {
-            if let error = viewModel.lastError, !viewModel.isFinished {
+            if let error = viewModel.lastError {
                 ContentUnavailableView(
-                    "等待子任务事件…",
-                    systemImage: "clock.arrow.circlepath",
+                    "无法加载子任务记录",
+                    systemImage: "exclamationmark.triangle",
                     description: Text(error)
                 )
             } else {

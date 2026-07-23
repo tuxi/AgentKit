@@ -81,6 +81,10 @@ extension String {
     /// 将持久化存储中带有旧沙盒 UUID 的绝对路径，修正为当前 App 运行时的真实沙盒绝对路径
     public var resolvingCurrentSandboxPath: String {
 #if os(iOS)
+        guard contains("/Containers/Data/Application/") else {
+              // 外部目录不能用这种方式修复，需要 bookmark。
+              return self
+          }
         let standardDirectories = ["Documents", "Library", "tmp"]
         
         for dir in standardDirectories {
