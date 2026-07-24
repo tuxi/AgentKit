@@ -259,6 +259,7 @@ public struct ExecutionReducer: Sendable {
             )
 
         case .workflowNodeStateChanged, .workflowSuspended,
+             .workflowTaskFailed, .workflowTaskSucceeded, .workflowTaskSuspended,
              .workflowNodeProgress, .workflowTaskProgress,
              .workflowToolProgress, .workflowToolLog,
              .workflowToolStream, .workflowToolStreamEnd:

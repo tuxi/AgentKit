@@ -35,6 +35,7 @@ final class TimelineProjectionTurnsTests: XCTestCase {
             case .artifact: return "artifact"
             case .system: return "system"
             case .childStream: return "childStream"
+            case .workflow: return "workflow"
             }
         }
     }

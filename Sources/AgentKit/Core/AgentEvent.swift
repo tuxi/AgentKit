@@ -113,6 +113,12 @@ public enum AgentEvent: Sendable {
     case workflowFinished(turnID: String?, workflow: WorkflowFinishedData)
     /// Planning, registration, execution, or Task terminal failure.
     case workflowFailed(turnID: String?, workflow: WorkflowFailedData)
+    /// Task bracket: terminal failed.
+    case workflowTaskFailed(turnID: String?, workflow: WorkflowTaskBracketData)
+    /// Task bracket: terminal success.
+    case workflowTaskSucceeded(turnID: String?, workflow: WorkflowTaskBracketData)
+    /// Task bracket: suspended.
+    case workflowTaskSuspended(turnID: String?, workflow: WorkflowTaskBracketData)
 
     // ── Workflow transient（不 replay，仅实时视觉反馈）──
     /// Non-authoritative node progress update.
@@ -289,10 +295,19 @@ extension AgentEvent {
         case "workflow_plan_ready":
             guard let wf = wire.workflow else { return nil }
             let planNodes = (wf.nodes?.values ?? []).map { wn in
-                WorkflowPlanNode(
+                // Golden fixture 格式：扁平的 "tool" 字段。
+                // 兼容旧格式：type + config.tool。
+                let nodeType: String = {
+                    if let t = wn.type { return t }
+                    if wn.tool != nil { return "tool" }
+                    return "tool"
+                }()
+                let toolName: String? = wn.tool ?? wn.config?["tool"].stringValue
+                return WorkflowPlanNode(
                     name: wn.name ?? "?",
-                    type: wn.type ?? "tool",
-                    toolName: wn.config?["tool"].stringValue
+                    type: nodeType,
+                    toolName: toolName,
+                    inputMapping: wn.inputMapping
                 )
             }
             let wfEdges = (wf.edges ?? []).map { we in
@@ -317,9 +332,13 @@ extension AgentEvent {
                 workflow: WorkflowTaskStateChange(
                     workflowID: wf.workflowId ?? "",
                     taskID: wf.taskId,
+                    rootTaskID: wf.rootTaskId,
                     from: wf.from,
                     to: wf.to ?? wf.status ?? "unknown",
-                    sequence: wf.sequence ?? 0
+                    sequence: wf.sequence,
+                    message: wf.message,
+                    progress: wf.progress ?? 0,
+                    createdAt: wf.createdAt
                 )
             )
 
@@ -336,8 +355,11 @@ extension AgentEvent {
                     to: wf.to ?? "unknown",
                     terminal: wf.terminal ?? false,
                     progress: wf.progress ?? 0,
-                    sequence: wf.sequence ?? 0,
-                    error: wf.error
+                    sequence: wf.sequence,
+                    error: wf.error,
+                    output: wf.output,
+                    message: wf.message,
+                    createdAt: wf.createdAt
                 )
             )
 
@@ -377,6 +399,57 @@ extension AgentEvent {
                     taskID: wf.taskId,
                     status: wf.status ?? "failed",
                     error: wf.error
+                )
+            )
+
+        // ── Workflow task bracket events (v1.3 golden) ──
+
+        case "workflow_task_failed":
+            guard let wf = wire.workflow else { return nil }
+            return .workflowTaskFailed(
+                turnID: turnID,
+                workflow: WorkflowTaskBracketData(
+                    workflowID: wf.workflowId ?? "",
+                    parentCallID: wf.parentCallId,
+                    taskID: wf.taskId,
+                    rootTaskID: wf.rootTaskId,
+                    message: wf.message,
+                    error: wf.error,
+                    progress: wf.progress ?? 0,
+                    sequence: wf.sequence,
+                    createdAt: wf.createdAt
+                )
+            )
+
+        case "workflow_task_succeeded":
+            guard let wf = wire.workflow else { return nil }
+            return .workflowTaskSucceeded(
+                turnID: turnID,
+                workflow: WorkflowTaskBracketData(
+                    workflowID: wf.workflowId ?? "",
+                    parentCallID: wf.parentCallId,
+                    taskID: wf.taskId,
+                    rootTaskID: wf.rootTaskId,
+                    message: wf.message,
+                    progress: wf.progress ?? 0,
+                    sequence: wf.sequence,
+                    createdAt: wf.createdAt
+                )
+            )
+
+        case "workflow_task_suspended":
+            guard let wf = wire.workflow else { return nil }
+            return .workflowTaskSuspended(
+                turnID: turnID,
+                workflow: WorkflowTaskBracketData(
+                    workflowID: wf.workflowId ?? "",
+                    parentCallID: wf.parentCallId,
+                    taskID: wf.taskId,
+                    rootTaskID: wf.rootTaskId,
+                    message: wf.message,
+                    progress: wf.progress ?? 0,
+                    sequence: wf.sequence,
+                    createdAt: wf.createdAt
                 )
             )
 
@@ -422,7 +495,7 @@ extension AgentEvent {
                 workflow: WorkflowToolStreamData(
                     workflowID: wf.workflowId ?? "",
                     nodeName: wf.nodeName ?? "?",
-                    chunk: wire.chunk ?? ""
+                    chunk: wf.message ?? wire.chunk ?? ""
                 )
             )
 

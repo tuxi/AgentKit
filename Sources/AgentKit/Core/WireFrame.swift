@@ -210,10 +210,12 @@ struct WireWorkflow: Decodable {
     let edges: [WireWorkflowEdge]?
     let output: JSONValue?
     let error: String?
+    let message: String?
+    let createdAt: String?
 
     enum CodingKeys: String, CodingKey {
         case stage, goal, status, terminal, progress, sequence
-        case reason, resumable, nodes, edges, output, error
+        case reason, resumable, nodes, edges, output, error, message
         case from, to
         case workflowId = "workflow_id"
         case parentCallId = "parent_call_id"
@@ -221,19 +223,23 @@ struct WireWorkflow: Decodable {
         case rootTaskId = "root_task_id"
         case nodeRuntimeId = "node_runtime_id"
         case nodeName = "node_name"
+        case createdAt = "created_at"
     }
-    
+
 }
 
 struct WireWorkflowNode: Decodable {
     var name: String?
     var type: String?
-    var config: JSONValue?   // 任意工具配置
+    var tool: String?        // v1.3 golden: flat tool name (替代 config.tool)
+    var config: JSONValue?   // 任意工具配置（旧格式兼容）
     var dependsOn: [String]?
+    var inputMapping: JSONValue?  // 表达式形式的输入映射
 
     enum CodingKeys: String, CodingKey {
-        case name, type, config
+        case name, type, tool, config
         case dependsOn = "depends_on"
+        case inputMapping = "input_mapping"
     }
 }
 

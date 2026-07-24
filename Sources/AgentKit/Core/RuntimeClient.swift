@@ -143,6 +143,11 @@ public protocol RuntimeClient: Sendable {
     /// 后台 job 子流实时只读流（`GET /v1/jobs/{id}/stream`）：backlog + 直播、seq 去重。
     func openJobStream(jobID: String) -> AsyncStream<AgentEvent>
 
+    // MARK: - Workflow (v1.3 Phase 4)
+
+    /// DAG snapshot：一次拿齐拓扑 + 全部节点状态 + `snapshot_sequence`。
+    func getWorkflowSnapshot(conversationID: String, workflowID: String) async throws -> WorkflowSnapshot
+
     // MARK: - Assets
 
     /// Structured asset preview derived from persisted conversation events.
@@ -252,6 +257,11 @@ extension RuntimeClient {
         let events = try await getEvents(conversationID: conversationID)
         let tail = since < events.count ? Array(events[since...]) : []
         return AgentEventBatch(events: tail, nextSince: max(since, events.count))
+    }
+
+    /// 默认实现：不支持 workflow snapshot（mock backend）。
+    public func getWorkflowSnapshot(conversationID: String, workflowID: String) async throws -> WorkflowSnapshot {
+        throw RuntimeHTTPError.unsupported
     }
 
     /// 默认实现：不支持 job 端点（mock backend）。

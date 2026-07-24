@@ -186,6 +186,8 @@ public struct WorkflowNode: Sendable, Identifiable {
     public var streamOutput: String
     /// 工具名（tool 类型节点）。
     public var toolName: String?
+    /// 表达式形式的输入映射（来自 plan_ready，key 为参数名，value 为 $from 表达式）。
+    public var inputMapping: JSONValue?
 
     public init(
         name: String,
@@ -197,7 +199,8 @@ public struct WorkflowNode: Sendable, Identifiable {
         terminal: Bool = false,
         elapsedMs: Int64? = nil,
         streamOutput: String = "",
-        toolName: String? = nil
+        toolName: String? = nil,
+        inputMapping: JSONValue? = nil
     ) {
         self.name = name
         self.type = type
@@ -209,6 +212,7 @@ public struct WorkflowNode: Sendable, Identifiable {
         self.elapsedMs = elapsedMs
         self.streamOutput = streamOutput
         self.toolName = toolName
+        self.inputMapping = inputMapping
     }
 }
 
@@ -252,11 +256,15 @@ public struct WorkflowPlanNode: Sendable {
     public let name: String
     public let type: String
     public let toolName: String?
+    /// 表达式形式的输入映射，key 为工具参数名，value 为 $from 表达式。
+    public let inputMapping: JSONValue?
 
-    public init(name: String, type: String, toolName: String? = nil) {
+    public init(name: String, type: String, toolName: String? = nil,
+                inputMapping: JSONValue? = nil) {
         self.name = name
         self.type = type
         self.toolName = toolName
+        self.inputMapping = inputMapping
     }
 }
 
@@ -264,17 +272,27 @@ public struct WorkflowPlanNode: Sendable {
 public struct WorkflowTaskStateChange: Sendable {
     public let workflowID: String
     public let taskID: Int64?
+    public let rootTaskID: Int64?
     public let from: String?
     public let to: String
-    public let sequence: Int64
+    public let sequence: Int64?
+    public let message: String?
+    public let progress: Double
+    public let createdAt: String?
 
-    public init(workflowID: String, taskID: Int64?,
-                from: String?, to: String, sequence: Int64) {
+    public init(workflowID: String, taskID: Int64?, rootTaskID: Int64? = nil,
+                from: String?, to: String, sequence: Int64? = nil,
+                message: String? = nil, progress: Double = 0,
+                createdAt: String? = nil) {
         self.workflowID = workflowID
         self.taskID = taskID
+        self.rootTaskID = rootTaskID
         self.from = from
         self.to = to
         self.sequence = sequence
+        self.message = message
+        self.progress = progress
+        self.createdAt = createdAt
     }
 }
 
@@ -288,13 +306,17 @@ public struct WorkflowNodeStateChange: Sendable {
     public let to: String
     public let terminal: Bool
     public let progress: Double
-    public let sequence: Int64
+    public let sequence: Int64?
     public let error: String?
+    public let output: JSONValue?
+    public let message: String?
+    public let createdAt: String?
 
     public init(workflowID: String, parentCallID: String?, taskID: Int64?,
                 nodeName: String, from: String?, to: String,
-                terminal: Bool, progress: Double, sequence: Int64,
-                error: String? = nil) {
+                terminal: Bool, progress: Double, sequence: Int64? = nil,
+                error: String? = nil, output: JSONValue? = nil,
+                message: String? = nil, createdAt: String? = nil) {
         self.workflowID = workflowID
         self.parentCallID = parentCallID
         self.taskID = taskID
@@ -305,6 +327,9 @@ public struct WorkflowNodeStateChange: Sendable {
         self.progress = progress
         self.sequence = sequence
         self.error = error
+        self.output = output
+        self.message = message
+        self.createdAt = createdAt
     }
 }
 
@@ -387,4 +412,78 @@ public struct WorkflowToolStreamData: Sendable {
         self.nodeName = nodeName
         self.chunk = chunk
     }
+}
+
+/// `workflow_task_succeeded` / `workflow_task_failed` / `workflow_task_suspended` bracket 事件的 payload。
+public struct WorkflowTaskBracketData: Sendable {
+    public let workflowID: String
+    public let parentCallID: String?
+    public let taskID: Int64?
+    public let rootTaskID: Int64?
+    public let message: String?
+    public let error: String?
+    public let progress: Double
+    public let sequence: Int64?
+    public let createdAt: String?
+
+    public init(workflowID: String, parentCallID: String? = nil,
+                taskID: Int64? = nil, rootTaskID: Int64? = nil,
+                message: String? = nil, error: String? = nil,
+                progress: Double = 0, sequence: Int64? = nil,
+                createdAt: String? = nil) {
+        self.workflowID = workflowID
+        self.parentCallID = parentCallID
+        self.taskID = taskID
+        self.rootTaskID = rootTaskID
+        self.message = message
+        self.error = error
+        self.progress = progress
+        self.sequence = sequence
+        self.createdAt = createdAt
+    }
+}
+
+
+// MARK: - Phase 4 Snapshot API types
+
+/// `GET /v1/conversations/{id}/workflow/{workflow_id}/snapshot` 返回的顶层结构。
+/// 包含 DAG 拓扑 + 全部节点状态 + snapshot_sequence，一次调用即可渲染完整 DAG。
+public struct WorkflowSnapshot: Decodable, Sendable {
+    public let workflowId: String
+    public let goal: String?
+    public let task: WorkflowSnapshotTask?
+    public let nodes: [WorkflowSnapshotNode]
+    public let edges: [WorkflowSnapshotEdge]
+    public let snapshotSequence: Int64
+
+    enum CodingKeys: String, CodingKey {
+        case goal, task, nodes, edges
+        case workflowId = "workflow_id"
+        case snapshotSequence = "snapshot_sequence"
+    }
+}
+
+/// Snapshot 中的 task 摘要。
+public struct WorkflowSnapshotTask: Decodable, Sendable {
+    public let id: Int64
+    public let status: String
+    public let progress: Double?
+    public let output: JSONValue?
+}
+
+/// Snapshot 中的单个节点状态。
+public struct WorkflowSnapshotNode: Decodable, Sendable {
+    public let name: String
+    public let state: String
+    public let terminal: Bool
+    public let active: Bool
+    public let error: String?
+    public let progress: Double?
+    public let output: JSONValue?
+}
+
+/// Snapshot 中的边。
+public struct WorkflowSnapshotEdge: Decodable, Sendable {
+    public let from: String
+    public let to: String
 }

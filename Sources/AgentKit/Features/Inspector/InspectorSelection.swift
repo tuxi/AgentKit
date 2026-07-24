@@ -43,10 +43,13 @@ public struct WorkflowDAGSelection: Sendable, Hashable {
     public let workflowID: String
     /// DAG 目标描述，用作面板标题。
     public let title: String?
+    /// Phase 4：加载 snapshot 所需的 conversation ID。
+    public let conversationID: String?
 
-    public init(workflowID: String, title: String? = nil) {
+    public init(workflowID: String, title: String? = nil, conversationID: String? = nil) {
         self.workflowID = workflowID
         self.title = title
+        self.conversationID = conversationID
     }
 }
 

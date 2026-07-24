@@ -46,8 +46,9 @@ final class TurnActionDispatcher {
             )))
         case .openWorkflow(let workflowID):
             let title = workflowPayload(workflowID: workflowID)?.goal
+            let conversationID = store.activeConversationViewModel?.conversation?.id
             store.showInspector(.workflowDAG(WorkflowDAGSelection(
-                workflowID: workflowID, title: title
+                workflowID: workflowID, title: title, conversationID: conversationID
             )))
         case .copyBlock(let text):
             Clipboard.copy(text)

@@ -619,6 +619,7 @@ public final class ConversationViewModel {
         case .workflowStarted, .workflowPlanReady,
              .workflowTaskStateChanged, .workflowNodeStateChanged,
              .workflowSuspended, .workflowFinished, .workflowFailed,
+             .workflowTaskFailed, .workflowTaskSucceeded, .workflowTaskSuspended,
              .workflowNodeProgress, .workflowTaskProgress,
              .workflowToolProgress, .workflowToolLog,
              .workflowToolStream, .workflowToolStreamEnd:

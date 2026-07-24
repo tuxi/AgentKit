@@ -349,6 +349,10 @@ public final class CodeAgentTransport: AgentTransport, @unchecked Sendable {
         return Self.batch(from: wireFrames, since: since)
     }
 
+    public func getWorkflowSnapshot(conversationID: String, workflowID: String) async throws -> WorkflowSnapshot {
+        try await http.getWorkflowSnapshot(conversationID: conversationID, workflowID: workflowID)
+    }
+
     /// job 实时子流：复用 AgentWireSocket 的握手 / backfill / seq 去重 / 重连机制，
     /// 只把路径切到 `/v1/jobs/{id}/stream`，backfill 走 `/v1/jobs/{id}/events`。
     /// 只读——不注册工具、不发任何入站帧。stream 被取消时断开 socket（socket 由

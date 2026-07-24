@@ -18,34 +18,48 @@ struct WorkflowCardView: View {
         Button {
             onAction(.openWorkflow(workflowID: payload.workflowID))
         } label: {
-            HStack(spacing: 8) {
-                Image(systemName: "flowchart")
-                    .font(.caption)
+            HStack(spacing: 10) {
+                // Icon
+                Image(systemName: "flowchart.fill")
+                    .font(.system(size: 14))
                     .foregroundStyle(.purple)
+                    .frame(width: 28, height: 28)
+                    .background(Color.purple.opacity(0.10))
+                    .clipShape(RoundedRectangle(cornerRadius: 6))
 
-                VStack(alignment: .leading, spacing: 2) {
-                    Text("Workflow")
-                        .font(.caption2.weight(.semibold))
-                        .foregroundStyle(.secondary)
-                        .textCase(.uppercase)
+                VStack(alignment: .leading, spacing: 3) {
+                    HStack(spacing: 6) {
+                        Text("Workflow")
+                            .font(.caption2.weight(.semibold))
+                            .foregroundStyle(.secondary)
+                            .textCase(.uppercase)
+
+                        if payload.nodeCount > 0 {
+                            Text("\(payload.nodeCount) steps")
+                                .font(.caption2)
+                                .foregroundStyle(.tertiary)
+                        }
+                    }
 
                     if let goal = payload.goal {
                         Text(goal)
                             .font(.caption.weight(.medium))
-                            .lineLimit(1)
+                            .lineLimit(2)
                     } else {
                         Text(payload.workflowID)
-                            .font(.caption.weight(.medium))
-                            .lineLimit(1)
+                            .font(.caption)
                             .foregroundStyle(.secondary)
+                            .lineLimit(1)
                     }
 
+                    // Status + error preview
                     HStack(spacing: 6) {
                         statusLabel
-                        if payload.nodeCount > 0 {
-                            Text("\(payload.nodeCount) nodes")
+                        if let error = payload.error {
+                            Text(error)
                                 .font(.caption2)
-                                .foregroundStyle(.tertiary)
+                                .foregroundStyle(.red)
+                                .lineLimit(1)
                         }
                     }
                 }
@@ -56,15 +70,15 @@ struct WorkflowCardView: View {
                     .font(.caption2)
                     .foregroundStyle(.tertiary)
             }
-            .padding(.horizontal, 10)
-            .padding(.vertical, 8)
+            .padding(.horizontal, 12)
+            .padding(.vertical, 10)
             .background(
-                RoundedRectangle(cornerRadius: 8)
-                    .fill(Color.purple.opacity(0.06))
+                RoundedRectangle(cornerRadius: 10)
+                    .fill(Color.purple.opacity(0.05))
             )
             .overlay(
-                RoundedRectangle(cornerRadius: 8)
-                    .stroke(Color.purple.opacity(0.15), lineWidth: 1)
+                RoundedRectangle(cornerRadius: 10)
+                    .stroke(Color.purple.opacity(0.12), lineWidth: 1)
             )
         }
         .buttonStyle(.plain)
@@ -74,41 +88,29 @@ struct WorkflowCardView: View {
     private var statusLabel: some View {
         switch payload.status {
         case .pending:
-            Label("准备中", systemImage: "circle.dotted")
-                .font(.caption2)
-                .foregroundStyle(.secondary)
-                .labelStyle(.titleAndIcon)
+            Label("Pending", systemImage: "circle.dotted")
+                .font(.caption2).foregroundStyle(.secondary).labelStyle(.titleAndIcon)
         case .running:
-            HStack(spacing: 3) {
-                ProgressView().scaleEffect(0.5)
-                Text("执行中").font(.caption2)
+            HStack(spacing: 4) {
+                ProgressView().scaleEffect(0.55).frame(width: 12, height: 12)
+                Text("Running").font(.caption2)
             }
             .foregroundStyle(.blue)
         case .suspended:
-            Label("已暂停", systemImage: "pause.circle.fill")
-                .font(.caption2)
-                .foregroundStyle(.orange)
-                .labelStyle(.titleAndIcon)
+            Label("Suspended", systemImage: "pause.circle.fill")
+                .font(.caption2).foregroundStyle(.orange).labelStyle(.titleAndIcon)
         case .success:
-            Label("已完成", systemImage: "checkmark.circle.fill")
-                .font(.caption2)
-                .foregroundStyle(.green)
-                .labelStyle(.titleAndIcon)
+            Label("Complete", systemImage: "checkmark.circle.fill")
+                .font(.caption2).foregroundStyle(.green).labelStyle(.titleAndIcon)
         case .failed:
-            Label("失败", systemImage: "xmark.circle.fill")
-                .font(.caption2)
-                .foregroundStyle(.red)
-                .labelStyle(.titleAndIcon)
+            Label("Failed", systemImage: "xmark.circle.fill")
+                .font(.caption2).foregroundStyle(.red).labelStyle(.titleAndIcon)
         case .canceled:
-            Label("已取消", systemImage: "stop.circle.fill")
-                .font(.caption2)
-                .foregroundStyle(.secondary)
-                .labelStyle(.titleAndIcon)
+            Label("Canceled", systemImage: "stop.circle.fill")
+                .font(.caption2).foregroundStyle(.secondary).labelStyle(.titleAndIcon)
         case .unknown(let v):
             Label(v, systemImage: "questionmark.circle")
-                .font(.caption2)
-                .foregroundStyle(.secondary)
-                .labelStyle(.titleAndIcon)
+                .font(.caption2).foregroundStyle(.secondary).labelStyle(.titleAndIcon)
         }
     }
 }

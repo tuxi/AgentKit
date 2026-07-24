@@ -20,6 +20,19 @@ public extension EnvironmentValues {
     }
 }
 
+// MARK: - RuntimeClient environment key (Phase 4 snapshot)
+
+public struct RuntimeClientEnvironmentKey: EnvironmentKey {
+    public static let defaultValue: RuntimeClient? = nil
+}
+
+public extension EnvironmentValues {
+    var runtimeClient: RuntimeClient? {
+        get { self[RuntimeClientEnvironmentKey.self] }
+        set { self[RuntimeClientEnvironmentKey.self] = newValue }
+    }
+}
+
 // MARK: - InspectorView
 
 public struct InspectorView: View {
@@ -82,7 +95,8 @@ public struct InspectorView: View {
                 if let store = workflowStore {
                     WorkflowDAGDetailView(
                         store: store,
-                        workflowID: selection.workflowID
+                        workflowID: selection.workflowID,
+                        conversationID: selection.conversationID
                     )
                 } else {
                     ContentUnavailableView(

@@ -922,15 +922,19 @@ struct PlanApprovalBar: View {
                     planPathRow(path)
                 }
 
-                // Plan content — markdown rendered in a scrollable area
-                ScrollView(.vertical, showsIndicators: true) {
-                    MarkdownRenderer(text: plan.content)
-                        .font(.caption)
+                // Plan content — DAG rendering for workflow plans, markdown otherwise
+                if let dag = parseWorkflowDAG(from: plan.content) {
+                    workflowDAGPreview(dag: dag)
+                } else {
+                    ScrollView(.vertical, showsIndicators: true) {
+                        MarkdownRenderer(text: plan.content)
+                            .font(.caption)
+                    }
+                    .frame(maxHeight: 300)
+                    .padding(12)
+                    .background(.quaternary.opacity(0.3))
+                    .clipShape(RoundedRectangle(cornerRadius: 8))
                 }
-                .frame(maxHeight: 300)
-                .padding(12)
-                .background(.quaternary.opacity(0.3))
-                .clipShape(RoundedRectangle(cornerRadius: 8))
 
                 // Action buttons
                 HStack(spacing: 8) {
@@ -955,22 +959,31 @@ struct PlanApprovalBar: View {
         }
     }
     
+    private var isWorkflowDAG: Bool {
+        plan.content.trimmingCharacters(in: .whitespacesAndNewlines).first == "{"
+    }
+
     private var header: some View {
-        HStack(spacing: 8) {
-            Image(systemName: "text.document.fill")
-                .foregroundStyle(.blue)
-            
+        HStack(alignment: .top, spacing: 8) {
+            Image(systemName: isWorkflowDAG ? "flowchart.fill" : "text.document.fill")
+                .foregroundStyle(isWorkflowDAG ? .purple : .blue)
+                .padding(.top, 1)
+
             VStack(alignment: .leading, spacing: 2) {
-                Text(plan.title)
-                    .font(.subheadline.weight(.semibold))
-                
-                Text("Proposed Plan")
+                ScrollView(.vertical) {
+                    Text(plan.title)
+                        .font(.subheadline.weight(.semibold))
+                        .textSelection(.enabled)
+                }
+                .frame(maxHeight: 70)
+
+                Text(isWorkflowDAG ? "Workflow Plan" : "Proposed Plan")
                     .font(.caption)
                     .foregroundStyle(.secondary)
             }
-            
+
             Spacer()
-            
+
             if let deadline = plan.deadlineSeconds {
                 Text("\(deadline)s")
                     .font(.caption2.weight(.medium))
@@ -1047,6 +1060,56 @@ struct PlanApprovalBar: View {
         openFolderInFinder(path: filePath)
     }
 #endif
+
+    // MARK: - Workflow DAG detection & preview
+
+    private func parseWorkflowDAG(from jsonString: String) -> DAGApprovalData? {
+        guard let firstChar = jsonString.trimmingCharacters(in: .whitespacesAndNewlines).first,
+              firstChar == "{" else { return nil }
+        guard let data = jsonString.data(using: .utf8) else { return nil }
+        guard let dag = try? JSONDecoder().decode(DAGApprovalData.self, from: data),
+              !dag.nodes.isEmpty else { return nil }
+        return dag
+    }
+
+    @ViewBuilder
+    private func workflowDAGPreview(dag: DAGApprovalData) -> some View {
+        let nodes = dag.nodes.map { wn in
+            WorkflowNode(
+                name: wn.name,
+                type: wn.type ?? (wn.tool != nil ? "tool" : "unknown"),
+                state: .pending,
+                toolName: wn.tool,
+                inputMapping: wn.inputMapping
+            )
+        }
+        let edges = (dag.edges ?? []).map { WorkflowEdge(from: $0.from, to: $0.to) }
+
+        VStack(alignment: .leading, spacing: 6) {
+            HStack(spacing: 6) {
+                Image(systemName: "flowchart.fill")
+                    .font(.caption)
+                    .foregroundStyle(.purple)
+                Text("Workflow DAG")
+                    .font(.caption.weight(.medium))
+                Spacer()
+                Text("\(dag.nodes.count) nodes, \(dag.edges?.count ?? 0) edges")
+                    .font(.caption2)
+                    .foregroundStyle(.secondary)
+            }
+
+            ScrollView([.horizontal, .vertical], showsIndicators: false) {
+                WorkflowDAGLayoutView(nodes: nodes, edges: edges)
+                    .padding(8)
+            }
+            .frame(maxHeight: 240)
+            .background(.ultraThinMaterial)
+            .clipShape(RoundedRectangle(cornerRadius: 8))
+        }
+        .padding(10)
+        .background(.quaternary.opacity(0.3))
+        .clipShape(RoundedRectangle(cornerRadius: 8))
+    }
 }
 
 
@@ -1078,6 +1141,7 @@ private enum ApprovalScope: String, CaseIterable, Hashable {
 
 // 扩展三态选择的回调
 struct ApprovalBar: View {
+    @Environment(\.colorScheme) private var colorScheme
     let request: ApprovalRequest
 
     private var appDisplayName: String {
@@ -1245,8 +1309,9 @@ struct ApprovalBar: View {
                     // Allow once 3 ↩ (高亮主按钮)
                     Button(action: onAllowOnce) {
                         HStack(spacing: 4) {
-                            Text("Allow once ") + Text("3 ⌘↩").foregroundStyle(.primary.opacity(0.7))
+                            Text("Allow once ") + Text("3 ⌘↩")
                         }
+                        .foregroundStyle(colorScheme == .light ? .white.opacity(0.7) : .black.opacity(0.7) )
                     }
                     .buttonStyle(.borderedProminent)
                     .controlSize(.small)
@@ -1517,4 +1582,31 @@ extension View {
         )
         .cornerRadius(8)
     }
+}
+
+// MARK: - Workflow DAG approval JSON types
+
+/// 审批卡中 workflow DAG 定义的轻量 Decodable。
+/// `plan_approval_request.content` 为 JSON string 且首字符为 `{` 时尝试解码为此类型。
+private struct DAGApprovalData: Decodable {
+    let nodes: [DAGApprovalNode]
+    let edges: [DAGApprovalEdge]?
+}
+
+private struct DAGApprovalNode: Decodable {
+    let name: String
+    let tool: String?
+    let type: String?
+    let label: String?
+    let inputMapping: JSONValue?
+
+    enum CodingKeys: String, CodingKey {
+        case name, tool, type, label
+        case inputMapping = "input_mapping"
+    }
+}
+
+private struct DAGApprovalEdge: Decodable {
+    let from: String
+    let to: String
 }

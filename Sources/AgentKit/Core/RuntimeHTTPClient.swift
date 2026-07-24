@@ -299,6 +299,14 @@ struct RuntimeHTTPClient: Sendable {
         return try decodeEnvelope([WireFrame].self, from: data)
     }
 
+    /// `GET /v1/conversations/{id}/workflow/{workflow_id}/snapshot` — Phase 4 DAG snapshot。
+    func getWorkflowSnapshot(conversationID: String, workflowID: String) async throws -> WorkflowSnapshot {
+        let request = try await buildRequest("GET", pathComponents: "v1/conversations", conversationID, "workflow", workflowID, "snapshot")
+        let (data, response) = try await session.data(for: request)
+        try validateHTTP(response, data: data)
+        return try decodeEnvelope(WorkflowSnapshot.self, from: data)
+    }
+
     /// `GET /v1/conversations/{id}/assets/{asset_id}/preview`.
     func getAssetPreview(conversationID: String, assetID: String) async throws -> AgentAssetPreviewResponse {
         let request = try await buildRequest("GET", pathComponents: "v1/conversations", conversationID, "assets", assetID, "preview")
