@@ -260,6 +260,69 @@ public final class WorkspaceStore {
         try? await coordinator.upload(id: id, in: key, onStateChange: onStateChange)
     }
 
+    /// 拖拽文件到输入框时，将文件 URL 转为附件并启动上传管线。
+    /// 与 selectAndUploadUserAssets 同构：先批量持久化 DraftAttachmentReference，
+    /// 再逐个调用 coordinator.upload() 走 preparing → uploading → ready 状态机。
+    public func addDroppedFiles(
+        _ urls: [URL],
+        for key: ConversationLocalStateKey,
+        onStateChange: @escaping @MainActor @Sendable () -> Void = {}
+    ) async {
+        guard canSelectUserAssets,
+              let coordinator = userAssetDraftCoordinator,
+              !urls.isEmpty else { return }
+        do {
+            let currentCount: Int
+            if let state = try? localStateStore.state(for: key) {
+                currentCount = state.composerDraft.attachments.count
+            } else {
+                currentCount = 0
+            }
+            let remaining = max(0, 4 - currentCount)
+            guard remaining > 0 else { return }
+
+            let toAdd = Array(urls.prefix(remaining))
+
+            let generatedItems = toAdd.map { url -> (id: String, ref: DraftAttachmentReference) in
+                let id = UUID().uuidString
+                let ref = DraftAttachmentReference(
+                    id: id,
+                    displayName: url.lastPathComponent,
+                    resourceURI: url.absoluteString
+                )
+                return (id, ref)
+            }
+            
+            // 抽取出 let 常量数组
+            let addedIDs = generatedItems.map(\.id)
+            let newAttachments = generatedItems.map(\.ref)
+            
+            // 闭包内部只更新状态，不再对外部变量进行 mutation
+            try localStateStore.updateState(for: key) { state in
+                let existingIDs = Set(state.composerDraft.attachments.map(\.id))
+                
+                // 过滤掉极其罕见的 UUID 冲突（如果有）
+                let validAttachments = newAttachments.filter { !existingIDs.contains($0.id) }
+                
+                if !validAttachments.isEmpty {
+                    state.composerDraft.attachments.append(contentsOf: validAttachments)
+                    state.composerDraft.revision += 1
+                }
+            }
+            
+            onStateChange()
+            for id in addedIDs {
+                try? await coordinator.upload(
+                    id: id,
+                    in: key,
+                    onStateChange: onStateChange
+                )
+            }
+        } catch {
+            onStateChange()
+        }
+    }
+
     // MARK: - Conversation Management
 
     /// Select a retained/background conversation without changing any other session's

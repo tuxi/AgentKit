@@ -15,6 +15,7 @@
 
 import AppKit
 import SwiftUI
+import UniformTypeIdentifiers
 
 struct MacComposerTextView: NSViewRepresentable {
 
@@ -28,6 +29,8 @@ struct MacComposerTextView: NSViewRepresentable {
     let maxHeight: CGFloat
     /// 回车发送。是否满足发送条件由调用方在闭包内判断。
     let onSend: () -> Void
+    /// 拖拽文件到输入框时回调。返回 true 表示接受拖放。
+    var onFileDrop: (([URL]) -> Bool)? = nil
 
     func makeCoordinator() -> Coordinator { Coordinator(self) }
 
@@ -54,6 +57,8 @@ struct MacComposerTextView: NSViewRepresentable {
         textView.autoresizingMask = [.width]
         textView.placeholderString = placeholder
         textView.onSend = onSend
+        textView.onFileDrop = onFileDrop
+        textView.registerForDraggedTypes([.fileURL])
 
         scrollView.documentView = textView
         context.coordinator.textView = textView
@@ -75,6 +80,7 @@ struct MacComposerTextView: NSViewRepresentable {
         textView.isEditable = isEnabled
         textView.isSelectable = isEnabled
         textView.onSend = onSend
+        textView.onFileDrop = onFileDrop
         context.coordinator.recalculateHeight()
     }
 
@@ -133,12 +139,14 @@ struct MacComposerTextView: NSViewRepresentable {
 // MARK: - ComposerNSTextView
 
 /// 带占位符绘制的 NSTextView（NSTextView 本身无 placeholder）。
+/// 同时支持拖拽文件作为附件添加。
 final class ComposerNSTextView: NSTextView {
 
     var placeholderString: String = "" {
         didSet { if string.isEmpty { needsDisplay = true } }
     }
     var onSend: (() -> Void)?
+    var onFileDrop: (([URL]) -> Bool)?
 
     override func draw(_ dirtyRect: NSRect) {
         super.draw(dirtyRect)
@@ -151,6 +159,76 @@ final class ComposerNSTextView: NSTextView {
         let origin = NSPoint(x: textContainerInset.width + padding,
                              y: textContainerInset.height)
         placeholderString.draw(at: origin, withAttributes: attrs)
+    }
+
+    // MARK: - Drag Destination
+
+    private var isDropTargeted = false {
+        didSet {
+            guard isDropTargeted != oldValue else { return }
+            wantsLayer = true
+            layer?.borderWidth = isDropTargeted ? 2 : 0
+            layer?.borderColor = isDropTargeted
+                ? NSColor.controlAccentColor.cgColor
+                : NSColor.clear.cgColor
+            layer?.cornerRadius = 8
+        }
+    }
+
+    override func draggingEntered(_ sender: NSDraggingInfo) -> NSDragOperation {
+        guard onFileDrop != nil,
+              let urls = fileURLs(from: sender.draggingPasteboard),
+              !urls.isEmpty,
+              urls.allSatisfy({ Self.isImageFile($0) }) else {
+            return []
+        }
+        isDropTargeted = true
+        return .copy
+    }
+
+    override func draggingUpdated(_ sender: NSDraggingInfo) -> NSDragOperation {
+        guard onFileDrop != nil,
+              let urls = fileURLs(from: sender.draggingPasteboard),
+              !urls.isEmpty,
+              urls.allSatisfy({ Self.isImageFile($0) }) else {
+            isDropTargeted = false
+            return []
+        }
+        isDropTargeted = true
+        return .copy
+    }
+
+    override func draggingExited(_ sender: NSDraggingInfo?) {
+        isDropTargeted = false
+    }
+
+    override func prepareForDragOperation(_ sender: NSDraggingInfo) -> Bool {
+        true
+    }
+
+    override func performDragOperation(_ sender: NSDraggingInfo) -> Bool {
+        isDropTargeted = false
+        guard let onFileDrop,
+              let urls = fileURLs(from: sender.draggingPasteboard),
+              !urls.isEmpty else { return false }
+        let imageURLs = urls.filter { Self.isImageFile($0) }
+        guard !imageURLs.isEmpty else { return false }
+        return onFileDrop(imageURLs)
+    }
+
+    private func fileURLs(from pasteboard: NSPasteboard) -> [URL]? {
+        guard let items = pasteboard.pasteboardItems else { return nil }
+        let urls = items.compactMap { item -> URL? in
+            guard let path = item.string(forType: .fileURL) else { return nil }
+            return URL(string: path)
+        }
+        return urls.isEmpty ? nil : urls
+    }
+
+    private static func isImageFile(_ url: URL) -> Bool {
+        guard let uti = try? url.resourceValues(forKeys: [.typeIdentifierKey]).typeIdentifier,
+              let type = UTType(uti) else { return false }
+        return type.conforms(to: .image)
     }
 }
 

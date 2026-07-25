@@ -301,6 +301,8 @@ struct ConversationWebWorkbenchView: NSViewRepresentable {
                 handleViewport(body)
             case "action":
                 handleAction(body)
+            case "resolveUserAssetURL":
+                handleResolveUserAssetURL(body)
             default:
                 break
             }
@@ -593,6 +595,60 @@ struct ConversationWebWorkbenchView: NSViewRepresentable {
             openURL(url)
         }
 
+        /// JS → Native：解析用户资产预览 URL（gateway 签名 URL）。
+        /// JS 发送 `{type: "resolveUserAssetURL", assetID: Int64, requestID: String}`
+        /// 原生调 `UserAssetPreviewResolving.previewURL(for:)` 获取签名 URL
+        /// 通过 `evaluateJavaScript` 回调 `{type: "userAssetURLResolved", assetID, requestID, url}`
+        private func handleResolveUserAssetURL(_ body: [String: Any]) {
+            guard let assetID = (body["assetID"] as? NSNumber)?.int64Value,
+                  assetID > 0,
+                  let requestID = body["requestID"] as? String,
+                  !requestID.isEmpty,
+                  let resolver = workspaceStore?.userAssetPreviewResolver else { return }
+
+            // 仅需 assetID 即可调 gateway API（resolver 只用 asset.assetID）
+            let ref = UserAssetRef(assetID: assetID, mimeType: "image/jpeg", filename: "")
+
+            Task { [weak self] in
+                guard let self, let webView = self.webView else { return }
+                let urlString: String?
+                do {
+                    let url = try await resolver.previewURL(for: ref)
+                    // Upgrade to HTTPS so WKWebView won't block the image as
+                    // mixed content when loaded from a custom-scheme origin.
+                    if var components = URLComponents(url: url, resolvingAgainstBaseURL: false),
+                       components.scheme == "http" {
+                        components.scheme = "https"
+                        urlString = components.string
+                    } else {
+                        urlString = url.absoluteString
+                    }
+                } catch {
+                    urlString = nil
+                }
+
+                await MainActor.run {
+                    let response = ResolveAssetResponse(
+                        type: "userAssetURLResolved",
+                        assetID: assetID,
+                        requestID: requestID,
+                        url: urlString
+                    )
+                    guard let jsonData = try? JSONEncoder().encode(response),
+                          let json = String(data: jsonData, encoding: .utf8) else { return }
+                    let cleanJSON = json.replacingOccurrences(of: "\\/", with: "/")
+                    let js = "window.dispatchEvent(new CustomEvent('userAssetURLResolved', {detail: \(cleanJSON)}))"
+                    webView.evaluateJavaScript(js) { _, error in
+                        if let error {
+                            print("[AgentKit] evaluateJavaScript failed for assetID=\(assetID): \(error)")
+                        } else {
+                            print("[AgentKit] evaluateJavaScript succeeded for assetID=\(assetID)")
+                        }
+                    }
+                }
+            }
+        }
+
         private func reportFatalFailure(_ message: String) {
             #if DEBUG
             NSLog("[AgentKit] %@", message)
@@ -650,5 +706,14 @@ fileprivate final class WeakScriptMessageHandler: NSObject, WKScriptMessageHandl
     ) {
         delegate?.userContentController(userContentController, didReceive: message)
     }
+}
+
+// MARK: - User asset URL resolution bridge
+
+private struct ResolveAssetResponse: Encodable {
+    let type: String
+    let assetID: Int64
+    let requestID: String
+    let url: String?
 }
 #endif

@@ -41,16 +41,16 @@ struct TurnView: View, Equatable {
     /// each turn block as its own view, no TextKit NSAttributedString.
     private var iosBody: some View {
         VStack(alignment: .leading, spacing: 6) {
-            // User prompt as a right-aligned markdown bubble
-            if let userPrompt = turn.userPrompt {
-                UserPromptBubble(prompt: userPrompt)
-            }
             // User-attached images / files
             if let userAssets = turn.userPrompt?.userAssets, !userAssets.isEmpty {
                 UserAssetPreviewStrip(
                     assets: userAssets,
                     resolver: store.userAssetPreviewResolver
                 )
+            }
+            // User prompt as a right-aligned markdown bubble
+            if let userPrompt = turn.userPrompt {
+                UserPromptBubble(prompt: userPrompt)
             }
             // Agent response blocks rendered as typed SwiftUI views
             AgentResponseView(

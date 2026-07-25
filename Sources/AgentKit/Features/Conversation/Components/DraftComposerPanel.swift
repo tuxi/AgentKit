@@ -350,6 +350,10 @@ struct DraftComposerPanel: View {
             maxHeight: composerMaxHeight,
             onSend: {
                 send()
+            },
+            onFileDrop: { urls in
+                handleDroppedFiles(urls)
+                return true
             }
         )
         .frame(height: composerHeight)
@@ -545,6 +549,21 @@ struct DraftComposerPanel: View {
             await workspaceStore.selectAndUploadUserAssets(
                 for: key,
                 remainingSlots: 4 - attachments.count
+            ) {
+                refreshAttachmentsFromLocalState()
+            }
+        }
+    }
+
+    private func handleDroppedFiles(_ urls: [URL]) {
+        guard let key = persistenceKey,
+              workspaceStore.canSelectUserAssets else { return }
+        let remainingSlots = 4 - attachments.count
+        guard remainingSlots > 0 else { return }
+        Task {
+            await workspaceStore.addDroppedFiles(
+                urls,
+                for: key
             ) {
                 refreshAttachmentsFromLocalState()
             }

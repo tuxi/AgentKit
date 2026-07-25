@@ -23,6 +23,39 @@ let workbenchSuspended = false;
 let suspendedFocusID: string | undefined;
 const workbenchSuspensionEvent = "agentkit-workbench-suspension";
 
+// -- User asset URL resolution ------------------------------------------------
+// Assets arrive without signed URLs. The native side resolves them
+// asynchronously and fires a `userAssetURLResolved` CustomEvent.
+//
+// We use three complementary mechanisms so that timing cannot break the
+// pipeline: (1) the CustomEvent listener catches the native response and
+// updates the DOM immediately, (2) a MutationObserver catches <img> elements
+// that appear *after* the URL was already cached, and (3) the Turn component
+// reads the cache on every render so a React update after resolution uses the
+// real URL directly.
+
+const userAssetPlaceholderSrc =
+  "data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='104' height='76' viewBox='0 0 104 76'%3E%3Crect width='104' height='76' fill='%23f0f0f0'/%3E%3C/svg%3E";
+const pendingAssetURLs = new Map<number, string>(); // "" = pending, url = resolved
+
+function resolveUserAssetURL(assetID: number): void {
+  if (pendingAssetURLs.has(assetID)) return;
+  pendingAssetURLs.set(assetID, ""); // mark pending
+  window.webkit?.messageHandlers?.agentkitWorkbench?.postMessage({
+    type: "resolveUserAssetURL",
+    assetID,
+    requestID: crypto.randomUUID(),
+  });
+}
+
+function applyResolvedAssetURL(assetID: number, url: string): void {
+  pendingAssetURLs.set(assetID, url);
+  const img = document.querySelector<HTMLImageElement>(
+    `img[data-asset-id="${assetID}"]`,
+  );
+  if (img) img.src = url;
+}
+
 function postToNative(message: NativeBridgeMessage): void {
   window.webkit?.messageHandlers?.agentkitWorkbench?.postMessage(message);
 }
@@ -1518,6 +1551,14 @@ function CollapsibleUserPrompt({
 const Turn = memo(function Turn({ turn }: { turn: ConversationWebTurn }) {
   const footer = turn.footer;
   const headingID = `turn-heading-${turn.id}`;
+
+  // Request signed URLs for user assets that arrived without one.
+  useEffect(() => {
+    for (const asset of turn.userAssets) {
+      if (!asset.previewURL) resolveUserAssetURL(asset.assetID);
+    }
+  }, [turn.userAssets]);
+
   return (
     <article
       className="turn"
@@ -1526,6 +1567,40 @@ const Turn = memo(function Turn({ turn }: { turn: ConversationWebTurn }) {
       aria-labelledby={headingID}
     >
       <h2 className="visually-hidden" id={headingID}>Conversation turn</h2>
+      {turn.userAssets.length > 0 ? (
+        <div
+          className="user-asset-strip"
+          data-scroll-id={`user-assets:${turn.id}`}
+        >
+          {turn.userAssets.map((asset) => {
+            const resolvedURL = pendingAssetURLs.get(asset.assetID);
+            const src = asset.previewURL || (resolvedURL || undefined);
+            return (
+              <div
+                className="user-asset-thumbnail"
+                key={asset.assetID}
+                title={asset.filename}
+              >
+                {src ? (
+                  <img
+                    src={src}
+                    data-asset-id={asset.assetID}
+                    alt={asset.filename}
+                    loading="lazy"
+                  />
+                ) : (
+                  <img
+                    src={userAssetPlaceholderSrc}
+                    data-asset-id={asset.assetID}
+                    alt={asset.filename}
+                    loading="lazy"
+                  />
+                )}
+              </div>
+            );
+          })}
+        </div>
+      ) : null}
       {turn.userPrompt ? (
         <CollapsibleUserPrompt turnID={turn.id} text={turn.userPrompt} />
       ) : null}
@@ -1713,8 +1788,16 @@ function App(): React.JSX.Element {
         }
       },
     };
+    const handleAssetURLResolved = (event: Event) => {
+      const detail = (event as CustomEvent).detail;
+      if (detail && typeof detail.url === "string" && typeof detail.assetID === "number") {
+        applyResolvedAssetURL(detail.assetID, detail.url);
+      }
+    };
+    window.addEventListener("userAssetURLResolved", handleAssetURLResolved);
     postToNative({ type: "ready", protocolVersion });
     return () => {
+      window.removeEventListener("userAssetURLResolved", handleAssetURLResolved);
       stopViewportController();
       currentConversationID = undefined;
       delete window.AgentKitWorkbench;
@@ -1762,6 +1845,28 @@ function App(): React.JSX.Element {
   }, [conversation]);
 
   useEffect(() => {
+    // Apply any already-resolved asset URLs to <img> elements that appear
+    // after the CustomEvent has already fired (e.g. React re-rendering).
+    const assetObserver = new MutationObserver((mutations) => {
+      for (const mutation of mutations) {
+        for (const node of mutation.addedNodes) {
+          if (!(node instanceof HTMLElement)) continue;
+          const imgs = node.tagName === "IMG" && node.dataset.assetId
+            ? [node as HTMLImageElement]
+            : node.querySelectorAll<HTMLImageElement>("img[data-asset-id]");
+          for (const img of imgs) {
+            const id = Number(img.dataset.assetId);
+            const url = pendingAssetURLs.get(id);
+            if (url && url !== "") {
+              console.log("[AgentKit] MutationObserver: applying cached URL for assetID =", id);
+              img.src = url;
+            }
+          }
+        }
+      }
+    });
+    assetObserver.observe(document.body, { childList: true, subtree: true });
+
     const hideTasks = new Map<HTMLElement, number>();
     const revealHorizontalScrollbar = (event: Event) => {
       const target = event.target instanceof HTMLElement
@@ -1778,6 +1883,7 @@ function App(): React.JSX.Element {
     };
     document.addEventListener("scroll", revealHorizontalScrollbar, true);
     return () => {
+      assetObserver.disconnect();
       document.removeEventListener("scroll", revealHorizontalScrollbar, true);
       hideTasks.forEach((task) => window.clearTimeout(task));
     };

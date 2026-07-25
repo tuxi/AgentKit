@@ -59,9 +59,17 @@ export interface ConversationWebBlock {
   codeCopyActionIDs: string[];
 }
 
+export interface ConversationWebUserAsset {
+  assetID: number;
+  filename: string;
+  mimeType: string;
+  previewURL?: string;
+}
+
 export interface ConversationWebTurn {
   id: string;
   userPrompt?: string;
+  userAssets: ConversationWebUserAsset[];
   blocks: ConversationWebBlock[];
   todos: ConversationWebDocument["todos"];
   extensionNodes: ConversationWebExtensionNode[];
@@ -191,6 +199,11 @@ export type NativeBridgeMessage =
       interacting: boolean;
       anchorID?: string;
       anchorTop?: number;
+    }
+  | {
+      type: "resolveUserAssetURL";
+      assetID: number;
+      requestID: string;
     };
 
 declare global {

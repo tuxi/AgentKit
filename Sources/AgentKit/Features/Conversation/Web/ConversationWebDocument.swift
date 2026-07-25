@@ -27,6 +27,7 @@ struct ConversationWebDocument: Codable, Equatable, Sendable {
     struct Turn: Codable, Equatable, Sendable {
         let id: String
         let userPrompt: String?
+        let userAssets: [UserAsset]
         let blocks: [Block]
         let todos: [Todo]
         let extensionNodes: [ExtensionNode]
@@ -36,6 +37,13 @@ struct ConversationWebDocument: Codable, Equatable, Sendable {
         let shareActionID: String?
         let assetsActionID: String?
         let assetCount: Int
+    }
+
+    struct UserAsset: Codable, Equatable, Sendable {
+        let assetID: Int64
+        let filename: String
+        let mimeType: String
+        let previewURL: String?
     }
 
     struct Block: Codable, Equatable, Sendable {
@@ -256,7 +264,15 @@ enum ConversationWebDocumentBuilder {
         }
         return ConversationWebDocument.Turn(
             id: turn.id,
-            userPrompt: turn.userPrompt?.displayTextWithUserAssets,
+            userPrompt: turn.userPrompt?.text,
+            userAssets: turn.userPrompt?.userAssets.map { asset in
+                ConversationWebDocument.UserAsset(
+                    assetID: asset.assetID,
+                    filename: asset.filename,
+                    mimeType: asset.mimeType,
+                    previewURL: nil  // Phase 2: 宿主 app resolve gateway 签名 URL 后注入
+                )
+            } ?? [],
             blocks: turn.blocks.enumerated().map { blockIndex, block in
                 let previousBlock = previousTurn.flatMap {
                     blockIndex < $0.blocks.count ? $0.blocks[blockIndex] : nil

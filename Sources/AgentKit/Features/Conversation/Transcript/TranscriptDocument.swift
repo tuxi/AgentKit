@@ -71,7 +71,9 @@ enum TurnTranscriptBuilder {
         var builder = TranscriptAttributedBuilder(assetIndex: assetIndex)
 
         if let user = turn.userPrompt {
-            builder.appendUserPrompt(user.displayTextWithUserAssets)
+            // 图片已由 UserAssetPreviewStrip 在 transcript 上方独立渲染，
+            // 文本中不再拼接 [图片] 占位符，避免重复显示。
+            builder.appendUserPrompt(user.text)
             builder.appendBlankLine()
         }
 
