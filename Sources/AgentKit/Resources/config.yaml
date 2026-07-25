@@ -65,7 +65,6 @@ agent:
   subagent_model: deepseek
   client_tool_timeout_seconds: 900
 
-
 provider:
   request_timeout_seconds: 600
   max_retries: 5

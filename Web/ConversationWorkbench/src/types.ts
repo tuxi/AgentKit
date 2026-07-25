@@ -23,6 +23,12 @@ export interface ConversationWebTool {
   copyOutputActionID?: string;
   argumentActions: InlineAction[];
   outputActions: InlineAction[];
+  /// Non-nil when tool output contains a DAG definition.
+  dagNodes?: number;
+  /// Number of edges in the DAG (when dagNodes is non-nil).
+  dagEdges?: number;
+  /// Action to open the workflow DAG detail.
+  dagOpenActionID?: string;
 }
 
 export interface InlineAction {

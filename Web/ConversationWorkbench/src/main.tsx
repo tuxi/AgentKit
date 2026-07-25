@@ -1212,6 +1212,32 @@ function Tool({ tool }: { tool: ConversationWebTool }): React.JSX.Element {
             </div>
           </section>
         ) : null}
+        {tool.dagNodes ? (
+          <section className="dag-summary-card">
+            <div className="dag-summary-header">
+              <span className="dag-summary-icon" aria-hidden="true">⚡</span>
+              <span className="dag-summary-title">Workflow DAG</span>
+              {tool.status === "completed" ? (
+                <span className="dag-summary-badge">✓</span>
+              ) : null}
+            </div>
+            <div className="dag-summary-body">
+              <span className="dag-summary-count">
+                📊 {tool.dagNodes} node{tool.dagNodes !== 1 ? "s" : ""}
+                {tool.dagEdges != null ? `, ${tool.dagEdges} edge${tool.dagEdges !== 1 ? "s" : ""}` : ""}
+              </span>
+              {tool.dagOpenActionID ? (
+                <ActionButton
+                  actionID={tool.dagOpenActionID}
+                  focusID={`tool-dag:${tool.id}`}
+                  tooltip="Open workflow DAG detail"
+                >
+                  View Workflow DAG →
+                </ActionButton>
+              ) : null}
+            </div>
+          </section>
+        ) : null}
         {tool.artifactActionID ? (
           <ActionButton actionID={tool.artifactActionID} focusID={`tool-artifact:${tool.id}`}>
             Open artifact

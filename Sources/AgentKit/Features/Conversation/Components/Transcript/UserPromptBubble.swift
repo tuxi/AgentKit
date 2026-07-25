@@ -32,6 +32,7 @@ struct UserPromptBubble: View {
         HStack {
             Spacer()
             Text(prompt.text)
+                .textSelection(.enabled)
                 .font(.body)
                 .foregroundStyle(.primary)
                 .padding(.horizontal, 14)

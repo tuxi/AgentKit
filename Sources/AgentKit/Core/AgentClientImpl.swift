@@ -74,7 +74,9 @@ public final class CodeAgentSessionChannel: RuntimeSessionChannel, @unchecked Se
         return newSocket.connect()
     }
 
-    public func send(input: AgentInput) async { await socket?.send(input: input) }
+    public func send(input: AgentInput) async {
+        await socket?.send(input: input)
+    }
 
     public func submit(input: AgentInput) async -> AgentInputSubmissionTicket {
         guard let socket else {

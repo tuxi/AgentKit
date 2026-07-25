@@ -44,11 +44,9 @@ public struct ConversationDetailView: View {
                 draftView
             }
         }
-        .frame(maxWidth: 800)
-        .frame(minWidth: 230)
         .toolbar { toolbarContent }
-        #if os(macOS)
-        .navigationTitle(store.activeConversationViewModel?.conversation?.name ?? "")
+        #if os(iOS)
+        .navigationBarTitleDisplayMode(.inline)
         #endif
     }
     

@@ -80,6 +80,12 @@ struct ConversationWebDocument: Codable, Equatable, Sendable {
         let copyOutputActionID: String?
         let argumentActions: [InlineAction]
         let outputActions: [InlineAction]
+        /// Non-nil when tool output contains a DAG definition.
+        let dagNodes: Int?
+        /// Number of edges in the DAG (when dagNodes is non-nil).
+        let dagEdges: Int?
+        /// Action to open the workflow DAG detail (when workflow_id is present).
+        let dagOpenActionID: String?
     }
 
     struct InlineAction: Codable, Equatable, Sendable {
@@ -207,6 +213,7 @@ enum ConversationWebDocumentBuilder {
                 for tool in block.tools {
                     if let token = tool.artifactActionID { tokens.insert(token) }
                     if let token = tool.copyOutputActionID { tokens.insert(token) }
+                    if let token = tool.dagOpenActionID { tokens.insert(token) }
                     tokens.formUnion(tool.assetActions.map(\.actionID))
                     tokens.formUnion(tool.argumentActions.map(\.actionID))
                     tokens.formUnion(tool.outputActions.map(\.actionID))
@@ -432,6 +439,16 @@ enum ConversationWebDocumentBuilder {
                 let presentation = ToolTranscriptPresenter.presentation(for: tool)
                 let arguments = tool.args.flatMap(formattedJSON)
                 let output = tool.output.isEmpty ? nil : tool.output
+                // DAG detection for workflow tools (workflow_definition, etc.)
+                let dag = tryParseDAG(from: tool.output)
+                let dagOpenActionID: String? = dag?.workflowId.flatMap { wfID in
+                    registerAction.map {
+                        $0(.transcript(
+                            turnID: turn.id,
+                            action: .openWorkflow(workflowID: wfID)
+                        ))
+                    }
+                }
                 return ConversationWebDocument.Tool(
                     id: tool.callID,
                     name: presentation.title,
@@ -441,7 +458,7 @@ enum ConversationWebDocumentBuilder {
                     elapsed: presentation.elapsed,
                     changeSummary: presentation.changeSummary,
                     arguments: arguments,
-                    output: output,
+                    output: dag != nil ? nil : output,  // suppress raw JSON when DAG is rendered
                     artifactActionID: previousTool?.artifact == tool.artifact
                         ? previousWebTool?.artifactActionID
                         : tool.artifact.flatMap { _ in
@@ -494,7 +511,10 @@ enum ConversationWebDocumentBuilder {
                             assetIndex: assetIndex,
                             registerAction: registerAction
                         )
-                    } ?? []
+                    } ?? [],
+                    dagNodes: dag?.nodes.count,
+                    dagEdges: dag?.edges?.count,
+                    dagOpenActionID: dagOpenActionID
                 )
             }
             return .init(
@@ -613,6 +633,14 @@ enum ConversationWebDocumentBuilder {
         return value.stringValue.isEmpty ? nil : value.stringValue
     }
 
+    /// 检测工具输出 JSON 是否包含 DAG 定义（workflow_definition / workflow_plan_ready 等格式）。
+    private static func tryParseDAG(from jsonString: String) -> WebDAGData? {
+        guard let data = jsonString.data(using: .utf8),
+              let dag = try? JSONDecoder().decode(WebDAGData.self, from: data),
+              !dag.nodes.isEmpty else { return nil }
+        return dag
+    }
+
     private static func artifactText(_ artifact: ArtifactNode) -> String? {
         switch artifact.content {
         case .diff(let payload):
@@ -712,4 +740,26 @@ enum ConversationWebDocumentBuilder {
             ))
         }
     }
+}
+
+// MARK: - Web DAG detection
+
+private struct WebDAGData: Decodable {
+    let workflowId: String?
+    let nodes: [WebDAGNode]
+    let edges: [WebDAGEdge]?
+
+    enum CodingKeys: String, CodingKey {
+        case nodes, edges
+        case workflowId = "workflow_id"
+    }
+}
+
+private struct WebDAGNode: Decodable {
+    let name: String
+}
+
+private struct WebDAGEdge: Decodable {
+    let from: String
+    let to: String
 }

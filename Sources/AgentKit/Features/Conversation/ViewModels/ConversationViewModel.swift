@@ -142,6 +142,9 @@ public final class ConversationViewModel {
     /// execute at most once for the lifetime of this session ViewModel.
     private var inFlightClientToolCallIDs: Set<String> = []
     private var completedClientToolCallIDs: Set<String> = []
+    /// disconnect() 被调用时如果有 client tool 还在执行中，暂存为待处理，
+    /// 等工具完成后自动执行真正的断开。
+    private var pendingDisconnect = false
 
     /// Host 注入的 auth 恢复钩子。收到 `turn_failed(code: auth_expired)` 时调用
     /// （契约：credential-injection-v1 §5.2 —— 刷新 token → Reconfigure Runtime）。
@@ -436,7 +439,14 @@ public final class ConversationViewModel {
     }
 
     /// 断开连接。
+    ///
+    /// 如果有 client tool 仍在执行中（如 interactive 拍照），暂不拆 channel，
+    /// 等工具完成后自动执行延迟的断开。否则工具结果因 channel 为 nil 而丢失。
     public func disconnect() async {
+        guard inFlightClientToolCallIDs.isEmpty else {
+            pendingDisconnect = true
+            return
+        }
         turnDispatchTask?.cancel()
         if let queuedTicket {
             await turnCoordinator?.cancel(ticket: queuedTicket)
@@ -717,6 +727,11 @@ public final class ConversationViewModel {
             await self.executeClientTool(turnID: turnID, callID: callID, tool: tool)
             self.inFlightClientToolCallIDs.remove(callID)
             self.completedClientToolCallIDs.insert(callID)
+            // disconnect() 可能因本工具正在执行而被延迟——现在补执行
+            if self.pendingDisconnect {
+                self.pendingDisconnect = false
+                await self.disconnect()
+            }
         }
     }
 

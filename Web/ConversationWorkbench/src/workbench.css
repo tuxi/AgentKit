@@ -513,6 +513,52 @@ summary:active {
   outline-offset: 1px;
 }
 
+/* DAG summary card — rendered when a tool output contains a workflow DAG */
+
+.dag-summary-card {
+  margin: 8px 0;
+  padding: 10px 14px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--subtle);
+}
+
+.dag-summary-header {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  margin-bottom: 7px;
+}
+
+.dag-summary-icon {
+  font-size: 15px;
+  line-height: 1;
+}
+
+.dag-summary-title {
+  flex: 1 1 auto;
+  font-weight: 500;
+  color: var(--text);
+}
+
+.dag-summary-badge {
+  flex: 0 0 auto;
+  color: light-dark(rgb(24 139 62), rgb(68 195 106));
+  font-size: 12px;
+}
+
+.dag-summary-body {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.dag-summary-count {
+  color: var(--secondary);
+  font-size: 12px;
+}
+
 .status-dot {
   flex: 0 0 auto;
   width: 7px;

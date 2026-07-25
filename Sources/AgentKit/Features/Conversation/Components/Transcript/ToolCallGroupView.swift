@@ -96,13 +96,17 @@ struct ToolCallGroupView: View {
                     .foregroundStyle(.tertiary)
                 MarkdownRenderer(text: args.prettyPrinted, baseFont: .caption)
             }
-            // Output
+            // Output — DAG component for workflow tools, markdown for others
             if !tool.output.isEmpty {
-                Text("输出")
-                    .font(.caption2.weight(.semibold))
-                    .foregroundStyle(.tertiary)
-                    .padding(.top, 2)
-                MarkdownRenderer(text: tool.output, baseFont: .caption)
+                if let dag = tryParseDAG(from: tool.output) {
+                    workflowToolDAGView(dag: dag, toolName: tool.toolName)
+                } else {
+                    Text("输出")
+                        .font(.caption2.weight(.semibold))
+                        .foregroundStyle(.tertiary)
+                        .padding(.top, 2)
+                    MarkdownRenderer(text: tool.output, baseFont: .caption)
+                }
             }
             // Error
             if tool.status == .failed {
@@ -136,6 +140,83 @@ struct ToolCallGroupView: View {
                 .padding(.horizontal, 10)
         }
     }
+
+    // MARK: - Workflow tool DAG rendering
+
+    /// 尝试从工具输出 JSON 解析 DAG 定义（兼容 `workflow_definition`、`workflow_plan_ready` 等格式）。
+    private func tryParseDAG(from jsonString: String) -> ToolResultDAGData? {
+        guard let data = jsonString.data(using: .utf8),
+              let dag = try? JSONDecoder().decode(ToolResultDAGData.self, from: data),
+              !dag.nodes.isEmpty else { return nil }
+        return dag
+    }
+
+    @ViewBuilder
+    private func workflowToolDAGView(dag: ToolResultDAGData, toolName: String) -> some View {
+        let nodes = dag.nodes.map { wn in
+            WorkflowNode(
+                name: wn.name,
+                type: wn.type ?? (wn.tool != nil ? "tool" : "unknown"),
+                state: .pending,
+                toolName: wn.tool
+            )
+        }
+        let edges = (dag.edges ?? []).map { WorkflowEdge(from: $0.from, to: $0.to) }
+
+        VStack(alignment: .leading, spacing: 6) {
+            HStack(spacing: 6) {
+                Image(systemName: "flowchart.fill")
+                    .font(.caption2)
+                    .foregroundStyle(.purple)
+                Text(dag.goal ?? toolName)
+                    .font(.caption.weight(.medium))
+                    .lineLimit(2)
+                Spacer()
+                Text("\(dag.nodes.count) nodes")
+                    .font(.caption2)
+                    .foregroundStyle(.secondary)
+            }
+
+            ScrollView(.horizontal, showsIndicators: false) {
+                WorkflowDAGLayoutView(nodes: nodes, edges: edges)
+                    .padding(6)
+            }
+            .frame(maxHeight: 220)
+            .background(.ultraThinMaterial)
+            .clipShape(RoundedRectangle(cornerRadius: 8))
+            .overlay(
+                RoundedRectangle(cornerRadius: 8)
+                    .stroke(Color.purple.opacity(0.15), lineWidth: 1)
+            )
+        }
+        .padding(.top, 4)
+    }
+}
+
+// MARK: - Tool result DAG detection types
+
+/// 工具输出中 DAG 定义的轻量 Decodable（workflow_definition / workflow_plan_ready 等格式）。
+private struct ToolResultDAGData: Decodable {
+    let goal: String?
+    let workflowId: String?
+    let nodes: [ToolResultDAGNode]
+    let edges: [ToolResultDAGEdge]?
+
+    enum CodingKeys: String, CodingKey {
+        case goal, nodes, edges
+        case workflowId = "workflow_id"
+    }
+}
+
+private struct ToolResultDAGNode: Decodable {
+    let name: String
+    let tool: String?
+    let type: String?
+}
+
+private struct ToolResultDAGEdge: Decodable {
+    let from: String
+    let to: String
 }
 
 private extension JSONValue {
