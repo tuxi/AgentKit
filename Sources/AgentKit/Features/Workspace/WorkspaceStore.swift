@@ -225,11 +225,24 @@ public final class WorkspaceStore {
         remainingSlots: Int,
         onStateChange: @escaping @MainActor @Sendable () -> Void = {}
     ) async {
-        guard remainingSlots > 0,
-              let userAssetPicker,
+        guard let userAssetPicker,
               let coordinator = userAssetDraftCoordinator else { return }
         do {
-            let selected = Array(try await userAssetPicker().prefix(remainingSlots))
+            // 先把已失败/已发送的残留附件清掉，再算真实可用槽位
+            try localStateStore.updateState(for: key) { state in
+                state.composerDraft.attachments.removeAll {
+                    $0.state == .failed || $0.state == .sending
+                }
+                state.composerDraft.revision += 1
+            }
+            onStateChange()
+
+            let currentCount = (try? localStateStore.state(for: key))?
+                .composerDraft.attachments.count ?? 0
+            let available = max(0, min(4, 4 - currentCount))
+            guard available > 0 else { return }
+
+            let selected = Array(try await userAssetPicker().prefix(available))
             guard !selected.isEmpty else { return }
             try localStateStore.updateState(for: key) { state in
                 let existingIDs = Set(state.composerDraft.attachments.map(\.id))
@@ -272,12 +285,17 @@ public final class WorkspaceStore {
               let coordinator = userAssetDraftCoordinator,
               !urls.isEmpty else { return }
         do {
-            let currentCount: Int
-            if let state = try? localStateStore.state(for: key) {
-                currentCount = state.composerDraft.attachments.count
-            } else {
-                currentCount = 0
+            // 先清掉已失败/已发送的残留附件，再算真实可用槽位
+            try localStateStore.updateState(for: key) { state in
+                state.composerDraft.attachments.removeAll {
+                    $0.state == .failed || $0.state == .sending
+                }
+                state.composerDraft.revision += 1
             }
+            onStateChange()
+
+            let currentCount = (try? localStateStore.state(for: key))?
+                .composerDraft.attachments.count ?? 0
             let remaining = max(0, 4 - currentCount)
             guard remaining > 0 else { return }
 
@@ -292,11 +310,11 @@ public final class WorkspaceStore {
                 )
                 return (id, ref)
             }
-            
+
             // 抽取出 let 常量数组
             let addedIDs = generatedItems.map(\.id)
             let newAttachments = generatedItems.map(\.ref)
-            
+
             // 闭包内部只更新状态，不再对外部变量进行 mutation
             try localStateStore.updateState(for: key) { state in
                 let existingIDs = Set(state.composerDraft.attachments.map(\.id))
