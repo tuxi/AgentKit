@@ -94,7 +94,7 @@ struct DraftComposerPanel: View {
                     }
                     .buttonStyle(.plain)
                     .foregroundStyle(.secondary)
-                    .accessibilityLabel("添加")
+                    .accessibilityLabel(AgentKitLocalized.string("composer.add_attachment"))
                     .disabled(
                         attachments.count >= 4
                             || (onAddAttachment == nil && !workspaceStore.canSelectUserAssets)
@@ -102,9 +102,9 @@ struct DraftComposerPanel: View {
 
                     #if os(macOS)
                     Menu {
-                        Button("请求批准") { }
+                        Button(AgentKitLocalized.string("composer.request_approval")) { }
                     } label: {
-                        Label("请求批准", systemImage: "hand.raised")
+                        Label(AgentKitLocalized.string("composer.request_approval"), systemImage: "hand.raised")
                             .font(.system(size: 13, weight: .medium))
                             .labelStyle(.titleAndIcon)
                         Image(systemName: "chevron.down")
@@ -140,7 +140,7 @@ struct DraftComposerPanel: View {
                     .buttonStyle(.plain)
                     .frame(maxWidth: 132)
                     .disabled(modelSettings.availableModelIDs.isEmpty)
-                    .accessibilityLabel("选择模型")
+                    .accessibilityLabel(AgentKitLocalized.string("composer.select_model"))
                     #else
                     Menu {
                         // 优雅的 Popover 内部视图
@@ -235,7 +235,7 @@ struct DraftComposerPanel: View {
                     }
                     .buttonStyle(.plain)
                     .foregroundStyle(.secondary)
-                    .accessibilityLabel("语音输入")
+                    .accessibilityLabel(AgentKitLocalized.string("composer.voice_input"))
                     #endif
 
                     // ── Send / Stop button ──
@@ -250,7 +250,7 @@ struct DraftComposerPanel: View {
                         .buttonStyle(.plain)
                         .foregroundStyle(.white)
                         .background(Color.red, in: Circle())
-                        .accessibilityLabel("停止")
+                        .accessibilityLabel(AgentKitLocalized.string("composer.stop"))
                     } else {
                         Button {
                             send()
@@ -269,7 +269,7 @@ struct DraftComposerPanel: View {
                         .foregroundStyle(canSend ? Color.draftSendForeground : Color.draftDisabledSendForeground)
                         .background(canSend ? Color.draftSendBackground : Color.draftDisabledSendBackground, in: Circle())
                         .disabled(!canSend)
-                        .accessibilityLabel("发送")
+                        .accessibilityLabel(AgentKitLocalized.string("composer.send"))
                     }
                 }
                 .padding(.horizontal, 14)
@@ -599,9 +599,9 @@ private struct IOSModelPickerSheet: View {
             Group {
                 if modelIDs.isEmpty {
                     ContentUnavailableView(
-                        "暂无可用模型",
+                        AgentKitLocalized.string("composer.no_models"),
                         systemImage: "cpu",
-                        description: Text("模型列表加载完成后会显示在这里")
+                        description: Text(AgentKitLocalized.string("composer.models_load_hint"))
                     )
                 } else {
                     List(modelIDs, id: \.self) { modelID in
@@ -634,11 +634,11 @@ private struct IOSModelPickerSheet: View {
                     .listStyle(.insetGrouped)
                 }
             }
-            .navigationTitle("选择模型")
+            .navigationTitle(AgentKitLocalized.string("composer.select_model_title"))
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .topBarTrailing) {
-                    Button("完成") { dismiss() }
+                    Button(AgentKitLocalized.string("composer.done")) { dismiss() }
                 }
             }
         }
@@ -692,7 +692,7 @@ private struct DraftAttachmentThumbnail: View {
                 }
                 .buttonStyle(.plain)
                 .padding(5)
-                .accessibilityLabel("移除 \(attachment.displayName)")
+                .accessibilityLabel(String(format: AgentKitLocalized.string("composer.remove_attachment"), attachment.displayName))
             }
         }
         .frame(width: 96, height: 76)
@@ -711,10 +711,10 @@ private struct DraftAttachmentThumbnail: View {
     private var stateOverlay: some View {
         switch attachment.state {
         case .local, .preparing:
-            statusOverlay(title: "处理中", progress: nil)
+            statusOverlay(title: AgentKitLocalized.string("composer.processing"), progress: nil)
         case .uploading:
             statusOverlay(
-                title: "上传中 \(Int((attachment.progress ?? 0) * 100))%",
+                title: String(format: AgentKitLocalized.string("composer.uploading_pct"), String(Int((attachment.progress ?? 0) * 100))),
                 progress: attachment.progress
             )
         case .failed:
@@ -722,7 +722,7 @@ private struct DraftAttachmentThumbnail: View {
                 VStack(spacing: 4) {
                     Image(systemName: "exclamationmark.arrow.triangle.2.circlepath")
                         .font(.system(size: 18, weight: .semibold))
-                    Text("上传失败 · 重试")
+                    Text(verbatim: AgentKitLocalized.string("composer.upload_failed_retry"))
                         .font(.caption2.weight(.semibold))
                 }
                 .foregroundStyle(.white)
@@ -730,7 +730,7 @@ private struct DraftAttachmentThumbnail: View {
                 .background(.black.opacity(0.58))
             }
             .buttonStyle(.plain)
-            .accessibilityHint(attachment.failure?.message ?? "点击重新上传")
+            .accessibilityHint(attachment.failure?.message ?? AgentKitLocalized.string("composer.tap_to_retry"))
         case .ready, .sending:
             EmptyView()
         }
@@ -761,11 +761,11 @@ private struct DraftAttachmentThumbnail: View {
 
     private var accessibilityLabel: String {
         switch attachment.state {
-        case .local, .preparing: return "\(attachment.displayName)，处理中"
-        case .uploading: return "\(attachment.displayName)，上传中"
-        case .failed: return "\(attachment.displayName)，上传失败"
-        case .ready: return "\(attachment.displayName)，上传完成"
-        case .sending: return "\(attachment.displayName)，发送中"
+        case .local, .preparing: return String(format: AgentKitLocalized.string("composer.attachment_processing"), attachment.displayName)
+        case .uploading: return String(format: AgentKitLocalized.string("composer.attachment_uploading"), attachment.displayName)
+        case .failed: return String(format: AgentKitLocalized.string("composer.attachment_failed"), attachment.displayName)
+        case .ready: return String(format: AgentKitLocalized.string("composer.attachment_ready"), attachment.displayName)
+        case .sending: return String(format: AgentKitLocalized.string("composer.attachment_sending"), attachment.displayName)
         }
     }
 }
@@ -1171,7 +1171,7 @@ struct ApprovalBar: View {
     
     private var approvalHeaderText: String {
         if request.isExternalPathAccess {
-            return "\(appDisplayName) 请求访问工作区外的文件"
+            return String(format: AgentKitLocalized.string("composer.request_file_access"), appDisplayName)
         }
         return "Allow \(appDisplayName) to run \(request.displayToolName)?"
     }
@@ -1430,7 +1430,7 @@ struct AskUserBar: View {
                 Text(request.header)
                     .font(.subheadline.weight(.semibold))
 
-                Text(request.multiSelect ? "可多选" : "请选择一个选项")
+                Text(request.multiSelect ? AgentKitLocalized.string("composer.multi_select") : AgentKitLocalized.string("composer.please_select"))
                     .font(.caption)
                     .foregroundStyle(.secondary)
             }
@@ -1459,7 +1459,7 @@ struct AskUserBar: View {
                     .foregroundStyle(.secondary)
             }
             .buttonStyle(.plain)
-            .help(isExpanded ? "收起" : "展开")
+            .help(isExpanded ? AgentKitLocalized.string("composer.collapse") : AgentKitLocalized.string("composer.expand"))
 
             // Skip button
             Button(action: onSkip) {
@@ -1467,7 +1467,7 @@ struct AskUserBar: View {
                     .foregroundStyle(.secondary)
             }
             .buttonStyle(.plain)
-            .help("跳过此问题")
+            .help(AgentKitLocalized.string("composer.skip_question"))
         }
     }
 
@@ -1516,7 +1516,7 @@ struct AskUserBar: View {
                             .foregroundStyle(.primary)
 
                         if isRecommended {
-                            Text("推荐")
+                            Text(verbatim: AgentKitLocalized.string("composer.recommended"))
                                 .font(.system(size: 9))
                                 .foregroundStyle(.blue)
                                 .padding(.horizontal, 4)
@@ -1558,7 +1558,7 @@ struct AskUserBar: View {
                 .foregroundStyle(.secondary)
                 .font(.caption)
 
-            TextField("自定义输入（可选）…", text: $customText)
+            TextField(AgentKitLocalized.string("composer.custom_input_optional"), text: $customText)
                 .textFieldStyle(.plain)
                 .font(.subheadline)
         }
@@ -1572,7 +1572,7 @@ struct AskUserBar: View {
     private var actionButtons: some View {
         HStack(spacing: 8) {
             Button(action: onSkip) {
-                Label("跳过", systemImage: "forward.fill")
+                Label(AgentKitLocalized.string("composer.skip"), systemImage: "forward.fill")
                     .frame(maxWidth: .infinity)
             }
             .buttonStyle(.bordered)
@@ -1582,7 +1582,7 @@ struct AskUserBar: View {
                 let notes = customText.trimmingCharacters(in: .whitespacesAndNewlines)
                 onSubmit(Array(selectedLabels), notes.isEmpty ? nil : notes)
             } label: {
-                Label("确认选择", systemImage: "checkmark.circle.fill")
+                Label(AgentKitLocalized.string("composer.confirm_selection"), systemImage: "checkmark.circle.fill")
                     .frame(maxWidth: .infinity)
             }
             .buttonStyle(.borderedProminent)

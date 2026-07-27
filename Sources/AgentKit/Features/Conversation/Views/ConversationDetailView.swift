@@ -113,7 +113,7 @@ public struct ConversationDetailView: View {
 
     private var draftComposer: some View {
         DraftComposerPanel(
-            placeholder: store.isPreparingWorkspace ? "正在准备工作区…" : "描述你想构建什么…",
+            placeholder: store.isPreparingWorkspace ? AgentKitLocalized.string("conversation.preparing_workspace") : AgentKitLocalized.string("conversation.describe_placeholder"),
             isEnabled: (store.draft?.canCommit ?? false) && !store.isPreparingWorkspace,
             isDraft: true,
             onSend: { text, model, assets in
@@ -129,7 +129,7 @@ public struct ConversationDetailView: View {
     private var draftTitle: AttributedString {
         let workspace = store.draft?.workspace ?? store.recentWorkspaces.mostRecent
         guard let name = workspace?.name, !name.isEmpty else {
-            return AttributedString("我们应该构建什么？")
+            return AttributedString(AgentKitLocalized.string("conversation.what_should_we_build"))
         }
         
         // 1. 获取动态校正后的“当前可用真实路径”
@@ -139,11 +139,11 @@ public struct ConversationDetailView: View {
         // 中文/特殊字符安全编码
         guard let encodedPath = currentValidPath.addingPercentEncoding(withAllowedCharacters: .urlHostAllowed),
               let url = URL(string: "codeagent://workspace?path=\(encodedPath)") else {
-            return AttributedString("我们应该在 \(name) 中构建什么？")
+            return AttributedString(String(format: AgentKitLocalized.string("conversation.what_should_we_build_in"), name))
         }
         
-        let prefix = AttributedString("我们应该在")
-        let suffix = AttributedString("中构建什么？")
+        let prefix = AttributedString(AgentKitLocalized.string("conversation.we_should_build_prefix"))
+        let suffix = AttributedString(AgentKitLocalized.string("conversation.we_should_build_suffix"))
         var highlighted = AttributedString(name)
         highlighted.foregroundColor = .accentColor
         highlighted.font = .system(size: 28, weight: .bold)
@@ -154,7 +154,7 @@ public struct ConversationDetailView: View {
     private func failureBanner(_ message: String) -> some View {
         HStack(spacing: 6) {
             Image(systemName: "exclamationmark.triangle.fill")
-            Text("创建会话失败：\(message)")
+            Text(String(format: AgentKitLocalized.string("conversation.create_failed"), message))
                 .lineLimit(2)
             Spacer()
         }
@@ -261,22 +261,22 @@ public struct ConversationDetailView: View {
                 
                 DraftComposerPanel(
                     placeholder: vm.isAwaitingTurnAcceptance
-                    ? "正在提交任务…"
+                    ? AgentKitLocalized.string("conversation.submitting_task")
                     : vm.isLocallyQueued
-                    ? "已排队 — 当前 Runtime 暂不支持跨会话并行"
+                    ? AgentKitLocalized.string("conversation.queued_no_parallel")
                     : vm.lifecycleStatus == "queued"
                     ? vm.runtimeQueueDescription
                     : vm.lifecycleStatus == "accepted"
-                    ? "Runtime 已接收 — 等待调度"
+                    ? AgentKitLocalized.string("conversation.runtime_received")
                     : isPaused
-                    ? "会话已暂停 — 点击继续"
+                    ? AgentKitLocalized.string("conversation.paused_click_to_resume")
                     : isArchived
-                    ? "会话已归档 — 恢复后可继续"
+                    ? AgentKitLocalized.string("conversation.archived_restore_to_continue")
                     : (vm.snapshot.pendingAskUser != nil)
-                    ? "请回答以下问题以继续…"
+                    ? AgentKitLocalized.string("conversation.answer_questions_to_continue")
                     : (vm.snapshot.pendingApproval != nil || vm.snapshot.pendingPlanApproval != nil)
-                    ? "审批中 — 请选择「允许」或「拒绝」"
-                    : "输入消息…",
+                    ? AgentKitLocalized.string("conversation.approval_needed_allow_deny")
+                    : AgentKitLocalized.string("conversation.input_message"),
                     isEnabled: !isArchived && !isPaused && !vm.isTurnActive
                         && vm.snapshot.pendingAskUser == nil
                         && vm.snapshot.pendingApproval == nil
@@ -367,11 +367,11 @@ public struct ConversationDetailView: View {
                     }
                 } label: {
                     Label(
-                        "待审批 \(store.supervisor.pendingApprovals.count)",
+                        String(format: AgentKitLocalized.string("conversation.pending_approvals_count"), String(store.supervisor.pendingApprovals.count)),
                         systemImage: "hand.raised.fill"
                     )
                 }
-                .help("查看所有会话的待审批请求")
+                .help(AgentKitLocalized.string("conversation.view_all_pending"))
             }
         }
      
@@ -389,10 +389,10 @@ public struct ConversationDetailView: View {
                         Label(ConversationShareFormat.markdown.title, systemImage: ConversationShareFormat.markdown.systemImage)
                     }
                 } label: {
-                    Label("分享", systemImage: "square.and.arrow.up")
+                    Label(AgentKitLocalized.string("conversation.share"), systemImage: "square.and.arrow.up")
                 }
                 .disabled(store.activeConversationViewModel?.snapshot.turns.isEmpty ?? true)
-                .help("分享完整会话")
+                .help(AgentKitLocalized.string("conversation.share_full"))
             }
             ToolbarItem {
                 Button {
@@ -404,7 +404,7 @@ public struct ConversationDetailView: View {
                         workspace: vm.workspaceAnchor
                     )))
                 } label: {
-                    Label("资产", systemImage: "tray.full")
+                    Label(AgentKitLocalized.string("conversation.assets"), systemImage: "tray.full")
                 }
                 .disabled(store.activeConversationViewModel?.assetRefs.isEmpty ?? true)
             }
@@ -412,7 +412,7 @@ public struct ConversationDetailView: View {
                 Button {
                     store.isInspectorPresented.toggle()
                 } label: {
-                    Label("详情", systemImage: "sidebar.right")
+                    Label(AgentKitLocalized.string("conversation.details"), systemImage: "sidebar.right")
                 }
                 .disabled(store.selectedConversation == nil)
             }
@@ -438,15 +438,15 @@ private struct ArchivedConversationBar: View {
             Image(systemName: "archivebox.fill")
                 .foregroundStyle(.secondary)
             VStack(alignment: .leading, spacing: 2) {
-                Text("此任务已归档")
+                Text(verbatim: AgentKitLocalized.string("conversation.archived_banner"))
                     .font(.subheadline.weight(.semibold))
-                Text(errorMessage ?? "历史记录和 Worktree 均已保留；恢复后可以继续执行。")
+                Text(errorMessage ?? AgentKitLocalized.string("conversation.archived_desc"))
                     .font(.caption)
                     .foregroundStyle(errorMessage == nil ? Color.secondary : Color.orange)
                     .lineLimit(2)
             }
             Spacer(minLength: 8)
-            Button("恢复") { onRestore() }
+            Button(AgentKitLocalized.string("conversation.restore")) { onRestore() }
                 .disabled(isRestoring)
             if isRestoring {
                 ProgressView().controlSize(.small)
@@ -473,7 +473,7 @@ private struct ResumePausedBar: View {
                     .foregroundStyle(.orange)
                 
                 VStack(alignment: .leading, spacing: 2) {
-                    Text("上次任务被系统中断")
+                    Text(verbatim: AgentKitLocalized.string("conversation.last_task_interrupted"))
                         .font(.subheadline.weight(.semibold))
                     Text(subtitle)
                         .font(.caption)
@@ -490,7 +490,7 @@ private struct ResumePausedBar: View {
                         ProgressView()
                             .controlSize(.small)
                     } else {
-                        Label("继续", systemImage: "play.fill")
+                        Label(AgentKitLocalized.string("conversation.continue"), systemImage: "play.fill")
                     }
                 }
                 .disabled(isResuming)
@@ -510,15 +510,15 @@ private struct ResumePausedBar: View {
             return errorMessage
         }
         guard let pausedAt else {
-            return "点击继续后，Agent 会从 checkpoint 恢复。"
+            return AgentKitLocalized.string("conversation.resume_from_checkpoint")
         }
         let interval = Int(Date().timeIntervalSince(pausedAt))
         if interval < 60 {
-            return "中断于刚刚，点击继续恢复执行。"
+            return AgentKitLocalized.string("conversation.interrupted_just_now")
         }
         if interval < 3600 {
-            return "中断于 \(interval / 60) 分钟前，点击继续恢复执行。"
+            return String(format: AgentKitLocalized.string("conversation.interrupted_minutes_ago"), String(interval / 60))
         }
-        return "中断于 \(interval / 3600) 小时前，点击继续恢复执行。"
+        return String(format: AgentKitLocalized.string("conversation.interrupted_hours_ago"), String(interval / 3600))
     }
 }
