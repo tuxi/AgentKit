@@ -62,30 +62,30 @@ struct WorkspaceChipBar: View {
                 }
             )
         }
-        .alert("为项目命名", isPresented: $isNewProjectPresented) {
+        .alert(AgentKitLocalized.string("workspace.name_project"), isPresented: $isNewProjectPresented) {
             TextField("Project name", text: $newProjectName)
-            Button("取消", role: .cancel) { }
-            Button("创建") { createProject() }
+            Button(AgentKitLocalized.string("common.action.cancel"), role: .cancel) { }
+            Button(AgentKitLocalized.string("workspace.create_action")) { createProject() }
         } message: {
             #if os(macOS)
-            Text("将在文稿中创建一个新项目，并初始化 Git 仓库。")
+            Text(verbatim: AgentKitLocalized.string("workspace.create_in_documents"))
             #else
-            Text("将在 Documents 下创建一个新项目目录。")
+            Text(verbatim: AgentKitLocalized.string("workspace.create_in_documents_alt"))
             #endif
         }
-        .alert("导入文件夹", isPresented: $isImportNamePresented) {
-            TextField("项目名", text: $importName)
-            Button("取消", role: .cancel) { pendingImportURL = nil }
-            Button("导入") { confirmImport() }
+        .alert(AgentKitLocalized.string("workspace.import_folder_alert"), isPresented: $isImportNamePresented) {
+            TextField(AgentKitLocalized.string("workspace.project_name"), text: $importName)
+            Button(AgentKitLocalized.string("common.action.cancel"), role: .cancel) { pendingImportURL = nil }
+            Button(AgentKitLocalized.string("workspace.import_action")) { confirmImport() }
         } message: {
-            Text("将复制进 Documents。可改名以区分不同来源（iOS 无法自动获取来源 App 名）。")
+            Text(verbatim: AgentKitLocalized.string("workspace.import_hint_rename"))
         }
         .alert(
-            "无法创建项目",
+            AgentKitLocalized.string("workspace.cannot_create_project"),
             isPresented: Binding(get: { createError != nil },
                                  set: { if !$0 { createError = nil } })
         ) {
-            Button("好", role: .cancel) { createError = nil }
+            Button(AgentKitLocalized.string("workspace.ok"), role: .cancel) { createError = nil }
         } message: {
             Text(createError ?? "")
         }
@@ -96,7 +96,7 @@ struct WorkspaceChipBar: View {
             content
             if store.isPreparingWorkspace {
                 ProgressView().controlSize(.small)
-                Text("准备工作区…")
+                Text(verbatim: AgentKitLocalized.string("workspace.preparing_workspace"))
                     .font(.caption)
                     .foregroundStyle(.secondary)
             }
@@ -204,7 +204,7 @@ struct WorkspaceChipBar: View {
                 store.setDraftManagedWorktreeEnabled(!enabled)
             } label: {
                 Label(
-                    enabled ? "使用主工作区" : "使用独立 Worktree",
+                    enabled ? AgentKitLocalized.string("workspace.use_main_workspace") : AgentKitLocalized.string("workspace.use_independent_worktree"),
                     systemImage: enabled ? "square" : "checkmark.square"
                 )
             }
@@ -215,7 +215,7 @@ struct WorkspaceChipBar: View {
                     store.setDraftManagedWorktreeBaseRef(.head)
                 } label: {
                     Label(
-                        "从当前 HEAD 创建",
+                        AgentKitLocalized.string("workspace.from_current_head"),
                         systemImage: store.draft?.managedWorktreeBaseRef == .head
                             ? "checkmark.circle.fill"
                             : "circle"
@@ -225,7 +225,7 @@ struct WorkspaceChipBar: View {
                     store.setDraftManagedWorktreeBaseRef(.fresh)
                 } label: {
                     Label(
-                        "从远端默认分支创建",
+                        AgentKitLocalized.string("workspace.from_remote_default"),
                         systemImage: store.draft?.managedWorktreeBaseRef == .fresh
                             ? "checkmark.circle.fill"
                             : "circle"
@@ -235,7 +235,7 @@ struct WorkspaceChipBar: View {
         } label: {
             chip(
                 icon: enabled ? "checkmark.square.fill" : "square",
-                text: "独立 Worktree",
+                text: AgentKitLocalized.string("workspace.independent_worktree_label"),
                 prominent: enabled,
                 showsChevron: true
             )
@@ -260,7 +260,7 @@ struct WorkspaceChipBar: View {
             } label: {
                 chip(
                     icon: isLoading ? "ellipsis.circle" : "exclamationmark.triangle",
-                    text: isLoading ? "Worktree 检测中" : "Worktree 不可用"
+                    text: isLoading ? AgentKitLocalized.string("workspace.worktree_detecting") : AgentKitLocalized.string("workspace.worktree_unavailable")
                 )
             }
             .buttonStyle(.plain)
@@ -272,20 +272,20 @@ struct WorkspaceChipBar: View {
     private var worktreeUnavailableHelp: String {
         switch store.runtimeCapabilityDiscoveryState {
         case .idle, .loading:
-            return "正在读取 Runtime 的托管 Worktree 能力。"
+            return AgentKitLocalized.string("workspace.worktree_reading_capability")
         case .available:
-            return "当前 Runtime 未声明 managed_worktree_v1 和 workspace_execution_policy_v1。"
+            return AgentKitLocalized.string("workspace.worktree_not_declared")
         case .unavailable:
             return store.runtimeCapabilityErrorMessage.map {
-                "无法读取 Runtime 能力：\($0)。点击重试。"
-            } ?? "无法读取 Runtime 能力。点击重试。"
+                String(format: AgentKitLocalized.string("workspace.worktree_read_failed"), String(describing: $0))
+            } ?? AgentKitLocalized.string("workspace.worktree_read_failed_default")
         }
     }
 
     private func worktreeStateTitle(_ worktree: ManagedWorktreeMetadata) -> String {
-        if worktree.needsRebind || worktree.state == "missing" { return "Worktree 不可用" }
-        if worktree.state == "remove_failed" { return "清理失败" }
-        if worktree.state == "failed" { return "创建失败" }
+        if worktree.needsRebind || worktree.state == "missing" { return AgentKitLocalized.string("workspace.worktree_unavailable_status") }
+        if worktree.state == "remove_failed" { return AgentKitLocalized.string("workspace.worktree_cleanup_failed") }
+        if worktree.state == "failed" { return AgentKitLocalized.string("workspace.worktree_creation_failed") }
         return worktree.state
     }
 
@@ -318,15 +318,15 @@ struct WorkspaceChipBar: View {
                         newProjectName = "New Project"
                         isNewProjectPresented = true
                     } label: {
-                        Label("新建空白项目…", systemImage: "folder.badge.plus")
+                        Label(AgentKitLocalized.string("workspace.new_blank_project"), systemImage: "folder.badge.plus")
                     }
                     Button {
                         isImporterPresented = true
                     } label: {
                         #if os(macOS)
-                        Label("使用现有文件夹…", systemImage: "folder")
+                        Label(AgentKitLocalized.string("workspace.use_existing_folder"), systemImage: "folder")
                         #else
-                        Label("导入现有文件夹…", systemImage: "square.and.arrow.down")
+                        Label(AgentKitLocalized.string("workspace.import_existing_folder"), systemImage: "square.and.arrow.down")
                         #endif
                     }
                     if store.supportsPublicGitClone {
@@ -334,11 +334,11 @@ struct WorkspaceChipBar: View {
                             cloneError = nil
                             isGitClonePresented = true
                         } label: {
-                            Label("从 Git 仓库克隆…", systemImage: "arrow.down.circle")
+                            Label(AgentKitLocalized.string("workspace.clone_from_git"), systemImage: "arrow.down.circle")
                         }
                     }
                 } label: {
-                    Label("新建项目", systemImage: "plus")
+                    Label(AgentKitLocalized.string("workspace.new_project"), systemImage: "plus")
                 }
             } else {
                 // macOS：无工作区根 → 任意文件夹选择。
@@ -494,23 +494,23 @@ private struct PublicGitCloneSheet: View {
                         .keyboardType(.URL)
                         #endif
                 } header: {
-                    Text("公开 HTTPS Git 地址")
+                    Text(verbatim: AgentKitLocalized.string("workspace.git.clone_https_url"))
                 } footer: {
-                    Text("支持 GitHub、GitLab、Gitee 和公开自建 Git 服务；不传输登录凭据。")
+                    Text(verbatim: AgentKitLocalized.string("workspace.git.clone_https_hint"))
                 }
 
-                Section("可选") {
-                    TextField("项目名（默认从 URL 推导）", text: $projectName)
-                    TextField("分支或标签（默认远程默认分支）", text: $gitRef)
+                Section(AgentKitLocalized.string("workspace.git.optional_section")) {
+                    TextField(AgentKitLocalized.string("workspace.git.project_name_default"), text: $projectName)
+                    TextField(AgentKitLocalized.string("workspace.git.branch_or_tag"), text: $gitRef)
                         .autocorrectionDisabled()
                         #if os(iOS)
                         .textInputAutocapitalization(.never)
                         #endif
-                    Toggle("克隆完整历史", isOn: $clonesFullHistory)
+                    Toggle(AgentKitLocalized.string("workspace.git.clone_full_history"), isOn: $clonesFullHistory)
                 }
 
                 if let projectsRoot, !projectsRoot.isEmpty {
-                    Section("存放位置") {
+                    Section(AgentKitLocalized.string("workspace.git.save_location")) {
                         Label(projectsRoot, systemImage: "folder")
                             .font(.caption)
                             .textSelection(.enabled)
@@ -528,17 +528,17 @@ private struct PublicGitCloneSheet: View {
                     Section {
                         HStack(spacing: 10) {
                             ProgressView()
-                            Text("正在克隆仓库…")
+                            Text(verbatim: AgentKitLocalized.string("workspace.git.cloning_repo"))
                             Spacer(minLength: 0)
                         }
                     }
                 }
             }
             .formStyle(.grouped)
-            .navigationTitle("从 Git 仓库克隆")
+            .navigationTitle(AgentKitLocalized.string("workspace.git.clone_nav_title"))
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
-                    Button(isCloning ? "取消 Clone" : "取消", action: onCancel)
+                    Button(isCloning ? AgentKitLocalized.string("workspace.git.cancel_clone") : AgentKitLocalized.string("common.action.cancel"), action: onCancel)
                 }
                 ToolbarItem(placement: .confirmationAction) {
                     Button("Clone") {
