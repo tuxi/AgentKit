@@ -49,6 +49,8 @@ struct DraftComposerPanel: View {
     @State private var loadedStateKey: ConversationLocalStateKey?
     @State private var pendingSaveTask: Task<Void, Never>?
     @State private var isRestoringLocalState = false
+    @State private var pendingGatewayUploadID: String?
+    @State private var isGatewayUploadConfirmationPresented = false
 #if os(macOS)
     @State private var composerHeight: CGFloat = 56
     private let composerMinHeight: CGFloat = 56
@@ -73,9 +75,14 @@ struct DraftComposerPanel: View {
 
             VStack(spacing: 8) {
                 if !attachments.isEmpty {
-                    attachmentStrip
-                        .padding(.horizontal, 16)
-                        .padding(.top, 12)
+                    VStack(alignment: .leading, spacing: 5) {
+                        attachmentStrip
+                        Text("🔒 本地处理 · 文件不会自动上传")
+                            .font(.caption2)
+                            .foregroundStyle(.secondary)
+                    }
+                    .padding(.horizontal, 16)
+                    .padding(.top, 12)
                 }
                 inputField
                     .padding(.horizontal, 16)
@@ -86,7 +93,7 @@ struct DraftComposerPanel: View {
                         if let onAddAttachment {
                             onAddAttachment()
                         } else {
-                            pickAndUploadAttachments()
+                            pickAttachments()
                         }
                     } label: {
                         Image(systemName: "plus")
@@ -334,6 +341,18 @@ struct DraftComposerPanel: View {
                 selectedModel = resolved
             }
         }
+        .confirmationDialog(
+            "这会将文件上传到云端进行视觉识别。",
+            isPresented: $isGatewayUploadConfirmationPresented,
+            titleVisibility: .visible
+        ) {
+            Button("上传并使用云端视觉") {
+                confirmGatewayUpload()
+            }
+            Button("取消", role: .cancel) {
+                pendingGatewayUploadID = nil
+            }
+        }
     }
 
     // MARK: - Input Field
@@ -399,14 +418,22 @@ struct DraftComposerPanel: View {
 
     private var readyAssets: [UserAssetRef] {
         attachments.compactMap { attachment in
-            guard attachment.state == .ready else { return nil }
+            guard attachment.state == .ready,
+                  attachment.delivery == .gateway else { return nil }
             return attachment.readyAsset
         }
     }
 
     private var canSend: Bool {
-        let hasContent = !trimmed.isEmpty || !readyAssets.isEmpty
-        let attachmentsReady = attachments.allSatisfy { $0.state == .ready }
+        let hasContent = !trimmed.isEmpty || !attachments.isEmpty
+        let attachmentsReady = attachments.allSatisfy { attachment in
+            if attachment.delivery == .localOnly {
+                return attachment.state == .local
+                    || attachment.state == .ready
+                    || (isDraft && attachment.state == .failed && attachment.localAsset == nil)
+            }
+            return attachment.state == .ready
+        }
         return isEnabled && hasContent && attachmentsReady && !isSending
             && !isTurnRunning && !(selectedModel ?? "").isEmpty
     }
@@ -419,6 +446,7 @@ struct DraftComposerPanel: View {
         isSending = true
         Task {
             _ = await onSend(toSend, selectedModel ?? "", readyAssets)
+            refreshAttachmentsFromLocalState()
             isSending = false
         }
     }
@@ -514,7 +542,10 @@ struct DraftComposerPanel: View {
                         attachment: attachment,
                         resolver: workspaceStore.userAssetDraftPreviewResolver,
                         onRemove: { removeAttachment(attachment.id) },
-                        onRetry: { retryUpload(attachment.id) }
+                        onRetry: { retryAttachment(attachment.id) },
+                        onUploadToGateway: canOfferGatewayUpload(for: attachment)
+                            ? { requestGatewayUpload(attachment.id) }
+                            : nil
                     )
                 }
             }
@@ -543,10 +574,10 @@ struct DraftComposerPanel: View {
         }
     }
 
-    private func pickAndUploadAttachments() {
+    private func pickAttachments() {
         guard let key = persistenceKey else { return }
         Task {
-            await workspaceStore.selectAndUploadUserAssets(
+            await workspaceStore.selectUserAssets(
                 for: key,
                 remainingSlots: 4 - attachments.count
             ) {
@@ -557,7 +588,7 @@ struct DraftComposerPanel: View {
 
     private func handleDroppedFiles(_ urls: [URL]) {
         guard let key = persistenceKey,
-              workspaceStore.canSelectUserAssets else { return }
+              workspaceStore.canStageLocalUserAssets else { return }
         let remainingSlots = 4 - attachments.count
         guard remainingSlots > 0 else { return }
         Task {
@@ -575,10 +606,39 @@ struct DraftComposerPanel: View {
         persistCurrentDraft()
     }
 
-    private func retryUpload(_ id: String) {
+    private func retryAttachment(_ id: String) {
         guard let key = persistenceKey else { return }
         Task {
-            await workspaceStore.retryUserAssetUpload(id: id, for: key) {
+            await workspaceStore.retryLocalUserAssetStaging(id: id, for: key) {
+                refreshAttachmentsFromLocalState()
+            }
+        }
+    }
+
+    private func canOfferGatewayUpload(for attachment: DraftAttachmentReference) -> Bool {
+        guard workspaceStore.canUploadUserAssetsToGateway,
+              attachment.delivery == .localOnly,
+              attachment.state != .uploading,
+              attachment.state != .sending else { return false }
+        let name = attachment.displayName.lowercased()
+        return name.hasSuffix(".jpg")
+            || name.hasSuffix(".jpeg")
+            || name.hasSuffix(".png")
+            || attachment.localAsset?.mimeType == "image/jpeg"
+            || attachment.localAsset?.mimeType == "image/png"
+    }
+
+    private func requestGatewayUpload(_ id: String) {
+        pendingGatewayUploadID = id
+        isGatewayUploadConfirmationPresented = true
+    }
+
+    private func confirmGatewayUpload() {
+        guard let id = pendingGatewayUploadID,
+              let key = persistenceKey else { return }
+        pendingGatewayUploadID = nil
+        Task {
+            await workspaceStore.uploadUserAssetToGateway(id: id, for: key) {
                 refreshAttachmentsFromLocalState()
             }
         }
@@ -674,26 +734,47 @@ private struct DraftAttachmentThumbnail: View {
     let resolver: (any UserAssetDraftPreviewResolving)?
     let onRemove: () -> Void
     let onRetry: () -> Void
+    let onUploadToGateway: (() -> Void)?
 
     var body: some View {
-        ZStack(alignment: .topTrailing) {
+        ZStack {
             DraftAttachmentPreview(attachment: attachment, resolver: resolver)
                 .frame(width: 96, height: 76)
 
             stateOverlay
 
-            if attachment.state != .sending {
-                Button(action: onRemove) {
-                    Image(systemName: "xmark")
-                        .font(.system(size: 10, weight: .bold))
-                        .foregroundStyle(.white)
-                        .frame(width: 22, height: 22)
-                        .background(.black.opacity(0.72), in: Circle())
+            VStack {
+                HStack {
+                    Spacer()
+                    if attachment.state != .sending {
+                        Button(action: onRemove) {
+                            Image(systemName: "xmark")
+                                .font(.system(size: 10, weight: .bold))
+                                .foregroundStyle(.white)
+                                .frame(width: 22, height: 22)
+                                .background(.black.opacity(0.72), in: Circle())
+                        }
+                        .buttonStyle(.plain)
+                        .accessibilityLabel(String(format: AgentKitLocalized.string("composer.remove_attachment"), attachment.displayName))
+                    }
                 }
-                .buttonStyle(.plain)
-                .padding(5)
-                .accessibilityLabel(String(format: AgentKitLocalized.string("composer.remove_attachment"), attachment.displayName))
+                Spacer()
+                if let onUploadToGateway {
+                    HStack {
+                        Spacer()
+                        Button(action: onUploadToGateway) {
+                            Image(systemName: "cloud")
+                                .font(.system(size: 10, weight: .semibold))
+                                .foregroundStyle(.white)
+                                .frame(width: 24, height: 22)
+                                .background(.blue.opacity(0.82), in: Capsule())
+                        }
+                        .buttonStyle(.plain)
+                        .accessibilityLabel("上传并使用云端视觉")
+                    }
+                }
             }
+            .padding(5)
         }
         .frame(width: 96, height: 76)
         .background(Color.secondary.opacity(0.12))
@@ -710,7 +791,9 @@ private struct DraftAttachmentThumbnail: View {
     @ViewBuilder
     private var stateOverlay: some View {
         switch attachment.state {
-        case .local, .preparing:
+        case .local:
+            EmptyView()
+        case .preparing:
             statusOverlay(title: AgentKitLocalized.string("composer.processing"), progress: nil)
         case .uploading:
             statusOverlay(

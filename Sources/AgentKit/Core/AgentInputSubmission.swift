@@ -42,6 +42,7 @@ actor AgentInputSubmissionCoordinator {
         let text: String?
         let model: String?
         let assets: [UserAssetRef]
+        let localAssets: [LocalUserAssetRef]
     }
 
     private struct Entry {
@@ -54,7 +55,12 @@ actor AgentInputSubmissionCoordinator {
 
     func register(_ input: AgentInput) -> AgentInputSubmissionTicket {
         let requestID = input.requestID ?? ""
-        let identity = PayloadIdentity(text: input.text, model: input.model, assets: input.assets)
+        let identity = PayloadIdentity(
+            text: input.text,
+            model: input.model,
+            assets: input.assets,
+            localAssets: input.localAssets
+        )
         let subscriberID = UUID()
         var capturedContinuation: AsyncStream<AgentInputSubmissionState>.Continuation?
         let stream = AsyncStream<AgentInputSubmissionState> { continuation in

@@ -55,19 +55,22 @@ public struct MessageNodePayload: Sendable, Equatable {
     public let isStreaming: Bool
     public let textAnnotations: [AgentTextAnnotation]
     public let userAssets: [UserAssetRef]
+    public let localAssets: [LocalUserAssetRef]
 
     public init(
         role: MessageRole,
         text: String,
         isStreaming: Bool = false,
         textAnnotations: [AgentTextAnnotation] = [],
-        userAssets: [UserAssetRef] = []
+        userAssets: [UserAssetRef] = [],
+        localAssets: [LocalUserAssetRef] = []
     ) {
         self.role = role
         self.text = text
         self.isStreaming = isStreaming
         self.textAnnotations = textAnnotations
         self.userAssets = userAssets
+        self.localAssets = localAssets
     }
 }
 

@@ -66,10 +66,22 @@ export interface ConversationWebUserAsset {
   previewURL?: string;
 }
 
+export interface ConversationWebLocalAsset {
+  id: string;
+  relativePath: string;
+  filename: string;
+  mimeType: string;
+  kind: string;
+  sizeBytes?: number;
+  previewURL?: string;
+  transferPolicy: "local_only";
+}
+
 export interface ConversationWebTurn {
   id: string;
   userPrompt?: string;
   userAssets: ConversationWebUserAsset[];
+  localAssets?: ConversationWebLocalAsset[];
   blocks: ConversationWebBlock[];
   todos: ConversationWebDocument["todos"];
   extensionNodes: ConversationWebExtensionNode[];
@@ -203,6 +215,12 @@ export type NativeBridgeMessage =
   | {
       type: "resolveUserAssetURL";
       assetID: number;
+      requestID: string;
+    }
+  | {
+      type: "resolveLocalAssetURL";
+      localAssetID: string;
+      conversationID: string;
       requestID: string;
     };
 

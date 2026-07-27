@@ -246,7 +246,7 @@ public actor RuntimeEngine {
         }
         // Turn lifecycle: a turn is "active" from turn_started to turn_finished.
         // Drives the live working indicator (and its turn-level timer).
-        if case .turnStarted(let turnID, _, _) = event {
+        if case .turnStarted(let turnID, _, _, _) = event {
             _pendingApprovals.removeAll()
             _pendingAskUsers.removeAll()
             _modelStats = nil

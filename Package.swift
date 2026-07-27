@@ -23,8 +23,8 @@ let package = Package(
     targets: [
         .binaryTarget(
             name: "CodeAgentRuntime",
-            url: "https://github.com/tuxi/code-agent-releases/releases/download/1.0.6/CodeAgentRuntime.xcframework.zip",
-            checksum: "ad090513134ce215769cda987acff4629b2cb6ab1551c4096ac11a1aea247617"
+            url: "https://github.com/tuxi/code-agent-releases/releases/download/1.0.7/CodeAgentRuntime.xcframework.zip",
+            checksum: "6536287e57c13d4a62f86195a628de87d2582ee7d5b8ba46831dccf83555f019"
         ),
         // Targets are the basic building blocks of a package, defining a module or a test suite.
         // Targets can depend on other targets in this package and products from dependencies.

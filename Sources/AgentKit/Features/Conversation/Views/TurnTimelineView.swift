@@ -18,6 +18,8 @@ public struct TurnTimelineView: View {
     /// Stable conversation identity. The native macOS timeline uses this to
     /// distinguish a newly opened conversation from a streaming update.
     let conversationID: String?
+    /// Stable workspace root from the resident conversation model.
+    let workspaceRoot: URL?
     let rendererMode: ConversationRendererMode
     let isVisible: Bool
     @State private var didWebRendererFail = false
@@ -26,12 +28,14 @@ public struct TurnTimelineView: View {
         snapshot: RuntimeSnapshot,
         timelineExtensions: [any TimelineExtension] = [],
         conversationID: String? = nil,
+        workspaceRoot: URL? = nil,
         rendererMode: ConversationRendererMode = .auto,
         isVisible: Bool = true
     ) {
         self.snapshot = snapshot
         self.timelineExtensions = timelineExtensions
         self.conversationID = conversationID
+        self.workspaceRoot = workspaceRoot
         self.rendererMode = rendererMode
         self.isVisible = isVisible
     }
@@ -53,6 +57,7 @@ public struct TurnTimelineView: View {
             ConversationWebWorkbenchView(
                 snapshot: snapshot,
                 conversationID: conversationID,
+                workspaceRoot: workspaceRoot,
                 extensionContributions: webExtensionContributions,
                 timelineExtensions: timelineExtensions,
                 isVisible: isVisible,
@@ -64,7 +69,8 @@ public struct TurnTimelineView: View {
             MacNativeChatTimeline(
                 snapshot: snapshot,
                 timelineExtensions: timelineExtensions,
-                conversationID: conversationID
+                conversationID: conversationID,
+                workspaceRoot: workspaceRoot
             )
         }
         #else
@@ -74,7 +80,11 @@ public struct TurnTimelineView: View {
         ) {
             LazyVStack(alignment: .leading, spacing: 12) {
                 ForEach(snapshot.turns) { turn in
-                    TurnView(turn: turn)
+                    TurnView(
+                        turn: turn,
+                        conversationID: conversationID,
+                        workspaceRoot: workspaceRoot
+                    )
                         .equatable()
                         .id(turn.id)
 

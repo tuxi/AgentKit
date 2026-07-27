@@ -194,10 +194,16 @@ public enum NodePayload: Sendable {
 public struct UserInputPayload: Sendable {
     public let text: String
     public let userAssets: [UserAssetRef]
+    public let localAssets: [LocalUserAssetRef]
 
-    public init(text: String, userAssets: [UserAssetRef] = []) {
+    public init(
+        text: String,
+        userAssets: [UserAssetRef] = [],
+        localAssets: [LocalUserAssetRef] = []
+    ) {
         self.text = text
         self.userAssets = userAssets
+        self.localAssets = localAssets
     }
 }
 

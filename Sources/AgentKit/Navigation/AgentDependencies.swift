@@ -36,9 +36,13 @@ public struct AgentDependencies {
     /// implementation; the default uses Application Support SQLite.
     public let localStateStore: any ConversationLocalStateStore
     public let userAssetPicker: UserAssetPicking?
+    /// Host-owned importer that copies picker resources into the final
+    /// conversation workspace and returns a validated workspace-relative ref.
+    public let localUserAssetStager: (any LocalUserAssetStaging)?
     public let userAssetUploader: (any UserAssetUploading)?
     public let userAssetDraftPreviewResolver: (any UserAssetDraftPreviewResolving)?
     public let userAssetPreviewResolver: (any UserAssetPreviewResolving)?
+    public let localUserAssetPreviewResolver: (any LocalUserAssetPreviewResolving)?
 
     /// Host hook for local notifications or other out-of-conversation alerts.
     public let onAttentionEvent: (@MainActor (ConversationAttentionEvent) -> Void)?
@@ -51,9 +55,11 @@ public struct AgentDependencies {
         onAuthExpired: (@MainActor () async -> Void)? = nil,
         localStateStore: any ConversationLocalStateStore = SQLiteConversationLocalStateStore.shared,
         userAssetPicker: UserAssetPicking? = nil,
+        localUserAssetStager: (any LocalUserAssetStaging)? = nil,
         userAssetUploader: (any UserAssetUploading)? = nil,
         userAssetDraftPreviewResolver: (any UserAssetDraftPreviewResolving)? = nil,
         userAssetPreviewResolver: (any UserAssetPreviewResolving)? = nil,
+        localUserAssetPreviewResolver: (any LocalUserAssetPreviewResolving)? = nil,
         attentionReadStore: (any ConversationAttentionReadStore)? = nil,
         onAttentionEvent: (@MainActor (ConversationAttentionEvent) -> Void)? = nil
     ) {
@@ -64,9 +70,11 @@ public struct AgentDependencies {
         self.onAuthExpired = onAuthExpired
         self.localStateStore = localStateStore
         self.userAssetPicker = userAssetPicker
+        self.localUserAssetStager = localUserAssetStager
         self.userAssetUploader = userAssetUploader
         self.userAssetDraftPreviewResolver = userAssetDraftPreviewResolver
         self.userAssetPreviewResolver = userAssetPreviewResolver
+        self.localUserAssetPreviewResolver = localUserAssetPreviewResolver
         self.attentionReadStore = attentionReadStore
             ?? ConversationLocalStateAttentionReadStore(localStateStore: localStateStore)
         self.onAttentionEvent = onAttentionEvent

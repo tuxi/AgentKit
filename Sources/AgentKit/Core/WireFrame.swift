@@ -45,6 +45,8 @@ struct WireFrame: Decodable {
     let assets: [AgentAssetRef]?
     /// Agent Wire v1.5 user attachments. Never decode these as v1.3 tool assets.
     let userAssets: [UserAssetRef]?
+    /// Workspace-relative user attachments emitted by the local Runtime.
+    let localAssets: [LocalUserAssetRef]?
     let textAnnotations: [AgentTextAnnotation]?
     let failure: String?
     let planId: String?
@@ -88,6 +90,7 @@ struct WireFrame: Decodable {
         case type, kind, at, step, id, server, seq
         case text, observation, output, assets, failure, err, error, ratio, todos, chunk
         case userAssets = "user_assets"
+        case localAssets = "local_assets"
         case reason, position
         case queuePosition = "queue_position"
         case textAnnotations = "text_annotations"
@@ -262,6 +265,7 @@ struct OutgoingAgentInput: Encodable {
     let metadata: [String: String]?
     let requestID: String?
     let assets: [UserAssetRef]?
+    let localAssets: [LocalUserAssetRef]?
     // system command fields
     let command: String?            // system command name
     let commandKey: String?
@@ -269,6 +273,7 @@ struct OutgoingAgentInput: Encodable {
 
     enum CodingKeys: String, CodingKey {
         case type, kind, text, metadata, command, model, assets
+        case localAssets = "local_assets"
         case requestID = "request_id"
         case toolResult = "tool_result"
         case commandKey = "command_key"
@@ -283,6 +288,7 @@ struct OutgoingAgentInput: Encodable {
                 kind: "text", text: input.text, toolResult: nil, model: input.model,
                 metadata: input.metadata, requestID: input.requestID,
                 assets: input.assets.isEmpty ? nil : input.assets,
+                localAssets: input.localAssets.isEmpty ? nil : input.localAssets,
                 command: nil, commandKey: nil, commandValue: nil
             )
         case .toolResult:
@@ -297,13 +303,13 @@ struct OutgoingAgentInput: Encodable {
             }
             return OutgoingAgentInput(
                 kind: "tool_result", text: nil, toolResult: tr, model: input.model,
-                metadata: input.metadata, requestID: input.requestID, assets: nil,
+                metadata: input.metadata, requestID: input.requestID, assets: nil, localAssets: nil,
                 command: nil, commandKey: nil, commandValue: nil
             )
         case .command:
             return OutgoingAgentInput(
                 kind: "command", text: input.text, toolResult: nil, model: input.model,
-                metadata: input.metadata, requestID: input.requestID, assets: nil,
+                metadata: input.metadata, requestID: input.requestID, assets: nil, localAssets: nil,
                 command: nil, commandKey: nil, commandValue: nil
             )
         case .system(let cmd):
@@ -311,19 +317,19 @@ struct OutgoingAgentInput: Encodable {
             case .patchContext(let key, let value):
                 return OutgoingAgentInput(
                     kind: "system", text: nil, toolResult: nil, model: input.model,
-                    metadata: input.metadata, requestID: input.requestID, assets: nil,
+                    metadata: input.metadata, requestID: input.requestID, assets: nil, localAssets: nil,
                     command: "patch_context", commandKey: key, commandValue: value
                 )
             case .updateMemory(let key, let value):
                 return OutgoingAgentInput(
                     kind: "system", text: nil, toolResult: nil, model: input.model,
-                    metadata: input.metadata, requestID: input.requestID, assets: nil,
+                    metadata: input.metadata, requestID: input.requestID, assets: nil, localAssets: nil,
                     command: "update_memory", commandKey: key, commandValue: value
                 )
             case .overridePlan(let planID):
                 return OutgoingAgentInput(
                     kind: "system", text: nil, toolResult: nil, model: input.model,
-                    metadata: input.metadata, requestID: input.requestID, assets: nil,
+                    metadata: input.metadata, requestID: input.requestID, assets: nil, localAssets: nil,
                     command: "override_plan", commandKey: nil, commandValue: planID
                 )
             }

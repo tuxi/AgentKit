@@ -24,7 +24,12 @@ public enum AgentEvent: Sendable {
     /// Non-persisted control response for an input that did not create a turn.
     case agentInputRejected(requestID: String?, rejection: AgentInputRejection)
     /// `turn_started`：新 turn 开始。`turnID` 是 grouping key。
-    case turnStarted(turnID: String, text: String, userAssets: [UserAssetRef] = [])
+    case turnStarted(
+        turnID: String,
+        text: String,
+        userAssets: [UserAssetRef] = [],
+        localAssets: [LocalUserAssetRef] = []
+    )
     /// `turn_finished`：当前 turn 结束。
     case turnFinished(turnID: String, text: String, textAnnotations: [AgentTextAnnotation])
     /// `turn_paused`：当前 turn 已 checkpoint 并暂停，等待 ResumeSession。
@@ -163,7 +168,8 @@ extension AgentEvent {
             return .turnStarted(
                 turnID: turnID ?? "",
                 text: wire.text ?? "",
-                userAssets: wire.userAssets ?? []
+                userAssets: wire.userAssets ?? [],
+                localAssets: wire.localAssets ?? []
             )
 
         case "turn_finished":

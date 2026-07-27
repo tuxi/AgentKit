@@ -3,6 +3,31 @@ import XCTest
 
 final class MultiConversationTests: XCTestCase {
     @MainActor
+    func testConversationViewModelRetainsWorkspaceRootWithoutSidebarState() async {
+        let client = MultiSessionRuntimeClient()
+        let viewModel = ConversationViewModel(
+            client: client,
+            localStateStore: InMemoryConversationLocalStateStore()
+        )
+        let conversation = ConversationRef(
+            id: "detached-detail",
+            workspacePath: "/tmp/detached-workspace",
+            workspace: WorkspaceAnchor(
+                id: "remote-anchor",
+                rootPath: "/runtime/root",
+                runtimeCWD: "/runtime/cwd"
+            )
+        )
+
+        await viewModel.connect(to: conversation)
+
+        XCTAssertEqual(
+            viewModel.workspaceRootURL?.standardizedFileURL.path,
+            "/tmp/detached-workspace"
+        )
+    }
+
+    @MainActor
     func testSelectionSwitchRetainsIndependentControllersAndChannels() async throws {
         let client = MultiSessionRuntimeClient()
         let store = WorkspaceStore(
@@ -221,6 +246,62 @@ final class MultiConversationTests: XCTestCase {
         })
         XCTAssertEqual(request.worktree?.baseRef, .fresh)
         XCTAssertEqual(store.selectedConversation?.worktree?.state, "ready")
+    }
+
+    @MainActor
+    func testManagedWorktreeStagesAttachmentsOnlyAfterFinalWorkspaceIsKnown() async throws {
+        let capabilities = RuntimeCapabilitySnapshot(capabilities: [
+            "multi_session_execution_v1": true,
+            "session_scoped_client_tools_v1": true,
+            "activity_snapshot_v1": true,
+            "workspace_execution_policy_v1": true,
+            "managed_worktree_v1": true,
+        ])
+        let client = MultiSessionRuntimeClient(
+            capabilitySnapshot: capabilities,
+            activity: RuntimeActivitySnapshot(sessions: [])
+        )
+        let localState = InMemoryConversationLocalStateStore()
+        let stager = ManagedWorktreeAssetStager()
+        let store = WorkspaceStore(
+            client: client,
+            localStateStore: localState,
+            localUserAssetStager: stager
+        )
+        await store.refreshRuntimeState()
+        store.beginDraft()
+        store.selectWorkspace(Workspace(
+            url: URL(fileURLWithPath: "/tmp/AgentKit-base"),
+            branch: "main"
+        ))
+        store.setDraftManagedWorktreeEnabled(true)
+        let draftID = try XCTUnwrap(store.draft?.id)
+        let attachmentID = "A6B6775D-4635-4F88-90C8-5F1DCE38A57E"
+        try localState.updateState(for: .draft(draftID)) { state in
+            state.composerDraft.text = "read the document"
+            state.composerDraft.attachments = [DraftAttachmentReference(
+                id: attachmentID,
+                displayName: "design.pdf",
+                resourceURI: "picker://design"
+            )]
+        }
+
+        await store.commitDraft(firstMessage: "read the document", model: "test-model")
+        try await Task.sleep(for: .milliseconds(100))
+
+        let conversation = try XCTUnwrap(store.selectedConversation)
+        let roots = await stager.workspaceRoots
+        XCTAssertEqual(roots, [conversation.workspacePath])
+        XCTAssertNotEqual(roots.first, "/tmp/AgentKit-base")
+        XCTAssertTrue(conversation.workspacePath.contains("/.codeagent/worktrees/"))
+
+        let sessionState = try localState.state(for: .session(conversation.id))
+        let session = try XCTUnwrap(sessionState?.composerDraft.pendingSubmission)
+        XCTAssertTrue(session.assets.isEmpty)
+        XCTAssertEqual(session.localAssets.map(\.id), [attachmentID])
+        let sent = try XCTUnwrap(client.channel(for: conversation.id).sentInputs.first)
+        XCTAssertTrue(sent.assets.isEmpty)
+        XCTAssertEqual(sent.localAssets.map(\.id), [attachmentID])
     }
 
     @MainActor
@@ -1193,6 +1274,26 @@ private func terminalActivity(
             at: "2026-07-13T12:00:00Z"
         )
     )
+}
+
+private actor ManagedWorktreeAssetStager: LocalUserAssetStaging {
+    private(set) var workspaceRoots: [String] = []
+
+    func stage(
+        attachment: DraftAttachmentReference,
+        workspaceRoot: URL
+    ) async throws -> LocalUserAssetRef {
+        workspaceRoots.append(workspaceRoot.path)
+        return LocalUserAssetRef(
+            id: attachment.id,
+            relativePath: "user-assets/\(attachment.id)/\(attachment.displayName)",
+            filename: attachment.displayName,
+            mimeType: "application/pdf",
+            kind: "document",
+            sizeBytes: 128,
+            sha256: String(repeating: "d", count: 64)
+        )
+    }
 }
 
 private final class MultiSessionChannelDouble: RuntimeSessionChannel, @unchecked Sendable {

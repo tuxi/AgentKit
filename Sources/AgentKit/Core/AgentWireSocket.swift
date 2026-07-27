@@ -238,7 +238,8 @@ public final class AgentWireSocket: @unchecked Sendable {
             return .terminal(
                 requestID: requestID,
                 state: .rejected(AgentInputRejection(
-                    code: error is UserAssetValidationError && input.assets.count > 4
+                    code: error is UserAssetValidationError
+                        && input.assets.count + input.localAssets.count > 4
                         ? "too_many_assets"
                         : "invalid_assets",
                     message: error.localizedDescription

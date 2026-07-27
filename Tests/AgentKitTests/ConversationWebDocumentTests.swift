@@ -55,6 +55,45 @@ final class ConversationWebDocumentTests: XCTestCase {
         XCTAssertEqual(try JSONDecoder().decode(ConversationWebDocument.self, from: encoded), document)
     }
 
+    func testBuilderProjectsLocalHistoryAssetsWithoutLeakingFileURLs() throws {
+        let localAsset = LocalUserAssetRef(
+            id: "E7C8B36A-0C48-47B4-A3C5-F793E8E1C910",
+            relativePath: "user-assets/E7C8B36A-0C48-47B4-A3C5-F793E8E1C910/diagram.png",
+            filename: "diagram.png",
+            mimeType: "image/png",
+            kind: "image",
+            sizeBytes: 256,
+            sha256: String(repeating: "e", count: 64)
+        )
+        let turn = ConversationTurn(
+            id: "turn-local",
+            userPrompt: MessageNodePayload(
+                role: .user,
+                text: "inspect",
+                localAssets: [localAsset]
+            ),
+            blocks: [],
+            footer: nil,
+            isLive: false
+        )
+
+        let document = ConversationWebDocumentBuilder.build(
+            snapshot: RuntimeSnapshot(timeline: [], turns: [turn]),
+            conversationID: "conversation-local"
+        )
+        let projected = try XCTUnwrap(document.turns.first?.localAssets.first)
+        XCTAssertEqual(projected.id, localAsset.id)
+        XCTAssertEqual(projected.relativePath, localAsset.relativePath)
+        XCTAssertEqual(projected.transferPolicy, "local_only")
+        XCTAssertNil(projected.previewURL)
+
+        let encoded = try XCTUnwrap(
+            String(data: JSONEncoder().encode(document), encoding: .utf8)
+        )
+        XCTAssertFalse(encoded.contains("file://"))
+        XCTAssertFalse(encoded.contains("/private/"))
+    }
+
     func testBuilderProjectsToolStatusAndWideOutput() {
         let runningTool = ToolNodePayload(
             callID: "call-1",
@@ -717,6 +756,140 @@ final class ConversationWebDocumentTests: XCTestCase {
                 rawURL
             )
         }
+    }
+
+    func testPrivateSchemeUsesOpaqueTokensForRegisteredLocalImages() throws {
+        let handler = ConversationWebSchemeHandler()
+        let source = URL(fileURLWithPath: "/private/tmp/secret-preview.png")
+        let exposed = try XCTUnwrap(
+            handler.registerLocalAsset(sourceURL: source, mimeType: "image/png")
+        )
+
+        XCTAssertTrue(ConversationWebSchemeHandler.isLocalAssetURL(exposed))
+        XCTAssertEqual(exposed.host, ConversationWebSchemeHandler.localAssetHost)
+        XCTAssertFalse(exposed.absoluteString.contains(source.path))
+        XCTAssertNil(
+            handler.registerLocalAsset(
+                sourceURL: source,
+                mimeType: "application/pdf"
+            )
+        )
+        for rawURL in [
+            "agentkit-workbench://local-asset/not-a-uuid",
+            "agentkit-workbench://local-asset/00000000-0000-0000-0000-000000000000/extra",
+            "agentkit-workbench://bundle/00000000-0000-0000-0000-000000000000",
+        ] {
+            XCTAssertFalse(
+                ConversationWebSchemeHandler.isLocalAssetURL(
+                    try XCTUnwrap(URL(string: rawURL))
+                )
+            )
+        }
+    }
+
+    func testBundledShellReplacesLocalImagePlaceholderAfterResolution() async throws {
+        let ready = expectation(description: "Web renderer handshake")
+        let acknowledged = expectation(description: "Local asset document acknowledgement")
+        let localAssetRequested = expectation(description: "Local asset URL requested")
+        let probe = ConversationWebBridgeProbe(ready: ready)
+        probe.expectAcknowledgement(revision: 1, expectation: acknowledged)
+        probe.expectLocalAssetRequest(localAssetRequested)
+
+        let configuration = WKWebViewConfiguration()
+        configuration.websiteDataStore = .nonPersistent()
+        configuration.setURLSchemeHandler(
+            ConversationWebSchemeHandler(),
+            forURLScheme: ConversationWebSchemeHandler.scheme
+        )
+        configuration.userContentController.add(probe, name: "agentkitWorkbench")
+        let webView = WKWebView(
+            frame: .init(x: 0, y: 0, width: 320, height: 480),
+            configuration: configuration
+        )
+        webView.load(URLRequest(url: ConversationWebSchemeHandler.indexURL))
+        await fulfillment(of: [ready], timeout: 5)
+
+        let assetID = "e7c8b36a-0c48-47b4-a3c5-f793e8e1c910"
+        let conversationID = "local-preview"
+        let asset = LocalUserAssetRef(
+            id: assetID,
+            relativePath: "user-assets/\(assetID)/preview.png",
+            filename: "preview.png",
+            mimeType: "image/png",
+            kind: "image",
+            sizeBytes: 68,
+            sha256: String(repeating: "e", count: 64)
+        )
+        let document = ConversationWebDocumentBuilder.build(
+            snapshot: RuntimeSnapshot(
+                timeline: [],
+                turns: [ConversationTurn(
+                    id: "turn-local-preview",
+                    userPrompt: MessageNodePayload(
+                        role: .user,
+                        text: "inspect",
+                        localAssets: [asset]
+                    ),
+                    blocks: [],
+                    footer: nil,
+                    isLive: false
+                )]
+            ),
+            conversationID: conversationID,
+            revision: 1
+        )
+        let payload = try JSONEncoder().encode(
+            ConversationWebDocumentDiffer.reset(document)
+        ).base64EncodedString()
+        _ = try await webView.evaluateJavaScript(
+            "window.AgentKitWorkbench.applyUpdateBase64('\(payload)')"
+        )
+        await fulfillment(of: [acknowledged, localAssetRequested], timeout: 5)
+
+        XCTAssertEqual(probe.requestedLocalAssetID, assetID)
+        XCTAssertEqual(probe.requestedLocalAssetConversationID, conversationID)
+        let requestID = try XCTUnwrap(probe.localAssetRequestID)
+        let initialTag = try await webView.evaluateJavaScript(
+            "document.querySelector('.local-asset-thumbnail')?.firstElementChild?.tagName"
+        ) as? String
+        XCTAssertEqual(initialTag, "DIV")
+
+        let transparentPixel =
+            "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII="
+        let detail: [String: Any] = [
+            "localAssetID": assetID,
+            "conversationID": conversationID,
+            "requestID": requestID,
+            "url": transparentPixel,
+        ]
+        let detailData = try JSONSerialization.data(withJSONObject: detail)
+        let detailJSON = try XCTUnwrap(String(data: detailData, encoding: .utf8))
+        _ = try await webView.evaluateJavaScript(
+            "window.dispatchEvent(new CustomEvent('localAssetURLResolved', {detail: \(detailJSON)}))"
+        )
+        try await Task.sleep(for: .milliseconds(50))
+
+        let resolved = try await webView.evaluateJavaScript(
+            """
+            (() => {
+              const thumbnail = document.querySelector('.local-asset-thumbnail');
+              const image = thumbnail?.querySelector('img[data-local-asset-id]');
+              return {
+                tag: thumbnail?.firstElementChild?.tagName ?? null,
+                src: image?.getAttribute('src') ?? null,
+                placeholder: Boolean(thumbnail?.querySelector('.user-asset-placeholder')),
+              };
+            })()
+            """
+        ) as? [String: Any]
+        XCTAssertEqual(resolved?["tag"] as? String, "IMG")
+        XCTAssertEqual(resolved?["src"] as? String, transparentPixel)
+        XCTAssertEqual(resolved?["placeholder"] as? Bool, false)
+
+        configuration.userContentController.removeScriptMessageHandler(
+            forName: "agentkitWorkbench"
+        )
+        _ = webView
     }
 
     func testRendererRolloutPolicyIsConservative() {
@@ -1513,10 +1686,14 @@ final class ConversationWebDocumentTests: XCTestCase {
 private final class ConversationWebBridgeProbe: NSObject, WKScriptMessageHandler {
     private let ready: XCTestExpectation
     private var acknowledgementExpectations: [Int: XCTestExpectation] = [:]
+    private var localAssetRequestExpectation: XCTestExpectation?
     private(set) var protocolVersion: Int?
     private(set) var acknowledgedRevision: Int?
     private(set) var lastViewportPinned: Bool?
     private(set) var lastViewportInteracting: Bool?
+    private(set) var localAssetRequestID: String?
+    private(set) var requestedLocalAssetID: String?
+    private(set) var requestedLocalAssetConversationID: String?
 
     init(ready: XCTestExpectation) {
         self.ready = ready
@@ -1524,6 +1701,10 @@ private final class ConversationWebBridgeProbe: NSObject, WKScriptMessageHandler
 
     func expectAcknowledgement(revision: Int, expectation: XCTestExpectation) {
         acknowledgementExpectations[revision] = expectation
+    }
+
+    func expectLocalAssetRequest(_ expectation: XCTestExpectation) {
+        localAssetRequestExpectation = expectation
     }
 
     func userContentController(
@@ -1547,6 +1728,12 @@ private final class ConversationWebBridgeProbe: NSObject, WKScriptMessageHandler
         case "viewport":
             lastViewportPinned = body["pinned"] as? Bool
             lastViewportInteracting = body["interacting"] as? Bool
+        case "resolveLocalAssetURL":
+            localAssetRequestID = body["requestID"] as? String
+            requestedLocalAssetID = body["localAssetID"] as? String
+            requestedLocalAssetConversationID = body["conversationID"] as? String
+            localAssetRequestExpectation?.fulfill()
+            localAssetRequestExpectation = nil
         default:
             break
         }

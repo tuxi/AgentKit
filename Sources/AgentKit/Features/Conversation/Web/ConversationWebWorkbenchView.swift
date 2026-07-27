@@ -15,6 +15,7 @@ import WebKit
 struct ConversationWebWorkbenchView: NSViewRepresentable {
     let snapshot: RuntimeSnapshot
     let conversationID: String?
+    let workspaceRoot: URL?
     let extensionContributions: [String: [TimelineWebContribution]]
     let timelineExtensions: [any TimelineExtension]
     let isVisible: Bool
@@ -61,6 +62,7 @@ struct ConversationWebWorkbenchView: NSViewRepresentable {
         context.coordinator.replaceSnapshot(
             snapshot,
             conversationID: conversationID,
+            workspaceRoot: workspaceRoot,
             extensionContributions: extensionContributions,
             timelineExtensions: timelineExtensions,
             store: workspaceStore,
@@ -75,6 +77,7 @@ struct ConversationWebWorkbenchView: NSViewRepresentable {
         context.coordinator.replaceSnapshot(
             snapshot,
             conversationID: conversationID,
+            workspaceRoot: workspaceRoot,
             extensionContributions: extensionContributions,
             timelineExtensions: timelineExtensions,
             store: workspaceStore,
@@ -117,6 +120,7 @@ struct ConversationWebWorkbenchView: NSViewRepresentable {
         private var shellURL: URL?
         private var sourceGeneration: UInt64?
         private var sourceConversationID: String?
+        private var sourceWorkspaceRoot: URL?
         private var sourceExtensionContributions: [String: [TimelineWebContribution]] = [:]
         private var acknowledgedExtensionContributions: [String: [TimelineWebContribution]] = [:]
         private var inFlightExtensionContributions: [String: [TimelineWebContribution]]?
@@ -168,12 +172,14 @@ struct ConversationWebWorkbenchView: NSViewRepresentable {
             acknowledgementTimeoutTask?.cancel()
             acknowledgementTimeoutTask = nil
             actionRegistry.removeAll()
+            schemeHandler?.removeAllLocalAssets()
             onFatalFailure = nil
         }
 
         func replaceSnapshot(
             _ snapshot: RuntimeSnapshot,
             conversationID: String?,
+            workspaceRoot: URL?,
             extensionContributions: [String: [TimelineWebContribution]],
             timelineExtensions: [any TimelineExtension],
             store: WorkspaceStore,
@@ -187,6 +193,7 @@ struct ConversationWebWorkbenchView: NSViewRepresentable {
             let resolvedConversationID = conversationID ?? "unbound"
             guard sourceGeneration != snapshot.generation
                     || sourceConversationID != resolvedConversationID
+                    || sourceWorkspaceRoot != workspaceRoot
                     || sourceExtensionContributions != extensionContributions else {
                 return
             }
@@ -208,12 +215,14 @@ struct ConversationWebWorkbenchView: NSViewRepresentable {
                 isViewportInteracting = false
                 lastApplyDurationMilliseconds = 0
                 actionRegistry.removeAll()
+                schemeHandler?.removeAllLocalAssets()
                 acknowledgedExtensionContributions = [:]
                 inFlightExtensionContributions = nil
             }
             latestSnapshot = snapshot
             sourceGeneration = snapshot.generation
             sourceConversationID = resolvedConversationID
+            sourceWorkspaceRoot = workspaceRoot
             sourceExtensionContributions = extensionContributions
             sourceVersion &+= 1
             scheduleLatestDocumentSend()
@@ -276,6 +285,7 @@ struct ConversationWebWorkbenchView: NSViewRepresentable {
                 acknowledgementTimeoutTask?.cancel()
                 acknowledgementTimeoutTask = nil
                 actionRegistry.removeAll()
+                schemeHandler?.removeAllLocalAssets()
                 if isVisible {
                     scheduleLatestDocumentSend(delayMilliseconds: 0)
                 }
@@ -303,6 +313,8 @@ struct ConversationWebWorkbenchView: NSViewRepresentable {
                 handleAction(body)
             case "resolveUserAssetURL":
                 handleResolveUserAssetURL(body)
+            case "resolveLocalAssetURL":
+                handleResolveLocalAssetURL(body)
             default:
                 break
             }
@@ -649,6 +661,62 @@ struct ConversationWebWorkbenchView: NSViewRepresentable {
             }
         }
 
+        /// Resolves a local history attachment through the Host, then exposes
+        /// only an opaque, in-memory allowlisted scheme URL to Web content.
+        private func handleResolveLocalAssetURL(_ body: [String: Any]) {
+            guard let localAssetID = body["localAssetID"] as? String,
+                  UUID(uuidString: localAssetID) != nil,
+                  let conversationID = body["conversationID"] as? String,
+                  conversationID == sourceConversationID,
+                  let requestID = body["requestID"] as? String,
+                  UUID(uuidString: requestID) != nil,
+                  let resolver = workspaceStore?.localUserAssetPreviewResolver,
+                  let workspaceRoot = sourceWorkspaceRoot,
+                  let asset = latestTurns.lazy
+                    .compactMap(\.userPrompt)
+                    .flatMap(\.localAssets)
+                    .first(where: { $0.id.caseInsensitiveCompare(localAssetID) == .orderedSame }),
+                  asset.mimeType == "image/jpeg" || asset.mimeType == "image/png"
+            else { return }
+
+            let requestedSourceVersion = sourceVersion
+            Task { @MainActor [weak self] in
+                guard let self else { return }
+                let sourceURL: URL?
+                do {
+                    sourceURL = try await resolver.previewURL(
+                        for: asset,
+                        conversationID: conversationID,
+                        workspaceRoot: workspaceRoot
+                    )
+                } catch {
+                    sourceURL = nil
+                    Self.logger.error(
+                        "Local asset preview resolution failed for \(localAssetID, privacy: .public) in \(conversationID, privacy: .public): \(error.localizedDescription, privacy: .public)"
+                    )
+                }
+                guard self.sourceConversationID == conversationID,
+                      self.sourceVersion >= requestedSourceVersion,
+                      let webView = self.webView else { return }
+                let resolvedURL = sourceURL.flatMap {
+                    self.schemeHandler?.registerLocalAsset(
+                        sourceURL: $0,
+                        mimeType: asset.mimeType
+                    )
+                }
+                let response = ResolveLocalAssetResponse(
+                    localAssetID: localAssetID,
+                    conversationID: conversationID,
+                    requestID: requestID,
+                    url: resolvedURL?.absoluteString
+                )
+                guard let jsonData = try? JSONEncoder().encode(response),
+                      let json = String(data: jsonData, encoding: .utf8) else { return }
+                let script = "window.dispatchEvent(new CustomEvent('localAssetURLResolved', {detail: \(json)}))"
+                _ = try? await webView.evaluateJavaScript(script)
+            }
+        }
+
         private func reportFatalFailure(_ message: String) {
             #if DEBUG
             NSLog("[AgentKit] %@", message)
@@ -713,6 +781,13 @@ fileprivate final class WeakScriptMessageHandler: NSObject, WKScriptMessageHandl
 private struct ResolveAssetResponse: Encodable {
     let type: String
     let assetID: Int64
+    let requestID: String
+    let url: String?
+}
+
+private struct ResolveLocalAssetResponse: Encodable {
+    let localAssetID: String
+    let conversationID: String
     let requestID: String
     let url: String?
 }

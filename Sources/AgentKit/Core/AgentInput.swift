@@ -53,6 +53,10 @@ public struct AgentInput: Sendable {
     /// Gateway-managed user image references from Agent Wire v1.5.
     /// Valid only for `kind == .text` and kept distinct from tool-result assets.
     public var assets: [UserAssetRef]
+    /// Workspace-relative attachments consumed by the local Runtime. These do not
+    /// require the Gateway `image_input` capability and are never uploaded by
+    /// AgentKit.
+    public var localAssets: [LocalUserAssetRef]
 
     // MARK: - Convenience factories
 
@@ -60,9 +64,17 @@ public struct AgentInput: Sendable {
         _ text: String,
         model: String? = nil,
         assets: [UserAssetRef] = [],
+        localAssets: [LocalUserAssetRef] = [],
         requestID: String = UUID().uuidString
     ) -> AgentInput {
-        AgentInput(kind: .text, text: text, model: model, requestID: requestID, assets: assets)
+        AgentInput(
+            kind: .text,
+            text: text,
+            model: model,
+            requestID: requestID,
+            assets: assets,
+            localAssets: localAssets
+        )
     }
 
     public static func toolResult(_ result: ToolResultContent) -> AgentInput {
@@ -86,7 +98,8 @@ public struct AgentInput: Sendable {
         model: String? = nil,
         metadata: [String: String]? = nil,
         requestID: String? = nil,
-        assets: [UserAssetRef] = []
+        assets: [UserAssetRef] = [],
+        localAssets: [LocalUserAssetRef] = []
     ) {
         self.kind = kind
         self.text = text
@@ -95,6 +108,7 @@ public struct AgentInput: Sendable {
         self.metadata = metadata
         self.requestID = requestID
         self.assets = assets
+        self.localAssets = localAssets
     }
 
     /// Deterministic client-side checks. Gateway remains the final trust boundary.
@@ -103,14 +117,17 @@ public struct AgentInput: Sendable {
             let hasText = !(text ?? "")
                 .trimmingCharacters(in: .whitespacesAndNewlines)
                 .isEmpty
-            guard hasText || !assets.isEmpty else {
+            guard hasText || !assets.isEmpty || !localAssets.isEmpty else {
                 throw AgentInputRejection(code: "invalid_input", message: "Text and assets cannot both be empty")
             }
-        } else if !assets.isEmpty {
+        } else if !assets.isEmpty || !localAssets.isEmpty {
             throw AgentInputRejection(code: "invalid_assets", message: "Assets are only valid for text input")
         }
 
-        guard assets.count <= 4 else { throw UserAssetValidationError.tooManyAssets(assets.count) }
+        let attachmentCount = assets.count + localAssets.count
+        guard attachmentCount <= 4 else {
+            throw UserAssetValidationError.tooManyAssets(attachmentCount)
+        }
         if !assets.isEmpty {
             guard supportsImageInput else {
                 throw AgentInputRejection(
@@ -130,6 +147,26 @@ public struct AgentInput: Sendable {
                 try asset.validate()
                 guard seen.insert(asset.assetID).inserted else {
                     throw UserAssetValidationError.duplicateAssetID(asset.assetID)
+                }
+            }
+        }
+        if !localAssets.isEmpty {
+            guard let requestID,
+                  !requestID.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+                throw AgentInputRejection(
+                    code: "invalid_input",
+                    message: "Local attachments require a request_id"
+                )
+            }
+            var seenIDs = Set<String>()
+            var seenPaths = Set<String>()
+            for asset in localAssets {
+                try asset.validate()
+                guard seenIDs.insert(asset.id.lowercased()).inserted else {
+                    throw LocalUserAssetValidationError.duplicateID(asset.id)
+                }
+                guard seenPaths.insert(asset.relativePath).inserted else {
+                    throw LocalUserAssetValidationError.duplicateRelativePath(asset.relativePath)
                 }
             }
         }

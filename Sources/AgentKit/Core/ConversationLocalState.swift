@@ -32,6 +32,8 @@ public struct DraftAttachmentReference: Codable, Sendable, Equatable, Identifiab
     public var resourceURI: String
     public var state: DraftAttachmentState
     public var progress: Double?
+    public var delivery: DraftAttachmentDelivery
+    public var localAsset: LocalUserAssetRef?
     public var readyAsset: UserAssetRef?
     public var failure: DraftAttachmentFailure?
 
@@ -41,6 +43,8 @@ public struct DraftAttachmentReference: Codable, Sendable, Equatable, Identifiab
         resourceURI: String,
         state: DraftAttachmentState = .local,
         progress: Double? = nil,
+        delivery: DraftAttachmentDelivery? = nil,
+        localAsset: LocalUserAssetRef? = nil,
         readyAsset: UserAssetRef? = nil,
         failure: DraftAttachmentFailure? = nil
     ) {
@@ -49,12 +53,15 @@ public struct DraftAttachmentReference: Codable, Sendable, Equatable, Identifiab
         self.resourceURI = resourceURI
         self.state = state
         self.progress = progress
+        self.delivery = delivery ?? (readyAsset == nil ? .localOnly : .gateway)
+        self.localAsset = localAsset
         self.readyAsset = readyAsset
         self.failure = failure
     }
 
     private enum CodingKeys: String, CodingKey {
-        case id, displayName, resourceURI, state, progress, readyAsset, failure
+        case id, displayName, resourceURI, state, progress, delivery
+        case localAsset, readyAsset, failure
     }
 
     public init(from decoder: Decoder) throws {
@@ -63,16 +70,19 @@ public struct DraftAttachmentReference: Codable, Sendable, Equatable, Identifiab
         displayName = try values.decode(String.self, forKey: .displayName)
         resourceURI = try values.decode(String.self, forKey: .resourceURI)
         let decodedState = try values.decodeIfPresent(DraftAttachmentState.self, forKey: .state) ?? .local
+        localAsset = try values.decodeIfPresent(LocalUserAssetRef.self, forKey: .localAsset)
         readyAsset = try values.decodeIfPresent(UserAssetRef.self, forKey: .readyAsset)
+        delivery = try values.decodeIfPresent(DraftAttachmentDelivery.self, forKey: .delivery)
+            ?? (readyAsset == nil ? .localOnly : .gateway)
         switch decodedState {
         case .preparing, .uploading, .sending:
             state = .failed
             progress = nil
             failure = DraftAttachmentFailure(message: "上次操作已中断，请重试", retryable: true)
-        case .ready where readyAsset == nil:
+        case .ready where localAsset == nil && readyAsset == nil:
             state = .failed
             progress = nil
-            failure = DraftAttachmentFailure(message: "远端资产引用缺失，请重新上传", retryable: true)
+            failure = DraftAttachmentFailure(message: "附件引用缺失，请重新选择", retryable: true)
         default:
             state = decodedState
             progress = decodedState == .uploading
@@ -81,6 +91,11 @@ public struct DraftAttachmentReference: Codable, Sendable, Equatable, Identifiab
             failure = try values.decodeIfPresent(DraftAttachmentFailure.self, forKey: .failure)
         }
     }
+}
+
+public enum DraftAttachmentDelivery: String, Codable, Sendable, Equatable {
+    case localOnly
+    case gateway
 }
 
 public enum DraftAttachmentState: String, Codable, Sendable, Equatable {
@@ -109,6 +124,7 @@ public struct ComposerSubmissionSnapshot: Codable, Sendable, Equatable {
     public var attachmentIDs: [String]
     public var model: String?
     public var assets: [UserAssetRef]
+    public var localAssets: [LocalUserAssetRef]
 
     public init(
         requestID: String,
@@ -116,7 +132,8 @@ public struct ComposerSubmissionSnapshot: Codable, Sendable, Equatable {
         text: String,
         attachmentIDs: [String],
         model: String? = nil,
-        assets: [UserAssetRef] = []
+        assets: [UserAssetRef] = [],
+        localAssets: [LocalUserAssetRef] = []
     ) {
         self.requestID = requestID
         self.revision = revision
@@ -124,10 +141,11 @@ public struct ComposerSubmissionSnapshot: Codable, Sendable, Equatable {
         self.attachmentIDs = attachmentIDs
         self.model = model
         self.assets = assets
+        self.localAssets = localAssets
     }
 
     private enum CodingKeys: String, CodingKey {
-        case requestID, revision, text, attachmentIDs, model, assets
+        case requestID, revision, text, attachmentIDs, model, assets, localAssets
     }
 
     public init(from decoder: Decoder) throws {
@@ -138,6 +156,7 @@ public struct ComposerSubmissionSnapshot: Codable, Sendable, Equatable {
         attachmentIDs = try values.decodeIfPresent([String].self, forKey: .attachmentIDs) ?? []
         model = try values.decodeIfPresent(String.self, forKey: .model)
         assets = try values.decodeIfPresent([UserAssetRef].self, forKey: .assets) ?? []
+        localAssets = try values.decodeIfPresent([LocalUserAssetRef].self, forKey: .localAssets) ?? []
     }
 }
 

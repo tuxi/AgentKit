@@ -19,6 +19,7 @@ struct MacNativeChatTimeline: NSViewRepresentable {
     let snapshot: RuntimeSnapshot
     let timelineExtensions: [any TimelineExtension]
     let conversationID: String?
+    let workspaceRoot: URL?
 
     @Environment(WorkspaceStore.self) private var workspaceStore
     @Environment(\.openURL) private var openURL
@@ -160,11 +161,23 @@ struct MacNativeChatTimeline: NSViewRepresentable {
         }
 
         @MainActor
-        func hostedView(workspaceStore: WorkspaceStore, openURL: OpenURLAction) -> AnyView {
+        func hostedView(
+            workspaceStore: WorkspaceStore,
+            openURL: OpenURLAction,
+            conversationID: String?,
+            workspaceRoot: URL?
+        ) -> AnyView {
             let content: AnyView
             switch self {
             case .turn(let turn):
-                content = AnyView(TurnView(turn: turn).equatable())
+                content = AnyView(
+                    TurnView(
+                        turn: turn,
+                        conversationID: conversationID,
+                        workspaceRoot: workspaceRoot
+                    )
+                    .equatable()
+                )
             case .extensionContent(_, _, _, let extensionContent):
                 content = extensionContent
             case .thinking(let turnStartedAt, let isThinking, let modelStats):
@@ -222,6 +235,7 @@ struct MacNativeChatTimeline: NSViewRepresentable {
 
         private var rows: [TimelineRow] = []
         private var conversationID: String?
+        private var workspaceRoot: URL?
         private var isPerformingProgrammaticScroll = false
         private var isHandlingUserScroll = false
         private var awaitingInitialBottomPin = false
@@ -328,7 +342,9 @@ struct MacNativeChatTimeline: NSViewRepresentable {
                 rowID: targetRow.identity,
                 rootView: targetRow.hostedView(
                     workspaceStore: parent.workspaceStore,
-                    openURL: parent.openURL
+                    openURL: parent.openURL,
+                    conversationID: parent.conversationID,
+                    workspaceRoot: parent.workspaceRoot
                 )
             )
             return cell
@@ -576,10 +592,13 @@ struct MacNativeChatTimeline: NSViewRepresentable {
             let oldRows = rows
             let isNewConversation = conversationID != parent.conversationID
                 || (oldRows.isEmpty && !newRows.isEmpty)
+            let didWorkspaceRootChange = workspaceRoot != parent.workspaceRoot
             conversationID = parent.conversationID
+            workspaceRoot = parent.workspaceRoot
             rows = newRows
 
             guard !isNewConversation,
+                  !didWorkspaceRootChange,
                   oldRows.map(\.identity) == newRows.map(\.identity) else {
                 heightCache.removeAll(keepingCapacity: true)
                 let liveTurnIDs = Set(newRows.compactMap { row -> String? in
@@ -641,7 +660,9 @@ struct MacNativeChatTimeline: NSViewRepresentable {
             // still never enters automatic-row-height mode.
             let host = NSHostingView(rootView: row.hostedView(
                 workspaceStore: parent.workspaceStore,
-                openURL: parent.openURL
+                openURL: parent.openURL,
+                conversationID: parent.conversationID,
+                workspaceRoot: parent.workspaceRoot
             ))
             host.frame = NSRect(x: 0, y: 0, width: width, height: 1)
             host.layoutSubtreeIfNeeded()

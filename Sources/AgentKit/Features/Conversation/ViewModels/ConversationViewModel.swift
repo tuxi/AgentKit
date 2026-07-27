@@ -200,6 +200,28 @@ public final class ConversationViewModel {
         return nil
     }
 
+    /// Stable workspace root owned by this conversation detail.
+    ///
+    /// Preview and client-tool paths must come from the resident conversation
+    /// model, not from transient sidebar selection/list state. A detail view can
+    /// remain mounted after those collections are cleared.
+    public var workspaceRootURL: URL? {
+        // Local assets are staged against ConversationRef.workspacePath, so
+        // preserve that exact root before considering structured Runtime
+        // anchors that may identify a different CWD.
+        let path = [
+            conversation?.workspacePath,
+            detail?.workspacePath,
+            conversation?.workspace?.localRootPath,
+            detail?.workspace?.localRootPath,
+            workspace?.url.path,
+        ]
+        .compactMap { $0 }
+        .first { !$0.isEmpty }
+        guard let path else { return nil }
+        return URL(fileURLWithPath: path, isDirectory: true)
+    }
+
     public var managedWorktree: ManagedWorktreeMetadata? {
         detail?.worktree ?? conversation?.worktree
     }
@@ -657,7 +679,7 @@ public final class ConversationViewModel {
             lifecycleStatus = "queued"
             queueReason = reason
             queuePosition = position
-        case .turnStarted(let turnID, _, _):
+        case .turnStarted(let turnID, _, _, _):
             isAwaitingTurnAcceptance = false
             currentTurnID = turnID
             lifecycleStatus = "running"

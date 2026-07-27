@@ -241,6 +241,7 @@ enum ConversationWebDocumentDiffer {
         lhs.id == rhs.id
             && lhs.userPrompt == rhs.userPrompt
             && lhs.userAssets == rhs.userAssets
+            && lhs.localAssets == rhs.localAssets
             && lhs.todos == rhs.todos
             && lhs.extensionNodes == rhs.extensionNodes
             && lhs.footer == rhs.footer

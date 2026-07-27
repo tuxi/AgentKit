@@ -259,7 +259,8 @@ public struct TimelineProjection: Sendable {
             kind = .message(MessageNodePayload(
                 role: .user,
                 text: payload.text,
-                userAssets: payload.userAssets
+                userAssets: payload.userAssets,
+                localAssets: payload.localAssets
             ))
 
         case .thinking(let text):

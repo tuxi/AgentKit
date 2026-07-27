@@ -286,7 +286,11 @@ public struct ConversationDetailView: View {
                     onStop: { Task { await vm.cancelTurn() } },
                     onSend: { text, model, assets in
                         let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
-                        return await vm.send(input: .text(trimmed, model: model, assets: assets))
+                        return await store.sendUserMessage(
+                            trimmed,
+                            model: model,
+                            through: vm
+                        )
                     },
                     viewModel: vm,
                     onModelChange: { newID in

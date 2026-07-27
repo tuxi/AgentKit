@@ -12,6 +12,8 @@ import ClientToolProtocol
 
 struct TurnView: View, Equatable {
     let turn: ConversationTurn
+    let conversationID: String?
+    let workspaceRoot: URL?
     @Environment(WorkspaceStore.self) private var store
     @Environment(\.openURL) private var openURL
     @State private var documentState = TranscriptDocumentState()
@@ -20,8 +22,20 @@ struct TurnView: View, Equatable {
     /// turns whose content didn't change — the common case while another turn
     /// streams. (Environment is only read inside action closures, and @State
     /// changes invalidate independently, so comparing `turn` is sufficient.)
+    init(
+        turn: ConversationTurn,
+        conversationID: String? = nil,
+        workspaceRoot: URL? = nil
+    ) {
+        self.turn = turn
+        self.conversationID = conversationID
+        self.workspaceRoot = workspaceRoot
+    }
+
     nonisolated static func == (lhs: TurnView, rhs: TurnView) -> Bool {
         lhs.turn == rhs.turn
+            && lhs.conversationID == rhs.conversationID
+            && lhs.workspaceRoot == rhs.workspaceRoot
     }
 
     // NOTE: no TimelineView(.periodic) here. Rebuilding the transcript on a
@@ -42,10 +56,15 @@ struct TurnView: View, Equatable {
     private var iosBody: some View {
         VStack(alignment: .leading, spacing: 6) {
             // User-attached images / files
-            if let userAssets = turn.userPrompt?.userAssets, !userAssets.isEmpty {
+            if let prompt = turn.userPrompt,
+               !prompt.userAssets.isEmpty || !prompt.localAssets.isEmpty {
                 UserAssetPreviewStrip(
-                    assets: userAssets,
-                    resolver: store.userAssetPreviewResolver
+                    assets: prompt.userAssets,
+                    localAssets: prompt.localAssets,
+                    resolver: store.userAssetPreviewResolver,
+                    localResolver: store.localUserAssetPreviewResolver,
+                    conversationID: conversationID,
+                    workspaceRoot: workspaceRoot
                 )
             }
             // User prompt as a right-aligned markdown bubble
@@ -94,10 +113,15 @@ struct TurnView: View, Equatable {
             state: documentState
         )
         return VStack(alignment: .leading, spacing: 6) {
-            if let userAssets = turn.userPrompt?.userAssets, !userAssets.isEmpty {
+            if let prompt = turn.userPrompt,
+               !prompt.userAssets.isEmpty || !prompt.localAssets.isEmpty {
                 UserAssetPreviewStrip(
-                    assets: userAssets,
-                    resolver: store.userAssetPreviewResolver
+                    assets: prompt.userAssets,
+                    localAssets: prompt.localAssets,
+                    resolver: store.userAssetPreviewResolver,
+                    localResolver: store.localUserAssetPreviewResolver,
+                    conversationID: conversationID,
+                    workspaceRoot: workspaceRoot
                 )
             }
             NativeTranscriptView(transcript: transcript) { action in
@@ -374,17 +398,87 @@ struct TurnView: View, Equatable {
 
 private struct UserAssetPreviewStrip: View {
     let assets: [UserAssetRef]
+    let localAssets: [LocalUserAssetRef]
     let resolver: (any UserAssetPreviewResolving)?
+    let localResolver: (any LocalUserAssetPreviewResolving)?
+    let conversationID: String?
+    let workspaceRoot: URL?
 
     var body: some View {
-        ScrollView(.horizontal, showsIndicators: false) {
-            HStack(spacing: 8) {
-                ForEach(assets) { asset in
-                    UserAssetThumbnail(asset: asset, resolver: resolver)
+        VStack(alignment: .trailing, spacing: 5) {
+            if !localAssets.isEmpty {
+                Text("🔒 本地处理 · 文件不会自动上传")
+                    .font(.caption2)
+                    .foregroundStyle(.secondary)
+            }
+            ScrollView(.horizontal, showsIndicators: false) {
+                HStack(spacing: 8) {
+                    ForEach(assets) { asset in
+                        UserAssetThumbnail(asset: asset, resolver: resolver)
+                    }
+                    ForEach(localAssets) { asset in
+                        LocalUserAssetThumbnail(
+                            asset: asset,
+                            resolver: localResolver,
+                            conversationID: conversationID,
+                            workspaceRoot: workspaceRoot
+                        )
+                    }
                 }
             }
+            .frame(maxWidth: .infinity, alignment: .trailing)
         }
         .frame(maxWidth: .infinity, alignment: .trailing)
+    }
+}
+
+private struct LocalUserAssetThumbnail: View {
+    let asset: LocalUserAssetRef
+    let resolver: (any LocalUserAssetPreviewResolving)?
+    let conversationID: String?
+    let workspaceRoot: URL?
+    @State private var previewURL: URL?
+
+    var body: some View {
+        Group {
+            if asset.mimeType.hasPrefix("image/"), let previewURL {
+                AsyncImage(url: previewURL) { image in
+                    image.resizable().scaledToFill()
+                } placeholder: {
+                    ProgressView()
+                }
+            } else {
+                VStack(spacing: 5) {
+                    Image(systemName: systemImage)
+                    Text(asset.filename)
+                        .font(.caption2)
+                        .lineLimit(1)
+                }
+                .foregroundStyle(.secondary)
+            }
+        }
+        .frame(width: 104, height: 76)
+        .background(Color.secondary.opacity(0.1))
+        .clipShape(RoundedRectangle(cornerRadius: 10))
+        .help(asset.filename)
+        .task(id: "\(conversationID ?? "")|\(workspaceRoot?.path ?? "")|\(asset.id)") {
+            guard asset.mimeType.hasPrefix("image/"),
+                  let resolver,
+                  let conversationID,
+                  let workspaceRoot else { return }
+            previewURL = try? await resolver.previewURL(
+                for: asset,
+                conversationID: conversationID,
+                workspaceRoot: workspaceRoot
+            )
+        }
+    }
+
+    private var systemImage: String {
+        if asset.mimeType == "application/pdf" { return "doc.richtext" }
+        if asset.mimeType.hasPrefix("text/") { return "doc.text" }
+        if asset.kind == "document" { return "doc" }
+        return "paperclip"
     }
 }
 

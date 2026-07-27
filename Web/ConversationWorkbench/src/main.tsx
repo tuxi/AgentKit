@@ -1,4 +1,11 @@
-import React, { memo, useEffect, useLayoutEffect, useRef, useState } from "react";
+import React, {
+  memo,
+  useEffect,
+  useLayoutEffect,
+  useRef,
+  useState,
+  useSyncExternalStore,
+} from "react";
 import { createRoot } from "react-dom/client";
 import ReactMarkdown, { defaultUrlTransform } from "react-markdown";
 import remarkGfm from "remark-gfm";
@@ -37,6 +44,42 @@ const workbenchSuspensionEvent = "agentkit-workbench-suspension";
 const userAssetPlaceholderSrc =
   "data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='104' height='76' viewBox='0 0 104 76'%3E%3Crect width='104' height='76' fill='%23f0f0f0'/%3E%3C/svg%3E";
 const pendingAssetURLs = new Map<number, string>(); // "" = pending, url = resolved
+interface PendingLocalAssetURL {
+  conversationID: string;
+  localAssetID: string;
+  requestID: string;
+  url?: string;
+  expires: number;
+}
+
+const pendingLocalAssetURLs = new Map<string, PendingLocalAssetURL>();
+let localAssetURLRevision = 0;
+const localAssetURLSubscribers = new Set<() => void>();
+const localAssetRequestTimeoutMilliseconds = 10_000;
+
+function subscribeLocalAssetURLs(callback: () => void): () => void {
+  localAssetURLSubscribers.add(callback);
+  return () => localAssetURLSubscribers.delete(callback);
+}
+
+function localAssetURLSnapshot(): number {
+  return localAssetURLRevision;
+}
+
+function notifyLocalAssetURLChange(): void {
+  localAssetURLRevision += 1;
+  for (const callback of localAssetURLSubscribers) callback();
+}
+
+function localAssetCacheKey(conversationID: string, localAssetID: string): string {
+  return `${conversationID}\u0000${localAssetID}`;
+}
+
+function clearLocalAssetURLs(): void {
+  if (pendingLocalAssetURLs.size === 0) return;
+  pendingLocalAssetURLs.clear();
+  notifyLocalAssetURLChange();
+}
 
 function resolveUserAssetURL(assetID: number): void {
   if (pendingAssetURLs.has(assetID)) return;
@@ -54,6 +97,61 @@ function applyResolvedAssetURL(assetID: number, url: string): void {
     `img[data-asset-id="${assetID}"]`,
   );
   if (img) img.src = url;
+}
+
+function resolveLocalAssetURL(localAssetID: string, conversationID: string): void {
+  const key = localAssetCacheKey(conversationID, localAssetID);
+  const existing = pendingLocalAssetURLs.get(key);
+  if (existing?.url) return;
+  if (existing && existing.expires > Date.now()) return;
+  const requestID = crypto.randomUUID();
+  pendingLocalAssetURLs.set(key, {
+    conversationID,
+    localAssetID,
+    requestID,
+    expires: Date.now() + localAssetRequestTimeoutMilliseconds,
+  });
+  window.webkit?.messageHandlers?.agentkitWorkbench?.postMessage({
+    type: "resolveLocalAssetURL",
+    localAssetID,
+    conversationID,
+    requestID,
+  });
+  window.setTimeout(() => {
+    const pending = pendingLocalAssetURLs.get(key);
+    if (pending?.requestID === requestID && !pending.url) {
+      pendingLocalAssetURLs.delete(key);
+    }
+  }, localAssetRequestTimeoutMilliseconds);
+}
+
+function applyResolvedLocalAssetURL(
+  conversationID: string,
+  localAssetID: string,
+  requestID: string,
+  url?: string,
+): void {
+  const key = localAssetCacheKey(conversationID, localAssetID);
+  const pending = pendingLocalAssetURLs.get(key);
+  if (
+    !pending ||
+    pending.requestID !== requestID ||
+    conversationID !== currentConversationID
+  ) return;
+  if (!url) {
+    pendingLocalAssetURLs.delete(key);
+    notifyLocalAssetURLChange();
+    return;
+  }
+  pendingLocalAssetURLs.set(key, { ...pending, url });
+  notifyLocalAssetURLChange();
+}
+
+function localAssetIcon(mimeType: string, kind: string): string {
+  if (mimeType === "application/pdf") return "PDF";
+  if (mimeType.startsWith("image/")) return "IMG";
+  if (kind === "document" || mimeType.startsWith("text/")) return "DOC";
+  return "FILE";
 }
 
 function postToNative(message: NativeBridgeMessage): void {
@@ -1548,9 +1646,21 @@ function CollapsibleUserPrompt({
   );
 }
 
-const Turn = memo(function Turn({ turn }: { turn: ConversationWebTurn }) {
+const Turn = memo(function Turn({
+  turn,
+  conversationID,
+}: {
+  turn: ConversationWebTurn;
+  conversationID: string;
+}) {
   const footer = turn.footer;
   const headingID = `turn-heading-${turn.id}`;
+  const localAssets = turn.localAssets ?? [];
+  useSyncExternalStore(
+    subscribeLocalAssetURLs,
+    localAssetURLSnapshot,
+    localAssetURLSnapshot,
+  );
 
   // Request signed URLs for user assets that arrived without one.
   useEffect(() => {
@@ -1558,6 +1668,14 @@ const Turn = memo(function Turn({ turn }: { turn: ConversationWebTurn }) {
       if (!asset.previewURL) resolveUserAssetURL(asset.assetID);
     }
   }, [turn.userAssets]);
+
+  useEffect(() => {
+    for (const asset of localAssets) {
+      if (asset.mimeType.startsWith("image/") && !asset.previewURL) {
+        resolveLocalAssetURL(asset.id, conversationID);
+      }
+    }
+  }, [turn.localAssets, conversationID]);
 
   return (
     <article
@@ -1599,6 +1717,46 @@ const Turn = memo(function Turn({ turn }: { turn: ConversationWebTurn }) {
               </div>
             );
           })}
+        </div>
+      ) : null}
+      {localAssets.length > 0 ? (
+        <div className="local-asset-group">
+          <div className="local-asset-privacy-label">
+            <span aria-hidden="true">🔒</span>
+            <span>本地处理 · 文件不会自动上传</span>
+          </div>
+          <div className="user-asset-strip" data-scroll-id={`local-assets:${turn.id}`}>
+            {localAssets.map((asset) => {
+              const resolved = pendingLocalAssetURLs.get(
+                localAssetCacheKey(conversationID, asset.id),
+              );
+              const src = asset.previewURL || resolved?.url;
+              const isImage = asset.mimeType.startsWith("image/");
+              return (
+                <div
+                  className="user-asset-thumbnail local-asset-thumbnail"
+                  key={asset.id}
+                  title={`${asset.filename} · 本地处理，文件不会自动上传`}
+                >
+                  {isImage && src ? (
+                    <img
+                      src={src}
+                      data-local-asset-id={asset.id}
+                      alt={asset.filename}
+                      loading="lazy"
+                    />
+                  ) : (
+                    <div className="user-asset-placeholder">
+                      <span className="local-asset-kind" aria-hidden="true">
+                        {localAssetIcon(asset.mimeType, asset.kind)}
+                      </span>
+                      <span className="user-asset-filename">{asset.filename}</span>
+                    </div>
+                  )}
+                </div>
+              );
+            })}
+          </div>
         </div>
       ) : null}
       {turn.userPrompt ? (
@@ -1770,6 +1928,7 @@ function App(): React.JSX.Element {
           currentRevision = update.revision;
           if (isReset) {
             if (!update.document) throw new Error("Reset is missing document");
+            clearLocalAssetURLs();
             conversationID.current = update.document.conversationID;
             currentConversationID = update.document.conversationID;
             setConversation(update.document);
@@ -1794,11 +1953,31 @@ function App(): React.JSX.Element {
         applyResolvedAssetURL(detail.assetID, detail.url);
       }
     };
+    const handleLocalAssetURLResolved = (event: Event) => {
+      const detail = (event as CustomEvent).detail;
+      if (
+        detail &&
+        typeof detail.localAssetID === "string" &&
+        typeof detail.conversationID === "string" &&
+        typeof detail.requestID === "string" &&
+        (typeof detail.url === "string" || detail.url == null)
+      ) {
+        applyResolvedLocalAssetURL(
+          detail.conversationID,
+          detail.localAssetID,
+          detail.requestID,
+          detail.url ?? undefined,
+        );
+      }
+    };
     window.addEventListener("userAssetURLResolved", handleAssetURLResolved);
+    window.addEventListener("localAssetURLResolved", handleLocalAssetURLResolved);
     postToNative({ type: "ready", protocolVersion });
     return () => {
       window.removeEventListener("userAssetURLResolved", handleAssetURLResolved);
+      window.removeEventListener("localAssetURLResolved", handleLocalAssetURLResolved);
       stopViewportController();
+      clearLocalAssetURLs();
       currentConversationID = undefined;
       delete window.AgentKitWorkbench;
     };
@@ -1895,7 +2074,13 @@ function App(): React.JSX.Element {
 
   return (
     <main className="conversation-shell" aria-label="Conversation">
-      {conversation.turns.map((turn) => <Turn key={turn.id} turn={turn} />)}
+      {conversation.turns.map((turn) => (
+        <Turn
+          key={turn.id}
+          turn={turn}
+          conversationID={conversation.conversationID}
+        />
+      ))}
       {conversation.live ? (
         <div
           className="live-indicator"

@@ -97,11 +97,22 @@ public final class WorkspaceStore {
     public let localStateStore: any ConversationLocalStateStore
     private let userAssetPicker: UserAssetPicking?
     private let userAssetDraftCoordinator: UserAssetDraftCoordinator?
+    private let hasLocalUserAssetStager: Bool
+    private let hasUserAssetUploader: Bool
     public let userAssetDraftPreviewResolver: (any UserAssetDraftPreviewResolving)?
     public let userAssetPreviewResolver: (any UserAssetPreviewResolving)?
+    public let localUserAssetPreviewResolver: (any LocalUserAssetPreviewResolving)?
 
     public var canSelectUserAssets: Bool {
-        userAssetPicker != nil && userAssetDraftCoordinator != nil
+        userAssetPicker != nil && canStageLocalUserAssets
+    }
+
+    public var canStageLocalUserAssets: Bool {
+        hasLocalUserAssetStager
+    }
+
+    public var canUploadUserAssetsToGateway: Bool {
+        hasUserAssetUploader
     }
 
     /// 客户端工具注册表。
@@ -180,9 +191,11 @@ public final class WorkspaceStore {
         onAuthExpired: (@MainActor () async -> Void)? = nil,
         localStateStore: any ConversationLocalStateStore = SQLiteConversationLocalStateStore.shared,
         userAssetPicker: UserAssetPicking? = nil,
+        localUserAssetStager: (any LocalUserAssetStaging)? = nil,
         userAssetUploader: (any UserAssetUploading)? = nil,
         userAssetDraftPreviewResolver: (any UserAssetDraftPreviewResolving)? = nil,
         userAssetPreviewResolver: (any UserAssetPreviewResolving)? = nil,
+        localUserAssetPreviewResolver: (any LocalUserAssetPreviewResolving)? = nil,
         attentionReadStore: (any ConversationAttentionReadStore)? = nil,
         onAttentionEvent: (@MainActor (ConversationAttentionEvent) -> Void)? = nil,
         recentWorkspaces: RecentWorkspacesStore = RecentWorkspacesStore(),
@@ -191,11 +204,18 @@ public final class WorkspaceStore {
         self.client = client
         self.localStateStore = localStateStore
         self.userAssetPicker = userAssetPicker
-        self.userAssetDraftCoordinator = userAssetUploader.map {
-            UserAssetDraftCoordinator(store: localStateStore, uploader: $0)
-        }
+        self.userAssetDraftCoordinator = (localUserAssetStager != nil || userAssetUploader != nil)
+            ? UserAssetDraftCoordinator(
+                store: localStateStore,
+                stager: localUserAssetStager,
+                uploader: userAssetUploader
+            )
+            : nil
+        self.hasLocalUserAssetStager = localUserAssetStager != nil
+        self.hasUserAssetUploader = userAssetUploader != nil
         self.userAssetDraftPreviewResolver = userAssetDraftPreviewResolver
         self.userAssetPreviewResolver = userAssetPreviewResolver
+        self.localUserAssetPreviewResolver = localUserAssetPreviewResolver
         self.recentWorkspaces = recentWorkspaces
         self.projects = projects
         self.toolRegistry = toolRegistry
@@ -217,10 +237,38 @@ public final class WorkspaceStore {
         )
     }
 
-    /// Host-driven picker/upload bridge. Selection tokens and upload credentials
-    /// remain outside AgentKit; only local draft state and ready UserAssetRef values
-    /// are persisted here.
-    public func selectAndUploadUserAssets(
+    /// Canonical dependency-container bridge used by Host app factories.
+    /// Keeping this mapping in AgentKit prevents newly added attachment
+    /// dependencies from being silently omitted by individual app targets.
+    public convenience init(
+        dependencies: AgentDependencies,
+        recentWorkspaces: RecentWorkspacesStore = RecentWorkspacesStore(),
+        projects: ProjectsStore = ProjectsStore()
+    ) {
+        self.init(
+            client: dependencies.client,
+            toolRegistry: dependencies.toolRegistry,
+            timelineExtensions: dependencies.timelineExtensions,
+            conversationRendererMode: dependencies.conversationRendererMode,
+            onAuthExpired: dependencies.onAuthExpired,
+            localStateStore: dependencies.localStateStore,
+            userAssetPicker: dependencies.userAssetPicker,
+            localUserAssetStager: dependencies.localUserAssetStager,
+            userAssetUploader: dependencies.userAssetUploader,
+            userAssetDraftPreviewResolver: dependencies.userAssetDraftPreviewResolver,
+            userAssetPreviewResolver: dependencies.userAssetPreviewResolver,
+            localUserAssetPreviewResolver: dependencies.localUserAssetPreviewResolver,
+            attentionReadStore: dependencies.attentionReadStore,
+            onAttentionEvent: dependencies.onAttentionEvent,
+            recentWorkspaces: recentWorkspaces,
+            projects: projects
+        )
+    }
+
+    /// Host-driven picker bridge. Selection only records durable draft state;
+    /// local staging targets the active conversation workspace and never invokes
+    /// the Gateway uploader.
+    public func selectUserAssets(
         for key: ConversationLocalStateKey,
         remainingSlots: Int,
         onStateChange: @escaping @MainActor @Sendable () -> Void = {}
@@ -228,10 +276,11 @@ public final class WorkspaceStore {
         guard let userAssetPicker,
               let coordinator = userAssetDraftCoordinator else { return }
         do {
-            // 先把已失败/已发送的残留附件清掉，再算真实可用槽位
+            // Sending residues are owned by the submission snapshot. Failed local
+            // imports remain visible and retryable.
             try localStateStore.updateState(for: key) { state in
                 state.composerDraft.attachments.removeAll {
-                    $0.state == .failed || $0.state == .sending
+                    $0.state == .sending
                 }
                 state.composerDraft.revision += 1
             }
@@ -239,7 +288,7 @@ public final class WorkspaceStore {
 
             let currentCount = (try? localStateStore.state(for: key))?
                 .composerDraft.attachments.count ?? 0
-            let available = max(0, min(4, 4 - currentCount))
+            let available = max(0, min(remainingSlots, min(4, 4 - currentCount)))
             guard available > 0 else { return }
 
             let selected = Array(try await userAssetPicker().prefix(available))
@@ -252,10 +301,10 @@ public final class WorkspaceStore {
                 state.composerDraft.revision += 1
             }
             onStateChange()
-            for attachment in selected {
-                try? await coordinator.upload(
-                    id: attachment.id,
-                    in: key,
+            if let workspaceRoot = workspaceRoot(for: key) {
+                _ = try? await coordinator.stageLocalAssets(
+                    for: key,
+                    workspaceRoot: workspaceRoot,
                     onStateChange: onStateChange
                 )
             }
@@ -264,7 +313,9 @@ public final class WorkspaceStore {
         }
     }
 
-    public func retryUserAssetUpload(
+    /// User-confirmed cloud visual delivery. This is the only automatic-composer
+    /// path that invokes `UserAssetUploading`.
+    public func uploadUserAssetToGateway(
         id: String,
         for key: ConversationLocalStateKey,
         onStateChange: @escaping @MainActor @Sendable () -> Void = {}
@@ -273,22 +324,36 @@ public final class WorkspaceStore {
         try? await coordinator.upload(id: id, in: key, onStateChange: onStateChange)
     }
 
-    /// 拖拽文件到输入框时，将文件 URL 转为附件并启动上传管线。
-    /// 与 selectAndUploadUserAssets 同构：先批量持久化 DraftAttachmentReference，
-    /// 再逐个调用 coordinator.upload() 走 preparing → uploading → ready 状态机。
+    public func retryLocalUserAssetStaging(
+        id: String,
+        for key: ConversationLocalStateKey,
+        onStateChange: @escaping @MainActor @Sendable () -> Void = {}
+    ) async {
+        guard let coordinator = userAssetDraftCoordinator,
+              let workspaceRoot = workspaceRoot(for: key) else { return }
+        try? await coordinator.stage(
+            id: id,
+            in: key,
+            workspaceRoot: workspaceRoot,
+            onStateChange: onStateChange
+        )
+    }
+
+    /// 拖拽文件到输入框时仅创建本地附件；活跃会话会立即 stage，
+    /// 新会话草稿则等 Runtime 返回最终 workspacePath 后再 stage。
     public func addDroppedFiles(
         _ urls: [URL],
         for key: ConversationLocalStateKey,
         onStateChange: @escaping @MainActor @Sendable () -> Void = {}
     ) async {
-        guard canSelectUserAssets,
+        guard canStageLocalUserAssets,
               let coordinator = userAssetDraftCoordinator,
               !urls.isEmpty else { return }
         do {
             // 先清掉已失败/已发送的残留附件，再算真实可用槽位
             try localStateStore.updateState(for: key) { state in
                 state.composerDraft.attachments.removeAll {
-                    $0.state == .failed || $0.state == .sending
+                    $0.state == .sending
                 }
                 state.composerDraft.revision += 1
             }
@@ -311,8 +376,6 @@ public final class WorkspaceStore {
                 return (id, ref)
             }
 
-            // 抽取出 let 常量数组
-            let addedIDs = generatedItems.map(\.id)
             let newAttachments = generatedItems.map(\.ref)
 
             // 闭包内部只更新状态，不再对外部变量进行 mutation
@@ -329,16 +392,74 @@ public final class WorkspaceStore {
             }
             
             onStateChange()
-            for id in addedIDs {
-                try? await coordinator.upload(
-                    id: id,
-                    in: key,
+            if let workspaceRoot = workspaceRoot(for: key) {
+                _ = try? await coordinator.stageLocalAssets(
+                    for: key,
+                    workspaceRoot: workspaceRoot,
                     onStateChange: onStateChange
                 )
             }
         } catch {
             onStateChange()
         }
+    }
+
+    /// Stages and resolves the attachment payload in persisted draft order.
+    /// Delivery is exclusive: a Gateway attachment never appears in localAssets.
+    public func prepareUserAssets(
+        for key: ConversationLocalStateKey,
+        workspaceRoot: URL,
+        onStateChange: @escaping @MainActor @Sendable () -> Void = {}
+    ) async throws -> (assets: [UserAssetRef], localAssets: [LocalUserAssetRef]) {
+        guard let coordinator = userAssetDraftCoordinator else {
+            let attachments = try localStateStore.state(for: key)?.composerDraft.attachments ?? []
+            guard attachments.isEmpty else {
+                throw AgentInputRejection(
+                    code: "local_asset_staging_unavailable",
+                    message: "当前 Host 未提供本地附件工作区导入能力"
+                )
+            }
+            return ([], [])
+        }
+        let localAssets = try await coordinator.stageLocalAssets(
+            for: key,
+            workspaceRoot: workspaceRoot,
+            onStateChange: onStateChange
+        )
+        let assets = try await coordinator.readyAssets(for: key)
+        return (assets, localAssets)
+    }
+
+    public func sendUserMessage(
+        _ text: String,
+        model: String,
+        through viewModel: ConversationViewModel,
+        onStateChange: @escaping @MainActor @Sendable () -> Void = {}
+    ) async -> Bool {
+        guard let conversation = viewModel.conversation else { return false }
+        do {
+            let key = ConversationLocalStateKey.session(conversation.id)
+            let payload = try await prepareUserAssets(
+                for: key,
+                workspaceRoot: URL(fileURLWithPath: conversation.workspacePath, isDirectory: true),
+                onStateChange: onStateChange
+            )
+            return await viewModel.send(input: .text(
+                text,
+                model: model,
+                assets: payload.assets,
+                localAssets: payload.localAssets
+            ))
+        } catch {
+            return false
+        }
+    }
+
+    private func workspaceRoot(for key: ConversationLocalStateKey) -> URL? {
+        guard case .session(let sessionID) = key,
+              let path = supervisor.controller(sessionID: sessionID)?.conversation?.workspacePath,
+              !path.isEmpty else { return nil }
+        return URL(fileURLWithPath: path, isDirectory: true)
     }
 
     // MARK: - Conversation Management
@@ -765,6 +886,7 @@ public final class WorkspaceStore {
             return
         }
         draft?.state = .committing
+        var createdConversation: ConversationRef?
         do {
             let managedRequest = current.usesManagedWorktree
                 ? ManagedWorktreeCreateRequest(
@@ -784,13 +906,17 @@ public final class WorkspaceStore {
                 worktree: managedRequest
             ))
             ref.name = String(firstMessage.trimmingCharacters(in: .whitespacesAndNewlines).prefix(18))
+            createdConversation = ref
             let vm = supervisor.controller(
                 for: ref,
                 workspace: workspace,
                 model: model
             )
-            await vm.connect(to: ref)
             try localStateStore.migrateDraft(current.id, to: ref.id)
+            let preparedAssets = try await prepareUserAssets(
+                for: .session(ref.id),
+                workspaceRoot: URL(fileURLWithPath: ref.workspacePath, isDirectory: true)
+            )
             // 加固：显式写入 selectedModelID 到 session state。
             // migrateDraft 已从 draft state merge，此处提供第二条恢复路径，
             // 防止因 WAL 时序或状态覆盖导致 active view 显示回退到默认模型（Bug 1）。
@@ -799,7 +925,13 @@ public final class WorkspaceStore {
                     state.selectedModelID = model
                 }
             }
-            let firstInput = AgentInput.text(firstMessage, model: model, assets: assets)
+            await vm.connect(to: ref)
+            let firstInput = AgentInput.text(
+                firstMessage,
+                model: model,
+                assets: preparedAssets.assets.isEmpty ? assets : preparedAssets.assets,
+                localAssets: preparedAssets.localAssets
+            )
             _ = try localStateStore.markSubmissionPending(
                 key: .session(ref.id),
                 input: firstInput
@@ -812,8 +944,19 @@ public final class WorkspaceStore {
             selectedConversation = ref  // supervisor reuses the connected controller
             draft = nil
         } catch {
-            draft?.state = .failed(error.localizedDescription)
-            persistDraftMetadata()
+            if let createdConversation,
+               (try? localStateStore.state(for: .session(createdConversation.id))) != nil {
+                // createConversation succeeded and the durable draft already moved
+                // to the session. Keep that session selected so text and staged
+                // attachment state remain retryable instead of pointing the UI at
+                // a migrated-away draft key.
+                listViewModel.prepend(createdConversation)
+                selectedConversation = createdConversation
+                draft = nil
+            } else {
+                draft?.state = .failed(error.localizedDescription)
+                persistDraftMetadata()
+            }
         }
     }
 
