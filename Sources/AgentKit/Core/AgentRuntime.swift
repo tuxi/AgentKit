@@ -65,7 +65,11 @@ public final class AgentRuntime: @unchecked Sendable {
     /// scenePhase `.active` 走这里：同进程 thaw 时端口不变、WS 秒级重连，切走不再丢会话。
     @discardableResult
     public func ensureStarted() throws -> Int {
-        if let server { return server.port() }
+        if let server {
+            print("[AgentRuntime] ensureStarted: server alive, port=\(server.port()) — reusing")
+            return server.port()
+        }
+        print("[AgentRuntime] ensureStarted: server nil, calling launch()")
         return try launch()
     }
 
@@ -163,7 +167,9 @@ public final class AgentRuntime: @unchecked Sendable {
     /// 改配置优先走 `reconfigure(secrets:model:)` 热加载以避免端口 churn；此方法保留给真正需重建 server 的场景。
     @discardableResult
     public func restart() throws -> Int {
+        print("[AgentRuntime] restart() called — tearing down and relaunching")
         stop()
+        print("[AgentRuntime] restart() old server stopped, calling launch()")
         return try launch()
     }
 
@@ -278,7 +284,10 @@ public final class AgentRuntime: @unchecked Sendable {
     public func endpoint() -> String { server?.endpoint() ?? "" }  // ws://127.0.0.1:<port>
     public func port() -> Int { server?.port() ?? -1 }
     public func stop()              {
-        try? server?.stop(); server = nil
+        print("[AgentRuntime] stop() called, server=\(server != nil ? "alive" : "nil")")
+        try? server?.stop()
+        server = nil
+        print("[AgentRuntime] stop() done, server=nil")
     }
 
     // MARK: - Private

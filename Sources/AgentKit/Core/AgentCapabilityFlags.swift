@@ -67,6 +67,8 @@ public struct AgentCapabilityFlags: OptionSet, Sendable {
     public static let publicGitClone = AgentCapabilityFlags(rawValue: 1 << 16)
     /// 支持 `reasoning_delta` 实时推理流式推送。
     public static let reasoningStreaming = AgentCapabilityFlags(rawValue: 1 << 17)
+    /// 支持 task / multi-agent 通用只读 child-stream WS。
+    public static let childStreaming = AgentCapabilityFlags(rawValue: 1 << 18)
 
     // MARK: - Presets
 

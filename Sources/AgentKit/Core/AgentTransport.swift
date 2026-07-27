@@ -147,6 +147,14 @@ public protocol AgentTransport: Sendable {
     /// seq 去重，收到 `job_finished` 即终态。流被取消 / consumer 退出时自动断开。
     func openJobStream(jobID: String) -> AsyncStream<AgentEvent>
 
+    // MARK: - Generic child stream (task / multi-agent)
+
+    /// task / multi-agent 子流 backlog（`GET /v1/child-streams/{id}/events`）。
+    func getChildStreamEventBatch(childID: String, since: Int) async throws -> AgentEventBatch
+
+    /// task / multi-agent 实时只读流（`GET /v1/child-streams/{id}/stream`）。
+    func openChildStream(childID: String) -> AsyncStream<AgentEvent>
+
     // MARK: - Assets
 
     /// Structured asset preview derived from persisted conversation events.
@@ -262,6 +270,14 @@ extension AgentTransport {
 
     /// 默认实现：无 job 实时流，返回立即结束的空流。
     public func openJobStream(jobID: String) -> AsyncStream<AgentEvent> {
+        AsyncStream { $0.finish() }
+    }
+
+    public func getChildStreamEventBatch(childID: String, since: Int) async throws -> AgentEventBatch {
+        try await getEventBatch(conversationID: childID, since: since)
+    }
+
+    public func openChildStream(childID: String) -> AsyncStream<AgentEvent> {
         AsyncStream { $0.finish() }
     }
 }

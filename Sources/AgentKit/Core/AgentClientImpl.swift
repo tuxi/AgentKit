@@ -143,6 +143,9 @@ public final class CodeAgentSessionChannel: RuntimeSessionChannel, @unchecked Se
         if values.contains("workspace_execution_policy_v1") {
             flags.insert(.workspaceExecutionPolicy)
         }
+        if values.contains("child_streaming") {
+            flags.insert(.childStreaming)
+        }
         return flags
     }
 }
@@ -351,6 +354,11 @@ public final class CodeAgentTransport: AgentTransport, @unchecked Sendable {
         return Self.batch(from: wireFrames, since: since)
     }
 
+    public func getChildStreamEventBatch(childID: String, since: Int) async throws -> AgentEventBatch {
+        let wireFrames = try await http.getChildStreamEvents(childID: childID, since: since)
+        return Self.batch(from: wireFrames, since: since)
+    }
+
     public func getWorkflowSnapshot(conversationID: String, workflowID: String) async throws -> WorkflowSnapshot {
         try await http.getWorkflowSnapshot(conversationID: conversationID, workflowID: workflowID)
     }
@@ -370,6 +378,33 @@ public final class CodeAgentTransport: AgentTransport, @unchecked Sendable {
         let http = self.http
         socket.gapFetch = { since in
             (try? await http.getJobEvents(jobID: jobID, since: since)) ?? []
+        }
+        let inner = socket.connect()
+        return AsyncStream { continuation in
+            let pump = Task {
+                for await event in inner { continuation.yield(event) }
+                continuation.finish()
+            }
+            continuation.onTermination = { _ in
+                pump.cancel()
+                socket.disconnect()
+            }
+        }
+    }
+
+    /// task / multi-agent 实时子流。与 job stream 共用 AgentWireSocket 的
+    /// handshake、backfill 缓冲、seq 去重和自动重连，只切换到通用只读 endpoint。
+    public func openChildStream(childID: String) -> AsyncStream<AgentEvent> {
+        let socket = AgentWireSocket(
+            environment: environment,
+            conversationID: childID,
+            streamKind: .childStream,
+            credentialStore: credentialStore,
+            credentialTarget: credentialTarget
+        )
+        let http = self.http
+        socket.gapFetch = { since in
+            (try? await http.getChildStreamEvents(childID: childID, since: since)) ?? []
         }
         let inner = socket.connect()
         return AsyncStream { continuation in
@@ -599,6 +634,14 @@ public final class DefaultAgentClient: RuntimeClient, @unchecked Sendable {
 
     public func openJobStream(jobID: String) -> AsyncStream<AgentEvent> {
         transport.openJobStream(jobID: jobID)
+    }
+
+    public func getChildStreamEventBatch(childID: String, since: Int) async throws -> AgentEventBatch {
+        try await transport.getChildStreamEventBatch(childID: childID, since: since)
+    }
+
+    public func openChildStream(childID: String) -> AsyncStream<AgentEvent> {
+        transport.openChildStream(childID: childID)
     }
 
     public func getAssetPreview(conversationID: String, assetID: String) async throws -> AgentAssetPreviewResponse {

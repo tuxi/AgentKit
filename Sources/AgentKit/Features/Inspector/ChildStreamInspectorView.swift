@@ -59,9 +59,8 @@ public final class ChildStreamViewModel {
         streamTask = Task { [weak self] in
             guard let self else { return }
             await self.engine.markLive()
-            // 消费一条子流事件流。job 是实时 WS（收到 job_finished 才终态），subagent 是
-            // 回放（翻页到尾自然结束）。break / 流结束都会 drop 迭代器 → 传输层 onTermination
-            // 断开 socket / 取消翻页。
+            // 消费一条只读实时子流。task / job 都只有收到自身 terminal bracket 才完成；
+            // socket 的瞬时断线由 transport 内部重连和 backfill，不会自然结束上层 stream。
             do {
                 for try await event in self.transport.open(childID: self.selection.childID) {
                     let terminalStatus = self.terminalStatus(for: event)
@@ -78,8 +77,10 @@ public final class ChildStreamViewModel {
                         break
                     }
                 }
+                guard !Task.isCancelled else { return }
                 if !self.isFinished {
-                    self.completionStatus = self.selection.kind == .task ? .completed : .failed
+                    self.lastError = "子流在收到终态事件前意外结束"
+                    self.completionStatus = .failed
                     self.isFinished = true
                 }
             } catch is CancellationError {
@@ -172,10 +173,10 @@ public struct ChildStreamInspectorView: View {
         }
         .task(id: selection) {
             viewModel?.stop()
-            // §③ 路由：job 有实时 WS 子流；subagent 是回放-only（同步执行，打开时已结束）。
+            // job 保留兼容 endpoint；task / future multi-agent 使用通用 child-stream WS。
             let transport: ChildStreamTransport = selection.kind == .job
                 ? JobLiveChildStreamTransport(client: store.client)
-                : ConversationReplayChildStreamTransport(client: store.client)
+                : TaskLiveChildStreamTransport(client: store.client)
             let vm = ChildStreamViewModel(selection: selection, transport: transport)
             viewModel = vm
             vm.start()

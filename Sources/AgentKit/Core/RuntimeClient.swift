@@ -143,6 +143,14 @@ public protocol RuntimeClient: Sendable {
     /// 后台 job 子流实时只读流（`GET /v1/jobs/{id}/stream`）：backlog + 直播、seq 去重。
     func openJobStream(jobID: String) -> AsyncStream<AgentEvent>
 
+    // MARK: - Generic child stream (task / multi-agent)
+
+    /// task / multi-agent 子流 backlog，游标属于 child 自己的事件分区。
+    func getChildStreamEventBatch(childID: String, since: Int) async throws -> AgentEventBatch
+
+    /// task / multi-agent 实时只读流：backlog + WS 直播 + seq 去重。
+    func openChildStream(childID: String) -> AsyncStream<AgentEvent>
+
     // MARK: - Workflow (v1.3 Phase 4)
 
     /// DAG snapshot：一次拿齐拓扑 + 全部节点状态 + `snapshot_sequence`。
@@ -271,6 +279,16 @@ extension RuntimeClient {
 
     /// 默认实现：无 job 实时流（mock backend）。
     public func openJobStream(jobID: String) -> AsyncStream<AgentEvent> {
+        AsyncStream { $0.finish() }
+    }
+
+    /// 兼容旧 backend：backlog 仍可从 conversation events 分区读取。
+    public func getChildStreamEventBatch(childID: String, since: Int) async throws -> AgentEventBatch {
+        try await getEventBatch(conversationID: childID, since: since)
+    }
+
+    /// 兼容旧 backend：没有通用 child WS 时返回空流，由调用方显示传输失败。
+    public func openChildStream(childID: String) -> AsyncStream<AgentEvent> {
         AsyncStream { $0.finish() }
     }
 }

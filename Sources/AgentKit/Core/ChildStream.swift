@@ -6,8 +6,9 @@
 //  设计：docs/p8.7-client-plan.md §WI-3a、docs/p8.7-job-observability.md §4 Phase C。
 //
 //  统一为「打开一条事件流」语义（push），三种实现对查看器透明：
-//    - 会话回放（subagent，回放-only）：GET /v1/conversations/{child}/events 翻页到尾。
+//    - 会话回放（旧 backend 兼容）：GET /v1/conversations/{child}/events 翻页到尾。
 //    - job 实时 WS（Phase C）：GET /v1/jobs/{id}/events backlog + /v1/jobs/{id}/stream 直播。
+//    - task / multi-agent 实时 WS：GET /v1/child-streams/{id}/events backlog + /stream 直播。
 //    - fixture 回放（预览/测试）：脚本分批吐帧。
 //
 
@@ -35,10 +36,10 @@ public protocol ChildStreamTransport: Sendable {
     func open(childID: String) -> AsyncThrowingStream<AgentEvent, Error>
 }
 
-// MARK: - ConversationReplayChildStreamTransport（subagent，回放-only）
+// MARK: - ConversationReplayChildStreamTransport（旧 backend 回放兼容）
 
-/// subagent 子流：同步执行，拿到 `task_finished` 时它已结束——没有实时可接的尾巴。
-/// 打开时翻页拉 `GET /v1/conversations/{child}/events` 到尾即完成。
+/// 旧 backend 的兼容回放层。新 task/multi-agent Inspector 使用
+/// `TaskLiveChildStreamTransport`，此实现不再承担活动子流展示。
 public struct ConversationReplayChildStreamTransport: ChildStreamTransport {
     private let fetchBatch: @Sendable (String, Int) async throws -> AgentEventBatch
     /// backlog 尚未落库时的空批重试预算（subagent bracket 与子流持久化之间的窗口）。
@@ -119,6 +120,29 @@ public struct JobLiveChildStreamTransport: ChildStreamTransport {
 
     public func open(childID: String) -> AsyncThrowingStream<AgentEvent, Error> {
         let inner = client.openJobStream(jobID: childID)
+        return AsyncThrowingStream { continuation in
+            let task = Task {
+                for await event in inner { continuation.yield(event) }
+                continuation.finish()
+            }
+            continuation.onTermination = { _ in task.cancel() }
+        }
+    }
+}
+
+// MARK: - TaskLiveChildStreamTransport（task / multi-agent 实时 WS）
+
+/// task / future multi-agent 子流：通用只读 child-stream endpoint。
+/// RuntimeClient 负责 backlog、直播缓冲、seq 去重和断线重连。
+public struct TaskLiveChildStreamTransport: ChildStreamTransport {
+    private let client: RuntimeClient
+
+    public init(client: RuntimeClient) {
+        self.client = client
+    }
+
+    public func open(childID: String) -> AsyncThrowingStream<AgentEvent, Error> {
+        let inner = client.openChildStream(childID: childID)
         return AsyncThrowingStream { continuation in
             let task = Task {
                 for await event in inner { continuation.yield(event) }

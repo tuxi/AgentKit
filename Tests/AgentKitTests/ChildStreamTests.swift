@@ -26,6 +26,16 @@ final class ChildStreamTests: XCTestCase {
 
     // MARK: - Wire decode（线格式按 §8.4 决策点 1 暂定：子流 id 复用 session_id）
 
+    func testGenericChildStreamUsesReadOnlyEndpoint() {
+        XCTAssertEqual(
+            WireStreamKind.childStream.streamPath(id: "child_1"),
+            "v1/child-streams/child_1/stream"
+        )
+        XCTAssertTrue(
+            CodeAgentSessionChannel.flags(from: ["child_streaming"]).contains(.childStreaming)
+        )
+    }
+
     func testDecodeJobStarted() throws {
         let event = try decodeEvent(
             #"{"kind":"job_started","at":"2026-07-02T10:00:00.000Z","session_id":"job_1","turn_id":"t1","text":"npx skills add okx/onchainos-skills"}"#
@@ -603,6 +613,28 @@ final class ChildStreamTests: XCTestCase {
             return payload.text
         }
         XCTAssertEqual(assistantTexts, ["final PDF summary"])
+        viewModel.stop()
+    }
+
+    @MainActor
+    func testTaskInspectorDoesNotTreatPrematureStreamEndAsCompletion() async throws {
+        let transport = FixtureChildStreamTransport(
+            batches: [[.turnStarted(turnID: "t1", text: "still running")]],
+            batchDelayNs: 0
+        )
+        let viewModel = ChildStreamViewModel(
+            selection: ChildStreamSelection(childID: "child", kind: .task, title: "inspect"),
+            transport: transport
+        )
+        viewModel.start()
+
+        for _ in 0..<100 where !viewModel.isFinished {
+            try await Task.sleep(nanoseconds: 1_000_000)
+        }
+
+        XCTAssertTrue(viewModel.isFinished)
+        XCTAssertEqual(viewModel.completionStatus, .failed)
+        XCTAssertNotNil(viewModel.lastError)
         viewModel.stop()
     }
 }

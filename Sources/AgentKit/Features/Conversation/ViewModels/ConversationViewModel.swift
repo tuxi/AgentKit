@@ -770,7 +770,7 @@ public final class ConversationViewModel {
         }
         
         let context = makeClientToolExecutionContext(turnID: turnID ?? "", callID: callID)
-
+        
         // 执行
         let result: ClientToolExecutionResult
         do {
@@ -781,9 +781,13 @@ public final class ConversationViewModel {
                 isError: true
             )
         }
-
+        
         // 回传
-        await channel?.send(input: .toolResult(ToolResultContent(
+        guard let channel else  {
+            DLLog("channle is nil")
+            return
+        }
+        await channel.send(input: .toolResult(ToolResultContent(
             toolUseID: callID,
             content: result.content,
             isError: result.isError,

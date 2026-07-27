@@ -53,27 +53,34 @@ public final class RuntimeConnectionMonitor {
         // 1. 未启动过（首次 / jetsam 冷启动）→ 启动
         if !AgentRuntime.shared.isAlive {
             state = .connecting
+            print("[RuntimeMonitor] isAlive=false, calling ensureStarted()")
             guard (try? AgentRuntime.shared.ensureStarted()) != nil else {
                 state = .disconnected
+                print("[RuntimeMonitor] ensureStarted() FAILED")
                 return false
             }
             let ok = await Self.pingHealthz()
             state = ok ? .connected : .disconnected
+            print("[RuntimeMonitor] cold start healthz=\(ok)")
             return ok
         }
         // 2. 指针在 → 探活
         if await Self.pingHealthz() {
             state = .connected
+            print("[RuntimeMonitor] isAlive=true, healthz OK — no restart needed")
             return true
         }
         // 3. 指针在但 listener 死了（iOS 挂起回收 socket）→ 重启
+        print("[RuntimeMonitor] ⚠️ isAlive=true but healthz FAILED — listener dead, calling restart()")
         state = .reconnecting
         guard (try? AgentRuntime.shared.restart()) != nil else {
             state = .disconnected
+            print("[RuntimeMonitor] restart() FAILED")
             return false
         }
         let ok = await Self.pingHealthz()
         state = ok ? .connected : .disconnected
+        print("[RuntimeMonitor] after restart healthz=\(ok)")
         return ok
     }
 

@@ -299,6 +299,19 @@ struct RuntimeHTTPClient: Sendable {
         return try decodeEnvelope([WireFrame].self, from: data)
     }
 
+    /// `GET /v1/child-streams/{id}/events[?since=N]` — task / multi-agent backlog。
+    func getChildStreamEvents(childID: String, since: Int = 0) async throws -> [WireFrame] {
+        let queryItems = since > 0 ? [URLQueryItem(name: "since", value: String(since))] : nil
+        let request = try await buildRequest(
+            "GET",
+            pathComponents: "v1/child-streams", childID, "events",
+            queryItems: queryItems
+        )
+        let (data, response) = try await session.data(for: request)
+        try validateHTTP(response, data: data)
+        return try decodeEnvelope([WireFrame].self, from: data)
+    }
+
     /// `GET /v1/conversations/{id}/workflow/{workflow_id}/snapshot` — Phase 4 DAG snapshot。
     func getWorkflowSnapshot(conversationID: String, workflowID: String) async throws -> WorkflowSnapshot {
         let request = try await buildRequest("GET", pathComponents: "v1/conversations", conversationID, "workflow", workflowID, "snapshot")

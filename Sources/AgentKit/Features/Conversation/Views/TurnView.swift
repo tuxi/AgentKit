@@ -68,7 +68,7 @@ struct TurnView: View, Equatable {
                 )
             }
             // User prompt as a right-aligned markdown bubble
-            if let userPrompt = turn.userPrompt {
+            if let userPrompt = turn.userPrompt, !userPrompt.text.isEmpty {
                 UserPromptBubble(prompt: userPrompt)
             }
             // Agent response blocks rendered as typed SwiftUI views
@@ -426,6 +426,7 @@ private struct UserAssetPreviewStrip: View {
                     }
                 }
             }
+            .defaultScrollAnchor(.trailing)
             .frame(maxWidth: .infinity, alignment: .trailing)
         }
         .frame(maxWidth: .infinity, alignment: .trailing)

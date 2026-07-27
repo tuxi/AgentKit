@@ -12,19 +12,22 @@ import ClientToolProtocol
 
 // MARK: - Wire stream kind
 
-/// 直播 WS 的目标分区。会话流与 job 子流（P8.7 Phase C）用同一套握手/backfill/
+/// 直播 WS 的目标分区。会话流与只读 child stream 用同一套握手/backfill/
 /// seq 去重/重连机制，只有 URL 路径不同。
 public enum WireStreamKind: Sendable {
     /// `/v1/conversations/{id}/stream` —— 主会话双向流。
     case conversation
     /// `/v1/jobs/{id}/stream` —— 后台 job 只读子流（P8.7 §4 Phase C）。
     case job
+    /// `/v1/child-streams/{id}/stream` —— task / future multi-agent 只读子流。
+    case childStream
 
     /// 直播 WS 路径。
     func streamPath(id: String) -> String {
         switch self {
         case .conversation: return "v1/conversations/\(id)/stream"
         case .job:          return "v1/jobs/\(id)/stream"
+        case .childStream:  return "v1/child-streams/\(id)/stream"
         }
     }
 }
@@ -127,7 +130,11 @@ public final class AgentWireSocket: @unchecked Sendable {
         self.credentialStore = credentialStore
         self.submissionCoordinator = submissionCoordinator
         self.credentialTarget = credentialTarget
-        let tag = streamKind == .job ? "job" : "agent-wire"
+        let tag: String = switch streamKind {
+        case .conversation: "agent-wire"
+        case .job: "job"
+        case .childStream: "child-stream"
+        }
         self.wsClient = WebSocketClient(identifier: "\(tag).\(conversationID)")
     }
 
