@@ -147,7 +147,7 @@ struct WorkspaceChipBar: View {
         switch mode {
         case .draftEmpty:
             workspaceMenu {
-                chip(icon: "folder.badge.plus", text: "Select Workspace",
+                chip(icon: "folder.badge.plus", text: AgentKitLocalized.string("workspace.select_workspace"),
                      prominent: true, showsChevron: true)
             }
 
