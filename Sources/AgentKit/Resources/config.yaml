@@ -1,11 +1,11 @@
 # iOS 端内嵌 runtime 的裁剪版 config（随 AgentKit 打进 bundle，由 AgentRuntime 读取）。
 #
-# 与服务端全量 config 的差异（均为 iOS 沙盒/单 key 约束所致）：
+# 与服务端全量 config 的差异（均为 iOS 沙盒/凭据注入约束所致）：
 #   1. 去掉 `workspace` 块 —— 工作区根由 MobileStart 的 workspaceDir 参数（= Documents）决定，
 #      不能让 config.workspace.root 覆盖，否则 relativize/re-anchor + 项目列表全失效。
 #   2. 去掉 `hooks` —— gofmt / run_command 走 sh -c（fork/exec），iOS 沙盒禁。
-#   3. 只保留 deepseek / deepseek-pro —— 仅注入了 DEEPSEEK_API_KEY；qwen/glm/ollama 需各自的
-#      key 或 localhost，故不在 iOS 暴露。
+#   3. 主 agent 和 task 子 agent 默认都走 gateway/default。App 登录态只注入这一份凭据；
+#      子 agent 若固定到 deepseek，会绕开 Gateway 并因设备上没有 DEEPSEEK_API_KEY 返回 401。
 #
 # 注意：api_key_env 只引用环境变量名，key 由 secretsJSON 注入（走 Keychain），此文件不含明文密钥。
 
@@ -62,7 +62,8 @@ agent:
   max_steps: 33
   max_parallel_tools: 4
   compact_ratio: 0.75
-  subagent_model: deepseek
+  # 不固定 subagent_model：让 task 继承当前主 agent 的模型、Provider 和登录凭据。
+  # 子 agent 因而始终保持和设备登录态一致的 Gateway 鉴权链。
   client_tool_timeout_seconds: 900
 
 provider:
