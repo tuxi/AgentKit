@@ -492,7 +492,7 @@ public final class DefaultAgentClient: RuntimeClient, @unchecked Sendable {
         self.init(environment: .placeholder)
     }
 
-    #if os(iOS)
+    #if canImport(CodeAgentRuntime)
     /// 便捷初始化：从 `AgentRuntime.shared` 读取已启动 server 的动态端口。
     public static func fromRuntime() -> DefaultAgentClient {
         DefaultAgentClient(environment: .fromRuntime())

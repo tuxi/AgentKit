@@ -2,14 +2,83 @@
 //  AgentRuntime.swift
 //  AgentKit
 //
-//  Created by xiaoyuan on 2026/6/30.
+//  Embedded CodeAgent Runtime shared by iOS and macOS hosts.
 //
 
 import Foundation
+#if canImport(CodeAgentRuntime)
+import CodeAgentRuntime
+#endif
 #if os(iOS)
-import CodeAgentRuntime   // xcframework 的 module 名；仅 iOS 可用
 import UIKit
 #endif
+#if os(macOS)
+import Darwin
+#endif
+
+#if canImport(CodeAgentRuntime)
+
+public enum EmbeddedRuntimeProfile: String, Sendable {
+    /// No subprocess tools. Used by iOS and OS-sandboxed hosts.
+    case sandboxed
+    /// Full desktop tool graph, including shell, Git, gopls, hooks and stdio MCP.
+    case fullDesktop
+
+    var isSandboxed: Bool { self == .sandboxed }
+}
+
+public struct EmbeddedRuntimeConfiguration: Sendable {
+    public var workspaceDirectory: URL
+    public var dataDirectory: URL
+    public var profile: EmbeddedRuntimeProfile
+    /// Extra executable lookup paths prepended before the Go runtime starts.
+    /// This matters for macOS apps launched from Finder, which inherit a minimal PATH.
+    public var executableSearchPaths: [String]
+
+    public init(
+        workspaceDirectory: URL,
+        dataDirectory: URL,
+        profile: EmbeddedRuntimeProfile,
+        executableSearchPaths: [String] = []
+    ) {
+        self.workspaceDirectory = workspaceDirectory
+        self.dataDirectory = dataDirectory
+        self.profile = profile
+        self.executableSearchPaths = executableSearchPaths
+    }
+
+    public static func platformDefault(
+        fileManager: FileManager = .default,
+        bundleIdentifier: String? = Bundle.main.bundleIdentifier
+    ) -> EmbeddedRuntimeConfiguration {
+        let support = fileManager.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
+
+        #if os(macOS)
+        let appDirectory = support
+            .appendingPathComponent(bundleIdentifier ?? "CodeAgent", isDirectory: true)
+            .appendingPathComponent("Runtime", isDirectory: true)
+        let home = fileManager.homeDirectoryForCurrentUser
+        return EmbeddedRuntimeConfiguration(
+            workspaceDirectory: home,
+            dataDirectory: appDirectory,
+            profile: .fullDesktop,
+            executableSearchPaths: [
+                "/opt/homebrew/bin",
+                "/usr/local/bin",
+                home.appendingPathComponent(".local/bin").path,
+                home.appendingPathComponent("go/bin").path,
+            ]
+        )
+        #else
+        let documents = fileManager.urls(for: .documentDirectory, in: .userDomainMask)[0]
+        return EmbeddedRuntimeConfiguration(
+            workspaceDirectory: documents,
+            dataDirectory: support,
+            profile: .sandboxed
+        )
+        #endif
+    }
+}
 
 #if os(iOS)
 private final class RuntimeBackgroundTaskGuard: @unchecked Sendable {
@@ -41,78 +110,76 @@ private final class RuntimeBackgroundTaskGuard: @unchecked Sendable {
         }
     }
 }
+#endif
 
 public final class AgentRuntime: @unchecked Sendable {
     private init() {}
-    
-    static public let shared = AgentRuntime()
 
-    private var server: MobileServer?      // 前缀 Mobile 来自 Go 包名
-    /// 最近一次由宿主注入的凭证。listener 健康恢复需要重建 server 时继续使用。
+    public static let shared = AgentRuntime()
+
+    private var server: MobileServer?
     private var injectedSecretsJSON: String?
-    /// CredentialStore 路径由 bundled config 的 default_model 决定，不能复用旧的
-    /// AgentSettings.model（它可能是 BYOK alias 或 Gateway 原生 model ID）。
-    /// nil = legacy settings；"" = config.default_model。
     private var startupModelNameOverride: String?
+    private var configuration = EmbeddedRuntimeConfiguration.platformDefault()
 
-    /// runtime 是否在本进程内存活。用作「同进程 suspend/thaw」与「jetsam 冷启动」的判据（见契约 §3.2）：
-    /// - `server != nil` ⇒ 同进程（可能刚被 OS thaw）→ 复用现有端口，WS 直接重连；
-    /// - `server == nil` ⇒ 冷启动（首次或 jetsam 后重启）→ 需 `launch()`。
     public var isAlive: Bool { server != nil }
+    public var currentConfiguration: EmbeddedRuntimeConfiguration { configuration }
 
-    /// 幂等启动：runtime 已在运行则直接返回现有端口，否则冷启动一个。
-    /// 替代旧的「每次 `start()` 都 `MobileStart` 新建」——那会覆盖 `server` 造成泄漏，且换 ephemeral 端口逼 WS 全量重连。
-    /// scenePhase `.active` 走这里：同进程 thaw 时端口不变、WS 秒级重连，切走不再丢会话。
+    /// Configure the embedded host before it starts. Changing filesystem/profile
+    /// policy on a live runtime requires an explicit stop followed by configure.
+    public func configure(_ configuration: EmbeddedRuntimeConfiguration) throws {
+        guard server == nil else {
+            throw NSError(
+                domain: "AgentKit.EmbeddedRuntime",
+                code: -3,
+                userInfo: [NSLocalizedDescriptionKey: "Stop the embedded runtime before changing its configuration."]
+            )
+        }
+        self.configuration = configuration
+    }
+
     @discardableResult
     public func ensureStarted() throws -> Int {
         if let server {
-            print("[AgentRuntime] ensureStarted: server alive, port=\(server.port()) — reusing")
             return server.port()
         }
-        print("[AgentRuntime] ensureStarted: server nil, calling launch()")
         return try launch()
     }
 
-    /// 兼容旧调用点：语义等同 `ensureStarted()`（幂等）。需要强制重建 server 走 `restart()`；
-    /// 改配置优先走 `reconfigure(secrets:model:)` 热加载，不再经 `restart` 的端口 churn。
     @discardableResult
     public func start() throws -> Int { try ensureStarted() }
 
-    /// 后台生命周期钩子：在 iOS background grace window 内请求 Go runtime 做有界 checkpoint。
-    /// Go 侧 `Suspend()` 负责取消在途 turn、标记 paused，并在 watchdog 预算内返回。
+    /// iOS checkpoints active work during its background grace period. macOS
+    /// deliberately keeps full-desktop turns running while the app is inactive.
     public func suspendRuntime(timeoutMillis: Int = 2000) {
+        #if os(iOS)
         guard let server else { return }
-
         DispatchQueue.global(qos: .background).async {
             let backgroundTask = RuntimeBackgroundTaskGuard()
             backgroundTask.begin(name: "AgentRuntime.Suspend")
-
-            let watchdog = DispatchWorkItem {
-                backgroundTask.end()
-            }
-            DispatchQueue.global(qos: .background).asyncAfter(deadline: .now() + .milliseconds(timeoutMillis), execute: watchdog)
-
-            do {
-                try server.suspend()
-            } catch {
-                print("AgentRuntime suspend failed: \(error)")
-            }
-
+            let watchdog = DispatchWorkItem { backgroundTask.end() }
+            DispatchQueue.global(qos: .background).asyncAfter(
+                deadline: .now() + .milliseconds(timeoutMillis),
+                execute: watchdog
+            )
+            try? server.suspend()
             watchdog.cancel()
             backgroundTask.end()
         }
+        #endif
     }
 
-    /// 续跑一个已 paused 的会话。Go 侧校验后立即返回，实际进度继续走 WS 事件流。
     public func resumeRuntime(sessionID: String) throws {
         guard let server else {
-            throw NSError(domain: "CodeAgent", code: -2,
-                          userInfo: [NSLocalizedDescriptionKey: "Runtime is not started"])
+            throw NSError(
+                domain: "AgentKit.EmbeddedRuntime",
+                code: -2,
+                userInfo: [NSLocalizedDescriptionKey: "Runtime is not started."]
+            )
         }
         try server.resumeSession(sessionID)
     }
 
-    /// 热切 secrets / model，不换端口、不断开 WS。传空字符串表示保留该项。
     public func reconfigure(secretsJSON: String = "", modelName: String = "") throws {
         guard let server else { return }
         try server.reconfigure(secretsJSON, modelName: modelName)
@@ -121,73 +188,92 @@ public final class AgentRuntime: @unchecked Sendable {
         }
     }
 
-    /// 实际冷启动一个 runtime server。启动前先 `stop()` 任何残留实例，杜绝覆盖泄漏。
-    @discardableResult
-    private func launch() throws -> Int {
-        stop()   // 防御：绝不覆盖一个尚未释放的 server
-        let fm = FileManager.default
-        // workspaceDir: 用户文件/项目所在，可写
-        let docs = fm.urls(for: .documentDirectory, in: .userDomainMask)[0].path
-        // dataDir: 运行时自有数据(session DB)，放 Application Support（不进 iCloud 同步）
-        let support = fm.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
-        try? fm.createDirectory(at: support, withIntermediateDirectories: true) // 首次可能不存在
-        // gap B：dataDir 及其内的 session DB(+ WAL -wal/-shm 边车) 必须在锁屏/后台可写，
-        // 否则 iOS 会在锁屏后加密文件、令后台 checkpoint 写失败——把契约 §2.2.1 的 WAL 目标架空。
-        Self.applyDataProtection(to: support)
-        // secrets / model 从用户设置读取（Keychain + UserDefaults）——不再硬编码进源码。
-        // 无 key 时 secretsJSON() 返回 "{}"，runtime 缺凭证；设置页引导用户填入后 restart()。
-        let secrets = injectedSecretsJSON ?? AgentSettings.secretsJSON()
-        let model = startupModelNameOverride ?? AgentSettings.model
-        // 模型路由 config（裁剪版，随 bundle 打包）。读不到则传 ""，回退 runtime 内置默认。
-        let configYAML = Self.bundledConfigYAML()
-        
-        Self.installBundledSkillsIfNeeded()
-
-        var error: NSError?
-        // MobileStart 是 C 函数，NSError** 需显式传入（不会自动转 throwing）
-        guard let srv = MobileStart(
-            docs,     // workspaceDir
-            support.path,    // dataDir  ← 新增；"" 则回退到 workspaceDir
-            configYAML, // configYAML（模型别名/路由；不含明文 key，key 走 secretsJSON）
-            model,    // modelName（"" → config.default_model）
-            secrets,  // secretsJSON
-            "",       // addr
-            true,     // sandboxed
-            &error
-        ) else {
-            throw error ?? NSError(domain: "CodeAgent", code: -1,
-                userInfo: [NSLocalizedDescriptionKey: "MobileStart failed"])
-        }
-        server = srv
-        return srv.port()
-    }
-
-    /// 强制重启（先 stop 再 launch），让新的 secretsJSON / model 生效。
-    /// 端口会换新（ephemeral）；WS 经 validator 现算端口自动重连（见 AgentWireSocket）。
-    /// 改配置优先走 `reconfigure(secrets:model:)` 热加载以避免端口 churn；此方法保留给真正需重建 server 的场景。
     @discardableResult
     public func restart() throws -> Int {
-        print("[AgentRuntime] restart() called — tearing down and relaunching")
         stop()
-        print("[AgentRuntime] restart() old server stopped, calling launch()")
         return try launch()
     }
 
-    /// gap B：把 dataDir 设为 `completeUntilFirstUserAuthentication`——首次解锁后即可读写、锁屏与后台不受限。
-    /// 目录级设置使 Go 在其中新建的 DB 及 `-wal`/`-shm` 边车继承该等级；已存在的 DB 文件再显式补设一遍。
-    private static func applyDataProtection(to dir: URL) {
-        let fm = FileManager.default
-        let attrs: [FileAttributeKey: Any] = [.protectionKey: FileProtectionType.completeUntilFirstUserAuthentication]
-        try? fm.setAttributes(attrs, ofItemAtPath: dir.path)
-        guard let items = try? fm.contentsOfDirectory(at: dir, includingPropertiesForKeys: nil) else { return }
-        for url in items {
-            let name = url.lastPathComponent
-            guard name.contains(".sqlite") || name.contains(".db") else { continue } // 含 .sqlite-wal/.sqlite-shm/.db-wal 等边车
-            try? fm.setAttributes(attrs, ofItemAtPath: url.path)
+    @discardableResult
+    public func ensureStarted(with credentialStore: any CredentialStore) async throws -> Int {
+        let map = (try? await credentialStore.all()) ?? CredentialMap()
+        let secretsJSON = map.toSecretsJSON()
+        let finalSecrets = secretsJSON == "{}" ? AgentSettings.secretsJSON() : secretsJSON
+        startupModelNameOverride = ""
+
+        if let server {
+            try server.reconfigure(finalSecrets, modelName: "")
+            injectedSecretsJSON = finalSecrets
+            return server.port()
         }
+        return try launch(secretsJSON: finalSecrets)
     }
 
-    /// 读取随 bundle 打包的裁剪版 config.yaml 内容；缺失则返回 ""（回退 runtime 内置默认）。
+    @discardableResult
+    public func launch(with credentialStore: any CredentialStore) async throws -> Int {
+        try await ensureStarted(with: credentialStore)
+    }
+
+    public func reconfigure(with credentialStore: any CredentialStore) async throws {
+        guard let server else { return }
+        let map = (try? await credentialStore.all()) ?? CredentialMap()
+        let secretsJSON = map.toSecretsJSON()
+        try server.reconfigure(secretsJSON, modelName: "")
+        injectedSecretsJSON = secretsJSON
+        startupModelNameOverride = ""
+    }
+
+    public func endpoint() -> String { server?.endpoint() ?? "" }
+    public func port() -> Int { server?.port() ?? -1 }
+
+    public func stop() {
+        try? server?.stop()
+        server = nil
+    }
+
+    @discardableResult
+    private func launch(secretsJSON: String = "") throws -> Int {
+        stop()
+
+        let fileManager = FileManager.default
+        let config = configuration
+        try fileManager.createDirectory(
+            at: config.workspaceDirectory,
+            withIntermediateDirectories: true
+        )
+        try fileManager.createDirectory(
+            at: config.dataDirectory,
+            withIntermediateDirectories: true
+        )
+        Self.applyDataProtectionIfNeeded(to: config.dataDirectory)
+        Self.bootstrapExecutablePath(config.executableSearchPaths)
+        Self.installBundledSkills(in: config.dataDirectory)
+
+        let finalSecrets = secretsJSON.isEmpty ? AgentSettings.secretsJSON() : secretsJSON
+        injectedSecretsJSON = finalSecrets
+        let model = startupModelNameOverride ?? AgentSettings.model
+
+        var error: NSError?
+        guard let newServer = MobileStart(
+            config.workspaceDirectory.path,
+            config.dataDirectory.path,
+            Self.bundledConfigYAML(),
+            model,
+            finalSecrets,
+            "",
+            config.profile.isSandboxed,
+            &error
+        ) else {
+            throw error ?? NSError(
+                domain: "AgentKit.EmbeddedRuntime",
+                code: -1,
+                userInfo: [NSLocalizedDescriptionKey: "MobileStart failed."]
+            )
+        }
+        server = newServer
+        return newServer.port()
+    }
+
     private static func bundledConfigYAML() -> String {
         #if DEBUG
         let gatewayBaseURL = "http://192.168.1.13:12221/api/v1/agent"
@@ -200,133 +286,65 @@ public final class AgentRuntime: @unchecked Sendable {
         }
         return text.replacingOccurrences(of: "__GATEWAY_BASE_URL__", with: gatewayBaseURL)
     }
-    
-    // copy into Application Support/skills (global/user-level)
-    private static func installBundledSkillsIfNeeded() {
-        let fm = FileManager.default
-        
-        // 1. 获取 Application Support 目录
-        let appSupportDir = fm.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
-        let dst = appSupportDir.appendingPathComponent("skills")
-        
-        do {
-            // 确保 Application Support 目录本身存在（非常重要！如果这个目录不存在，copyItem 会失败）
-            if !fm.fileExists(atPath: appSupportDir.path) {
-                try fm.createDirectory(at: appSupportDir, withIntermediateDirectories: true, attributes: nil)
-            }
-            
-            // 2. 正确检查 dst 是否存在
-            // 注意：iOS 16 之后建议用 dst.path，或者保险起见用 dst.path(percentEncoded: false)
-            var isDirectory: ObjCBool = false
-            let exists = fm.fileExists(atPath: dst.path, isDirectory: &isDirectory)
-            
-            if exists {
-                // 明确存在才删除
-                try fm.removeItem(at: dst)
-            }
-            
-            // 3. 执行拷贝
-            guard let src = Bundle.module.url(forResource: "skills", withExtension: nil) else {
-                print("Error: Source bundle 'skills' not found")
-                return
-            }
-            
-            try fm.copyItem(at: src, to: dst)
-            
-        } catch {
-            print("Failed to install bundled skills: \(error)")
+
+    private static func installBundledSkills(in dataDirectory: URL) {
+        let fileManager = FileManager.default
+        guard let source = Bundle.module.url(forResource: "skills", withExtension: nil),
+              let bundledSkills = try? fileManager.contentsOfDirectory(
+                at: source,
+                includingPropertiesForKeys: [.isDirectoryKey]
+              ) else {
+            return
+        }
+
+        let destination = dataDirectory.appendingPathComponent("skills", isDirectory: true)
+        try? fileManager.createDirectory(at: destination, withIntermediateDirectories: true)
+
+        // Replace only skills owned by the bundle. User-installed sibling skills survive upgrades.
+        for bundledSkill in bundledSkills {
+            let target = destination.appendingPathComponent(
+                bundledSkill.lastPathComponent,
+                isDirectory: true
+            )
+            try? fileManager.removeItem(at: target)
+            try? fileManager.copyItem(at: bundledSkill, to: target)
         }
     }
 
-    // MARK: - CredentialStore Integration
-
-    /// 使用 CredentialStore 幂等启动 Runtime。已有 listener 时只热更新凭证，
-    /// 不执行 stop/start，也不会更换 Agent Wire 端口。
-    @discardableResult
-    public func ensureStarted(with credentialStore: any CredentialStore) async throws -> Int {
-        let map = (try? await credentialStore.all()) ?? CredentialMap()
-        let secretsJSON = map.toSecretsJSON()
-        let finalSecrets = secretsJSON == "{}"
-            ? AgentSettings.secretsJSON()
-            : secretsJSON
-        // AppCredentialStore 注入的是 gateway/default；基础 provider 必须从
-        // config.default_model 启动。每条消息的具体 Gateway model 仍走 wire model。
-        startupModelNameOverride = ""
-
-        if let server {
-            try server.reconfigure(finalSecrets, modelName: "")
-            injectedSecretsJSON = finalSecrets
-            return server.port()
-        }
-        return try launch(secretsJSON: finalSecrets)
-    }
-
-    /// 兼容旧宿主；语义已改为幂等启动。显式重建请调用 restart()。
-    @discardableResult
-    public func launch(with credentialStore: any CredentialStore) async throws -> Int {
-        try await ensureStarted(with: credentialStore)
-    }
-
-    /// 热更新 credential（用户登录/切换 BYOK key/Token 刷新后）。
-    /// CredentialStore → CredentialMap → secretsJSON → Runtime。
-    /// 注意：secretsJSON 已经 `strippedForInjection()`——不含 refresh_token。
-    public func reconfigure(with credentialStore: any CredentialStore) async throws {
-        guard let server else { return }
-        let map = (try? await credentialStore.all()) ?? CredentialMap()
-        let secretsJSON = map.toSecretsJSON()
-        try server.reconfigure(secretsJSON, modelName: "")
-        injectedSecretsJSON = secretsJSON
-        startupModelNameOverride = ""
-    }
-
-    // MARK: - Accessors
-
-    public func endpoint() -> String { server?.endpoint() ?? "" }  // ws://127.0.0.1:<port>
-    public func port() -> Int { server?.port() ?? -1 }
-    public func stop()              {
-        print("[AgentRuntime] stop() called, server=\(server != nil ? "alive" : "nil")")
-        try? server?.stop()
-        server = nil
-        print("[AgentRuntime] stop() done, server=nil")
-    }
-
-    // MARK: - Private
-
-    /// 内部冷启动入口。`secretsJSON` 为空时回退 AgentSettings。
-    @discardableResult
-    private func launch(secretsJSON: String = "") throws -> Int {
-        stop()
-        let finalSecrets = secretsJSON.isEmpty ? AgentSettings.secretsJSON() : secretsJSON
-        injectedSecretsJSON = finalSecrets
-        return try _launch(secretsJSON: finalSecrets)
-    }
-
-    /// 原始冷启动逻辑（改名以避免与带参数版本冲突）。
-    private func _launch(secretsJSON: String) throws -> Int {
-        let fm = FileManager.default
-        let docs = fm.urls(for: .documentDirectory, in: .userDomainMask)[0].path
-        let support = fm.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
-        try? fm.createDirectory(at: support, withIntermediateDirectories: true)
-        Self.applyDataProtection(to: support)
-        let model = startupModelNameOverride ?? AgentSettings.model
-        let configYAML = Self.bundledConfigYAML()
-        Self.installBundledSkillsIfNeeded()
-        var error: NSError?
-        guard let srv = MobileStart(
-            docs,
-            support.path,
-            configYAML,
-            model,
-            secretsJSON,
-            "",
-            true,
-            &error
+    private static func applyDataProtectionIfNeeded(to directory: URL) {
+        #if os(iOS)
+        let fileManager = FileManager.default
+        let attributes: [FileAttributeKey: Any] = [
+            .protectionKey: FileProtectionType.completeUntilFirstUserAuthentication
+        ]
+        try? fileManager.setAttributes(attributes, ofItemAtPath: directory.path)
+        guard let items = try? fileManager.contentsOfDirectory(
+            at: directory,
+            includingPropertiesForKeys: nil
         ) else {
-            throw error ?? NSError(domain: "CodeAgent", code: -1,
-                userInfo: [NSLocalizedDescriptionKey: "MobileStart failed"])
+            return
         }
-        server = srv
-        return srv.port()
+        for url in items where url.lastPathComponent.contains(".sqlite")
+            || url.lastPathComponent.contains(".db") {
+            try? fileManager.setAttributes(attributes, ofItemAtPath: url.path)
+        }
+        #endif
+    }
+
+    private static func bootstrapExecutablePath(_ additionalPaths: [String]) {
+        #if os(macOS)
+        guard !additionalPaths.isEmpty else { return }
+        let fileManager = FileManager.default
+        let inherited = ProcessInfo.processInfo.environment["PATH"]?
+            .split(separator: ":")
+            .map(String.init) ?? []
+        var seen = Set<String>()
+        let paths = (additionalPaths + inherited).filter {
+            fileManager.fileExists(atPath: $0) && seen.insert($0).inserted
+        }
+        setenv("PATH", paths.joined(separator: ":"), 1)
+        #endif
     }
 }
+
 #endif

@@ -23,8 +23,8 @@ let package = Package(
     targets: [
         .binaryTarget(
             name: "CodeAgentRuntime",
-            url: "https://github.com/tuxi/code-agent-releases/releases/download/1.1.0/CodeAgentRuntime.xcframework.zip",
-            checksum: "f4c4d2a2d3a53ce68864133930af8a4ab41ef7244ea819a17ec7db95c9ef03ca"
+            url: "https://github.com/tuxi/code-agent-releases/releases/download/1.2.0/CodeAgentRuntime.xcframework.zip",
+            checksum: "fc8c0070e34e4ba38d157d0dd795b15c945d118d3ac8db3d9e4ac76156a72d1a"
         ),
         // Targets are the basic building blocks of a package, defining a module or a test suite.
         // Targets can depend on other targets in this package and products from dependencies.
@@ -33,7 +33,7 @@ let package = Package(
             dependencies: [
                 .product(name: "ClientToolProtocol", package: "ClientToolProtocol"),
                 .product(name: "Markdown", package: "swift-markdown"),
-                .target(name: "CodeAgentRuntime", condition: .when(platforms: [.iOS])),
+                .target(name: "CodeAgentRuntime", condition: .when(platforms: [.iOS, .macOS])),
             ],
             path: "Sources/AgentKit",
             resources: [

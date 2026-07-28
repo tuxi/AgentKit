@@ -9,15 +9,15 @@
 │                   CodeAgent App                       │
 │  ┌─────────────────────┐  ┌────────────────────────┐ │
 │  │     iOS Target       │  │     macOS Target        │ │
-│  │  (link CodeAgent     │  │  (no runtime link)      │ │
-│  │   Runtime)           │  │                         │ │
+│  │  (link Runtime,      │  │  (link Runtime,         │ │
+│  │   sandboxed)         │  │   full desktop)         │ │
 │  └──────────┬───────────┘  └──────────┬──────────────┘ │
 └─────────────┼──────────────────────────┼────────────────┘
               │                          │
        ┌──────▼──────┐            ┌──────▼──────┐
        │  AgentKit    │            │  AgentKit    │
-       │  (iOS: link  │            │  (macOS:     │
-       │   runtime)   │            │   no-op)     │
+       │  (sandboxed  │            │  (full       │
+       │   profile)   │            │   desktop)   │
        └──────┬───────┘            └──────────────┘
               │
        ┌──────▼──────────────────────────────────┐
@@ -73,9 +73,9 @@
 
 1. **gomobile init** — 初始化 gomobile 工具链
 2. **gomobile bind** — 将 `./mobile` Go 包编译为 xcframework
-   - `-target=ios,iossimulator` — 输出真机 + 模拟器两个 slice
-   - `-iosversion=15.0` — 设置 MinimumOSVersion
-3. **normalize Info.plist** — 确保每个内部 framework 的 `MinimumOSVersion` 为 15.0
+   - `-target=ios,iossimulator,macos` — 输出 iOS 真机/模拟器和通用 macOS slice
+   - `-iosversion=18.0` / `-macosversion=15.0`
+3. **normalize Info.plist** — 分平台修正 gomobile 内部 framework 的最低系统版本
 4. **打包 skills** — 将内置 skills 复制到 `build/skills/`
 ```
 
@@ -87,7 +87,9 @@ build/
 │   ├── Info.plist
 │   ├── ios-arm64/                  # 真机 (arm64)
 │   │   └── CodeAgentRuntime.framework/
-│   └── ios-arm64_x86_64-simulator/ # 模拟器 (arm64 + x86_64)
+│   ├── ios-arm64_x86_64-simulator/ # 模拟器 (arm64 + x86_64)
+│   │   └── CodeAgentRuntime.framework/
+│   └── macos-arm64_x86_64/         # Mac (Apple Silicon + Intel)
 │       └── CodeAgentRuntime.framework/
 └── skills/                         # 内置 skills
 ```
@@ -146,20 +148,22 @@ branch = main;
 - SPM 自动下载并缓存到 `~/Library/Caches/org.swift.swiftpm/artifacts/`
 - Checksum 确保完整性和安全性
 
-### 为什么 xcframework 只包含 iOS slice？
+### 为什么 iOS 与 macOS 共用一个 xcframework？
 
-macOS App 不需要嵌入式运行时——它通过网络连接远程 code-agent 服务。因此：
-- `xcframework` 只构建 `ios-arm64` 和 `ios-arm64_x86_64-simulator`
-- `AgentKit` target 只在 iOS 上依赖 `CodeAgentRuntime`：
+两端使用相同的 Agent Wire、存储和执行引擎，仅宿主 profile 不同：
+- iOS 传 `sandboxed=true`，禁用 subprocess 工具。
+- macOS Developer ID 发行版关闭 App Sandbox，传 `sandboxed=false`，启用 shell、Git、gopls、hooks 和 stdio MCP。
+- 两端都监听 `127.0.0.1:0`，AgentKit 延迟读取动态端口。
+- `AgentKit` target 在两个平台都依赖 `CodeAgentRuntime`：
 
 ```swift
-.target(name: "CodeAgentRuntime", condition: .when(platforms: [.iOS]))
+.target(name: "CodeAgentRuntime", condition: .when(platforms: [.iOS, .macOS]))
 ```
 
 - AgentKit 源码中的 import 也有编译时守卫：
 
 ```swift
-#if os(iOS)
+#if canImport(CodeAgentRuntime)
 import CodeAgentRuntime
 #endif
 ```
@@ -234,5 +238,5 @@ rm -rf ~/Library/Caches/org.swift.swiftpm/artifacts/https___github_com_tuxi_code
 | `code-agent/build/CodeAgentRuntime.xcframework/` | 构建产物（gitignored） |
 | `AgentKit/Package.swift` | binaryTarget 声明 — url + checksum |
 | `AgentKit/.gitignore` | `/Frameworks` 已排除，防止本地 xcframework 被误提交 |
-| `AgentKit/Sources/AgentKit/Core/AgentRuntime.swift` | iOS 端 Runtime 封装（`#if os(iOS)`） |
-| `CodeAgent/CodeAgent.xcodeproj/project.pbxproj` | App 对 AgentKit 的依赖声明 |
+| `AgentKit/Sources/AgentKit/Core/AgentRuntime.swift` | iOS/macOS 端 Runtime 封装与 profile 配置 |
+| `chater/Talkify.xcodeproj/project.pbxproj` | App 对 AgentKit 的依赖及 macOS full desktop 签名配置 |

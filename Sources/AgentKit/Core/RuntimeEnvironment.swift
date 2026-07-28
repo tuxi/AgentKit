@@ -59,7 +59,7 @@ public struct RuntimeEnvironment: Sendable {
     public static let placeholder = RuntimeEnvironment(host: "127.0.0.1", port: -1)
 }
 
-#if os(iOS)
+#if canImport(CodeAgentRuntime)
 extension RuntimeEnvironment {
     /// 从 `AgentRuntime.shared` 延迟读取动态端口。
     /// 每次访问 `host`/`port`/`baseURL`/`wsURL` 都会实时读取，不会快照。
