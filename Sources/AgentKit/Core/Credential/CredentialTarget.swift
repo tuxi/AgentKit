@@ -31,6 +31,17 @@ public struct CredentialTarget: Hashable, Codable, Sendable {
         self.name = name
     }
 
+    /// Decodes the stable `namespace/name` representation used by Keychain
+    /// accounts and Runtime `secretsJSON` keys.
+    public init?(id: String) {
+        guard let separator = id.firstIndex(of: "/") else { return nil }
+        let namespacePart = String(id[..<separator])
+        let namePart = String(id[id.index(after: separator)...])
+        guard !namespacePart.isEmpty, !namePart.isEmpty else { return nil }
+        self.namespace = namespacePart.removingPercentEncoding ?? namespacePart
+        self.name = namePart.removingPercentEncoding ?? namePart
+    }
+
     // MARK: - Presets
 
     public static let gateway = CredentialTarget(namespace: "gateway", name: "default")
@@ -55,8 +66,10 @@ extension CredentialTarget: Identifiable {
     ///
     /// **此方法需与 Go 侧 `Target.String()` 保持完全一致。**
     public var id: String {
-        let escapedNamespace = namespace.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed) ?? namespace
-        let escapedName = name.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed) ?? name
+        var componentAllowed = CharacterSet.urlPathAllowed
+        componentAllowed.remove(charactersIn: "/")
+        let escapedNamespace = namespace.addingPercentEncoding(withAllowedCharacters: componentAllowed) ?? namespace
+        let escapedName = name.addingPercentEncoding(withAllowedCharacters: componentAllowed) ?? name
         return "\(escapedNamespace)/\(escapedName)"
     }
 }

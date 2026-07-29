@@ -31,6 +31,10 @@ public struct EmbeddedRuntimeConfiguration: Sendable {
     public var workspaceDirectory: URL
     public var dataDirectory: URL
     public var profile: EmbeddedRuntimeProfile
+    /// Optional host-generated Code-Agent configuration document. JSON is
+    /// accepted because Code-Agent decodes it through YAML. Nil uses the
+    /// AgentKit bundled Gateway-compatible configuration.
+    public var runtimeConfigYAML: String?
     /// Extra executable lookup paths prepended before the Go runtime starts.
     /// This matters for macOS apps launched from Finder, which inherit a minimal PATH.
     public var executableSearchPaths: [String]
@@ -39,11 +43,13 @@ public struct EmbeddedRuntimeConfiguration: Sendable {
         workspaceDirectory: URL,
         dataDirectory: URL,
         profile: EmbeddedRuntimeProfile,
+        runtimeConfigYAML: String? = nil,
         executableSearchPaths: [String] = []
     ) {
         self.workspaceDirectory = workspaceDirectory
         self.dataDirectory = dataDirectory
         self.profile = profile
+        self.runtimeConfigYAML = runtimeConfigYAML
         self.executableSearchPaths = executableSearchPaths
     }
 
@@ -62,6 +68,7 @@ public struct EmbeddedRuntimeConfiguration: Sendable {
             workspaceDirectory: home,
             dataDirectory: appDirectory,
             profile: .fullDesktop,
+            runtimeConfigYAML: nil,
             executableSearchPaths: [
                 "/opt/homebrew/bin",
                 "/usr/local/bin",
@@ -74,7 +81,8 @@ public struct EmbeddedRuntimeConfiguration: Sendable {
         return EmbeddedRuntimeConfiguration(
             workspaceDirectory: documents,
             dataDirectory: support,
-            profile: .sandboxed
+            profile: .sandboxed,
+            runtimeConfigYAML: nil
         )
         #endif
     }
@@ -136,6 +144,16 @@ public final class AgentRuntime: @unchecked Sendable {
             )
         }
         self.configuration = configuration
+    }
+
+    /// Installs a generated Provider configuration before Runtime startup.
+    /// Structural Provider changes on a live Runtime still require stop/configure/start.
+    public func configureProviderConnections(
+        _ generated: GeneratedRuntimeProviderConfiguration
+    ) throws {
+        var updated = configuration
+        updated.runtimeConfigYAML = generated.configYAML
+        try configure(updated)
     }
 
     @discardableResult
@@ -257,7 +275,7 @@ public final class AgentRuntime: @unchecked Sendable {
         guard let newServer = MobileStart(
             config.workspaceDirectory.path,
             config.dataDirectory.path,
-            Self.bundledConfigYAML(),
+            config.runtimeConfigYAML ?? Self.bundledConfigYAML(),
             model,
             finalSecrets,
             "",

@@ -16,6 +16,12 @@ import ClientToolProtocol
 
 // MARK: - DraftComposerPanel
 
+private struct ComposerModelGroup: Identifiable {
+    let id: String
+    let name: String
+    let modelIDs: [String]
+}
+
 /// 统一输入面板 —— 合并了原 `ChatComposer` 和 `DraftComposerPanel`。
 /// 用于草稿页（新建对话）和活跃会话两种场景。
 /// 对标 Claude Code / Codex：模型选择器在输入栏中，每个对话独立管理自己的模型。
@@ -58,9 +64,7 @@ struct DraftComposerPanel: View {
 #endif
     
     // MARK: - Model Selector
-    @State private var isMenuPresented = false
     @State private var isIOSModelPickerPresented = false
-    @State private var hoveredID: String? = nil // 用于追踪当前鼠标悬停的 Item
 
     var body: some View {
         VStack(spacing: 0) {
@@ -130,7 +134,7 @@ struct DraftComposerPanel: View {
                         isIOSModelPickerPresented = true
                     } label: {
                         HStack(spacing: 5) {
-                            Text(modelSettings.displayName(for: selectedModel ?? ""))
+                            Text(modelSettings.selectionDisplayName(for: selectedModel ?? ""))
                                 .font(.system(size: 13, weight: .semibold))
                                 .lineLimit(1)
                             Image(systemName: "chevron.up")
@@ -150,76 +154,24 @@ struct DraftComposerPanel: View {
                     .accessibilityLabel(AgentKitLocalized.string("composer.select_model"))
                     #else
                     Menu {
-                        // 优雅的 Popover 内部视图
-                        VStack(alignment: .leading, spacing: 4) {
-                            #if os(macOS)
-                            // 顶部类别标题 (类似原生)
-                            Text("Models")
-                                .font(.system(size: 11, weight: .medium))
-                                .foregroundStyle(.secondary)
-                                .padding(.horizontal, 10)
-                                .padding(.top, 6)
-                                .padding(.bottom, 2)
-                            
-                            #endif
-                            
+                        if modelGroups.isEmpty {
                             ForEach(modelSettings.availableModelIDs, id: \.self) { modelID in
-                                let isSelected = modelID == selectedModel
-                                let isHovered = hoveredID == modelID
-                                
-                                Button {
-                                    selectModel(modelID)
-                                    isMenuPresented = false
-                                } label: {
-                                    HStack(spacing: 8) {
-                                        // 1. 模型名称
-                                        Text(modelSettings.displayName(for: modelID))
-                                            .font(.system(size: 13))
-                                            .foregroundColor(isHovered ? .white : .primary) // 悬停时文字变白更清晰
-                                            .lineLimit(1)
-                                        
-                                        // 2. 这里可以预留像截图那样的 "Included until..." 标签空间 (可选)
-                                        
-                                        Spacer()
-                                        
-                                        // 3. 勾选状态
-                                        if isSelected {
-                                            Image(systemName: "checkmark")
-                                                .font(.system(size: 11, weight: .bold))
-                                                .foregroundColor(isHovered ? .white : .accentColor)
-                                        }
+                                modelMenuButton(modelID)
+                            }
+                        } else {
+                            ForEach(modelGroups) { group in
+                                Section {
+                                    ForEach(group.modelIDs, id: \.self) { modelID in
+                                        modelMenuButton(modelID)
                                     }
-                                    // 核心支撑：撑满整行，让整行都能响应点击和高亮
-                                    .frame(maxWidth: .infinity, alignment: .leading)
-                                    .contentShape(Rectangle())
+                                } header: {
+                                    Text(group.name)
                                 }
-                                .buttonStyle(.plain)
-                                .padding(.horizontal, 8)
-                                .padding(.vertical, 6)
-                                // 悬停高亮背景：苹果经典的蓝底或者灰色半透明
-                                .background(
-                                    RoundedRectangle(cornerRadius: 5)
-                                        .fill(isHovered ? Color.accentColor : Color.clear)
-                                )
-                                .padding(.horizontal, 4) // 给高亮圆角留出一点点边缘呼吸感
-                                #if os(macOS)
-                                .onHover { hovering in
-                                    // 鼠标移入移出时切换状态
-                                    withAnimation(.easeOut(duration: 0.08)) {
-                                        hoveredID = hovering ? modelID : nil
-                                    }
-                                }
-                                #endif
                             }
                         }
-                        .padding(.vertical, 4)
-                        #if os(macOS)
-                        .frame(width: 200) // 固定宽度，防止长短文字抖动
-                        #endif
                     } label: {
-                        // 触发按钮增加一个微小的背景反馈，让点击体验更好
                         HStack(spacing: 4) {
-                            Text(modelSettings.displayName(for: selectedModel ?? ""))
+                            Text(modelSettings.selectionDisplayName(for: selectedModel ?? ""))
                                 .font(.system(size: 13, weight: .medium))
                                 .lineLimit(1)
                             Image(systemName: "chevron.up")
@@ -227,7 +179,6 @@ struct DraftComposerPanel: View {
                         }
                         .padding(.horizontal, 6)
                         .padding(.vertical, 3)
-                        .background(isMenuPresented ? Color.primary.opacity(0.05) : Color.clear)
                         .cornerRadius(4)
                     }
                     .menuStyle(.borderlessButton)
@@ -296,7 +247,8 @@ struct DraftComposerPanel: View {
         #if os(iOS)
         .sheet(isPresented: $isIOSModelPickerPresented) {
             IOSModelPickerSheet(
-                modelIDs: modelSettings.availableModelIDs,
+                groups: modelGroups,
+                ungroupedModelIDs: modelGroups.isEmpty ? modelSettings.availableModelIDs : [],
                 selectedModel: selectedModel,
                 displayName: { modelSettings.displayName(for: $0) },
                 onSelect: { modelID in
@@ -392,6 +344,32 @@ struct DraftComposerPanel: View {
         text.trimmingCharacters(in: .whitespacesAndNewlines)
     }
 
+    private var modelGroups: [ComposerModelGroup] {
+        modelSettings.unifiedModelGroups.map { group in
+            ComposerModelGroup(
+                id: group.connectionID,
+                name: group.name,
+                modelIDs: group.models.map(\.id)
+            )
+        }
+    }
+
+    #if os(macOS)
+    @ViewBuilder
+    private func modelMenuButton(_ modelID: String) -> some View {
+        Button {
+            selectModel(modelID)
+        } label: {
+            HStack {
+                Text(modelSettings.displayName(for: modelID))
+                if modelID == selectedModel {
+                    Image(systemName: "checkmark")
+                }
+            }
+        }
+    }
+    #endif
+
     private var composerControlSpacing: CGFloat {
         #if os(macOS)
         12
@@ -413,7 +391,9 @@ struct DraftComposerPanel: View {
         viewModel?.selectedModel = modelID
         modelSettings.didUseModel(modelID, conversation: viewModel?.conversation?.id ?? "")
         persistModel(modelID)
-        onModelChange?(modelID)
+        if let runtimeAlias = modelSettings.runtimeAlias(for: modelID) {
+            onModelChange?(runtimeAlias)
+        }
     }
 
     private var readyAssets: [UserAssetRef] {
@@ -435,17 +415,19 @@ struct DraftComposerPanel: View {
             return attachment.state == .ready
         }
         return isEnabled && hasContent && attachmentsReady && !isSending
-            && !isTurnRunning && !(selectedModel ?? "").isEmpty
+            && !isTurnRunning && modelSettings.isModelAvailable(selectedModel)
     }
 
     private func send() {
-        guard canSend else { return }
+        guard canSend,
+              let selectedModel,
+              let runtimeAlias = modelSettings.runtimeAlias(for: selectedModel) else { return }
         let toSend = text
         submittedTextSnapshot = toSend
         persistCurrentDraft()
         isSending = true
         Task {
-            _ = await onSend(toSend, selectedModel ?? "", readyAssets)
+            _ = await onSend(toSend, runtimeAlias, readyAssets)
             refreshAttachmentsFromLocalState()
             isSending = false
         }
@@ -649,47 +631,42 @@ struct DraftComposerPanel: View {
 private struct IOSModelPickerSheet: View {
     @Environment(\.dismiss) private var dismiss
 
-    let modelIDs: [String]
+    let groups: [ComposerModelGroup]
+    let ungroupedModelIDs: [String]
     let selectedModel: String?
     let displayName: (String) -> String
     let onSelect: (String) -> Void
 
+    private var isEmpty: Bool {
+        groups.allSatisfy(\.modelIDs.isEmpty) && ungroupedModelIDs.isEmpty
+    }
+
     var body: some View {
         NavigationStack {
             Group {
-                if modelIDs.isEmpty {
+                if isEmpty {
                     ContentUnavailableView(
                         AgentKitLocalized.string("composer.no_models"),
                         systemImage: "cpu",
                         description: Text(AgentKitLocalized.string("composer.models_load_hint"))
                     )
                 } else {
-                    List(modelIDs, id: \.self) { modelID in
-                        Button {
-                            onSelect(modelID)
-                        } label: {
-                            HStack(spacing: 12) {
-                                Image(systemName: "cpu")
-                                    .font(.system(size: 14, weight: .semibold))
-                                    .foregroundStyle(Color.accentColor)
-                                    .frame(width: 32, height: 32)
-                                    .background(
-                                        Color.accentColor.opacity(0.12),
-                                        in: RoundedRectangle(cornerRadius: 9, style: .continuous)
-                                    )
-                                Text(displayName(modelID))
-                                    .foregroundStyle(.primary)
-                                    .lineLimit(1)
-                                Spacer()
-                                if modelID == selectedModel {
-                                    Image(systemName: "checkmark")
-                                        .font(.system(size: 13, weight: .bold))
-                                        .foregroundStyle(Color.accentColor)
+                    List {
+                        if groups.isEmpty {
+                            ForEach(ungroupedModelIDs, id: \.self) { modelID in
+                                modelRow(modelID)
+                            }
+                        } else {
+                            ForEach(groups) { group in
+                                Section {
+                                    ForEach(group.modelIDs, id: \.self) { modelID in
+                                        modelRow(modelID)
+                                    }
+                                } header: {
+                                    Text(group.name)
                                 }
                             }
-                            .contentShape(Rectangle())
                         }
-                        .buttonStyle(.plain)
                     }
                     .listStyle(.insetGrouped)
                 }
@@ -702,6 +679,35 @@ private struct IOSModelPickerSheet: View {
                 }
             }
         }
+    }
+
+    @ViewBuilder
+    private func modelRow(_ modelID: String) -> some View {
+        Button {
+            onSelect(modelID)
+        } label: {
+            HStack(spacing: 12) {
+                Image(systemName: "cpu")
+                    .font(.system(size: 14, weight: .semibold))
+                    .foregroundStyle(Color.accentColor)
+                    .frame(width: 32, height: 32)
+                    .background(
+                        Color.accentColor.opacity(0.12),
+                        in: RoundedRectangle(cornerRadius: 9, style: .continuous)
+                    )
+                Text(displayName(modelID))
+                    .foregroundStyle(.primary)
+                    .lineLimit(1)
+                Spacer()
+                if modelID == selectedModel {
+                    Image(systemName: "checkmark")
+                        .font(.system(size: 13, weight: .bold))
+                        .foregroundStyle(Color.accentColor)
+                }
+            }
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
     }
 }
 #endif

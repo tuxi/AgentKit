@@ -62,6 +62,39 @@ public struct KeychainStore: Sendable {
         return status == errSecSuccess || status == errSecItemNotFound
     }
 
+    /// Lists all generic-password accounts owned by this service.
+    public func accounts() -> [String] {
+        let query: [String: Any] = [
+            kSecClass as String: kSecClassGenericPassword,
+            kSecAttrService as String: service,
+            kSecReturnAttributes as String: true,
+            kSecMatchLimit as String: kSecMatchLimitAll,
+        ]
+        let resultQuery = query as CFDictionary
+        var item: CFTypeRef?
+        let status = SecItemCopyMatching(resultQuery, &item)
+        guard status == errSecSuccess else { return [] }
+
+        if let rows = item as? [[String: Any]] {
+            return rows.compactMap { $0[kSecAttrAccount as String] as? String }
+        }
+        if let row = item as? [String: Any],
+           let account = row[kSecAttrAccount as String] as? String {
+            return [account]
+        }
+        return []
+    }
+
+    @discardableResult
+    public func removeAll() -> Bool {
+        let query: [String: Any] = [
+            kSecClass as String: kSecClassGenericPassword,
+            kSecAttrService as String: service,
+        ]
+        let status = SecItemDelete(query as CFDictionary)
+        return status == errSecSuccess || status == errSecItemNotFound
+    }
+
     // MARK: - Private
 
     private func baseQuery(_ account: String) -> [String: Any] {
