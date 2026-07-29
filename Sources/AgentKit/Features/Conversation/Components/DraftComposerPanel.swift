@@ -29,7 +29,7 @@ struct DraftComposerPanel: View {
     @Environment(WorkspaceStore.self) private var workspaceStore
     @Environment(ModelSettingsStore.self) private var modelSettings
     @Environment(\.scenePhase) private var scenePhase
-
+    
     let placeholder: String
     let isEnabled: Bool
     let isDraft: Bool
@@ -37,7 +37,7 @@ struct DraftComposerPanel: View {
     var onStop: (() -> Void)? = nil
     let onSend: (_ text: String, _ model: String, _ assets: [UserAssetRef]) async -> Bool
     var onAddAttachment: (() -> Void)? = nil
-
+    
     let viewModel: ConversationViewModel?
     /// 草稿代次（WorkspaceStore.draftNavigationRevision）。草稿模式下 viewModel 为 nil，
     /// `.task(id:)` 靠它区分「新一次草稿」—— 否则取消草稿再新建时 id 恒为 nil，
@@ -47,7 +47,7 @@ struct DraftComposerPanel: View {
     @State var selectedModel: String?
     /// 模型切换回调。
     var onModelChange: ((String) -> Void)? = nil
-
+    
     @State private var text = ""
     @State private var attachments: [DraftAttachmentReference] = []
     @State private var submittedTextSnapshot: String?
@@ -65,18 +65,18 @@ struct DraftComposerPanel: View {
     
     // MARK: - Model Selector
     @State private var isIOSModelPickerPresented = false
-
+    
     var body: some View {
         VStack(spacing: 0) {
-            #if os(iOS)
+#if os(iOS)
             WorkspaceChipBar()
                 .padding(.horizontal, 4)
                 .padding(.top, 3)
             Divider()
                 .opacity(0.45)
                 .padding(.horizontal, 12)
-            #endif
-
+#endif
+            
             VStack(spacing: 8) {
                 if !attachments.isEmpty {
                     VStack(alignment: .leading, spacing: 5) {
@@ -91,7 +91,7 @@ struct DraftComposerPanel: View {
                 inputField
                     .padding(.horizontal, 16)
                     .padding(.top, attachments.isEmpty ? 14 : 2)
-
+                
                 HStack(spacing: composerControlSpacing) {
                     Button {
                         if let onAddAttachment {
@@ -108,10 +108,10 @@ struct DraftComposerPanel: View {
                     .accessibilityLabel(AgentKitLocalized.string("composer.add_attachment"))
                     .disabled(
                         attachments.count >= 4
-                            || (onAddAttachment == nil && !workspaceStore.canSelectUserAssets)
+                        || (onAddAttachment == nil && !workspaceStore.canSelectUserAssets)
                     )
-
-                    #if os(macOS)
+                    
+#if os(macOS)
                     Menu {
                         Button(AgentKitLocalized.string("composer.request_approval")) { }
                     } label: {
@@ -124,12 +124,12 @@ struct DraftComposerPanel: View {
                     .menuStyle(.borderlessButton)
                     .fixedSize()
                     .foregroundStyle(.secondary)
-                    #endif
-
+#endif
+                    
                     Spacer(minLength: 12)
-
+                    
                     // ── Model Selector ──
-                    #if os(iOS)
+#if os(iOS)
                     Button {
                         isIOSModelPickerPresented = true
                     } label: {
@@ -152,7 +152,7 @@ struct DraftComposerPanel: View {
                     .frame(maxWidth: 132)
                     .disabled(modelSettings.availableModelIDs.isEmpty)
                     .accessibilityLabel(AgentKitLocalized.string("composer.select_model"))
-                    #else
+#else
                     Menu {
                         if modelGroups.isEmpty {
                             ForEach(modelSettings.availableModelIDs, id: \.self) { modelID in
@@ -183,10 +183,10 @@ struct DraftComposerPanel: View {
                     }
                     .menuStyle(.borderlessButton)
                     .fixedSize()
-//                    .foregroundStyle(.secondary)
-                    #endif
-
-                    #if os(macOS)
+                    //                    .foregroundStyle(.secondary)
+#endif
+                    
+#if os(macOS)
                     Button { } label: {
                         Image(systemName: "mic")
                             .font(.system(size: 15, weight: .medium))
@@ -194,8 +194,8 @@ struct DraftComposerPanel: View {
                     .buttonStyle(.plain)
                     .foregroundStyle(.secondary)
                     .accessibilityLabel(AgentKitLocalized.string("composer.voice_input"))
-                    #endif
-
+#endif
+                    
                     // ── Send / Stop button ──
                     if isTurnRunning {
                         Button {
@@ -234,17 +234,17 @@ struct DraftComposerPanel: View {
                 .padding(.bottom, 10)
             }
             
-            #if os(macOS)
+#if os(macOS)
             if isDraft {
                 WorkspaceChipBar()
                     .padding(.horizontal, 8)
                     .padding(.vertical, 3)
                     .background(Color.draftPanelFooterBackground)
             }
-            #endif
+#endif
         }
         .modifier(DraftComposerSurfaceModifier())
-        #if os(iOS)
+#if os(iOS)
         .sheet(isPresented: $isIOSModelPickerPresented) {
             IOSModelPickerSheet(
                 groups: modelGroups,
@@ -259,7 +259,7 @@ struct DraftComposerPanel: View {
             .presentationDetents([.medium, .height(260)])
             .presentationDragIndicator(.visible)
         }
-        #endif
+#endif
         .task(id: persistenceKey?.storageKey ?? "none-\(draftRevision)") {
             restoreLocalState()
         }
@@ -306,9 +306,9 @@ struct DraftComposerPanel: View {
             }
         }
     }
-
+    
     // MARK: - Input Field
-
+    
     @ViewBuilder
     private var inputField: some View {
 #if os(macOS)
@@ -337,13 +337,13 @@ struct DraftComposerPanel: View {
             .disabled(!isEnabled)
 #endif
     }
-
+    
     // MARK: - Helpers
-
+    
     private var trimmed: String {
         text.trimmingCharacters(in: .whitespacesAndNewlines)
     }
-
+    
     private var modelGroups: [ComposerModelGroup] {
         modelSettings.unifiedModelGroups.map { group in
             ComposerModelGroup(
@@ -353,8 +353,8 @@ struct DraftComposerPanel: View {
             )
         }
     }
-
-    #if os(macOS)
+    
+#if os(macOS)
     @ViewBuilder
     private func modelMenuButton(_ modelID: String) -> some View {
         Button {
@@ -368,24 +368,24 @@ struct DraftComposerPanel: View {
             }
         }
     }
-    #endif
-
+#endif
+    
     private var composerControlSpacing: CGFloat {
-        #if os(macOS)
+#if os(macOS)
         12
-        #else
+#else
         8
-        #endif
+#endif
     }
-
+    
     private var sendButtonSize: CGFloat {
-        #if os(macOS)
+#if os(macOS)
         30
-        #else
+#else
         34
-        #endif
+#endif
     }
-
+    
     private func selectModel(_ modelID: String) {
         selectedModel = modelID
         viewModel?.selectedModel = modelID
@@ -395,7 +395,7 @@ struct DraftComposerPanel: View {
             onModelChange?(runtimeAlias)
         }
     }
-
+    
     private var readyAssets: [UserAssetRef] {
         attachments.compactMap { attachment in
             guard attachment.state == .ready,
@@ -403,21 +403,21 @@ struct DraftComposerPanel: View {
             return attachment.readyAsset
         }
     }
-
+    
     private var canSend: Bool {
         let hasContent = !trimmed.isEmpty || !attachments.isEmpty
         let attachmentsReady = attachments.allSatisfy { attachment in
             if attachment.delivery == .localOnly {
                 return attachment.state == .local
-                    || attachment.state == .ready
-                    || (isDraft && attachment.state == .failed && attachment.localAsset == nil)
+                || attachment.state == .ready
+                || (isDraft && attachment.state == .failed && attachment.localAsset == nil)
             }
             return attachment.state == .ready
         }
         return isEnabled && hasContent && attachmentsReady && !isSending
-            && !isTurnRunning && modelSettings.isModelAvailable(selectedModel)
+        && !isTurnRunning && modelSettings.isModelAvailable(selectedModel)
     }
-
+    
     private func send() {
         guard canSend,
               let selectedModel,
@@ -432,7 +432,7 @@ struct DraftComposerPanel: View {
             isSending = false
         }
     }
-
+    
     private var persistenceKey: ConversationLocalStateKey? {
         if isDraft, let id = workspaceStore.draft?.id {
             return .draft(id)
@@ -442,7 +442,7 @@ struct DraftComposerPanel: View {
         }
         return nil
     }
-
+    
     private func restoreLocalState(persistOutgoingText: Bool = true) {
         pendingSaveTask?.cancel()
         if persistOutgoingText, let oldKey = loadedStateKey {
@@ -452,15 +452,15 @@ struct DraftComposerPanel: View {
         loadedStateKey = key
         isRestoringLocalState = true
         defer { isRestoringLocalState = false }
-
+        
         let state = key.flatMap { try? workspaceStore.localStateStore.state(for: $0) }
         text = state?.composerDraft.text ?? ""
         attachments = state?.composerDraft.attachments ?? []
         submittedTextSnapshot = state?.composerDraft.pendingSubmission?.text
         selectedModel = state?.selectedModelID
-            ?? modelSettings.getModel(with: viewModel?.conversation?.id)
+        ?? modelSettings.getModel(with: viewModel?.conversation?.id)
     }
-
+    
     private func scheduleTextSave(_ value: String, for key: ConversationLocalStateKey) {
         pendingSaveTask?.cancel()
         pendingSaveTask = Task {
@@ -469,13 +469,13 @@ struct DraftComposerPanel: View {
             persist(text: value, for: key)
         }
     }
-
+    
     private func persistCurrentText() {
         pendingSaveTask?.cancel()
         guard let key = loadedStateKey else { return }
         persist(text: text, for: key)
     }
-
+    
     private func persistCurrentDraft() {
         pendingSaveTask?.cancel()
         guard let key = loadedStateKey else { return }
@@ -487,7 +487,7 @@ struct DraftComposerPanel: View {
             state.composerDraft.revision += 1
         }
     }
-
+    
     /// Applies the accepted snapshot to the current editor value without writing
     /// the stale pre-accept text back over the durable state. Text entered while
     /// acknowledgement was pending remains in the composer.
@@ -509,13 +509,13 @@ struct DraftComposerPanel: View {
             restoreLocalState(persistOutgoingText: false)
         }
     }
-
+    
     private func refreshAttachmentsFromLocalState() {
         guard let key = loadedStateKey,
               let state = try? workspaceStore.localStateStore.state(for: key) else { return }
         attachments = state.composerDraft.attachments
     }
-
+    
     private var attachmentStrip: some View {
         ScrollView(.horizontal, showsIndicators: false) {
             HStack(spacing: 8) {
@@ -526,21 +526,21 @@ struct DraftComposerPanel: View {
                         onRemove: { removeAttachment(attachment.id) },
                         onRetry: { retryAttachment(attachment.id) },
                         onUploadToGateway: canOfferGatewayUpload(for: attachment)
-                            ? { requestGatewayUpload(attachment.id) }
-                            : nil
+                        ? { requestGatewayUpload(attachment.id) }
+                        : nil
                     )
                 }
             }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
     }
-
+    
     private func persist(text: String, for key: ConversationLocalStateKey) {
         try? workspaceStore.localStateStore.updateState(for: key) { state in
             state.composerDraft.text = text
         }
     }
-
+    
     /// 持久化当前对话/草稿的模型选择到 local state。
     /// 与 ModelSettingsStore.setUserModel() 互补：setUserModel 只写 .session(id)，
     /// 草稿（无 session）依赖此方法写 .draft(uuid)，保证多草稿间模型选择隔离。
@@ -555,7 +555,7 @@ struct DraftComposerPanel: View {
             }
         }
     }
-
+    
     private func pickAttachments() {
         guard let key = persistenceKey else { return }
         Task {
@@ -567,7 +567,7 @@ struct DraftComposerPanel: View {
             }
         }
     }
-
+    
     private func handleDroppedFiles(_ urls: [URL]) {
         guard let key = persistenceKey,
               workspaceStore.canStageLocalUserAssets else { return }
@@ -582,12 +582,12 @@ struct DraftComposerPanel: View {
             }
         }
     }
-
+    
     private func removeAttachment(_ id: String) {
         attachments.removeAll { $0.id == id }
         persistCurrentDraft()
     }
-
+    
     private func retryAttachment(_ id: String) {
         guard let key = persistenceKey else { return }
         Task {
@@ -596,7 +596,7 @@ struct DraftComposerPanel: View {
             }
         }
     }
-
+    
     private func canOfferGatewayUpload(for attachment: DraftAttachmentReference) -> Bool {
         guard workspaceStore.canUploadUserAssetsToGateway,
               attachment.delivery == .localOnly,
@@ -604,17 +604,17 @@ struct DraftComposerPanel: View {
               attachment.state != .sending else { return false }
         let name = attachment.displayName.lowercased()
         return name.hasSuffix(".jpg")
-            || name.hasSuffix(".jpeg")
-            || name.hasSuffix(".png")
-            || attachment.localAsset?.mimeType == "image/jpeg"
-            || attachment.localAsset?.mimeType == "image/png"
+        || name.hasSuffix(".jpeg")
+        || name.hasSuffix(".png")
+        || attachment.localAsset?.mimeType == "image/jpeg"
+        || attachment.localAsset?.mimeType == "image/png"
     }
-
+    
     private func requestGatewayUpload(_ id: String) {
         pendingGatewayUploadID = id
         isGatewayUploadConfirmationPresented = true
     }
-
+    
     private func confirmGatewayUpload() {
         guard let id = pendingGatewayUploadID,
               let key = persistenceKey else { return }
@@ -630,17 +630,17 @@ struct DraftComposerPanel: View {
 #if os(iOS)
 private struct IOSModelPickerSheet: View {
     @Environment(\.dismiss) private var dismiss
-
+    
     let groups: [ComposerModelGroup]
     let ungroupedModelIDs: [String]
     let selectedModel: String?
     let displayName: (String) -> String
     let onSelect: (String) -> Void
-
+    
     private var isEmpty: Bool {
         groups.allSatisfy(\.modelIDs.isEmpty) && ungroupedModelIDs.isEmpty
     }
-
+    
     var body: some View {
         NavigationStack {
             Group {
@@ -680,7 +680,7 @@ private struct IOSModelPickerSheet: View {
             }
         }
     }
-
+    
     @ViewBuilder
     private func modelRow(_ modelID: String) -> some View {
         Button {
@@ -714,24 +714,24 @@ private struct IOSModelPickerSheet: View {
 
 private struct DraftComposerSurfaceModifier: ViewModifier {
     func body(content: Content) -> some View {
-        #if os(macOS)
+#if os(macOS)
         content
             .background(Color.draftPanelBackground)
             .clipShape(RoundedRectangle(cornerRadius: 20, style: .continuous))
             .padding()
             .shadow(color: .black.opacity(0.10), radius: 20, y: 10)
-        #else
+#else
         content
-            .background(Color.draftPanelBackground)
-            .clipShape(RoundedRectangle(cornerRadius: 19, style: .continuous))
-            .overlay {
-                RoundedRectangle(cornerRadius: 19, style: .continuous)
-                    .stroke(Color.draftPanelStroke, lineWidth: 0.5)
-            }
-            .padding(.horizontal, 12)
-            .padding(.vertical, 4)
-            .shadow(color: .black.opacity(0.07), radius: 12, y: 4)
-        #endif
+        // 1. 强依赖 Material，使用 .thinMaterial 可以让背景颜色适度渗透
+            .background(.thinMaterial, in: RoundedRectangle(cornerRadius: 26, style: .continuous))
+        // 2. 移除任何纯色 background 叠加，只靠 Material
+        // 3. **极致关键：干掉描边 (overlay stroke)**
+            .padding(.horizontal, 16) // 调整 padding
+            .padding(.vertical, 8)  // 调整 padding
+        // 4. 极致阴影：极淡、极弥散
+            .shadow(color: Color.black.opacity(0.02), radius: 6, x: 0, y: 2)   // 几乎不可见的近景阴影
+            .shadow(color: Color.black.opacity(0.04), radius: 20, x: 0, y: 6)  // 柔和弥散阴影
+#endif
     }
 }
 
@@ -741,14 +741,14 @@ private struct DraftAttachmentThumbnail: View {
     let onRemove: () -> Void
     let onRetry: () -> Void
     let onUploadToGateway: (() -> Void)?
-
+    
     var body: some View {
         ZStack {
             DraftAttachmentPreview(attachment: attachment, resolver: resolver)
                 .frame(width: 96, height: 76)
-
+            
             stateOverlay
-
+            
             VStack {
                 HStack {
                     Spacer()
@@ -793,7 +793,7 @@ private struct DraftAttachmentThumbnail: View {
         .accessibilityElement(children: .combine)
         .accessibilityLabel(accessibilityLabel)
     }
-
+    
     @ViewBuilder
     private var stateOverlay: some View {
         switch attachment.state {
@@ -824,7 +824,7 @@ private struct DraftAttachmentThumbnail: View {
             EmptyView()
         }
     }
-
+    
     private func statusOverlay(title: String, progress: Double?) -> some View {
         VStack(spacing: 6) {
             if let progress {
@@ -843,11 +843,11 @@ private struct DraftAttachmentThumbnail: View {
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .background(.black.opacity(0.42))
     }
-
+    
     private var borderColor: Color {
         attachment.state == .failed ? .red.opacity(0.8) : .white.opacity(0.12)
     }
-
+    
     private var accessibilityLabel: String {
         switch attachment.state {
         case .local, .preparing: return String(format: AgentKitLocalized.string("composer.attachment_processing"), attachment.displayName)
@@ -863,7 +863,7 @@ private struct DraftAttachmentPreview: View {
     let attachment: DraftAttachmentReference
     let resolver: (any UserAssetDraftPreviewResolving)?
     @State private var previewImage: Image?
-
+    
     var body: some View {
         Group {
             if let previewImage {
@@ -884,7 +884,7 @@ private struct DraftAttachmentPreview: View {
             await loadPreview()
         }
     }
-
+    
     private func loadPreview() async {
         let url: URL
         do {
@@ -898,7 +898,7 @@ private struct DraftAttachmentPreview: View {
             } else {
                 return
             }
-
+            
             let data = try await Task.detached(priority: .utility) {
                 try Data(contentsOf: url, options: [.mappedIfSafe])
             }.value
@@ -920,87 +920,89 @@ private struct DraftAttachmentPreview: View {
 /// differently; these bridge them so the file compiles on both platforms.
 extension Color {
     static var draftPageBackground: Color {
-        #if os(macOS)
+#if os(macOS)
         Color(NSColor.windowBackgroundColor)
-        #else
+#else
         Color(UIColor.systemBackground)
-        #endif
+#endif
     }
-
+    
     static var draftPanelBackground: Color {
-        #if os(macOS)
+#if os(macOS)
         Color(NSColor.controlBackgroundColor)
-        #else
+#else
         Color(UIColor { traits in
+            // 浅色模式：接近纯白，带极低明度的灰（或利用材质的半透明）
             traits.userInterfaceStyle == .dark
-                ? UIColor.tertiarySystemBackground
-                : UIColor.secondarySystemBackground
+            ? UIColor.tertiarySystemBackground
+            : UIColor.systemBackground.withAlphaComponent(0.01) // 几乎透明，让 Material 唱主角
         })
-        #endif
+#endif
     }
-
+    
     static var draftPanelFooterBackground: Color {
-        #if os(macOS)
+#if os(macOS)
         Color(NSColor.separatorColor).opacity(0.12)
-        #else
+#else
         Color(UIColor.tertiarySystemBackground)
-        #endif
+#endif
     }
-
+    
+    // iOS 端这个颜色现在可以被移除，因为我们不使用描边
+    // 但为了代码兼容性，可以把它设为透明
     static var draftPanelStroke: Color {
-        #if os(macOS)
+#if os(macOS)
         Color(NSColor.separatorColor).opacity(0.35)
-        #else
-        Color(UIColor.separator).opacity(0.42)
-        #endif
+#else
+        Color.clear // 极致 iOS 风格不使用描边
+#endif
     }
-
     static var draftSendBackground: Color {
-        #if os(macOS)
+#if os(macOS)
         Color(NSColor.labelColor)
-        #else
+#else
         Color.accentColor
-        #endif
+#endif
     }
-
+    
     static var draftSendForeground: Color {
-        #if os(macOS)
+#if os(macOS)
         Color(NSColor.windowBackgroundColor)
-        #else
+#else
         Color.white
-        #endif
+#endif
     }
-
+    
     static var draftDisabledSendBackground: Color {
-        #if os(macOS)
+#if os(macOS)
         Color(NSColor.separatorColor).opacity(0.45)
-        #else
+#else
         Color(UIColor.tertiaryLabel).opacity(0.35)
-        #endif
+#endif
     }
-
+    
     static var draftDisabledSendForeground: Color {
-        #if os(macOS)
+#if os(macOS)
         Color(NSColor.secondaryLabelColor)
-        #else
+#else
         Color(UIColor.secondaryLabel)
-        #endif
+#endif
     }
-
+    
     static var approvalPanelBackground: Color {
-        #if os(macOS)
+#if os(macOS)
         Color(NSColor.windowBackgroundColor)
-        #else
+#else
         Color(UIColor.systemBackground)
-        #endif
+#endif
     }
-
+    
     static var approvalSecondaryFill: Color {
-        #if os(macOS)
+#if os(macOS)
         Color(NSColor.secondarySystemFill)
-        #else
+#else
         Color(UIColor.secondarySystemFill)
-        #endif
+#endif
     }
 }
 
@@ -1017,11 +1019,11 @@ struct PlanApprovalBar: View {
     private var displayPath: String? {
         plan.planPath ?? plan.filePath
     }
-
+    
     var body: some View {
         VStack(spacing: 0) {
             Divider()
-
+            
             VStack(alignment: .leading, spacing: 10) {
                 // Header
                 header
@@ -1029,7 +1031,7 @@ struct PlanApprovalBar: View {
                 if let path = displayPath, !path.isEmpty {
                     planPathRow(path)
                 }
-
+                
                 // Plan content — DAG rendering for workflow plans, markdown otherwise
                 if let dag = parseWorkflowDAG(from: plan.content) {
                     workflowDAGPreview(dag: dag)
@@ -1043,10 +1045,10 @@ struct PlanApprovalBar: View {
                     .background(.quaternary.opacity(0.3))
                     .clipShape(RoundedRectangle(cornerRadius: 8))
                 }
-
+                
                 // Action buttons
                 HStack(spacing: 8) {
-
+                    
                     Button(role: .destructive, action: onReject) {
                         Label("Reject", systemImage: "xmark.circle.fill")
                             .frame(maxWidth: .infinity)
@@ -1070,13 +1072,13 @@ struct PlanApprovalBar: View {
     private var isWorkflowDAG: Bool {
         plan.content.trimmingCharacters(in: .whitespacesAndNewlines).first == "{"
     }
-
+    
     private var header: some View {
         HStack(alignment: .top, spacing: 8) {
             Image(systemName: isWorkflowDAG ? "flowchart.fill" : "text.document.fill")
                 .foregroundStyle(isWorkflowDAG ? .purple : .blue)
                 .padding(.top, 1)
-
+            
             VStack(alignment: .leading, spacing: 2) {
                 ScrollView(.vertical) {
                     Text(plan.title)
@@ -1084,14 +1086,14 @@ struct PlanApprovalBar: View {
                         .textSelection(.enabled)
                 }
                 .frame(maxHeight: 70)
-
+                
                 Text(isWorkflowDAG ? "Workflow Plan" : "Proposed Plan")
                     .font(.caption)
                     .foregroundStyle(.secondary)
             }
-
+            
             Spacer()
-
+            
             if let deadline = plan.deadlineSeconds {
                 Text("\(deadline)s")
                     .font(.caption2.weight(.medium))
@@ -1168,9 +1170,9 @@ struct PlanApprovalBar: View {
         openFolderInFinder(path: filePath)
     }
 #endif
-
+    
     // MARK: - Workflow DAG detection & preview
-
+    
     private func parseWorkflowDAG(from jsonString: String) -> DAGApprovalData? {
         guard let firstChar = jsonString.trimmingCharacters(in: .whitespacesAndNewlines).first,
               firstChar == "{" else { return nil }
@@ -1179,7 +1181,7 @@ struct PlanApprovalBar: View {
               !dag.nodes.isEmpty else { return nil }
         return dag
     }
-
+    
     @ViewBuilder
     private func workflowDAGPreview(dag: DAGApprovalData) -> some View {
         let nodes = dag.nodes.map { wn in
@@ -1192,7 +1194,7 @@ struct PlanApprovalBar: View {
             )
         }
         let edges = (dag.edges ?? []).map { WorkflowEdge(from: $0.from, to: $0.to) }
-
+        
         VStack(alignment: .leading, spacing: 6) {
             HStack(spacing: 6) {
                 Image(systemName: "flowchart.fill")
@@ -1205,7 +1207,7 @@ struct PlanApprovalBar: View {
                     .font(.caption2)
                     .foregroundStyle(.secondary)
             }
-
+            
             ScrollView([.horizontal, .vertical], showsIndicators: false) {
                 WorkflowDAGLayoutView(nodes: nodes, edges: edges)
                     .padding(8)
@@ -1251,11 +1253,11 @@ private enum ApprovalScope: String, CaseIterable, Hashable {
 struct ApprovalBar: View {
     @Environment(\.colorScheme) private var colorScheme
     let request: ApprovalRequest
-
+    
     private var appDisplayName: String {
         Bundle.main.object(forInfoDictionaryKey: "CFBundleDisplayName") as? String
-            ?? Bundle.main.object(forInfoDictionaryKey: "CFBundleName") as? String
-            ?? "the agent"
+        ?? Bundle.main.object(forInfoDictionaryKey: "CFBundleName") as? String
+        ?? "the agent"
     }
     
     private var approvalHeaderText: String {
@@ -1264,7 +1266,7 @@ struct ApprovalBar: View {
         }
         return "Allow \(appDisplayName) to run \(request.displayToolName)?"
     }
-
+    
     
     // 三态回调映射图中的按钮
     let onDeny: () -> Void          // Deny 1
@@ -1455,40 +1457,40 @@ struct AskUserBar: View {
     let request: AskUserRequest
     let onSubmit: ([String], String?) -> Void
     let onSkip: () -> Void
-
+    
     @State private var selectedLabels: Set<String> = []
     @State private var customText: String = ""
     @State private var isExpanded: Bool = true
-
+    
     /// 推荐项 label（含 `(Recommended)` 或 `（推荐）` 后缀），自动预选。
     private var recommendedLabel: String? {
         request.options.first { request.isRecommended($0) }?.label
     }
-
+    
     var body: some View {
         VStack(spacing: 0) {
             Divider()
-
+            
             VStack(alignment: .leading, spacing: 10) {
                 // Header
                 headerRow
-
+                
                 // Question text
                 Text(request.question)
                     .font(.callout)
                     .foregroundStyle(.primary)
                     .fixedSize(horizontal: false, vertical: true)
-
+                
                 // Options list
                 if isExpanded {
                     optionsList
                 }
-
+                
                 // Custom input (only when allowCustom)
                 if request.allowCustom, isExpanded {
                     customInputRow
                 }
-
+                
                 // Action buttons
                 if isExpanded {
                     actionButtons
@@ -1507,25 +1509,25 @@ struct AskUserBar: View {
             }
         }
     }
-
+    
     // MARK: - Header
-
+    
     private var headerRow: some View {
         HStack(spacing: 8) {
             Image(systemName: "questionmark.bubble.fill")
                 .foregroundStyle(.blue)
-
+            
             VStack(alignment: .leading, spacing: 2) {
                 Text(request.header)
                     .font(.subheadline.weight(.semibold))
-
+                
                 Text(request.multiSelect ? AgentKitLocalized.string("composer.multi_select") : AgentKitLocalized.string("composer.please_select"))
                     .font(.caption)
                     .foregroundStyle(.secondary)
             }
-
+            
             Spacer()
-
+            
             // Deadline badge
             if let deadline = request.deadlineSeconds {
                 Text("\(deadline)s")
@@ -1536,7 +1538,7 @@ struct AskUserBar: View {
                     .background(.quaternary)
                     .clipShape(Capsule())
             }
-
+            
             // Collapse/expand toggle
             Button {
                 withAnimation(.easeOut(duration: 0.2)) {
@@ -1549,7 +1551,7 @@ struct AskUserBar: View {
             }
             .buttonStyle(.plain)
             .help(isExpanded ? AgentKitLocalized.string("composer.collapse") : AgentKitLocalized.string("composer.expand"))
-
+            
             // Skip button
             Button(action: onSkip) {
                 Image(systemName: "xmark.circle.fill")
@@ -1559,9 +1561,9 @@ struct AskUserBar: View {
             .help(AgentKitLocalized.string("composer.skip_question"))
         }
     }
-
+    
     // MARK: - Options
-
+    
     private var optionsList: some View {
         VStack(spacing: 6) {
             ForEach(request.options) { option in
@@ -1569,11 +1571,11 @@ struct AskUserBar: View {
             }
         }
     }
-
+    
     private func optionRow(_ option: AskUserOption) -> some View {
         let isSelected = selectedLabels.contains(option.label)
         let isRecommended = request.isRecommended(option)
-
+        
         return Button {
             if request.multiSelect {
                 if isSelected {
@@ -1597,13 +1599,13 @@ struct AskUserBar: View {
                     }
                 }
                 .font(.system(size: 16))
-
+                
                 VStack(alignment: .leading, spacing: 3) {
                     HStack(spacing: 4) {
                         Text(option.label)
                             .font(.subheadline.weight(isSelected ? .semibold : .regular))
                             .foregroundStyle(.primary)
-
+                        
                         if isRecommended {
                             Text(verbatim: AgentKitLocalized.string("composer.recommended"))
                                 .font(.system(size: 9))
@@ -1614,7 +1616,7 @@ struct AskUserBar: View {
                                 .clipShape(Capsule())
                         }
                     }
-
+                    
                     if !option.description.isEmpty {
                         Text(option.description)
                             .font(.caption)
@@ -1622,7 +1624,7 @@ struct AskUserBar: View {
                             .fixedSize(horizontal: false, vertical: true)
                     }
                 }
-
+                
                 Spacer(minLength: 0)
             }
             .padding(10)
@@ -1638,15 +1640,15 @@ struct AskUserBar: View {
         }
         .buttonStyle(.plain)
     }
-
+    
     // MARK: - Custom input
-
+    
     private var customInputRow: some View {
         HStack(spacing: 8) {
             Image(systemName: "pencil.line")
                 .foregroundStyle(.secondary)
                 .font(.caption)
-
+            
             TextField(AgentKitLocalized.string("composer.custom_input_optional"), text: $customText)
                 .textFieldStyle(.plain)
                 .font(.subheadline)
@@ -1655,9 +1657,9 @@ struct AskUserBar: View {
         .background(.quaternary.opacity(0.3))
         .clipShape(RoundedRectangle(cornerRadius: 8))
     }
-
+    
     // MARK: - Actions
-
+    
     private var actionButtons: some View {
         HStack(spacing: 8) {
             Button(action: onSkip) {
@@ -1666,7 +1668,7 @@ struct AskUserBar: View {
             }
             .buttonStyle(.bordered)
             .controlSize(.regular)
-
+            
             Button {
                 let notes = customText.trimmingCharacters(in: .whitespacesAndNewlines)
                 onSubmit(Array(selectedLabels), notes.isEmpty ? nil : notes)
@@ -1707,7 +1709,7 @@ private struct DAGApprovalNode: Decodable {
     let type: String?
     let label: String?
     let inputMapping: JSONValue?
-
+    
     enum CodingKeys: String, CodingKey {
         case name, tool, type, label
         case inputMapping = "input_mapping"

@@ -305,6 +305,32 @@ public struct ConversationDetailView: View {
                     }
                 )
                 .environment(modelSettings)
+                // 渐变穿透背景
+                .background {
+#if os(iOS)
+                    GeometryReader { proxy in
+                        LinearGradient(
+                            stops: [
+                                .init(color: .clear, location: 0.0),
+                                .init(color: Color(UIColor.systemBackground).opacity(0.4), location: 0.25),
+                                .init(color: Color(UIColor.systemBackground).opacity(0.95), location: 0.8)
+                            ],
+                            startPoint: .top,
+                            endPoint: .bottom
+                        )
+                        .background(.bar) // 引入系统 Bar 材质
+                        .mask {
+                            // 用垂直 alpha 渐变控制 Bar 的渐隐
+                            LinearGradient(
+                                colors: [.clear, .black.opacity(0.6), .black],
+                                startPoint: .top,
+                                endPoint: .bottom
+                            )
+                        }
+                    }
+                    .ignoresSafeArea(edges: .bottom)
+#endif
+                }
             }
             .animation(.easeOut(duration: 0.25), value: vm.snapshot.pendingAskUser != nil)
             .animation(.easeOut(duration: 0.25), value: vm.snapshot.pendingApproval != nil)
