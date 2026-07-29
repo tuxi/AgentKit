@@ -209,7 +209,7 @@ public final class AgentRuntime: @unchecked Sendable {
     @discardableResult
     public func restart() throws -> Int {
         stop()
-        return try launch()
+        return try launch(secretsJSON: injectedSecretsJSON ?? "")
     }
 
     @discardableResult

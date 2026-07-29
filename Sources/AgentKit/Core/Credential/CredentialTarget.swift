@@ -17,6 +17,8 @@ import Foundation
 ///   - `gateway` — Agent Gateway
 ///   - `llm`     — BYOK 直连 LLM provider
 ///   - `mcp`     — MCP server OAuth
+///   - `runtime_access` — external Runtime Server access (never injected as a
+///     model Provider credential)
 ///
 /// 注意：不存在 `search` namespace。web search 是 Gateway 的实现细节，
 /// Runtime 不应该感知底层用的是 Tavily/Google/Bing —— 统一走 `gateway/default`。
@@ -52,6 +54,10 @@ public struct CredentialTarget: Hashable, Codable, Sendable {
 
     public static func mcp(_ name: String) -> CredentialTarget {
         CredentialTarget(namespace: "mcp", name: name)
+    }
+
+    public static func runtimeAccess(_ connectionID: String) -> CredentialTarget {
+        CredentialTarget(namespace: "runtime_access", name: connectionID)
     }
 }
 
