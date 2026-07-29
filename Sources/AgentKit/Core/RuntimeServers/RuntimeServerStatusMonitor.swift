@@ -61,6 +61,7 @@ struct EmbeddedRuntimeLifecycle {
     var endpoint: @MainActor () -> URL?
     var profile: @MainActor () -> String
     var healthCheck: @MainActor () async -> Bool
+    var runtimeInfo: @MainActor () async throws -> RuntimeServerInfo
 
     static let live = EmbeddedRuntimeLifecycle(
         isAlive: { AgentRuntime.shared.isAlive },
@@ -71,6 +72,15 @@ struct EmbeddedRuntimeLifecycle {
         healthCheck: {
             let client = RuntimeHTTPClient(environment: .fromRuntime())
             return (try? await client.healthCheck()) == true
+        },
+        runtimeInfo: {
+            let runtime = AgentRuntime.shared
+            let client = RuntimeHTTPClient(
+                environment: .fromRuntime(),
+                credentialStore: runtime.runtimeAccessCredentialStore,
+                credentialTarget: runtime.runtimeAccessCredentialStore.target
+            )
+            return try await client.runtimeInfo()
         }
     )
 }
@@ -84,6 +94,7 @@ public final class RuntimeServerStatusMonitor {
     public private(set) var lastCheckedAt: Date?
     public private(set) var lastConnectedAt: Date?
     public private(set) var lastErrorDescription: String?
+    public private(set) var runtimeInfo: RuntimeServerInfo?
 
     private let lifecycle: EmbeddedRuntimeLifecycle
     @ObservationIgnored private var inflight: Task<Bool, Never>?
@@ -102,8 +113,8 @@ public final class RuntimeServerStatusMonitor {
             connectionID: RuntimeServerConnection.embeddedID,
             status: status,
             endpoint: lifecycle.endpoint(),
-            runtimeInfo: nil,
-            runtimeProfile: lifecycle.profile(),
+            runtimeInfo: runtimeInfo,
+            runtimeProfile: runtimeInfo?.runtimeProfile ?? lifecycle.profile(),
             lastCheckedAt: lastCheckedAt,
             lastConnectedAt: lastConnectedAt,
             lastErrorDescription: lastErrorDescription
@@ -179,8 +190,7 @@ public final class RuntimeServerStatusMonitor {
 
         status = .checking
         if await lifecycle.healthCheck() {
-            markConnected()
-            return true
+            return await finishAuthenticatedCheck()
         }
 
         guard repairIfNeeded else {
@@ -208,12 +218,37 @@ public final class RuntimeServerStatusMonitor {
     private func finishHealthCheck() async -> Bool {
         lastCheckedAt = Date()
         if await lifecycle.healthCheck() {
-            markConnected()
-            return true
+            return await finishAuthenticatedCheck()
         }
         status = .offline
         lastErrorDescription = "Embedded Runtime did not pass its health check."
         return false
+    }
+
+    private func finishAuthenticatedCheck() async -> Bool {
+        do {
+            let info = try await lifecycle.runtimeInfo()
+            guard info.isAgentWireV1Compatible else {
+                status = .protocolIncompatible
+                lastErrorDescription = "Embedded Runtime Agent Wire protocol is incompatible."
+                return false
+            }
+            runtimeInfo = info
+            markConnected()
+            return true
+        } catch RuntimeHTTPError.authenticationRequired {
+            status = .authenticationRequired
+            lastErrorDescription = "Embedded Runtime did not receive its access token."
+            return false
+        } catch RuntimeHTTPError.authenticationInvalid {
+            status = .authenticationFailed
+            lastErrorDescription = "Embedded Runtime rejected its access token."
+            return false
+        } catch {
+            status = .configurationError
+            lastErrorDescription = Self.safeDescription(error)
+            return false
+        }
     }
 
     private static func safeDescription(_ error: Error) -> String {

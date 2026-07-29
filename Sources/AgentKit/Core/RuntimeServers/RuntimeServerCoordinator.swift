@@ -2,20 +2,79 @@
 //  RuntimeServerCoordinator.swift
 //  AgentKit
 //
-//  Active Runtime boundary. Phase A exposes the embedded connection; Phase C
-//  extends client construction to validated Local/Remote connections.
+//  Active Runtime boundary for Embedded, Local and Remote CodeAgent Servers.
 //
 
 import Foundation
 
 public enum RuntimeServerCoordinatorError: Error, LocalizedError, Equatable {
-    case externalServerUnavailableInPhaseA
+    case accessTokenRequired
+    case activityCheckFailed
+    case activeWorkRequiresConfirmation
+    case identityConfirmationRequired(expected: String, actual: String)
 
     public var errorDescription: String? {
         switch self {
-        case .externalServerUnavailableInPhaseA:
-            "External Runtime Servers are not available until the Phase B server contract is installed."
+        case .accessTokenRequired:
+            "Runtime Server Access Token is required."
+        case .activityCheckFailed:
+            "Unable to verify whether the current Runtime Server has active work."
+        case .activeWorkRequiresConfirmation:
+            "The current Runtime Server has active work. Confirm before switching."
+        case .identityConfirmationRequired(let expected, let actual):
+            "Runtime Server identity changed from \(expected) to \(actual)."
         }
+    }
+}
+
+public struct RuntimeServerActiveContext: Sendable, Equatable {
+    public let serverConnectionID: String
+    public let info: RuntimeServerInfo
+    public let capabilities: RuntimeCapabilitySnapshot
+    public let modelCatalog: RuntimeServerModelCatalog
+    public let models: [UnifiedModelDescriptor]
+    public let defaultModelID: String?
+    public let refreshedAt: Date
+
+    public init(
+        serverConnectionID: String,
+        info: RuntimeServerInfo,
+        capabilities: RuntimeCapabilitySnapshot,
+        modelCatalog: RuntimeServerModelCatalog,
+        scopesModelIdentity: Bool,
+        refreshedAt: Date
+    ) {
+        self.serverConnectionID = serverConnectionID
+        self.info = info
+        self.capabilities = capabilities
+        self.modelCatalog = modelCatalog
+        self.models = modelCatalog.unifiedModels(
+            serverConnectionID: scopesModelIdentity ? serverConnectionID : nil
+        )
+        self.defaultModelID = modelCatalog.defaultModelStableID(
+            serverConnectionID: scopesModelIdentity ? serverConnectionID : nil
+        )
+        self.refreshedAt = refreshedAt
+    }
+}
+
+public struct RuntimeServerSwitchAssessment: Sendable, Equatable {
+    public let sourceConnectionID: String
+    public let targetConnectionID: String
+    public let hasActiveWork: Bool
+
+    public init(
+        sourceConnectionID: String,
+        targetConnectionID: String,
+        hasActiveWork: Bool
+    ) {
+        self.sourceConnectionID = sourceConnectionID
+        self.targetConnectionID = targetConnectionID
+        self.hasActiveWork = hasActiveWork
+    }
+
+    public var requiresConfirmation: Bool {
+        sourceConnectionID != targetConnectionID && hasActiveWork
     }
 }
 
@@ -26,16 +85,30 @@ public final class RuntimeServerCoordinator {
     public let registry: RuntimeServerRegistry
     public let embeddedStatusMonitor: RuntimeServerStatusMonitor
 
-    /// Hosts can use this value as a SwiftUI `.id(...)` to rebuild a
+    /// Hosts use this value as a SwiftUI `.id(...)` to rebuild the complete
     /// Server-scoped Workspace root after an explicit Active Server change.
     public private(set) var activeRevision: UInt64 = 0
+    public private(set) var activeContext: RuntimeServerActiveContext?
+
+    private let runtimeCredentialStore: any CredentialStore
+    private let platform: RuntimeServerClientPlatform
+    private let preflightService: RuntimeServerPreflightService
+    @ObservationIgnored private var externalMonitors:
+        [String: ExternalRuntimeServerStatusMonitor] = [:]
 
     public init(
         registry: RuntimeServerRegistry = RuntimeServerRegistry(),
-        embeddedStatusMonitor: RuntimeServerStatusMonitor = .embedded
+        embeddedStatusMonitor: RuntimeServerStatusMonitor = .embedded,
+        runtimeCredentialStore: any CredentialStore = KeychainCredentialStore(
+            service: "com.agentkit.runtime-server-access"
+        ),
+        platform: RuntimeServerClientPlatform = .current
     ) {
         self.registry = registry
         self.embeddedStatusMonitor = embeddedStatusMonitor
+        self.runtimeCredentialStore = runtimeCredentialStore
+        self.platform = platform
+        self.preflightService = RuntimeServerPreflightService(platform: platform)
     }
 
     public var activeConnection: RuntimeServerConnection {
@@ -51,23 +124,221 @@ public final class RuntimeServerCoordinator {
     }
 
     public func makeActiveClient() throws -> any RuntimeClient {
-        guard activeConnection.kind == .embedded else {
-            throw RuntimeServerCoordinatorError.externalServerUnavailableInPhaseA
-        }
-        return DefaultAgentClient.fromRuntime()
+        try makeClient(connection: activeConnection)
     }
 
-    /// Registry switching exists for host integration tests, but Phase A product
-    /// UI must expose only the embedded connection.
+    public func makeClient(
+        connection: RuntimeServerConnection
+    ) throws -> DefaultAgentClient {
+        switch connection.kind {
+        case .embedded:
+            return DefaultAgentClient.fromRuntime()
+        case .local, .remote:
+            guard let endpoint = connection.endpoint else {
+                throw RuntimeServerRegistryError.invalidExternalEndpoint
+            }
+            let environment = try RuntimeEnvironment(origin: endpoint)
+            switch connection.authentication {
+            case .none:
+                return DefaultAgentClient(environment: environment)
+            case .bearer:
+                return DefaultAgentClient(
+                    environment: environment,
+                    credentialStore: runtimeCredentialStore,
+                    credentialTarget: connection.credentialTarget
+                )
+            }
+        }
+    }
+
+    // MARK: - External connection lifecycle
+
+    public func preflightExternal(
+        connectionID: String?,
+        endpoint: URL,
+        authentication: RuntimeServerAuthentication,
+        accessToken: String?
+    ) async throws -> RuntimeServerPreflightResult {
+        var effectiveToken = accessToken
+        if authentication == .bearer,
+           effectiveToken?.isEmpty != false,
+           let connectionID,
+           let existing = try await runtimeCredentialStore.resolve(
+               .runtimeAccess(connectionID)
+           ) {
+            effectiveToken = existing.secret
+        }
+        return try await preflightService.test(
+            endpoint: endpoint,
+            authentication: authentication,
+            accessToken: effectiveToken
+        )
+    }
+
     @discardableResult
-    public func setActive(connectionID: String) throws -> RuntimeServerConnection {
-        let previous = registry.activeConnectionID
-        let selected = try registry.setActive(connectionID: connectionID)
-        if previous != selected.id {
+    public func saveExternalConnection(
+        id: String,
+        displayName: String?,
+        preflight: RuntimeServerPreflightResult,
+        accessToken: String?,
+        confirmIdentityChange: Bool = false
+    ) async throws -> RuntimeServerConnection {
+        let existing = registry.connection(id: id)
+        if let expected = existing?.serverID,
+           expected != preflight.info.serverID,
+           !confirmIdentityChange {
+            throw RuntimeServerCoordinatorError.identityConfirmationRequired(
+                expected: expected,
+                actual: preflight.info.serverID
+            )
+        }
+        if let duplicate = registry.connections.first(where: {
+            $0.id != id && $0.serverID == preflight.info.serverID
+        }) {
+            throw RuntimeServerPreflightError.duplicateServerIdentity(
+                connectionID: duplicate.id
+            )
+        }
+
+        let now = Date()
+        let connection = try RuntimeServerConnection(
+            id: id,
+            displayName: displayName?.trimmingCharacters(
+                in: .whitespacesAndNewlines
+            ).nilIfEmpty ?? preflight.info.displayName,
+            kind: preflight.kind,
+            endpoint: preflight.endpoint,
+            authentication: preflight.authentication,
+            serverID: preflight.info.serverID,
+            createdAt: existing?.createdAt ?? now,
+            updatedAt: now
+        )
+
+        switch preflight.authentication {
+        case .none:
+            try await runtimeCredentialStore.remove(connection.credentialTarget)
+        case .bearer:
+            if let accessToken, !accessToken.isEmpty {
+                guard accessToken.lengthOfBytes(using: .utf8) >= 32 else {
+                    throw RuntimeServerPreflightError.accessTokenTooShort
+                }
+                try await runtimeCredentialStore.set(
+                    Credential(kind: .bearer, secret: accessToken),
+                    for: connection.credentialTarget
+                )
+            } else if try await runtimeCredentialStore.resolve(
+                connection.credentialTarget
+            ) == nil {
+                throw RuntimeServerCoordinatorError.accessTokenRequired
+            }
+        }
+
+        try registry.upsert(connection)
+        externalStatusMonitor(for: connection).update(connection: connection)
+
+        if activeConnectionID == connection.id {
+            activeContext = Self.context(
+                connectionID: connection.id,
+                preflight: preflight
+            )
             activeRevision &+= 1
         }
-        return selected
+        return connection
     }
+
+    @discardableResult
+    public func removeExternalConnection(
+        connectionID: String
+    ) async throws -> RuntimeServerConnection {
+        guard let connection = registry.connection(id: connectionID),
+              connection.kind != .embedded else {
+            throw RuntimeServerRegistryError.cannotRemoveEmbedded
+        }
+        guard connectionID != activeConnectionID else {
+            throw RuntimeServerRegistryError.cannotRemoveActive
+        }
+        try await runtimeCredentialStore.remove(connection.credentialTarget)
+        let removed = try registry.remove(connectionID: connectionID)
+        externalMonitors.removeValue(forKey: connectionID)
+        return removed
+    }
+
+    // MARK: - Active Server
+
+    public func assessSwitch(
+        to connectionID: String
+    ) async throws -> RuntimeServerSwitchAssessment {
+        guard registry.connection(id: connectionID) != nil else {
+            throw RuntimeServerRegistryError.connectionNotFound(connectionID)
+        }
+        guard connectionID != activeConnectionID else {
+            return RuntimeServerSwitchAssessment(
+                sourceConnectionID: activeConnectionID,
+                targetConnectionID: connectionID,
+                hasActiveWork: false
+            )
+        }
+        do {
+            let snapshot = try await makeActiveClient().activitySnapshot()
+            return RuntimeServerSwitchAssessment(
+                sourceConnectionID: activeConnectionID,
+                targetConnectionID: connectionID,
+                hasActiveWork: snapshot.hasActiveRuntimeWork
+            )
+        } catch {
+            // An unreachable current Server cannot prove that work exists.
+            // Switching remains an explicit user action and never cancels work
+            // on that Server, so do not trap the user on an offline connection.
+            return RuntimeServerSwitchAssessment(
+                sourceConnectionID: activeConnectionID,
+                targetConnectionID: connectionID,
+                hasActiveWork: false
+            )
+        }
+    }
+
+    @discardableResult
+    public func activate(
+        connectionID: String,
+        allowingActiveWorkInterruption: Bool = false
+    ) async throws -> RuntimeServerActiveContext {
+        guard let target = registry.connection(id: connectionID) else {
+            throw RuntimeServerRegistryError.connectionNotFound(connectionID)
+        }
+        if connectionID == activeConnectionID {
+            return try await refreshActiveContext()
+        }
+
+        let assessment = try await assessSwitch(to: connectionID)
+        if assessment.requiresConfirmation && !allowingActiveWorkInterruption {
+            throw RuntimeServerCoordinatorError.activeWorkRequiresConfirmation
+        }
+
+        let context = try await loadContext(connection: target)
+        _ = try registry.setActive(connectionID: connectionID)
+        activeContext = context
+        activeRevision &+= 1
+        return context
+    }
+
+    @discardableResult
+    public func refreshActiveContext() async throws -> RuntimeServerActiveContext {
+        let context = try await loadContext(connection: activeConnection)
+        activeContext = context
+        return context
+    }
+
+    public func fetchActiveRuntimeInfo() async throws -> RuntimeServerInfo {
+        let context = try await refreshActiveContext()
+        return context.info
+    }
+
+    public func fetchActiveModelCatalog() async throws -> RuntimeServerModelCatalog {
+        let context = try await refreshActiveContext()
+        return context.modelCatalog
+    }
+
+    // MARK: - Status
 
     @discardableResult
     public func checkEmbedded(repairIfNeeded: Bool = false) async -> Bool {
@@ -81,6 +352,141 @@ public final class RuntimeServerCoordinator {
 
     public var embeddedDiagnostics: RuntimeServerDiagnosticSnapshot {
         embeddedStatusMonitor.diagnosticSnapshot
+    }
+
+    public func externalStatusMonitor(
+        connectionID: String
+    ) throws -> ExternalRuntimeServerStatusMonitor {
+        guard let connection = registry.connection(id: connectionID),
+              connection.kind != .embedded else {
+            throw RuntimeServerRegistryError.connectionNotFound(connectionID)
+        }
+        return externalStatusMonitor(for: connection)
+    }
+
+    @discardableResult
+    public func checkExternal(connectionID: String) async throws -> Bool {
+        try await externalStatusMonitor(connectionID: connectionID).check()
+    }
+
+    // MARK: - Private
+
+    private func loadContext(
+        connection: RuntimeServerConnection
+    ) async throws -> RuntimeServerActiveContext {
+        let preflight: RuntimeServerPreflightResult
+        switch connection.kind {
+        case .embedded:
+            let client = try makeHTTPClient(connection: connection)
+            guard try await client.healthCheck() else {
+                throw RuntimeServerPreflightError.offline
+            }
+            let info = try await client.runtimeInfo()
+            guard info.isAgentWireV1Compatible else {
+                throw RuntimeServerPreflightError.protocolIncompatible
+            }
+            let capabilities = try await client.runtimeCapabilities()
+            let models = try await client.runtimeModels()
+            guard models.schema == "runtime-model-catalog/v1" else {
+                throw RuntimeServerPreflightError.invalidModelCatalogSchema(
+                    models.schema
+                )
+            }
+            preflight = RuntimeServerPreflightResult(
+                endpoint: try RuntimeEnvironment.fromRuntime().baseURL
+                    .unwrap(or: RuntimeHTTPError.runtimeNotStarted),
+                kind: .embedded,
+                authentication: .bearer,
+                info: info,
+                capabilities: capabilities,
+                modelCatalog: models,
+                checkedAt: Date()
+            )
+        case .local, .remote:
+            preflight = try await preflightService.test(
+                connection: connection,
+                credentialStore: runtimeCredentialStore
+            )
+            if let expected = connection.serverID,
+               expected != preflight.info.serverID {
+                throw RuntimeServerPreflightError.serverIdentityChanged(
+                    expected: expected,
+                    actual: preflight.info.serverID
+                )
+            }
+        }
+        return Self.context(connectionID: connection.id, preflight: preflight)
+    }
+
+    private func makeHTTPClient(
+        connection: RuntimeServerConnection
+    ) throws -> RuntimeHTTPClient {
+        switch connection.kind {
+        case .embedded:
+            let runtime = AgentRuntime.shared
+            return RuntimeHTTPClient(
+                environment: .fromRuntime(),
+                credentialStore: runtime.runtimeAccessCredentialStore,
+                credentialTarget: runtime.runtimeAccessCredentialStore.target
+            )
+        case .local, .remote:
+            guard let endpoint = connection.endpoint else {
+                throw RuntimeServerRegistryError.invalidExternalEndpoint
+            }
+            let environment = try RuntimeEnvironment(origin: endpoint)
+            switch connection.authentication {
+            case .none:
+                return RuntimeHTTPClient(environment: environment)
+            case .bearer:
+                return RuntimeHTTPClient(
+                    environment: environment,
+                    credentialStore: runtimeCredentialStore,
+                    credentialTarget: connection.credentialTarget
+                )
+            }
+        }
+    }
+
+    private func externalStatusMonitor(
+        for connection: RuntimeServerConnection
+    ) -> ExternalRuntimeServerStatusMonitor {
+        if let monitor = externalMonitors[connection.id] {
+            monitor.update(connection: connection)
+            return monitor
+        }
+        let monitor = ExternalRuntimeServerStatusMonitor(
+            connection: connection,
+            credentialStore: runtimeCredentialStore
+        )
+        externalMonitors[connection.id] = monitor
+        return monitor
+    }
+
+    private static func context(
+        connectionID: String,
+        preflight: RuntimeServerPreflightResult
+    ) -> RuntimeServerActiveContext {
+        RuntimeServerActiveContext(
+            serverConnectionID: connectionID,
+            info: preflight.info,
+            capabilities: preflight.capabilities,
+            modelCatalog: preflight.modelCatalog,
+            scopesModelIdentity: preflight.kind != .embedded,
+            refreshedAt: preflight.checkedAt
+        )
+    }
+}
+
+private extension String {
+    var nilIfEmpty: String? {
+        isEmpty ? nil : self
+    }
+}
+
+private extension Optional {
+    func unwrap(or error: @autoclosure () -> Error) throws -> Wrapped {
+        guard let self else { throw error() }
+        return self
     }
 }
 #endif

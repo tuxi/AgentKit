@@ -10,6 +10,9 @@ public struct UnifiedModelDescriptor: Codable, Hashable, Identifiable, Sendable 
     public let id: String
     /// Alias used as the key in Code-Agent's `models` map.
     public let runtimeAlias: String
+    /// Nil for legacy/Embedded Provider catalogs. External Runtime catalogs
+    /// always scope identity to their Runtime Server Connection.
+    public let serverConnectionID: String?
     public let connectionID: String
     public let providerID: String
     public let providerDisplayName: String
@@ -23,11 +26,13 @@ public struct UnifiedModelDescriptor: Codable, Hashable, Identifiable, Sendable 
     public let outputPricePerMillion: Double?
     public let cacheInputPricePerMillion: Double?
     public let authentication: ProviderAuthentication
+    public let billingSource: String?
 
     public init(connection: ProviderConnection, model: ProviderModel) {
         let alias = Self.makeRuntimeAlias(connectionID: connection.id, wireModelID: model.id)
         self.id = alias
         self.runtimeAlias = alias
+        self.serverConnectionID = nil
         self.connectionID = connection.id
         self.providerID = connection.providerID
         self.providerDisplayName = connection.displayName
@@ -41,6 +46,45 @@ public struct UnifiedModelDescriptor: Codable, Hashable, Identifiable, Sendable 
         self.outputPricePerMillion = model.outputPricePerMillion
         self.cacheInputPricePerMillion = model.cacheInputPricePerMillion
         self.authentication = connection.authentication
+        self.billingSource = nil
+    }
+
+    public init(
+        serverConnectionID: String?,
+        connectionID: String,
+        providerID: String,
+        providerDisplayName: String,
+        runtimeAlias: String,
+        wireModelID: String,
+        displayName: String,
+        contextWindow: Int?,
+        supportsTools: Bool,
+        supportsReasoning: Bool,
+        inputModalities: Set<ProviderInputModality>,
+        billingSource: String
+    ) {
+        self.id = serverConnectionID.map {
+            RuntimeServerModelIdentity(
+                serverConnectionID: $0,
+                runtimeAlias: runtimeAlias
+            ).stableID
+        } ?? runtimeAlias
+        self.runtimeAlias = runtimeAlias
+        self.serverConnectionID = serverConnectionID
+        self.connectionID = connectionID
+        self.providerID = providerID
+        self.providerDisplayName = providerDisplayName
+        self.wireModelID = wireModelID
+        self.displayName = displayName
+        self.contextWindow = contextWindow
+        self.supportsTools = supportsTools
+        self.supportsReasoning = supportsReasoning
+        self.inputModalities = inputModalities
+        self.inputPricePerMillion = nil
+        self.outputPricePerMillion = nil
+        self.cacheInputPricePerMillion = nil
+        self.authentication = .none
+        self.billingSource = billingSource
     }
 
     public static func makeRuntimeAlias(connectionID: String, wireModelID: String) -> String {

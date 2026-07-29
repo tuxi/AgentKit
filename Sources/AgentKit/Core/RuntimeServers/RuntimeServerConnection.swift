@@ -97,6 +97,12 @@ public struct RuntimeServerConnection: Codable, Identifiable, Sendable, Equatabl
             for: endpoint,
             platform: platform
         )
+        try RuntimeServerEndpointClassifier.validateSecurity(
+            endpoint: endpoint,
+            kind: kind,
+            authentication: authentication,
+            platform: platform
+        )
         return try RuntimeServerConnection(
             id: id,
             displayName: displayName,
@@ -135,6 +141,12 @@ public struct RuntimeServerConnection: Codable, Identifiable, Sendable, Equatabl
             throw RuntimeServerRegistryError.invalidExternalEndpoint
         }
         try RuntimeServerEndpointClassifier.validateOrigin(endpoint)
+        try RuntimeServerEndpointClassifier.validateSecurity(
+            endpoint: endpoint,
+            kind: kind,
+            authentication: authentication,
+            platform: .current
+        )
     }
 }
 
@@ -233,6 +245,26 @@ public enum RuntimeServerEndpointClassifier {
         }
     }
 
+    public static func validateSecurity(
+        endpoint: URL,
+        kind: RuntimeServerKind,
+        authentication: RuntimeServerAuthentication,
+        platform: RuntimeServerClientPlatform
+    ) throws {
+        guard kind != .embedded else { return }
+        if platform == .iOS, isLoopback(endpoint) {
+            throw RuntimeServerRegistryError.loopbackUnavailableOnIOS
+        }
+        if kind == .remote {
+            guard endpoint.scheme?.lowercased() == "https" else {
+                throw RuntimeServerRegistryError.tlsRequired
+            }
+            guard authentication == .bearer else {
+                throw RuntimeServerRegistryError.remoteAuthenticationRequired
+            }
+        }
+    }
+
     public static func isLoopback(_ endpoint: URL) -> Bool {
         guard var host = URLComponents(
             url: endpoint,
@@ -258,6 +290,8 @@ public enum RuntimeServerRegistryError: Error, LocalizedError, Equatable {
     case invalidEmbeddedConnection
     case invalidExternalEndpoint
     case loopbackUnavailableOnIOS
+    case tlsRequired
+    case remoteAuthenticationRequired
     case duplicateConnectionID(String)
     case connectionNotFound(String)
     case cannotRemoveEmbedded
@@ -275,6 +309,10 @@ public enum RuntimeServerRegistryError: Error, LocalizedError, Equatable {
             "Runtime Server URL must be an HTTP(S) origin without credentials, query, or path."
         case .loopbackUnavailableOnIOS:
             "localhost refers to this iPhone. Use the Mac's LAN, VPN, or domain address."
+        case .tlsRequired:
+            "Remote Runtime Servers require HTTPS/WSS."
+        case .remoteAuthenticationRequired:
+            "Remote Runtime Servers require an Access Token."
         case .duplicateConnectionID(let id):
             "Duplicate Runtime Server Connection ID: \(id)"
         case .connectionNotFound(let id):

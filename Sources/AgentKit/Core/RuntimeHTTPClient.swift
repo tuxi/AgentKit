@@ -10,6 +10,25 @@ import Foundation
 
 // MARK: - RuntimeHTTPClient
 
+private final class RuntimeNoRedirectSessionDelegate:
+    NSObject,
+    URLSessionTaskDelegate,
+    @unchecked Sendable
+{
+    func urlSession(
+        _ session: URLSession,
+        task: URLSessionTask,
+        willPerformHTTPRedirection response: HTTPURLResponse,
+        newRequest request: URLRequest,
+        completionHandler: @escaping (URLRequest?) -> Void
+    ) {
+        // Runtime API origins are explicit security boundaries. A redirect
+        // could move an Authorization header to a different authority, so all
+        // redirects fail closed and the user must save the canonical origin.
+        completionHandler(nil)
+    }
+}
+
 struct RuntimeHTTPClient: Sendable {
     private let environment: RuntimeEnvironment
     private let session: URLSession
@@ -20,10 +39,14 @@ struct RuntimeHTTPClient: Sendable {
     init(
         environment: RuntimeEnvironment,
         credentialStore: (any CredentialStore)? = nil,
-        credentialTarget: CredentialTarget = .gateway
+        credentialTarget: CredentialTarget = .runtimeAccess("default")
     ) {
         self.environment = environment
-        self.session = URLSession(configuration: .ephemeral)
+        self.session = URLSession(
+            configuration: .ephemeral,
+            delegate: RuntimeNoRedirectSessionDelegate(),
+            delegateQueue: nil
+        )
         self.decoder = JSONDecoder()
         self.credentialStore = credentialStore
         self.credentialTarget = credentialTarget
@@ -97,6 +120,22 @@ struct RuntimeHTTPClient: Sendable {
     }
 
     // MARK: - Endpoints
+
+    /// `GET /v1/runtime/info` — stable Runtime identity and wire compatibility.
+    func runtimeInfo() async throws -> RuntimeServerInfo {
+        let request = try await buildRequest("GET", pathComponents: "v1/runtime/info")
+        let (data, response) = try await session.data(for: request)
+        try validateHTTP(response, data: data)
+        return try decodeEnvelope(RuntimeServerInfo.self, from: data)
+    }
+
+    /// `GET /v1/runtime/models` — server-scoped, secret-free model catalog.
+    func runtimeModels() async throws -> RuntimeServerModelCatalog {
+        let request = try await buildRequest("GET", pathComponents: "v1/runtime/models")
+        let (data, response) = try await session.data(for: request)
+        try validateHTTP(response, data: data)
+        return try decodeEnvelope(RuntimeServerModelCatalog.self, from: data)
+    }
 
     /// `GET /v1/runtime/capabilities` — versioned runtime-wide guarantees and limits.
     func runtimeCapabilities() async throws -> RuntimeCapabilitySnapshot {
@@ -392,7 +431,11 @@ struct RuntimeHTTPClient: Sendable {
 
     /// `GET /healthz` — 存活探针（不注入 credential，无需认证）。
     func healthCheck() async throws -> Bool {
-        let request = try await buildRequest("GET", pathComponents: "healthz", timeout: 3)
+        let url = try resolveBaseURL().appendingPathComponent("healthz")
+        var request = URLRequest(url: url)
+        request.httpMethod = "GET"
+        request.timeoutInterval = 3
+        DeviceContext.apply(to: &request)
         let (data, response) = try await session.data(for: request)
         guard let httpResponse = response as? HTTPURLResponse,
               httpResponse.statusCode == 200,
@@ -410,6 +453,19 @@ struct RuntimeHTTPClient: Sendable {
             return
         case 404:
             throw RuntimeHTTPError.notFound
+        case 401:
+            let payload = try? decoder.decode(
+                RuntimeEnvelope<RuntimeAuthenticationErrorPayload>.self,
+                from: data
+            ).data
+            switch payload?.code {
+            case "runtime_auth_required":
+                throw RuntimeHTTPError.authenticationRequired
+            case "runtime_auth_invalid":
+                throw RuntimeHTTPError.authenticationInvalid
+            default:
+                throw RuntimeHTTPError.authenticationInvalid
+            }
         default:
             let body = String(data: data, encoding: .utf8) ?? ""
             throw RuntimeHTTPError.unexpectedStatus(httpResponse.statusCode, body: body)
@@ -426,6 +482,10 @@ private struct RuntimeEnvelope<T: Decodable>: Decodable {
     let code: Int
     let msg: String
     let data: T?
+}
+
+private struct RuntimeAuthenticationErrorPayload: Decodable {
+    let code: String
 }
 
 // MARK: - Clone result
@@ -533,6 +593,8 @@ enum RuntimeHTTPError: Error {
     case invalidResponse
     case notFound
     case runtimeNotStarted
+    case authenticationRequired
+    case authenticationInvalid
     case unexpectedStatus(Int, body: String)
     /// 当前 client/transport 不支持该能力（如 mock）。
     case unsupported
@@ -544,6 +606,8 @@ extension RuntimeHTTPError: LocalizedError {
         case .invalidResponse:   return "服务器响应无效。"
         case .notFound:          return "未找到。"
         case .runtimeNotStarted: return "运行时尚未启动。"
+        case .authenticationRequired: return "Runtime Server 需要访问凭证。"
+        case .authenticationInvalid:  return "Runtime Server 访问凭证无效。"
         case .unsupported:       return "当前后端不支持该操作。"
         case .unexpectedStatus(let code, let body):
             let msg = Self.extractMessage(from: body)

@@ -8,7 +8,7 @@
 
 import Foundation
 
-/// 当前 Runtime 的连接目标（host + port）。
+/// Runtime HTTP(S) origin and its derived Agent Wire WS(S) origin.
 ///
 /// 内部使用 provider 闭包延迟取值 — `fromRuntime()` 每次读取 `AgentRuntime.shared.port()`，
 /// 不会在 init 时快照。传输层在发起连接时才取 port，避免拿到 start() 之前的旧值。
@@ -18,7 +18,7 @@ import Foundation
 /// 2. `let env = RuntimeEnvironment.fromRuntime()` → 持有 provider（不读值）
 /// 3. 发起连接时 provider 才执行 → 获取当前真实端口
 public struct RuntimeEnvironment: Sendable {
-    private let provider: @Sendable () -> (host: String, port: Int)
+    private let originProvider: @Sendable () -> URL?
 
     // MARK: - Init
 
@@ -26,37 +26,74 @@ public struct RuntimeEnvironment: Sendable {
     public init(host: String, port: Int) {
         let h = host
         let p = port
-        self.provider = { (h, p) }
+        self.originProvider = {
+            guard p > 0 else { return nil }
+            return URL(string: "http://\(h):\(p)")
+        }
+    }
+
+    /// Static External Runtime origin. Paths, credentials, query and fragments
+    /// are rejected because Runtime endpoints are always rooted at the origin.
+    public init(origin: URL) throws {
+        try RuntimeServerEndpointClassifier.validateOrigin(origin)
+        let normalized = Self.normalizedOrigin(origin)
+        self.originProvider = { normalized }
     }
 
     /// 每次取值时动态执行 provider（用于 `.fromRuntime()`）。
-    init(provider: @Sendable @escaping () -> (host: String, port: Int)) {
-        self.provider = provider
+    init(originProvider: @Sendable @escaping () -> URL?) {
+        self.originProvider = originProvider
     }
 
     // MARK: - Properties (lazy via provider)
 
-    public var host: String { provider().host }
-    public var port: Int    { provider().port }
+    public var host: String { baseURL?.host ?? "" }
+    public var port: Int {
+        guard let url = baseURL else { return -1 }
+        if let port = url.port { return port }
+        return url.scheme?.lowercased() == "https" ? 443 : 80
+    }
 
     /// HTTP base URL。端口无效（≤0）时返回 nil。
     public var baseURL: URL? {
-        let p = port
-        guard p > 0 else { return nil }
-        return URL(string: "http://\(host):\(p)")
+        originProvider().map(Self.normalizedOrigin)
     }
 
-    /// WebSocket URL。端口无效（≤0）时返回 nil。
+    /// Agent Wire origin derived without changing host, port or authority.
     public var wsURL: String? {
-        let p = port
-        guard p > 0 else { return nil }
-        return "ws://\(host):\(p)"
+        guard let baseURL,
+              var components = URLComponents(
+                url: baseURL,
+                resolvingAgainstBaseURL: false
+              ) else {
+            return nil
+        }
+        switch components.scheme?.lowercased() {
+        case "http":
+            components.scheme = "ws"
+        case "https":
+            components.scheme = "wss"
+        default:
+            return nil
+        }
+        return components.url?.absoluteString
     }
 
     // MARK: - Presets
 
     /// 占位值 — Runtime 启动前的 fallback（port = -1）。
     public static let placeholder = RuntimeEnvironment(host: "127.0.0.1", port: -1)
+
+    private static func normalizedOrigin(_ origin: URL) -> URL {
+        guard var components = URLComponents(
+            url: origin,
+            resolvingAgainstBaseURL: false
+        ) else {
+            return origin
+        }
+        components.path = ""
+        return components.url ?? origin
+    }
 }
 
 #if canImport(CodeAgentRuntime)
@@ -64,10 +101,12 @@ extension RuntimeEnvironment {
     /// 从 `AgentRuntime.shared` 延迟读取动态端口。
     /// 每次访问 `host`/`port`/`baseURL`/`wsURL` 都会实时读取，不会快照。
     public static func fromRuntime() -> RuntimeEnvironment {
-        RuntimeEnvironment {
+        RuntimeEnvironment(originProvider: {
             let rt = AgentRuntime.shared
-            return (host: "127.0.0.1", port: rt.port())
-        }
+            let port = rt.port()
+            guard port > 0 else { return nil }
+            return URL(string: "http://127.0.0.1:\(port)")
+        })
     }
 }
 #endif

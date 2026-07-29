@@ -97,15 +97,16 @@ public final class AgentWireSocket: @unchecked Sendable {
     ///   - since: 续传游标初值 = 调用方已回放事件里最大的 `seq`（0 = 无历史）。
     ///   - streamKind: 目标分区。`.job` 走 `/v1/jobs/{id}/stream`（只读子流），
     ///     不发任何入站帧、不注册工具。默认 `.conversation`（主会话双向流）。
-    ///   - credentialStore: 可选的 credential store（远端或 iOS 内嵌 Runtime 路径）。
-    ///     非 nil 时，WS 握手请求会注入 `Authorization: Bearer <jwt>` header。
+    ///   - credentialStore: 可选的 Runtime Server access credential store。
+    ///     非 nil 时，WS 握手请求会注入 `Authorization: Bearer <token>`。
+    ///     Gateway/Provider credential 不得用于此处。
     public convenience init(
         environment: RuntimeEnvironment,
         conversationID: String,
         since: Int = 0,
         streamKind: WireStreamKind = .conversation,
         credentialStore: (any CredentialStore)? = nil,
-        credentialTarget: CredentialTarget = .gateway
+        credentialTarget: CredentialTarget = .runtimeAccess("default")
     ) {
         self.init(
             environment: environment,
@@ -122,7 +123,7 @@ public final class AgentWireSocket: @unchecked Sendable {
          since: Int = 0, streamKind: WireStreamKind = .conversation,
          credentialStore: (any CredentialStore)? = nil,
          submissionCoordinator: AgentInputSubmissionCoordinator,
-         credentialTarget: CredentialTarget = .gateway) {
+         credentialTarget: CredentialTarget = .runtimeAccess("default")) {
         self.environment = environment
         self.conversationID = conversationID
         self.streamKind = streamKind

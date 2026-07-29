@@ -129,6 +129,7 @@ public final class AgentRuntime: @unchecked Sendable {
     private var injectedSecretsJSON: String?
     private var startupModelNameOverride: String?
     private var configuration = EmbeddedRuntimeConfiguration.platformDefault()
+    let runtimeAccessCredentialStore = EmbeddedRuntimeAccessCredentialStore()
 
     public var isAlive: Bool { server != nil }
     public var currentConfiguration: EmbeddedRuntimeConfiguration { configuration }
@@ -270,6 +271,7 @@ public final class AgentRuntime: @unchecked Sendable {
         let finalSecrets = secretsJSON.isEmpty ? AgentSettings.secretsJSON() : secretsJSON
         injectedSecretsJSON = finalSecrets
         let model = startupModelNameOverride ?? AgentSettings.model
+        let serverAccessToken = runtimeAccessCredentialStore.rotate()
 
         var error: NSError?
         guard let newServer = MobileStart(
@@ -278,6 +280,7 @@ public final class AgentRuntime: @unchecked Sendable {
             config.runtimeConfigYAML ?? Self.bundledConfigYAML(),
             model,
             finalSecrets,
+            serverAccessToken,
             "",
             config.profile.isSandboxed,
             &error

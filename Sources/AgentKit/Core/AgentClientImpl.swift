@@ -174,7 +174,7 @@ public final class CodeAgentTransport: AgentTransport, @unchecked Sendable {
     public init(
         environment: RuntimeEnvironment,
         credentialStore: (any CredentialStore)? = nil,
-        credentialTarget: CredentialTarget = .gateway
+        credentialTarget: CredentialTarget = .runtimeAccess("default")
     ) {
         self.environment = environment
         self.credentialStore = credentialStore
@@ -483,7 +483,11 @@ public final class DefaultAgentClient: RuntimeClient, @unchecked Sendable {
     }
 
     /// 便捷初始化：连接指定 Runtime 并注入 credential store（macOS 路径）。
-    public convenience init(environment: RuntimeEnvironment, credentialStore: any CredentialStore, credentialTarget: CredentialTarget = .gateway) {
+    public convenience init(
+        environment: RuntimeEnvironment,
+        credentialStore: any CredentialStore,
+        credentialTarget: CredentialTarget = .runtimeAccess("default")
+    ) {
         self.init(transport: CodeAgentTransport(environment: environment, credentialStore: credentialStore, credentialTarget: credentialTarget))
     }
 
@@ -493,15 +497,22 @@ public final class DefaultAgentClient: RuntimeClient, @unchecked Sendable {
     }
 
     #if canImport(CodeAgentRuntime)
-    /// 便捷初始化：从 `AgentRuntime.shared` 读取已启动 server 的动态端口。
+    /// 从 `AgentRuntime.shared` 读取动态端口，并自动注入进程内 Runtime
+    /// Access Token。Provider credential 永远不会用于 Runtime Server 鉴权。
     public static func fromRuntime() -> DefaultAgentClient {
-        DefaultAgentClient(environment: .fromRuntime())
+        let runtime = AgentRuntime.shared
+        return DefaultAgentClient(
+            environment: .fromRuntime(),
+            credentialStore: runtime.runtimeAccessCredentialStore,
+            credentialTarget: runtime.runtimeAccessCredentialStore.target
+        )
     }
 
-    /// 从内嵌 Runtime 读取动态端口，并为 HTTP / Agent Wire 握手注入凭证。
+    /// 从内嵌 Runtime 读取动态端口，并为 HTTP / Agent Wire 握手注入明确的
+    /// Runtime Access credential。调用方不得传入 Gateway/Provider credential。
     public static func fromRuntime(
         credentialStore: any CredentialStore,
-        credentialTarget: CredentialTarget = .gateway
+        credentialTarget: CredentialTarget
     ) -> DefaultAgentClient {
         DefaultAgentClient(
             environment: .fromRuntime(),
