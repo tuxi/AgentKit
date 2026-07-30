@@ -245,6 +245,107 @@ public final class AgentRuntime: @unchecked Sendable {
     public func endpoint() -> String { server?.endpoint() ?? "" }
     public func port() -> Int { server?.port() ?? -1 }
 
+    // MARK: - Shared Runtime listener
+
+    func startSharedListener(
+        configuration: RuntimeSharedListenerConfiguration
+    ) throws {
+        guard let server else {
+            throw RuntimeSharingError.runtimeNotStarted
+        }
+        let data = try JSONEncoder.runtimeSharing.encode(configuration)
+        guard let json = String(data: data, encoding: .utf8) else {
+            throw RuntimeSharingError.sharedListenerUnavailable
+        }
+        try server.startSharedListener(json)
+    }
+
+    func stopSharedListener() throws {
+        try server?.stopSharedListener()
+    }
+
+    func sharedListenerStatus() throws -> RuntimeSharedListenerStatus {
+        guard let server else {
+            return RuntimeSharedListenerStatus(
+                state: .stopped,
+                listenAddress: nil,
+                listenOrigin: nil,
+                port: 0,
+                startedAt: nil,
+                stoppedAt: nil,
+                lastTransitionAt: nil,
+                lastError: nil
+            )
+        }
+        var error: NSError?
+        let json = server.sharedListenerStatus(&error)
+        if let error { throw error }
+        guard let data = json.data(using: .utf8) else {
+            throw RuntimeSharingError.sharedListenerUnavailable
+        }
+        return try JSONDecoder.runtimeSharing.decode(
+            RuntimeSharedListenerStatus.self,
+            from: data
+        )
+    }
+
+    func rotateSharedBootstrap(
+        sha256: String,
+        expiresAt: Date
+    ) throws {
+        guard let server else {
+            throw RuntimeSharingError.runtimeNotStarted
+        }
+        try server.rotateSharedBootstrap(
+            sha256,
+            expiresAtUnix: Int64(expiresAt.timeIntervalSince1970)
+        )
+    }
+
+    func pendingSharedEnrollments() throws
+        -> [RuntimePendingSharedEnrollment] {
+        guard let server else {
+            throw RuntimeSharingError.runtimeNotStarted
+        }
+        var error: NSError?
+        let json = server.pendingSharedEnrollments(&error)
+        if let error { throw error }
+        guard let data = json.data(using: .utf8) else {
+            throw RuntimeSharingError.sharedListenerUnavailable
+        }
+        return try JSONDecoder.runtimeSharing.decode(
+            [RuntimePendingSharedEnrollment].self,
+            from: data
+        )
+    }
+
+    func acknowledgeSharedEnrollment(_ enrollmentID: String) throws {
+        guard let server else {
+            throw RuntimeSharingError.runtimeNotStarted
+        }
+        try server.acknowledgeSharedEnrollment(enrollmentID)
+    }
+
+    func rejectSharedEnrollment(_ enrollmentID: String) throws {
+        guard let server else {
+            throw RuntimeSharingError.runtimeNotStarted
+        }
+        try server.rejectSharedEnrollment(enrollmentID)
+    }
+
+    func updateSharedDevices(
+        _ records: [RuntimeSharedDeviceValidationRecord]
+    ) throws {
+        guard let server else {
+            throw RuntimeSharingError.runtimeNotStarted
+        }
+        let data = try JSONEncoder.runtimeSharing.encode(records)
+        guard let json = String(data: data, encoding: .utf8) else {
+            throw RuntimeSharingError.sharedListenerUnavailable
+        }
+        try server.updateSharedDevices(json)
+    }
+
     public func stop() {
         try? server?.stop()
         server = nil

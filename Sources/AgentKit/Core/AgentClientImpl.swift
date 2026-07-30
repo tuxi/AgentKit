@@ -27,6 +27,7 @@ public final class CodeAgentSessionChannel: RuntimeSessionChannel, @unchecked Se
     private let http: RuntimeHTTPClient
     private let credentialStore: (any CredentialStore)?
     private let credentialTarget: CredentialTarget
+    private let trustPolicy: RuntimeServerTrustPolicy?
     private var socket: AgentWireSocket?
     private var pendingTools: [ClientToolInfo] = []
     private let submissionCoordinator = AgentInputSubmissionCoordinator()
@@ -36,13 +37,15 @@ public final class CodeAgentSessionChannel: RuntimeSessionChannel, @unchecked Se
         environment: RuntimeEnvironment,
         http: RuntimeHTTPClient,
         credentialStore: (any CredentialStore)?,
-        credentialTarget: CredentialTarget
+        credentialTarget: CredentialTarget,
+        trustPolicy: RuntimeServerTrustPolicy?
     ) {
         self.sessionID = sessionID
         self.environment = environment
         self.http = http
         self.credentialStore = credentialStore
         self.credentialTarget = credentialTarget
+        self.trustPolicy = trustPolicy
     }
 
     public var isConnected: Bool { socket?.isConnected ?? false }
@@ -56,7 +59,8 @@ public final class CodeAgentSessionChannel: RuntimeSessionChannel, @unchecked Se
             since: since,
             credentialStore: credentialStore,
             submissionCoordinator: submissionCoordinator,
-            credentialTarget: credentialTarget
+            credentialTarget: credentialTarget,
+            trustPolicy: trustPolicy
         )
         let http = self.http
         let sessionID = self.sessionID
@@ -164,6 +168,7 @@ public final class CodeAgentTransport: AgentTransport, @unchecked Sendable {
     private let environment: RuntimeEnvironment
     private let credentialStore: (any CredentialStore)?
     private let credentialTarget: CredentialTarget
+    private let trustPolicy: RuntimeServerTrustPolicy?
 
     /// 待注册的客户端工具列表。在握手后自动发送。
     private var pendingTools: [ClientToolInfo] = []
@@ -174,15 +179,18 @@ public final class CodeAgentTransport: AgentTransport, @unchecked Sendable {
     public init(
         environment: RuntimeEnvironment,
         credentialStore: (any CredentialStore)? = nil,
-        credentialTarget: CredentialTarget = .runtimeAccess("default")
+        credentialTarget: CredentialTarget = .runtimeAccess("default"),
+        trustPolicy: RuntimeServerTrustPolicy? = nil
     ) {
         self.environment = environment
         self.credentialStore = credentialStore
         self.credentialTarget = credentialTarget
+        self.trustPolicy = trustPolicy
         self.http = RuntimeHTTPClient(
             environment: environment,
             credentialStore: credentialStore,
-            credentialTarget: credentialTarget
+            credentialTarget: credentialTarget,
+            trustPolicy: trustPolicy
         )
     }
 
@@ -194,7 +202,8 @@ public final class CodeAgentTransport: AgentTransport, @unchecked Sendable {
             environment: environment,
             http: http,
             credentialStore: credentialStore,
-            credentialTarget: credentialTarget
+            credentialTarget: credentialTarget,
+            trustPolicy: trustPolicy
         )
     }
 
@@ -258,7 +267,8 @@ public final class CodeAgentTransport: AgentTransport, @unchecked Sendable {
             since: since,
             credentialStore: credentialStore,
             submissionCoordinator: submissionCoordinator,
-            credentialTarget: credentialTarget
+            credentialTarget: credentialTarget,
+            trustPolicy: trustPolicy
         )
 
         // v1.2 §4 增量续传：每次握手（含 WebSocketClient 自动重连）后，socket 用
@@ -367,17 +377,44 @@ public final class CodeAgentTransport: AgentTransport, @unchecked Sendable {
     /// 只把路径切到 `/v1/jobs/{id}/stream`，backfill 走 `/v1/jobs/{id}/events`。
     /// 只读——不注册工具、不发任何入站帧。stream 被取消时断开 socket（socket 由
     /// onTermination 闭包持有存活）。
+    ///
+    /// On the first connection (since=0), the gap fetch locates the LAST job_started
+    /// bracket and replays only from there forward — otherwise every historical
+    /// invocation of this childID is replayed and reduced, which is wasteful and
+    /// produces a janky multi-bracket flash in the UI.
     public func openJobStream(jobID: String) -> AsyncStream<AgentEvent> {
         let socket = AgentWireSocket(
             environment: environment,
             conversationID: jobID,
             streamKind: .job,
             credentialStore: credentialStore,
-            credentialTarget: credentialTarget
+            credentialTarget: credentialTarget,
+            trustPolicy: trustPolicy
         )
         let http = self.http
-        socket.gapFetch = { since in
-            (try? await http.getJobEvents(jobID: jobID, since: since)) ?? []
+        socket.gapFetch = { [http] since in
+            do {
+                var frames = try await http.getJobEvents(jobID: jobID, since: since)
+                if since < 1 {
+                    // First connection: find the last job_started and skip
+                    // everything before it, so only the latest bracket is replayed.
+                    var lastStartSeq = 0
+                    for f in frames {
+                        if f.kind == "job_started", let s = f.seq, s > lastStartSeq {
+                            lastStartSeq = s
+                        }
+                    }
+                    if lastStartSeq > 0 {
+                        frames = frames.filter { ($0.seq ?? 0) >= lastStartSeq }
+                    }
+                }
+                return frames
+            } catch {
+                #if DEBUG
+                print("[AgentClient] getJobEvents failed: \(error)")
+                #endif
+                return []
+            }
         }
         let inner = socket.connect()
         return AsyncStream { continuation in
@@ -400,11 +437,19 @@ public final class CodeAgentTransport: AgentTransport, @unchecked Sendable {
             conversationID: childID,
             streamKind: .childStream,
             credentialStore: credentialStore,
-            credentialTarget: credentialTarget
+            credentialTarget: credentialTarget,
+            trustPolicy: trustPolicy
         )
         let http = self.http
-        socket.gapFetch = { since in
-            (try? await http.getChildStreamEvents(childID: childID, since: since)) ?? []
+        socket.gapFetch = { [http] since in
+            do {
+                return try await http.getChildStreamEvents(childID: childID, since: since)
+            } catch {
+                #if DEBUG
+                print("[AgentClient] getChildStreamEvents failed: \(error)")
+                #endif
+                return []
+            }
         }
         let inner = socket.connect()
         return AsyncStream { continuation in
@@ -482,13 +527,29 @@ public final class DefaultAgentClient: RuntimeClient, @unchecked Sendable {
         self.init(transport: CodeAgentTransport(environment: environment))
     }
 
+    public convenience init(
+        environment: RuntimeEnvironment,
+        trustPolicy: RuntimeServerTrustPolicy?
+    ) {
+        self.init(transport: CodeAgentTransport(
+            environment: environment,
+            trustPolicy: trustPolicy
+        ))
+    }
+
     /// 便捷初始化：连接指定 Runtime 并注入 credential store（macOS 路径）。
     public convenience init(
         environment: RuntimeEnvironment,
         credentialStore: any CredentialStore,
-        credentialTarget: CredentialTarget = .runtimeAccess("default")
+        credentialTarget: CredentialTarget = .runtimeAccess("default"),
+        trustPolicy: RuntimeServerTrustPolicy? = nil
     ) {
-        self.init(transport: CodeAgentTransport(environment: environment, credentialStore: credentialStore, credentialTarget: credentialTarget))
+        self.init(transport: CodeAgentTransport(
+            environment: environment,
+            credentialStore: credentialStore,
+            credentialTarget: credentialTarget,
+            trustPolicy: trustPolicy
+        ))
     }
 
     /// 便捷初始化：使用默认占位环境。调用方应在 Runtime 启动后替换为真实端口。

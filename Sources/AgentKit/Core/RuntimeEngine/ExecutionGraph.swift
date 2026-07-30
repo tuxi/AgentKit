@@ -131,7 +131,7 @@ public struct GraphNode: Identifiable, Sendable {
     public var payload: NodePayload
     public var status: NodeStatus
     public var timestamp: TimeInterval
-    public let turnID: String
+    public var turnID: String
     /// v1.2: Identifies which model invocation produced this node.
     /// nil for user messages and turn-boundary events. Set by appendNode.
     public var invocationID: String?
@@ -285,10 +285,10 @@ public struct ChildStreamPayload: Sendable {
     public let kind: ChildStreamKind
     public let childID: String
     /// task 的委派 prompt / job 的 command。
-    public let title: String
+    public var title: String
     /// 发起此子流的工具调用 id（task→`task` 调用 / job→`run_command` 调用）。
     /// 与工具卡共享，投影层据此合并去重（比按 prompt 字符串更稳）。
-    public let originCallID: String?
+    public var originCallID: String?
     /// 结束时写入：task 的结论 / job 失败时的展示文案（`err`，如 "exit code 2"）。
     public var result: String?
     /// job 专用（P8.7 §8.5）：仅失败时出现；>0 = 非零退出，-1 = 启动失败/被信号杀死。

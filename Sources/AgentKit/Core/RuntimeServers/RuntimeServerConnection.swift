@@ -41,6 +41,9 @@ public struct RuntimeServerConnection: Codable, Identifiable, Sendable, Equatabl
     /// are deliberately never persisted here.
     public var endpoint: URL?
     public var authentication: RuntimeServerAuthentication
+    /// Optional pairing-established TLS pin. Manual HTTPS servers continue to
+    /// use system trust when this value is nil.
+    public var trustPolicy: RuntimeServerTrustPolicy?
     /// Runtime-owned identity returned by `/v1/runtime/info`.
     public var serverID: String?
     public let createdAt: Date
@@ -52,6 +55,7 @@ public struct RuntimeServerConnection: Codable, Identifiable, Sendable, Equatabl
         kind: RuntimeServerKind,
         endpoint: URL?,
         authentication: RuntimeServerAuthentication,
+        trustPolicy: RuntimeServerTrustPolicy? = nil,
         serverID: String? = nil,
         createdAt: Date = Date(),
         updatedAt: Date = Date()
@@ -61,6 +65,7 @@ public struct RuntimeServerConnection: Codable, Identifiable, Sendable, Equatabl
         self.kind = kind
         self.endpoint = endpoint
         self.authentication = authentication
+        self.trustPolicy = trustPolicy
         self.serverID = serverID
         self.createdAt = createdAt
         self.updatedAt = updatedAt
@@ -90,6 +95,7 @@ public struct RuntimeServerConnection: Codable, Identifiable, Sendable, Equatabl
         endpoint: URL,
         authentication: RuntimeServerAuthentication,
         platform: RuntimeServerClientPlatform = .current,
+        trustPolicy: RuntimeServerTrustPolicy? = nil,
         serverID: String? = nil,
         now: Date = Date()
     ) throws -> RuntimeServerConnection {
@@ -109,6 +115,7 @@ public struct RuntimeServerConnection: Codable, Identifiable, Sendable, Equatabl
             kind: kind,
             endpoint: endpoint,
             authentication: authentication,
+            trustPolicy: trustPolicy,
             serverID: serverID,
             createdAt: now,
             updatedAt: now
@@ -141,6 +148,13 @@ public struct RuntimeServerConnection: Codable, Identifiable, Sendable, Equatabl
             throw RuntimeServerRegistryError.invalidExternalEndpoint
         }
         try RuntimeServerEndpointClassifier.validateOrigin(endpoint)
+        if let trustPolicy {
+            guard endpoint.scheme?.lowercased() == "https",
+                  endpoint.host?.lowercased() == trustPolicy.expectedHost,
+                  Data(base64Encoded: trustPolicy.spkiSHA256)?.count == 32 else {
+                throw RuntimeServerRegistryError.invalidExternalEndpoint
+            }
+        }
         try RuntimeServerEndpointClassifier.validateSecurity(
             endpoint: endpoint,
             kind: kind,

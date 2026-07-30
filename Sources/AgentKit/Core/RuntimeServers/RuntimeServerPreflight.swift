@@ -11,6 +11,7 @@ public struct RuntimeServerPreflightResult: Sendable, Equatable {
     public let endpoint: URL
     public let kind: RuntimeServerKind
     public let authentication: RuntimeServerAuthentication
+    public let trustPolicy: RuntimeServerTrustPolicy?
     public let info: RuntimeServerInfo
     public let capabilities: RuntimeCapabilitySnapshot
     public let modelCatalog: RuntimeServerModelCatalog
@@ -20,6 +21,7 @@ public struct RuntimeServerPreflightResult: Sendable, Equatable {
         endpoint: URL,
         kind: RuntimeServerKind,
         authentication: RuntimeServerAuthentication,
+        trustPolicy: RuntimeServerTrustPolicy? = nil,
         info: RuntimeServerInfo,
         capabilities: RuntimeCapabilitySnapshot,
         modelCatalog: RuntimeServerModelCatalog,
@@ -28,6 +30,7 @@ public struct RuntimeServerPreflightResult: Sendable, Equatable {
         self.endpoint = endpoint
         self.kind = kind
         self.authentication = authentication
+        self.trustPolicy = trustPolicy
         self.info = info
         self.capabilities = capabilities
         self.modelCatalog = modelCatalog
@@ -86,7 +89,8 @@ struct RuntimeServerPreflightService: Sendable {
     func test(
         endpoint: URL,
         authentication: RuntimeServerAuthentication,
-        accessToken: String?
+        accessToken: String?,
+        trustPolicy: RuntimeServerTrustPolicy? = nil
     ) async throws -> RuntimeServerPreflightResult {
         let kind = try RuntimeServerEndpointClassifier.kind(
             for: endpoint,
@@ -103,7 +107,10 @@ struct RuntimeServerPreflightService: Sendable {
         let client: RuntimeHTTPClient
         switch authentication {
         case .none:
-            client = RuntimeHTTPClient(environment: environment)
+            client = RuntimeHTTPClient(
+                environment: environment,
+                trustPolicy: trustPolicy
+            )
         case .bearer:
             guard let accessToken, !accessToken.isEmpty else {
                 throw RuntimeServerPreflightError.accessTokenRequired
@@ -118,14 +125,16 @@ struct RuntimeServerPreflightService: Sendable {
                     target: target,
                     token: accessToken
                 ),
-                credentialTarget: target
+                credentialTarget: target,
+                trustPolicy: trustPolicy
             )
         }
         return try await test(
             client: client,
             endpoint: endpoint,
             kind: kind,
-            authentication: authentication
+            authentication: authentication,
+            trustPolicy: trustPolicy
         )
     }
 
@@ -140,7 +149,10 @@ struct RuntimeServerPreflightService: Sendable {
         let client: RuntimeHTTPClient
         switch connection.authentication {
         case .none:
-            client = RuntimeHTTPClient(environment: environment)
+            client = RuntimeHTTPClient(
+                environment: environment,
+                trustPolicy: connection.trustPolicy
+            )
         case .bearer:
             guard let credential = try await credentialStore.resolve(
                 connection.credentialTarget
@@ -150,14 +162,16 @@ struct RuntimeServerPreflightService: Sendable {
             client = RuntimeHTTPClient(
                 environment: environment,
                 credentialStore: credentialStore,
-                credentialTarget: connection.credentialTarget
+                credentialTarget: connection.credentialTarget,
+                trustPolicy: connection.trustPolicy
             )
         }
         return try await test(
             client: client,
             endpoint: endpoint,
             kind: connection.kind,
-            authentication: connection.authentication
+            authentication: connection.authentication,
+            trustPolicy: connection.trustPolicy
         )
     }
 
@@ -165,7 +179,8 @@ struct RuntimeServerPreflightService: Sendable {
         client: RuntimeHTTPClient,
         endpoint: URL,
         kind: RuntimeServerKind,
-        authentication: RuntimeServerAuthentication
+        authentication: RuntimeServerAuthentication,
+        trustPolicy: RuntimeServerTrustPolicy?
     ) async throws -> RuntimeServerPreflightResult {
         do {
             guard try await client.healthCheck() else {
@@ -219,6 +234,7 @@ struct RuntimeServerPreflightService: Sendable {
             endpoint: endpoint,
             kind: kind,
             authentication: authentication,
+            trustPolicy: trustPolicy,
             info: info,
             capabilities: capabilities,
             modelCatalog: models,

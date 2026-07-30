@@ -71,12 +71,16 @@ public final class ExternalRuntimeServerStatusMonitor {
             let client: RuntimeHTTPClient
             switch connection.authentication {
             case .none:
-                client = RuntimeHTTPClient(environment: environment)
+                client = RuntimeHTTPClient(
+                    environment: environment,
+                    trustPolicy: connection.trustPolicy
+                )
             case .bearer:
                 client = RuntimeHTTPClient(
                     environment: environment,
                     credentialStore: credentialStore,
-                    credentialTarget: connection.credentialTarget
+                    credentialTarget: connection.credentialTarget,
+                    trustPolicy: connection.trustPolicy
                 )
             }
             guard try await client.healthCheck() else {

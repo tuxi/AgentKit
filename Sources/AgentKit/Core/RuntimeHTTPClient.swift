@@ -12,9 +12,31 @@ import Foundation
 
 private final class RuntimeNoRedirectSessionDelegate:
     NSObject,
+    URLSessionDelegate,
     URLSessionTaskDelegate,
     @unchecked Sendable
 {
+    private let trustPolicy: RuntimeServerTrustPolicy?
+
+    init(trustPolicy: RuntimeServerTrustPolicy?) {
+        self.trustPolicy = trustPolicy
+    }
+
+    func urlSession(
+        _ session: URLSession,
+        didReceive challenge: URLAuthenticationChallenge,
+        completionHandler: @escaping (
+            URLSession.AuthChallengeDisposition,
+            URLCredential?
+        ) -> Void
+    ) {
+        let result = RuntimeTLSSecurity.evaluate(
+            challenge: challenge,
+            policy: trustPolicy
+        )
+        completionHandler(result.0, result.1)
+    }
+
     func urlSession(
         _ session: URLSession,
         task: URLSessionTask,
@@ -39,12 +61,13 @@ struct RuntimeHTTPClient: Sendable {
     init(
         environment: RuntimeEnvironment,
         credentialStore: (any CredentialStore)? = nil,
-        credentialTarget: CredentialTarget = .runtimeAccess("default")
+        credentialTarget: CredentialTarget = .runtimeAccess("default"),
+        trustPolicy: RuntimeServerTrustPolicy? = nil
     ) {
         self.environment = environment
         self.session = URLSession(
             configuration: .ephemeral,
-            delegate: RuntimeNoRedirectSessionDelegate(),
+            delegate: RuntimeNoRedirectSessionDelegate(trustPolicy: trustPolicy),
             delegateQueue: nil
         )
         self.decoder = JSONDecoder()

@@ -140,12 +140,16 @@ public final class RuntimeServerCoordinator {
             let environment = try RuntimeEnvironment(origin: endpoint)
             switch connection.authentication {
             case .none:
-                return DefaultAgentClient(environment: environment)
+                return DefaultAgentClient(
+                    environment: environment,
+                    trustPolicy: connection.trustPolicy
+                )
             case .bearer:
                 return DefaultAgentClient(
                     environment: environment,
                     credentialStore: runtimeCredentialStore,
-                    credentialTarget: connection.credentialTarget
+                    credentialTarget: connection.credentialTarget,
+                    trustPolicy: connection.trustPolicy
                 )
             }
         }
@@ -157,9 +161,12 @@ public final class RuntimeServerCoordinator {
         connectionID: String?,
         endpoint: URL,
         authentication: RuntimeServerAuthentication,
-        accessToken: String?
+        accessToken: String?,
+        trustPolicy: RuntimeServerTrustPolicy? = nil
     ) async throws -> RuntimeServerPreflightResult {
         var effectiveToken = accessToken
+        let effectiveTrustPolicy = trustPolicy
+            ?? connectionID.flatMap { registry.connection(id: $0)?.trustPolicy }
         if authentication == .bearer,
            effectiveToken?.isEmpty != false,
            let connectionID,
@@ -171,7 +178,60 @@ public final class RuntimeServerCoordinator {
         return try await preflightService.test(
             endpoint: endpoint,
             authentication: authentication,
-            accessToken: effectiveToken
+            accessToken: effectiveToken,
+            trustPolicy: effectiveTrustPolicy
+        )
+    }
+
+    /// Completes a QR/Bonjour pairing against a Mac Embedded Runtime. The
+    /// plaintext device credential exists only in this call and is written to
+    /// the Runtime Access Keychain before the connection is returned.
+    @discardableResult
+    public func pairSharedRuntime(
+        invitation: RuntimePairingInvitation,
+        resolvedEndpoint: URL? = nil,
+        connectionID: String? = nil,
+        displayName: String? = nil,
+        deviceName: String
+    ) async throws -> RuntimeServerConnection {
+        guard invitation.bootstrapExpiresAt > Date() else {
+            throw RuntimeSharingError.invitationExpired
+        }
+        let endpoint = try (
+            resolvedEndpoint ?? URL(
+                string: "https://\(invitation.fallbackHost):\(invitation.port)"
+            )
+        ).unwrap(or: RuntimeSharingError.invalidInvitation)
+        let trustPolicy = RuntimeServerTrustPolicy(
+            expectedHost: endpoint.host ?? "",
+            spkiSHA256: invitation.spkiSHA256
+        )
+        let pairing = try await RuntimePairingClient().pair(
+            invitation: invitation,
+            endpoint: endpoint,
+            deviceName: deviceName,
+            platform: platform
+        )
+        let preflight = try await preflightService.test(
+            endpoint: endpoint,
+            authentication: .bearer,
+            accessToken: pairing.credential,
+            trustPolicy: trustPolicy
+        )
+        guard preflight.info.serverID == invitation.serverID else {
+            throw RuntimeSharingError.serverIdentityMismatch
+        }
+        let id = connectionID?.trimmingCharacters(
+            in: .whitespacesAndNewlines
+        ).nilIfEmpty ?? Self.suggestedPairedConnectionID(
+            serverID: invitation.serverID,
+            existing: Set(registry.connections.map(\.id))
+        )
+        return try await saveExternalConnection(
+            id: id,
+            displayName: displayName ?? invitation.serverDisplayName,
+            preflight: preflight,
+            accessToken: pairing.credential
         )
     }
 
@@ -209,6 +269,7 @@ public final class RuntimeServerCoordinator {
             kind: preflight.kind,
             endpoint: preflight.endpoint,
             authentication: preflight.authentication,
+            trustPolicy: preflight.trustPolicy,
             serverID: preflight.info.serverID,
             createdAt: existing?.createdAt ?? now,
             updatedAt: now
@@ -397,6 +458,7 @@ public final class RuntimeServerCoordinator {
                     .unwrap(or: RuntimeHTTPError.runtimeNotStarted),
                 kind: .embedded,
                 authentication: .bearer,
+                trustPolicy: nil,
                 info: info,
                 capabilities: capabilities,
                 modelCatalog: models,
@@ -436,12 +498,16 @@ public final class RuntimeServerCoordinator {
             let environment = try RuntimeEnvironment(origin: endpoint)
             switch connection.authentication {
             case .none:
-                return RuntimeHTTPClient(environment: environment)
+                return RuntimeHTTPClient(
+                    environment: environment,
+                    trustPolicy: connection.trustPolicy
+                )
             case .bearer:
                 return RuntimeHTTPClient(
                     environment: environment,
                     credentialStore: runtimeCredentialStore,
-                    credentialTarget: connection.credentialTarget
+                    credentialTarget: connection.credentialTarget,
+                    trustPolicy: connection.trustPolicy
                 )
             }
         }
@@ -474,6 +540,19 @@ public final class RuntimeServerCoordinator {
             scopesModelIdentity: preflight.kind != .embedded,
             refreshedAt: preflight.checkedAt
         )
+    }
+
+    private static func suggestedPairedConnectionID(
+        serverID: String,
+        existing: Set<String>
+    ) -> String {
+        let base = "paired-\(serverID.prefix(12))"
+        guard existing.contains(base) else { return base }
+        var suffix = 2
+        while existing.contains("\(base)-\(suffix)") {
+            suffix += 1
+        }
+        return "\(base)-\(suffix)"
     }
 }
 

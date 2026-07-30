@@ -135,6 +135,7 @@ public class WebSocketClient: NSObject, @unchecked Sendable {
     public var connectionValidatorRequest: (@Sendable () async -> URLRequest?)?
     
     private let identifier: String
+    private let runtimeTrustPolicy: RuntimeServerTrustPolicy?
     
     private var isAppActive: Bool {
 #if os(iOS)
@@ -149,12 +150,16 @@ public class WebSocketClient: NSObject, @unchecked Sendable {
     
     // MARK: - 初始化
     
-    public init(identifier: String? = nil) {
+    public init(
+        identifier: String? = nil,
+        runtimeTrustPolicy: RuntimeServerTrustPolicy? = nil
+    ) {
         if let identifier, !identifier.isEmpty {
             self.identifier = identifier
         } else {
             self.identifier = "dreamlog.default"
         }
+        self.runtimeTrustPolicy = runtimeTrustPolicy
         super.init()
         
         let configuration = URLSessionConfiguration.default
@@ -705,6 +710,21 @@ extension WebSocketClient {
 // MARK: - URLSessionTaskDelegate
 
 extension WebSocketClient: URLSessionTaskDelegate {
+    public func urlSession(
+        _ session: URLSession,
+        didReceive challenge: URLAuthenticationChallenge,
+        completionHandler: @escaping (
+            URLSession.AuthChallengeDisposition,
+            URLCredential?
+        ) -> Void
+    ) {
+        let result = RuntimeTLSSecurity.evaluate(
+            challenge: challenge,
+            policy: runtimeTrustPolicy
+        )
+        completionHandler(result.0, result.1)
+    }
+
     // 实现 URLSessionTaskDelegate 以捕获握手响应
     public func urlSession(_ session: URLSession, task: URLSessionTask, didCompleteWithError error: Error?) {
         // 握手阶段的错误或完成会走到这里

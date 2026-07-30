@@ -46,7 +46,11 @@ public final class ChildStreamViewModel {
     // MARK: - Lifecycle
 
     public func start() {
-        guard streamTask == nil else { return }
+        guard streamTask == nil else {
+            print("[ChildVM] start() called but streamTask already running — ignoring")
+            return
+        }
+        print("[ChildVM] start() childID=\(selection.childID) kind=\(selection.kind) title=\(selection.title)")
 
         let snapStream = engine.stateStream()
         snapshotTask = Task { [weak self] in
@@ -63,6 +67,14 @@ public final class ChildStreamViewModel {
             // socket 的瞬时断线由 transport 内部重连和 backfill，不会自然结束上层 stream。
             do {
                 for try await event in self.transport.open(childID: self.selection.childID) {
+                    // Diagnostic: log every ingested event for job streams
+                    if case .jobOutput(_, let jobID, let chunk) = event {
+                        print("[ChildVM] ingested jobOutput jobID=\(jobID) chunk=\(chunk.prefix(80))")
+                    } else if case .jobStarted(_, let jobID, _, let cmd) = event {
+                        print("[ChildVM] ingested jobStarted jobID=\(jobID) cmd=\(cmd)")
+                    } else if case .jobFinished(_, let jobID, _, _, _, let text) = event {
+                        print("[ChildVM] ingested jobFinished jobID=\(jobID) text=\(text ?? "nil")")
+                    }
                     let terminalStatus = self.terminalStatus(for: event)
                     // The outer task bracket is transport metadata for this
                     // inspector. Feeding it into the child engine creates a
@@ -71,10 +83,14 @@ public final class ChildStreamViewModel {
                     if !self.isOwnTaskEnvelope(event) {
                         await self.engine.ingest(event)
                     }
+                    // Don't break on the first job_finished — backlog replay
+                    // delivers ALL historical brackets for this childID, and
+                    // breaking early discards every bracket after the first.
+                    // completionStatus and isFinished are overwritten by each
+                    // terminal event so the LAST bracket's status wins.
                     if let terminalStatus {
                         self.completionStatus = terminalStatus
                         self.isFinished = true
-                        break
                     }
                 }
                 guard !Task.isCancelled else { return }
@@ -95,6 +111,7 @@ public final class ChildStreamViewModel {
     }
 
     public func stop() {
+        print("[ChildVM] stop() childID=\(selection.childID)")
         streamTask?.cancel()
         streamTask = nil
         snapshotTask?.cancel()
@@ -172,6 +189,7 @@ public struct ChildStreamInspectorView: View {
             }
         }
         .task(id: selection) {
+            print("[ChildView] .task(id:) selection=\(selection.childID) kind=\(selection.kind) title=\(selection.title)")
             viewModel?.stop()
             // job 保留兼容 endpoint；task / future multi-agent 使用通用 child-stream WS。
             let transport: ChildStreamTransport = selection.kind == .job

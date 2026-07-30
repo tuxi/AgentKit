@@ -106,7 +106,8 @@ public final class AgentWireSocket: @unchecked Sendable {
         since: Int = 0,
         streamKind: WireStreamKind = .conversation,
         credentialStore: (any CredentialStore)? = nil,
-        credentialTarget: CredentialTarget = .runtimeAccess("default")
+        credentialTarget: CredentialTarget = .runtimeAccess("default"),
+        trustPolicy: RuntimeServerTrustPolicy? = nil
     ) {
         self.init(
             environment: environment,
@@ -115,7 +116,8 @@ public final class AgentWireSocket: @unchecked Sendable {
             streamKind: streamKind,
             credentialStore: credentialStore,
             submissionCoordinator: AgentInputSubmissionCoordinator(),
-            credentialTarget: credentialTarget
+            credentialTarget: credentialTarget,
+            trustPolicy: trustPolicy
         )
     }
 
@@ -123,7 +125,8 @@ public final class AgentWireSocket: @unchecked Sendable {
          since: Int = 0, streamKind: WireStreamKind = .conversation,
          credentialStore: (any CredentialStore)? = nil,
          submissionCoordinator: AgentInputSubmissionCoordinator,
-         credentialTarget: CredentialTarget = .runtimeAccess("default")) {
+         credentialTarget: CredentialTarget = .runtimeAccess("default"),
+         trustPolicy: RuntimeServerTrustPolicy? = nil) {
         self.environment = environment
         self.conversationID = conversationID
         self.streamKind = streamKind
@@ -136,7 +139,10 @@ public final class AgentWireSocket: @unchecked Sendable {
         case .job: "job"
         case .childStream: "child-stream"
         }
-        self.wsClient = WebSocketClient(identifier: "\(tag).\(conversationID)")
+        self.wsClient = WebSocketClient(
+            identifier: "\(tag).\(conversationID)",
+            runtimeTrustPolicy: trustPolicy
+        )
     }
 
     deinit {

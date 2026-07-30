@@ -933,8 +933,31 @@ public struct ExecutionReducer: Sendable {
                                               originCallID: String?, turnID: String, ts: TimeInterval,
                                               graph: inout ExecutionGraph) -> [NodeID] {
         let nodeID = "sub_\(childID)"
+        // A completed/failed node means a new bracket for the SAME childID is
+        // starting (historical replay, or a job ID reused across turns). Reset
+        // its output so the previous run's output doesn't accumulate — otherwise
+        // the inspector shows a Frankenstein log of every historical invocation.
+        if var existing = graph.nodes[nodeID],
+           case .childStream(var payload) = existing.payload,
+           existing.status == .completed || existing.status == .failed {
+            payload.output = ""
+            payload.title = title
+            payload.originCallID = originCallID
+            payload.result = nil
+            payload.exitCode = nil
+            payload.canceled = false
+            payload.elapsedMs = nil
+            existing.payload = .childStream(payload)
+            existing.status = .running
+            existing.timestamp = ts
+            existing.turnID = turnID
+            graph.upsertNode(existing)
+            return [nodeID]
+        }
         // Replay can deliver a duplicate started — keep the existing node's identity.
-        guard graph.nodes[nodeID] == nil else { return [nodeID] }
+        guard graph.nodes[nodeID] == nil else {
+            return [nodeID]
+        }
         let pendingTerminal = internalState.pendingChildTerminals.removeValue(forKey: childID)
             ?? taskToolTerminal(kind: kind, originCallID: originCallID, graph: graph)
         let payload = ChildStreamPayload(
