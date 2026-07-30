@@ -323,6 +323,18 @@ public struct ConversationListView: View {
         .listRowSeparator(.hidden)
         .listRowBackground(Color.clear)
         .accessibilityLabel(isExpanded ? "收起项目 \(group.title)" : "展开项目 \(group.title)")
+        .contextMenu {
+            #if os(macOS)
+            Button {
+                if let workspacePath = group.conversations.first?.workspacePath {
+                    NSWorkspace.shared.selectFile(workspacePath, inFileViewerRootedAtPath: "")
+                }
+            } label: {
+                Label("在 Finder 中显示", systemImage: "folder")
+            }
+            .disabled(group.conversations.first?.workspacePath == nil)
+            #endif
+        }
 
         if isExpanded {
             ForEach(group.conversations, id: \.uiID) { ref in
