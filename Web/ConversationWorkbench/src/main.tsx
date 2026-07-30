@@ -1409,16 +1409,10 @@ const Block = memo(function Block({
       return <Markdown block={block} />;
     case "thinking":
       return (
-        <details
-          className="thinking-block"
-          data-status={block.status}
-          open={block.status === "streaming"}
-        >
+        <details className="thinking-block" data-status={block.status}>
           <summary className="thinking-summary">
             <span className="thinking-label">{block.title ?? "Thinking"}</span>
-            {block.status === "streaming" ? (
-              <span className="tool-status" data-tone="running">streaming</span>
-            ) : null}
+            <span className="disclosure-chevron" aria-hidden="true">›</span>
           </summary>
           <div className="thinking-body">
             {block.text ? <Markdown block={{ ...block, kind: "markdown" }} /> : null}

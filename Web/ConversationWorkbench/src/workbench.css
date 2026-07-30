@@ -590,6 +590,80 @@ summary:active {
   color: var(--secondary);
 }
 
+/* --- Thinking block --- */
+
+.thinking-block {
+  width: fit-content;
+  max-width: 100%;
+  font-size: 13px;
+  line-height: 1.4;
+  color: var(--secondary);
+}
+
+.thinking-block > summary::marker {
+  content: "";
+}
+
+.thinking-summary {
+  display: inline-flex;
+  max-width: 100%;
+  align-items: center;
+  gap: 6px;
+  padding: 3px 4px;
+  cursor: pointer;
+  user-select: text;
+  -webkit-user-select: text;
+}
+
+.thinking-label {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* Shimmer animation on the label while the model is thinking */
+.thinking-block[data-status="streaming"] > .thinking-summary > .thinking-label {
+  color: transparent;
+  background-image: linear-gradient(
+    90deg,
+    var(--secondary) 0%,
+    var(--secondary) 34%,
+    var(--text) 50%,
+    var(--secondary) 66%,
+    var(--secondary) 100%
+  );
+  background-size: 240% 100%;
+  background-clip: text;
+  -webkit-background-clip: text;
+  -webkit-text-fill-color: transparent;
+  animation: tool-working-wave 1.45s linear infinite;
+}
+
+.workbench-suspended .thinking-block[data-status="streaming"] > .thinking-summary > .thinking-label {
+  animation-play-state: paused;
+}
+
+/* Pause shimmer when the user expands to read */
+.thinking-block[open][data-status="streaming"] > .thinking-summary > .thinking-label {
+  color: var(--secondary);
+  background-image: none;
+  -webkit-text-fill-color: currentColor;
+  animation: none;
+}
+
+.thinking-block[open] {
+  width: 100%;
+}
+
+.thinking-block[open] > .thinking-summary > .disclosure-chevron {
+  transform: rotate(90deg);
+}
+
+.thinking-body {
+  padding: 4px 4px 8px 10px;
+}
+
 .child-stream {
   display: inline-flex;
   align-items: center;
@@ -892,7 +966,8 @@ summary:active {
   }
 
   .tool-group[data-status="running"] > .tool-group-summary,
-  .tool[data-status="running"] > .tool-summary {
+  .tool[data-status="running"] > .tool-summary,
+  .thinking-block[data-status="streaming"] > .thinking-summary > .thinking-label {
     color: var(--secondary);
     background-image: none;
     -webkit-text-fill-color: currentColor;

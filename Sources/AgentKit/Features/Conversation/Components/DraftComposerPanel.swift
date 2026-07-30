@@ -57,6 +57,7 @@ struct DraftComposerPanel: View {
     @State private var isRestoringLocalState = false
     @State private var pendingGatewayUploadID: String?
     @State private var isGatewayUploadConfirmationPresented = false
+    @StateObject private var voiceService = VoiceInputService()
 #if os(macOS)
     @State private var composerHeight: CGFloat = 56
     private let composerMinHeight: CGFloat = 56
@@ -65,6 +66,8 @@ struct DraftComposerPanel: View {
     
     // MARK: - Model Selector
     @State private var isIOSModelPickerPresented = false
+    
+    @State private var showPermissionAlert = false
     
     var body: some View {
         VStack(spacing: 0) {
@@ -78,160 +81,166 @@ struct DraftComposerPanel: View {
 #endif
             
             VStack(spacing: 8) {
-                if !attachments.isEmpty {
-                    VStack(alignment: .leading, spacing: 5) {
-                        attachmentStrip
-                        Text("🔒 本地处理 · 文件不会自动上传")
-                            .font(.caption2)
-                            .foregroundStyle(.secondary)
-                    }
-                    .padding(.horizontal, 16)
-                    .padding(.top, 12)
-                }
-                inputField
-                    .padding(.horizontal, 16)
-                    .padding(.top, attachments.isEmpty ? 14 : 2)
-                
-                HStack(spacing: composerControlSpacing) {
-                    Button {
-                        if let onAddAttachment {
-                            onAddAttachment()
-                        } else {
-                            pickAttachments()
-                        }
-                    } label: {
-                        Image(systemName: "plus")
-                            .font(.system(size: 17, weight: .medium))
-                    }
-                    .buttonStyle(.plain)
-                    .foregroundStyle(.secondary)
-                    .accessibilityLabel(AgentKitLocalized.string("composer.add_attachment"))
-                    .disabled(
-                        attachments.count >= 4
-                        || (onAddAttachment == nil && !workspaceStore.canSelectUserAssets)
+                if voiceService.state == .recording || voiceService.state == .transcribing
+                    // *voiceService.state == .preparing*/
+                {
+                    // 录音浮层占据整个底部区域（隐藏附件、模型选择器、工具栏）
+                    VoiceRecordingOverlay(
+                        service: voiceService,
+                        onStop: { voiceService.stopRecordingAndTranscribe() },
+                        onSend: { send() }
                     )
-                    
-#if os(macOS)
-                    Menu {
-                        Button(AgentKitLocalized.string("composer.request_approval")) { }
-                    } label: {
-                        Label(AgentKitLocalized.string("composer.request_approval"), systemImage: "hand.raised")
-                            .font(.system(size: 13, weight: .medium))
-                            .labelStyle(.titleAndIcon)
-                        Image(systemName: "chevron.down")
-                            .font(.system(size: 9, weight: .semibold))
-                    }
-                    .menuStyle(.borderlessButton)
-                    .fixedSize()
-                    .foregroundStyle(.secondary)
-#endif
-                    
-                    Spacer(minLength: 12)
-                    
-                    // ── Model Selector ──
-#if os(iOS)
-                    Button {
-                        isIOSModelPickerPresented = true
-                    } label: {
-                        HStack(spacing: 5) {
-                            Text(modelSettings.selectionDisplayName(for: selectedModel ?? ""))
-                                .font(.system(size: 13, weight: .semibold))
-                                .lineLimit(1)
-                            Image(systemName: "chevron.up")
-                                .font(.system(size: 8, weight: .bold))
+                    .padding(.horizontal, 2)
+                    .padding(.top, attachments.isEmpty ? 8 : 2)
+                } else {
+                    if !attachments.isEmpty {
+                        VStack(alignment: .leading, spacing: 5) {
+                            attachmentStrip
+                            Text("🔒 本地处理 · 文件不会自动上传")
+                                .font(.caption2)
+                                .foregroundStyle(.secondary)
                         }
-                        .foregroundStyle(Color.accentColor)
-                        .padding(.horizontal, 9)
-                        .frame(height: 32)
-                        .background(
-                            Color.accentColor.opacity(0.12),
-                            in: RoundedRectangle(cornerRadius: 10, style: .continuous)
+                        .padding(.horizontal, 16)
+                        .padding(.top, 12)
+                    }
+                    inputField
+                        .padding(.horizontal, 16)
+                        .padding(.top, attachments.isEmpty ? 14 : 2)
+                }
+                
+                if voiceService.state != .recording && voiceService.state != .transcribing && voiceService.state != .preparing {
+                    HStack(spacing: composerControlSpacing) {
+                        Button {
+                            if let onAddAttachment {
+                                onAddAttachment()
+                            } else {
+                                pickAttachments()
+                            }
+                        } label: {
+                            Image(systemName: "plus")
+                                .font(.system(size: 17, weight: .medium))
+                        }
+                        .buttonStyle(.plain)
+                        .foregroundStyle(.secondary)
+                        .accessibilityLabel(AgentKitLocalized.string("composer.add_attachment"))
+                        .disabled(
+                            attachments.count >= 4
+                            || (onAddAttachment == nil && !workspaceStore.canSelectUserAssets)
                         )
-                    }
-                    .buttonStyle(.plain)
-                    .frame(maxWidth: 132)
-                    .disabled(modelSettings.availableModelIDs.isEmpty)
-                    .accessibilityLabel(AgentKitLocalized.string("composer.select_model"))
-#else
-                    Menu {
-                        if modelGroups.isEmpty {
-                            ForEach(modelSettings.availableModelIDs, id: \.self) { modelID in
-                                modelMenuButton(modelID)
-                            }
-                        } else {
-                            ForEach(modelGroups) { group in
-                                Section {
-                                    ForEach(group.modelIDs, id: \.self) { modelID in
-                                        modelMenuButton(modelID)
-                                    }
-                                } header: {
-                                    Text(group.name)
-                                }
-                            }
-                        }
-                    } label: {
-                        HStack(spacing: 4) {
-                            Text(modelSettings.selectionDisplayName(for: selectedModel ?? ""))
+                        
+#if os(macOS)
+                        Menu {
+                            Button(AgentKitLocalized.string("composer.request_approval")) { }
+                        } label: {
+                            Label(AgentKitLocalized.string("composer.request_approval"), systemImage: "hand.raised")
                                 .font(.system(size: 13, weight: .medium))
-                                .lineLimit(1)
-                            Image(systemName: "chevron.up")
+                                .labelStyle(.titleAndIcon)
+                            Image(systemName: "chevron.down")
                                 .font(.system(size: 9, weight: .semibold))
                         }
-                        .padding(.horizontal, 6)
-                        .padding(.vertical, 3)
-                        .cornerRadius(4)
-                    }
-                    .menuStyle(.borderlessButton)
-                    .fixedSize()
-                    //                    .foregroundStyle(.secondary)
+                        .menuStyle(.borderlessButton)
+                        .fixedSize()
+                        .foregroundStyle(.secondary)
 #endif
-                    
-#if os(macOS)
-                    Button { } label: {
-                        Image(systemName: "mic")
-                            .font(.system(size: 15, weight: .medium))
-                    }
-                    .buttonStyle(.plain)
-                    .foregroundStyle(.secondary)
-                    .accessibilityLabel(AgentKitLocalized.string("composer.voice_input"))
-#endif
-                    
-                    // ── Send / Stop button ──
-                    if isTurnRunning {
+                        
+                        Spacer(minLength: 12)
+                        
+                        // ── Model Selector ──
+#if os(iOS)
                         Button {
-                            onStop?()
+                            isIOSModelPickerPresented = true
                         } label: {
-                            Image(systemName: "stop.fill")
-                                .font(.system(size: 12, weight: .bold))
-                                .frame(width: sendButtonSize, height: sendButtonSize)
+                            HStack(spacing: 5) {
+                                Text(modelSettings.selectionDisplayName(for: selectedModel ?? ""))
+                                    .font(.system(size: 13, weight: .semibold))
+                                    .lineLimit(1)
+                                Image(systemName: "chevron.up")
+                                    .font(.system(size: 8, weight: .bold))
+                            }
+                            .foregroundStyle(Color.accentColor)
+                            .padding(.horizontal, 9)
+                            .frame(height: 32)
+                            .background(
+                                Color.accentColor.opacity(0.12),
+                                in: RoundedRectangle(cornerRadius: 10, style: .continuous)
+                            )
                         }
                         .buttonStyle(.plain)
-                        .foregroundStyle(.white)
-                        .background(Color.red, in: Circle())
-                        .accessibilityLabel(AgentKitLocalized.string("composer.stop"))
-                    } else {
-                        Button {
-                            send()
-                        } label: {
-                            if isSending {
-                                ProgressView()
-                                    .controlSize(.small)
-                                    .frame(width: sendButtonSize, height: sendButtonSize)
+                        .frame(maxWidth: 132)
+                        .disabled(modelSettings.availableModelIDs.isEmpty)
+                        .accessibilityLabel(AgentKitLocalized.string("composer.select_model"))
+#else
+                        Menu {
+                            if modelGroups.isEmpty {
+                                ForEach(modelSettings.availableModelIDs, id: \.self) { modelID in
+                                    modelMenuButton(modelID)
+                                }
                             } else {
-                                Image(systemName: "arrow.up")
-                                    .font(.system(size: 16, weight: .bold))
+                                ForEach(modelGroups) { group in
+                                    Section {
+                                        ForEach(group.modelIDs, id: \.self) { modelID in
+                                            modelMenuButton(modelID)
+                                        }
+                                    } header: {
+                                        Text(group.name)
+                                    }
+                                }
+                            }
+                        } label: {
+                            HStack(spacing: 4) {
+                                Text(modelSettings.selectionDisplayName(for: selectedModel ?? ""))
+                                    .font(.system(size: 13, weight: .medium))
+                                    .lineLimit(1)
+                                Image(systemName: "chevron.up")
+                                    .font(.system(size: 9, weight: .semibold))
+                            }
+                            .padding(.horizontal, 6)
+                            .padding(.vertical, 3)
+                            .cornerRadius(4)
+                        }
+                        .menuStyle(.borderlessButton)
+                        .fixedSize()
+                        //                    .foregroundStyle(.secondary)
+#endif
+                        VoiceInputButton(service: voiceService)
+                        
+                        // ── Send / Stop button ──
+                        if isTurnRunning {
+                            Button {
+                                onStop?()
+                            } label: {
+                                Image(systemName: "stop.fill")
+                                    .font(.system(size: 12, weight: .bold))
                                     .frame(width: sendButtonSize, height: sendButtonSize)
                             }
+                            .buttonStyle(.plain)
+                            .foregroundStyle(.white)
+                            .background(Color.red, in: Circle())
+                            .accessibilityLabel(AgentKitLocalized.string("composer.stop"))
+                        } else {
+                            Button {
+                                send()
+                            } label: {
+                                if isSending {
+                                    ProgressView()
+                                        .controlSize(.small)
+                                        .frame(width: sendButtonSize, height: sendButtonSize)
+                                } else {
+                                    Image(systemName: "arrow.up")
+                                        .font(.system(size: 16, weight: .bold))
+                                        .frame(width: sendButtonSize, height: sendButtonSize)
+                                }
+                            }
+                            .buttonStyle(.plain)
+                            .foregroundStyle(canSend ? Color.draftSendForeground : Color.draftDisabledSendForeground)
+                            .background(canSend ? Color.draftSendBackground : Color.draftDisabledSendBackground, in: Circle())
+                            .disabled(!canSend)
+                            .accessibilityLabel(AgentKitLocalized.string("composer.send"))
                         }
-                        .buttonStyle(.plain)
-                        .foregroundStyle(canSend ? Color.draftSendForeground : Color.draftDisabledSendForeground)
-                        .background(canSend ? Color.draftSendBackground : Color.draftDisabledSendBackground, in: Circle())
-                        .disabled(!canSend)
-                        .accessibilityLabel(AgentKitLocalized.string("composer.send"))
                     }
-                }
-                .padding(.horizontal, 14)
-                .padding(.bottom, 10)
+                    .padding(.horizontal, 14)
+                    .padding(.bottom, 10)
+                } // end: if not recording
             }
             
 #if os(macOS)
@@ -260,6 +269,12 @@ struct DraftComposerPanel: View {
             .presentationDragIndicator(.visible)
         }
 #endif
+        .onChange(of: voiceService.state) { _, newState in
+            handleVoiceStateChange(newState)
+        }
+        .onAppear {
+            setupVoiceCallbacks()
+        }
         .task(id: persistenceKey?.storageKey ?? "none-\(draftRevision)") {
             restoreLocalState()
         }
@@ -275,13 +290,10 @@ struct DraftComposerPanel: View {
             refreshAttachmentsFromLocalState()
         }
         .onChange(of: scenePhase) { _, phase in
-            if phase == .background || phase == .inactive {
-                persistCurrentText()
-                try? workspaceStore.localStateStore.flush()
-            }
+            handleScenePhaseChange(phase)
         }
         .onDisappear {
-            persistCurrentText()
+            handleDisappear()
         }
         .onChange(of: modelSettings.availableModelIDs) { _, newIDs in
             // 模型列表延迟到达时自动恢复 selectedModel（Bug 2）。
@@ -303,6 +315,22 @@ struct DraftComposerPanel: View {
             }
             Button("取消", role: .cancel) {
                 pendingGatewayUploadID = nil
+            }
+        }
+        .alert(AgentKitLocalized.string("composer.voice_input.no_permission_title"),
+               isPresented: $showPermissionAlert) {
+            Button(AgentKitLocalized.string("composer.voice_input.open_settings")) {
+                VoiceInputService.openSystemSettings()
+            }
+            Button(AgentKitLocalized.string("composer.voice_input.cancel"), role: .cancel) {
+                voiceService.reset()
+            }
+        } message: {
+            Text(AgentKitLocalized.string("composer.voice_input.no_permission"))
+        }
+        .onChange(of: voiceService.state) { _, newState in
+            if case .error = newState {
+                showPermissionAlert = true
             }
         }
     }
@@ -339,6 +367,22 @@ struct DraftComposerPanel: View {
     }
     
     // MARK: - Helpers
+    
+    private func setupVoiceCallbacks() {
+        voiceService.onTranscriptionComplete = { transcription in
+            guard !transcription.isEmpty else { return }
+            if text.isEmpty {
+                text = transcription
+            } else {
+                text += "\n" + transcription
+            }
+        }
+    }
+    
+    private func handleVoiceStateChange(_ newState: VoiceInputService.State) {
+        // 录音/转写状态变化仅影响 UI 显示，无额外状态需要管理。
+        // 转写完成后的文本追加由 onTranscriptionComplete 处理。
+    }
     
     private var trimmed: String {
         text.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -419,6 +463,11 @@ struct DraftComposerPanel: View {
     }
     
     private func send() {
+        // 若正在录音，先停止并追加最终转录
+        if voiceService.state == .recording {
+            voiceService.stopRecordingAndTranscribe()
+        }
+        
         guard canSend,
               let selectedModel,
               let runtimeAlias = modelSettings.runtimeAlias(for: selectedModel) else { return }
@@ -474,6 +523,23 @@ struct DraftComposerPanel: View {
         pendingSaveTask?.cancel()
         guard let key = loadedStateKey else { return }
         persist(text: text, for: key)
+    }
+    
+    private func handleScenePhaseChange(_ phase: ScenePhase) {
+        if phase == .background || phase == .inactive {
+            if voiceService.state == .recording {
+                voiceService.cancelRecording()
+            }
+            persistCurrentText()
+            try? workspaceStore.localStateStore.flush()
+        }
+    }
+    
+    private func handleDisappear() {
+        if voiceService.state == .recording {
+            voiceService.cancelRecording()
+        }
+        persistCurrentText()
     }
     
     private func persistCurrentDraft() {

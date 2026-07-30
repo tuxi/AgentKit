@@ -71,8 +71,7 @@ struct AgentResponseView: View {
             ThinkingCardView(
                 id: id,
                 payload: payload,
-                isExpanded: documentState.expandedThinkingIDs.contains(id)
-                    || payload.isStreaming,
+                isExpanded: documentState.expandedThinkingIDs.contains(id),
                 onToggle: { onAction(.toggleThinking(id: id)) }
             )
 

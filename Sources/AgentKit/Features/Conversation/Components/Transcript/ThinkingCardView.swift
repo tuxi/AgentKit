@@ -22,7 +22,7 @@ struct ThinkingCardView: View {
                 HStack(spacing: 6) {
                     Image(systemName: "brain.head.profile")
                         .font(.caption)
-                    Text("思考过程")
+                    Text(payload.isStreaming ? "Thinking…" : "Thought")
                         .font(.caption.weight(.medium))
                     if payload.isStreaming {
                         ProgressView()
