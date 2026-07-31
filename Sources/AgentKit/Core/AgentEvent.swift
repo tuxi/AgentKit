@@ -200,7 +200,7 @@ extension AgentEvent {
             )
 
         case "turn_cancelled", "turn.cancelled":
-            return .turnCancelled(turnID: turnID, reason: wire.reason ?? wire.text)
+            return .turnCancelled(turnID: turnID, reason: wire.cancelledReason ?? wire.reason ?? wire.text)
 
         case "model_started":
             return .modelStarted(turnID: turnID, invocationID: wire.invocationId)

@@ -33,6 +33,8 @@ struct WireFrame: Decodable {
     let parentSessionId: String?
     let turnId: String?
     let reason: String?
+    /// v1.7: `turn_cancelled` 事件的 cancelled_reason 字段。
+    let cancelledReason: String?
     let queuePosition: Int?
     /// Legacy fixture/client spelling retained for replay compatibility.
     let position: Int?
@@ -92,6 +94,7 @@ struct WireFrame: Decodable {
         case userAssets = "user_assets"
         case localAssets = "local_assets"
         case reason, position
+        case cancelledReason = "cancelled_reason"
         case queuePosition = "queue_position"
         case textAnnotations = "text_annotations"
         case eventId = "event_id"

@@ -175,6 +175,7 @@ public final class ConversationSupervisor {
             switch controller.lifecycleStatus {
             case "accepted", "queued": return .queued
             case "running", "resuming": return .running
+            case "cancelling": return .connecting
             case "paused": return .paused
             case "done", "failed", "cancelled":
                 guard selectedSessionID != sessionID else { return .idle }

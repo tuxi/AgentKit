@@ -44,6 +44,8 @@ public struct ConversationDetailView: View {
                 draftView
             }
         }
+        .frame(maxWidth: 800) // 仅限制内部 content 宽度
+        .frame(maxWidth: .infinity) // 保持整体居中
         .toolbar { toolbarContent }
         #if os(iOS)
         .navigationBarTitleDisplayMode(.inline)
@@ -64,6 +66,7 @@ public struct ConversationDetailView: View {
                 }
                 .frame(maxWidth: .infinity)
             }
+            .background(.bar)
             .scrollDisabled(true)
             .scrollIndicators(.hidden)
             .safeAreaInset(edge: .bottom, spacing: 6) {
@@ -167,7 +170,7 @@ public struct ConversationDetailView: View {
     // MARK: - Active session
     
     private func activeView(vm: ConversationViewModel) -> some View {
-        let isPaused = vm.lifecycleStatus == "paused"
+        let isPaused = false// vm.lifecycleStatus == "paused"
         || (vm.lifecycleStatus == nil && store.selectedConversation?.isPaused == true)
         let isArchived = vm.isArchived
         

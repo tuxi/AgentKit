@@ -49,8 +49,11 @@ public final class ConversationViewModel {
 
     public var isTurnActive: Bool {
         isLocallyQueued || isAwaitingTurnAcceptance
-            || ["accepted", "queued", "running", "resuming"].contains(lifecycleStatus)
+            || ["accepted", "queued", "running", "resuming", "cancelling"].contains(lifecycleStatus)
     }
+
+    /// turn 正在被取消（已发送 cancel_turn，等待 Runtime 确认）。
+    public var isCancelling: Bool { lifecycleStatus == "cancelling" }
 
     public var isArchived: Bool {
         detail?.isArchived == true || conversation?.isArchived == true
@@ -138,6 +141,9 @@ public final class ConversationViewModel {
     private var turnDispatchTask: Task<Void, Never>?
     private var pendingRestoreTask: Task<Void, Never>?
     private var queuedTicket: UUID?
+    /// cancelTurn() 发送 cancel_turn 帧后等待 Runtime 确认的超时任务。
+    /// 超时后兜底清理状态，防止 legacy Runtime 永不回复导致 UI 卡死。
+    private var cancelTimeoutTask: Task<Void, Never>?
     /// Event backfill/reconnect may replay tool_started. A call identity must
     /// execute at most once for the lifetime of this session ViewModel.
     private var inFlightClientToolCallIDs: Set<String> = []
@@ -339,16 +345,11 @@ public final class ConversationViewModel {
     /// 发送结构化输入，驱动一轮对话。
     @discardableResult
     public func send(input: AgentInput) async -> Bool {
-        guard !isArchived, let channel else { return false }
-        guard input.startsNewTurn, let turnCoordinator else {
+        guard !isArchived, let channel, lifecycleStatus != "cancelling" else { return false }
+        guard input.startsNewTurn else {
             await channel.send(input: input)
             return true
         }
-
-        turnDispatchTask?.cancel()
-        let ticket = await turnCoordinator.enqueue(sessionID: channel.sessionID)
-        queuedTicket = ticket
-        isLocallyQueued = true
 
         // Runtime-wide HTTP capabilities are authoritative. A legacy Runtime that only
         // has hello strings remains serialized even if an individual socket is healthy.
@@ -357,14 +358,40 @@ public final class ConversationViewModel {
         if let refreshedCapabilities = try? await client.runtimeCapabilities() {
             await capabilityRegistry?.update(refreshedCapabilities)
         }
-        let allowsConcurrent = await capabilityRegistry?.current().allowsMultiSessionExecution ?? false
+        let allowsMultiSessionExecution = await capabilityRegistry?.current().allowsMultiSessionExecution ?? false
+
+        // Runtime 已声明多 session 并发能力时，直接提交，不走客户端排队。
+        guard let turnCoordinator, !allowsMultiSessionExecution else {
+            isAwaitingTurnAcceptance = true
+            if case .text = input.kind {
+                _ = try? localStateStore.markSubmissionPending(
+                    key: .session(channel.sessionID),
+                    input: input
+                )
+            }
+            let submission = await channel.submit(input: input)
+            // 仍记录到 coordinator，防止 daemon 重启后能力翻转为单会话时
+            // 新 session 误判 activeSessions 为空而并发执行。
+            if let turnCoordinator, allowsMultiSessionExecution {
+                await turnCoordinator.markActive(sessionID: channel.sessionID)
+            }
+            Task { @MainActor [weak self] in
+                await self?.observeSubmission(submission)
+            }
+            return true
+        }
+
+        turnDispatchTask?.cancel()
+        let ticket = await turnCoordinator.enqueue(sessionID: channel.sessionID)
+        queuedTicket = ticket
+        isLocallyQueued = true
 
         turnDispatchTask = Task { [weak self, channel, turnCoordinator] in
             while !Task.isCancelled {
                 if await turnCoordinator.tryAcquire(
                     ticket: ticket,
                     sessionID: channel.sessionID,
-                    allowsConcurrentSessions: allowsConcurrent
+                    allowsConcurrentSessions: false
                 ) {
                     guard !Task.isCancelled else {
                         await turnCoordinator.release(sessionID: channel.sessionID)
@@ -433,6 +460,10 @@ public final class ConversationViewModel {
     }
 
     /// 取消当前 turn。
+    ///
+    /// turn 仍在客户端排队时直接出队；已提交到 Runtime 的 turn 发送 cancel_turn
+    /// 控制帧后进入 "cancelling" 状态等待 Runtime 确认，不再乐观清空 lifecycle。
+    /// 如果 Runtime 在 15 秒内未回复 turn_cancelled 事件，超时兜底清理状态。
     public func cancelTurn() async {
         if let queuedTicket {
             turnDispatchTask?.cancel()
@@ -442,16 +473,32 @@ public final class ConversationViewModel {
             isAwaitingTurnAcceptance = false
             return
         }
-        // cancel_turn has no guaranteed terminal event, so end the local graph
-        // before waiting for transport. This also closes any running tool card.
+        cancelTimeoutTask?.cancel()
+        let turnIDBeingCancelled = currentTurnID
         await engine?.cancelActiveTurn()
         await channel?.cancelTurn()
-        if let sessionID = conversation?.id {
-            await turnCoordinator?.release(sessionID: sessionID)
-        }
-        currentTurnID = nil
-        lifecycleStatus = nil
+
+        // await 是挂起点：streamTask 可能已处理了 turn_finished/turn_failed/
+        // turn_cancelled，把 lifecycle 置为终态。只有仍在可取消状态时才继续。
+        let cancellableStates: Set<String?> = ["accepted", "queued", "running", "resuming", nil]
+        guard cancellableStates.contains(lifecycleStatus) else { return }
+
+        lifecycleStatus = "cancelling"
         pausedAt = nil
+
+        cancelTimeoutTask = Task { [weak self] in
+            try? await Task.sleep(for: .seconds(15))
+            guard let self,
+                  self.lifecycleStatus == "cancelling",
+                  self.currentTurnID == turnIDBeingCancelled else { return }
+            // 超时兜底：Runtime 未及时回复，强制视为已取消
+            self.lifecycleStatus = "cancelled"
+            self.currentTurnID = nil
+            self.queueReason = nil
+            self.queuePosition = nil
+            self.releaseTurnPermit()
+            self.onActivityInvalidated?()
+        }
     }
 
     /// Optimistically reflect that ResumeSession was accepted by the host wrapper.
@@ -470,6 +517,8 @@ public final class ConversationViewModel {
             return
         }
         turnDispatchTask?.cancel()
+        cancelTimeoutTask?.cancel()
+        cancelTimeoutTask = nil
         if let queuedTicket {
             await turnCoordinator?.cancel(ticket: queuedTicket)
         }
@@ -689,12 +738,17 @@ public final class ConversationViewModel {
             if let sessionID = conversation?.id {
                 Task { await turnCoordinator?.markActive(sessionID: sessionID) }
             }
-        case .turnFinished:
+        case .turnFinished(let turnID, _, _):
+            // 只处理当前 turn 的终态事件，防止超时兜底后旧 turn 事件覆盖新 turn 状态。
+            guard turnID == currentTurnID || currentTurnID == nil else { return }
+            cancelTimeoutTask?.cancel()
+            cancelTimeoutTask = nil
             isAwaitingTurnAcceptance = false
             lifecycleStatus = "done"
             queueReason = nil
             queuePosition = nil
             pausedAt = nil
+            currentTurnID = nil
             releaseTurnPermit()
             shouldRefreshActivity = true
         case .turnPaused:
@@ -707,15 +761,22 @@ public final class ConversationViewModel {
         case .turnResumed:
             lifecycleStatus = "resuming"
             pausedAt = nil
-        case .turnFailed:
+        case .turnFailed(let turnID, _, _, _):
+            guard turnID == currentTurnID || turnID == nil || currentTurnID == nil else { return }
+            cancelTimeoutTask?.cancel()
+            cancelTimeoutTask = nil
             isAwaitingTurnAcceptance = false
             lifecycleStatus = "failed"
             queueReason = nil
             queuePosition = nil
             pausedAt = nil
+            currentTurnID = nil
             releaseTurnPermit()
             shouldRefreshActivity = true
-        case .turnCancelled:
+        case .turnCancelled(let turnID, _):
+            guard turnID == currentTurnID || turnID == nil || currentTurnID == nil else { return }
+            cancelTimeoutTask?.cancel()
+            cancelTimeoutTask = nil
             isAwaitingTurnAcceptance = false
             lifecycleStatus = "cancelled"
             queueReason = nil
