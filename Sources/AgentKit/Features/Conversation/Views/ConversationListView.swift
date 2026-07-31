@@ -78,9 +78,7 @@ public struct ConversationListView: View {
             guard indices[descriptor.id] == nil else { continue }
             indices[descriptor.id] = groups.count
             groups.append(ConversationWorkspaceGroup(
-                id: descriptor.id,
-                title: descriptor.title,
-                systemImage: descriptor.systemImage,
+               descriptor: descriptor,
                 conversations: []
             ))
         }
@@ -92,9 +90,7 @@ public struct ConversationListView: View {
             } else {
                 indices[descriptor.id] = groups.count
                 groups.append(ConversationWorkspaceGroup(
-                    id: descriptor.id,
-                    title: descriptor.title,
-                    systemImage: descriptor.systemImage,
+                    descriptor: descriptor,
                     conversations: [conversation]
                 ))
             }
@@ -326,7 +322,19 @@ public struct ConversationListView: View {
         .contextMenu {
             #if os(macOS)
             Button {
-                if let workspacePath = group.conversations.first?.workspacePath {
+                let workspacePath = group.descriptor.workspacePath
+                let url = URL(fileURLWithPath: workspacePath)
+                store.selectWorkspace(Workspace(url: url))
+                store.beginDraft()
+            } label: {
+                Label("新建任务", systemImage: "square.and.pencil")
+            }
+            
+            Divider()
+
+            Button {
+                let workspacePath = group.descriptor.workspacePath
+                if !workspacePath.isEmpty {
                     NSWorkspace.shared.selectFile(workspacePath, inFileViewerRootedAtPath: "")
                 }
             } label: {
@@ -686,10 +694,11 @@ private struct ConversationListDialogModifier: ViewModifier {
 
 /// 只服务于侧边栏渲染，不参与 Runtime 会话数据的持久化或传输。
 private struct ConversationWorkspaceGroup: Identifiable {
-    struct Descriptor {
+    struct Descriptor: Identifiable {
         let id: String
         let title: String
         let systemImage: String
+        let workspacePath: String
 
         init(conversation: ConversationRef) {
             // 通用会话没有绑定路径，固定显示在「聊天」分组中。
@@ -697,6 +706,7 @@ private struct ConversationWorkspaceGroup: Identifiable {
                 id = "chat"
                 title = "聊天"
                 systemImage = "bubble.left.and.bubble.right"
+                workspacePath = ""
                 return
             }
 
@@ -705,19 +715,28 @@ private struct ConversationWorkspaceGroup: Identifiable {
             id = conversation.workspaceGroupingID
             title = conversation.workspaceGroupingName
             systemImage = "folder"
+            workspacePath = conversation.workspacePath
         }
 
         init(workspace: Workspace) {
             id = "path:\(workspace.url.canonicalPathForGrouping)"
             title = workspace.name
             systemImage = "folder"
+            self.workspacePath = workspace.url.path()
         }
     }
 
-    let id: String
-    let title: String
-    let systemImage: String
+    let descriptor: Descriptor
     var conversations: [ConversationRef]
+    var id: String {
+        descriptor.id
+    }
+    var title: String {
+        descriptor.title
+    }
+    var systemImage: String {
+        descriptor.systemImage
+    }
 }
 
 // MARK: - ConversationRow

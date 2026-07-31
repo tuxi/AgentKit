@@ -80,10 +80,10 @@ public struct ConversationDetailView: View {
                 }
                 .frame(maxWidth: .infinity)
             }
+            .background(.bar)
             #endif
         }
         .scrollDismissesKeyboard(.interactively)
-        .background(.bar)
         .task {
             if store.draft == nil
                 && store.activeConversationViewModel == nil
