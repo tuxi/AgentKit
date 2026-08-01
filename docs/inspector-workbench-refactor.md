@@ -174,10 +174,13 @@ Inspector 文件入口
 
 ### Phase 4：审阅入口
 
-- [ ] 区分 Git working tree diff 与 turn-scoped diff。
-- [ ] 文件树与 Diff 双向定位。
-- [ ] 支持轮次、筛选、增删统计和未修改行折叠。
-- [ ] 完善 FileViewerKit 的 DiffView，或抽取统一 Diff 渲染核心。
+- [x] 以只读方式明确展示 `HEAD ↔ working tree`，不与 turn-scoped diff 混用。
+- [x] 展示本地 A/M/D 文件、筛选、刷新、增删统计和当前文件选择。
+- [x] macOS 宿主通过受工作区根目录约束的 Git provider 注入数据。
+- [x] FileViewerKit 提供统一 `LineDiffBuilder` 和自适应 `ReviewWorkspaceView`。
+- [ ] 文件树与 Diff 双向定位及未修改行折叠。
+- [ ] 将 iOS 旧 Workspace diff 完全迁移到统一 builder，移除剩余模型转换。
+- [ ] 暂存、撤销、提交、分支比较和行评论。
 
 ### Phase 5：终端、浏览器、侧边聊天
 
@@ -263,6 +266,10 @@ InspectorWorkbenchView(
   视频通过 AVPlayer 状态和失败通知展示可重试错误，PDF 在进入 PDFKit 前验证文档并支持重试。
   FileViewerKit 29 项测试、chater macOS 与 iOS Simulator 构建通过。实时文件预览部分完成，
   剩余 Diff 数据模型统一随 Phase 4 审阅入口实施。
+- 2026-08-01：Phase 4 第一切片采用只读边界：FileViewerKit 建立 canonical
+  `FileReviewProvider`、`LineDiffBuilder` 与自适应 `ReviewWorkspaceView`；chater macOS 从
+  `git status --porcelain -z` 读取 A/M/D 和未跟踪文件，以 `HEAD` 与当前工作区内容生成统一
+  Diff。审阅选择与文件浏览选择独立保存；暂不支持暂存、撤销、提交、分支比较和行评论。
 - 2026-08-01：本阶段宿主构建暂受工作区中另一组未提交并发改动阻塞：
   `ConversationListViewModel.refreshTask` 的推断类型为 `Task<()?, Never>`，而声明为
   `Task<Void, Never>`。该改动不属于 Inspector 重构，因此未在本阶段代为修改。

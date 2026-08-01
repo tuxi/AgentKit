@@ -20,17 +20,21 @@ public final class InspectorSessionState: Identifiable {
     public var hostResourceID: String?
     /// 文件入口当前选中的实时工作区路径；与时间线 `FilePayload` 快照分离。
     public var selectedFilePath: String?
+    /// 审阅入口当前选中的变更文件；与文件浏览入口各自保存选择。
+    public var selectedReviewFilePath: String?
 
     public init(
         id: UUID = UUID(),
         entry: InspectorEntry,
         hostResourceID: String? = nil,
-        selectedFilePath: String? = nil
+        selectedFilePath: String? = nil,
+        selectedReviewFilePath: String? = nil
     ) {
         self.id = id
         self.entry = entry
         self.hostResourceID = hostResourceID
         self.selectedFilePath = selectedFilePath
+        self.selectedReviewFilePath = selectedReviewFilePath
     }
 }
 

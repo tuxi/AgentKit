@@ -79,6 +79,7 @@ final class InspectorWorkspaceStateTests: XCTestCase {
         let terminal = store.inspectorWorkspaceState.open(.terminal)
         terminal.session.hostResourceID = "pty-1"
         terminal.session.selectedFilePath = "output.log"
+        terminal.session.selectedReviewFilePath = "Sources/Changed.swift"
         terminal.pathState.push(.filePreview(filePath: "output.log"))
         store.showInspector(.todo("temporary detail"))
 
@@ -89,6 +90,7 @@ final class InspectorWorkspaceStateTests: XCTestCase {
         XCTAssertTrue(store.inspectorWorkspaceState.selectedTab === terminal)
         XCTAssertEqual(terminal.session.hostResourceID, "pty-1")
         XCTAssertEqual(terminal.session.selectedFilePath, "output.log")
+        XCTAssertEqual(terminal.session.selectedReviewFilePath, "Sources/Changed.swift")
         XCTAssertEqual(terminal.pathState.path, [.filePreview(filePath: "output.log")])
     }
 }
