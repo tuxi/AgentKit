@@ -164,11 +164,12 @@ Inspector 文件入口
 
 ### Phase 3：文件入口
 
-- [ ] 使用 FileViewerKit 文件树构建宽屏文件工作区。
-- [ ] 保留 `NativeCodePreviewView` 作为 macOS 优先代码渲染器。
-- [ ] 统一实时文件和 Agent 事件快照的语义。
+- [x] 使用 FileViewerKit 文件树构建宽屏文件工作区。
+- [x] 保留 `NativeCodePreviewView` 作为 macOS 优先代码渲染器。
+- [x] 统一实时文件和 Agent 事件快照的语义。
 - [ ] 消除 AgentKit/FileViewerKit 两套 provider 与 Diff 模型的重复转换。
-- [ ] 完善大文件、二进制、图片、视频和 PDF 状态。
+- [x] 建立大文本上限、二进制拒绝和图片、视频、PDF 的类型分发。
+- [ ] 补齐超大文件分段读取、媒体加载失败恢复等边界状态。
 
 ### Phase 4：审阅入口
 
@@ -237,3 +238,11 @@ InspectorWorkbenchView(
   selection，但不销毁长期入口 session。
 - 2026-08-01：Phase 2 完整回归为 317 项测试通过、1 项跳过、0 项失败；chater 的
   `Talkify-MacDirect` macOS 构建与 `Talkify` iOS Simulator 构建均通过。
+- 2026-08-01：Phase 3 第一切片完成：FileViewerKit 新增根目录受限的本地 provider、
+  可选中文件树和自适应 `FileWorkspaceView`；AgentKit 公开 `AgentCodePreviewView`，
+  让宿主在 macOS 复用 `NativeCodePreviewView`，其他平台保留现有 SwiftUI 预览。
+- 2026-08-01：文件标签保存 `selectedFilePath`，读取实时工作区；时间线 `FilePayload`
+  继续表示 Agent 事件快照，两者不隐式覆盖。FileViewerKit 回归 25 项测试通过。
+- 2026-08-01：本阶段宿主构建暂受工作区中另一组未提交并发改动阻塞：
+  `ConversationListViewModel.refreshTask` 的推断类型为 `Task<()?, Never>`，而声明为
+  `Task<Void, Never>`。该改动不属于 Inspector 重构，因此未在本阶段代为修改。

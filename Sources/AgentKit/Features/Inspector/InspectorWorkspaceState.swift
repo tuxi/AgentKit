@@ -18,15 +18,19 @@ public final class InspectorSessionState: Identifiable {
     public let id: UUID
     public let entry: InspectorEntry
     public var hostResourceID: String?
+    /// 文件入口当前选中的实时工作区路径；与时间线 `FilePayload` 快照分离。
+    public var selectedFilePath: String?
 
     public init(
         id: UUID = UUID(),
         entry: InspectorEntry,
-        hostResourceID: String? = nil
+        hostResourceID: String? = nil,
+        selectedFilePath: String? = nil
     ) {
         self.id = id
         self.entry = entry
         self.hostResourceID = hostResourceID
+        self.selectedFilePath = selectedFilePath
     }
 }
 
