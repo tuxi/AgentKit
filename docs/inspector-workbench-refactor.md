@@ -169,7 +169,7 @@ Inspector 文件入口
 - [x] 统一实时文件和 Agent 事件快照的语义。
 - [ ] 消除 AgentKit/FileViewerKit 两套 provider 与 Diff 模型的重复转换。
 - [x] 建立大文本上限、二进制拒绝和图片、视频、PDF 的类型分发。
-- [ ] 补齐超大文件分段读取、媒体加载失败恢复等边界状态。
+- [ ] 补齐超大文件分段读取、视频/PDF 加载失败恢复等边界状态。
 
 ### Phase 4：审阅入口
 
@@ -251,6 +251,12 @@ InspectorWorkbenchView(
   原因是 macOS 没有 compact size class，文件工作区在 280–480pt 内仍强制树与预览双栏，
   同时 detail 曾声明低于最小宽度的 `idealWidth: 0`。现改用 `ViewThatFits` 按父级 proposal
   无状态切换单双栏，并统一 detail/Inspector 的合法宽度区间；macOS 宿主构建通过。
+- 2026-08-01：Phase 3 预览边界继续收敛：超限文本不再伪装成二进制，而是携带
+  文件大小与预览上限；`Makefile`、`Dockerfile`、`.gitignore` 等无扩展名文本获得统一
+  类型识别；本地图片改为异步读取后使用平台原生解码，并提供失败重试。
+- 2026-08-01：chater iOS 的 Workspace Provider 不再复制文件类型识别和文本读取，
+  改为复用 FileViewerKit 的受根目录约束 provider，再向旧 AgentKit 文本协议做投影；
+  Diff 模型转换保留到 Phase 4。FileViewerKit 28 项测试、macOS 与 iOS 宿主构建通过。
 - 2026-08-01：本阶段宿主构建暂受工作区中另一组未提交并发改动阻塞：
   `ConversationListViewModel.refreshTask` 的推断类型为 `Task<()?, Never>`，而声明为
   `Task<Void, Never>`。该改动不属于 Inspector 重构，因此未在本阶段代为修改。
