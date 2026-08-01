@@ -25,6 +25,8 @@ public struct ConversationListView: View {
     @State private var renameTarget: ConversationRef? = nil
     @State private var renameText: String = ""
     @State private var expandedWorkspaceIDs: Set<String> = []
+    /// 已点击「显示全部」的 workspace 分组：该组不再折叠到前 5 个会话。
+    @State private var fullyExpandedWorkspaceIDs: Set<String> = []
     @State private var knownWorkspaceIDs: Set<String> = []
     @State private var didInitializeExpansion = false
     @State private var isProjectsExpanded = true
@@ -63,6 +65,14 @@ public struct ConversationListView: View {
             ref.id.localizedCaseInsensitiveContains(searchText)
                 || (ref.name ?? "").localizedCaseInsensitiveContains(searchText)
         }
+    }
+
+    private var conversationItemsByID: [String: ConversationListItem] {
+        Dictionary(uniqueKeysWithValues: viewModel.conversationItems.map { ($0.id, $0) })
+    }
+
+    private var archivedConversationItemsByID: [String: ConversationListItem] {
+        Dictionary(uniqueKeysWithValues: viewModel.archivedConversationItems.map { ($0.id, $0) })
     }
 
     /// 侧边栏仅用的展示分组。每个真实会话固定属于一个 workspace；旧数据或通用会话
@@ -150,9 +160,10 @@ public struct ConversationListView: View {
         .listStyle(.sidebar)
         .scrollContentBackground(.hidden)
         .task {
-            await viewModel.refresh()
-            await store.refreshRuntimeState()
+            store.setConversationListVisible(true)
+            await store.refreshConversationList()
         }
+        .onDisappear { store.setConversationListVisible(false) }
         .onAppear {
             syncExpandedWorkspaceIDs()
         }
@@ -182,9 +193,8 @@ public struct ConversationListView: View {
     }
 
     private var conversationList: some View {
-        let listRevision = viewModel.revision
         return List(selection: $selected) {
-            if viewModel.isLoading {
+            if viewModel.isLoading && !viewModel.hasLoadedConversations {
                 ProgressView()
                     .controlSize(.small)
                     .frame(maxWidth: .infinity)
@@ -227,14 +237,14 @@ public struct ConversationListView: View {
 
                 if isProjectsExpanded {
                     ForEach(conversationGroups) { group in
-                        workspaceGroup(group, listRevision: listRevision)
+                        workspaceGroup(group)
                     }
                 }
             }
 
 
             if store.supportsConversationArchive {
-                archivedGroup(listRevision: listRevision)
+                archivedGroup()
             }
         }
     }
@@ -284,8 +294,7 @@ public struct ConversationListView: View {
 
     @ViewBuilder
     private func workspaceGroup(
-        _ group: ConversationWorkspaceGroup,
-        listRevision: Int
+        _ group: ConversationWorkspaceGroup
     ) -> some View {
         let isExpanded = expandedWorkspaceIDs.contains(group.id)
 
@@ -325,7 +334,9 @@ public struct ConversationListView: View {
                 let workspacePath = group.descriptor.workspacePath
                 let url = URL(fileURLWithPath: workspacePath)
                 store.selectWorkspace(Workspace(url: url))
-                store.beginDraft()
+                DispatchQueue.main.async {
+                    store.beginDraft()
+                }
             } label: {
                 Label("新建任务", systemImage: "square.and.pencil")
             }
@@ -345,13 +356,13 @@ public struct ConversationListView: View {
         }
 
         if isExpanded {
-            ForEach(group.conversations, id: \.uiID) { ref in
+            ForEach(visibleConversations(in: group).compactMap { conversationItemsByID[$0.id] }) { item in
+                let ref = item.ref
                 ConversationRow(
-                    ref: ref,
+                    item: item,
                     activity: store.supervisor.activity(for: ref),
                     queueReason: store.supervisor.queueReason(for: ref.id)
                 )
-                    .id("\(ref.uiID)-\(listRevision)")
                     .tag(ref)
                     .listRowInsets(.init(top: 0, leading: 12, bottom: 0, trailing: 12))
                     .listRowSeparator(.hidden)
@@ -377,8 +388,7 @@ public struct ConversationListView: View {
                     #endif
                     .contextMenu {
                         Button {
-                            renameTarget = ref
-                            renameText = ref.name ?? ""
+                            beginRename(conversationID: ref.id, fallback: ref)
                         } label: {
                             Label("重命名", systemImage: "pencil")
                         }
@@ -410,11 +420,65 @@ public struct ConversationListView: View {
                         .disabled(!canDelete(ref))
                     }
             }
+            if !isSearchActive,
+               group.conversations.count > Self.maxVisibleConversationsPerGroup {
+                showAllToggle(for: group)
+            }
         }
     }
 
+    /// 每个 workspace 分组默认最多同时渲染的会话数。超过该数量时由
+    /// `showAllToggle(for:)` 提供「显示全部」入口，避免单个分组渲染过多行
+    /// 拖慢滚动到其他分组。
+    private static let maxVisibleConversationsPerGroup = 5
+
+    /// 分组展开时实际渲染的会话：搜索期间不折叠，保证搜索结果全部可见；
+    /// 其余情况默认只显示前 5 个，直到用户点击「显示全部」。
+    private func visibleConversations(in group: ConversationWorkspaceGroup) -> [ConversationRef] {
+        guard !isSearchActive else { return group.conversations }
+        guard !fullyExpandedWorkspaceIDs.contains(group.id) else { return group.conversations }
+        return Array(group.conversations.prefix(Self.maxVisibleConversationsPerGroup))
+    }
+
+    private var isSearchActive: Bool {
+        !searchText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+    }
+
+    /// 分组会话数超过上限时显示的一行「显示全部 / 收起」切换入口。
     @ViewBuilder
-    private func archivedGroup(listRevision: Int) -> some View {
+    private func showAllToggle(for group: ConversationWorkspaceGroup) -> some View {
+        let isFullyExpanded = fullyExpandedWorkspaceIDs.contains(group.id)
+        Button {
+            if isFullyExpanded {
+                fullyExpandedWorkspaceIDs.remove(group.id)
+            } else {
+                fullyExpandedWorkspaceIDs.insert(group.id)
+            }
+        } label: {
+            HStack(spacing: 5) {
+                Image(systemName: isFullyExpanded ? "chevron.up" : "chevron.down")
+                    .font(.system(size: 10, weight: .bold))
+                    .foregroundStyle(.tertiary)
+                Text(isFullyExpanded
+                     ? "收起"
+                     : "显示全部 \(group.conversations.count) 个任务")
+                    .font(.system(size: 12, weight: .medium))
+                    .foregroundStyle(.secondary)
+                Spacer(minLength: 0)
+            }
+            .padding(.horizontal, 8)
+            .padding(.vertical, 6)
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .listRowInsets(.init())
+        .listRowSeparator(.hidden)
+        .listRowBackground(Color.clear)
+        .accessibilityLabel(isFullyExpanded ? "收起分组全部对话" : "展开显示分组全部对话")
+    }
+
+    @ViewBuilder
+    private func archivedGroup() -> some View {
         Button {
             isArchivedExpanded.toggle()
         } label: {
@@ -431,7 +495,7 @@ public struct ConversationListView: View {
                         .font(.caption2.monospacedDigit())
                         .foregroundStyle(.tertiary)
                 }
-                if viewModel.isLoadingArchived {
+                if viewModel.isLoadingArchived && !viewModel.hasLoadedArchivedConversations {
                     ProgressView().controlSize(.mini)
                 }
                 Image(systemName: isArchivedExpanded ? "chevron.down" : "chevron.right")
@@ -458,9 +522,9 @@ public struct ConversationListView: View {
                     .listRowSeparator(.hidden)
                     .listRowBackground(Color.clear)
             } else {
-                ForEach(filteredArchivedConversations, id: \.uiID) { ref in
-                    ConversationRow(ref: ref, activity: .idle, queueReason: nil)
-                        .id("archived-\(ref.uiID)-\(listRevision)")
+                ForEach(filteredArchivedConversations.compactMap { archivedConversationItemsByID[$0.id] }) { item in
+                    let ref = item.ref
+                    ConversationRow(item: item, activity: .idle, queueReason: nil)
                         .tag(ref)
                         .listRowInsets(.init(top: 0, leading: 12, bottom: 0, trailing: 12))
                         .listRowSeparator(.hidden)
@@ -514,12 +578,24 @@ public struct ConversationListView: View {
             expandedWorkspaceIDs.formUnion(currentIDs.subtracting(knownWorkspaceIDs))
             expandedWorkspaceIDs.formIntersection(currentIDs)
         }
+        fullyExpandedWorkspaceIDs.formIntersection(currentIDs)
         knownWorkspaceIDs = currentIDs
     }
 
     private func canDelete(_ conversation: ConversationRef) -> Bool {
         store.canDeleteConversation(conversation)
             && !viewModel.deletingConversationIDs.contains(conversation.id)
+    }
+
+    /// Context-menu closures can outlive a row's visual update in `List`.
+    /// Resolve the reference at tap time instead of using the captured snapshot,
+    /// so repeated renames always open with the current name.
+    private func beginRename(conversationID: String, fallback: ConversationRef) {
+        let current = viewModel.conversations.first(where: { $0.id == conversationID })
+            ?? viewModel.archivedConversations.first(where: { $0.id == conversationID })
+            ?? fallback
+        renameTarget = current
+        renameText = current.name ?? ""
     }
 
     private func canArchive(_ conversation: ConversationRef) -> Bool {
@@ -742,9 +818,11 @@ private struct ConversationWorkspaceGroup: Identifiable {
 // MARK: - ConversationRow
 
 private struct ConversationRow: View {
-    let ref: ConversationRef
+    let item: ConversationListItem
     let activity: ConversationActivityState
     let queueReason: String?
+
+    private var ref: ConversationRef { item.ref }
 
     var body: some View {
         HStack(spacing: 8) {

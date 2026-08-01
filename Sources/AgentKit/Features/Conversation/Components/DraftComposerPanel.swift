@@ -1549,7 +1549,9 @@ struct AskUserBar: View {
                 
                 // Options list
                 if isExpanded {
-                    optionsList
+                    ScrollView(.vertical) {
+                        optionsList
+                    }
                 }
                 
                 // Custom input (only when allowCustom)

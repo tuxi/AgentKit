@@ -168,13 +168,13 @@ public struct ConversationDetailView: View {
     }
     
     // MARK: - Active session
-    
+
     private func activeView(vm: ConversationViewModel) -> some View {
         let isPaused = false// vm.lifecycleStatus == "paused"
         || (vm.lifecycleStatus == nil && store.selectedConversation?.isPaused == true)
         let isArchived = vm.isArchived
-        
-        return VStack(spacing: 0) {
+
+        let banner: some View = Group {
             if isArchived, let conversation = vm.conversation {
                 ArchivedConversationBar(
                     isRestoring: store.listViewModel.restoringConversationIDs.contains(conversation.id),
@@ -193,11 +193,25 @@ public struct ConversationDetailView: View {
                 }
                 .transition(.move(edge: .top).combined(with: .opacity))
             }
-            
+        }
+
+        #if os(macOS)
+        // macOS: Use VStack layout instead of safeAreaInset to avoid
+        // Auto Layout os_unfair_lock deadlock between NSISEngine and
+        // performSelector:withObject:afterDelay: during constraint updates.
+        return VStack(spacing: 0) {
+            banner
+            residentTimelines(activeViewModel: vm)
+            activeBottomBar(vm: vm, isPaused: isPaused, isArchived: isArchived)
+        }
+        .background(.bar)
+        .padding(.horizontal, 20)
+        #else
+        return VStack(spacing: 0) {
+            banner
             residentTimelines(activeViewModel: vm)
         }
         .background(.bar)
-        #if os(iOS)
         .background {
             ClientToolPresentationHost(
                 presentationCoordinator: vm.clientToolPresentationCoordinator
@@ -205,13 +219,18 @@ public struct ConversationDetailView: View {
             .frame(width: 0, height: 0)
             .accessibilityHidden(true)
         }
-        #endif
-        #if os(macOS)
-        .padding(.horizontal, 20)
-        #endif
         .safeAreaInset(edge: .bottom, spacing: 8) {
-            VStack(spacing: 0) {
-                // ── ask_user 卡片（优先级最高：AskUser > Plan > Approval）──
+            activeBottomBar(vm: vm, isPaused: isPaused, isArchived: isArchived)
+        }
+        #endif
+    }
+
+    /// Bottom bar shared by both macOS (inline VStack) and iOS (safeAreaInset).
+    @ViewBuilder
+    private func activeBottomBar(vm: ConversationViewModel, isPaused: Bool, isArchived: Bool) -> some View {
+        VStack(spacing: 0) {
+            ZStack(alignment: .bottom) {
+                // ── ask_user ──
                 if let askUser = vm.snapshot.pendingAskUser {
                     AskUserBar(
                         request: askUser,
@@ -225,8 +244,6 @@ public struct ConversationDetailView: View {
                     .transition(.move(edge: .bottom).combined(with: .opacity))
                 }
 
-                // Plan 是阻塞输入的审批状态，不是对话消息。完整规划只在
-                // 这里展示一次，批准后才进入后续执行阶段。
                 if let plan = vm.snapshot.pendingPlanApproval {
                     PlanApprovalBar(
                         plan: plan,
@@ -240,7 +257,6 @@ public struct ConversationDetailView: View {
                     .transition(.move(edge: .bottom).combined(with: .opacity))
                 }
 
-                // ── 工具审批拦截栏（阻断 input pipeline）──
                 if let approval = vm.snapshot.pendingApproval {
                     ApprovalBar(
                         request: approval,
@@ -256,91 +272,88 @@ public struct ConversationDetailView: View {
                     )
                     .transition(.move(edge: .bottom).combined(with: .opacity))
                 }
-                
-                #if os(macOS)
-                WorkspaceChipBar()          // macOS 保持独立的只读工作区工具栏
-                    .padding(.horizontal, 20)
-                #endif
-                
-                DraftComposerPanel(
-                    placeholder: vm.isAwaitingTurnAcceptance
-                    ? AgentKitLocalized.string("conversation.submitting_task")
-                    : vm.isLocallyQueued
-                    ? AgentKitLocalized.string("conversation.queued_no_parallel")
-                    : vm.lifecycleStatus == "queued"
-                    ? vm.runtimeQueueDescription
-                    : vm.lifecycleStatus == "accepted"
-                    ? AgentKitLocalized.string("conversation.runtime_received")
-                    : isPaused
-                    ? AgentKitLocalized.string("conversation.paused_click_to_resume")
-                    : isArchived
-                    ? AgentKitLocalized.string("conversation.archived_restore_to_continue")
-                    : (vm.snapshot.pendingAskUser != nil)
-                    ? AgentKitLocalized.string("conversation.answer_questions_to_continue")
-                    : (vm.snapshot.pendingApproval != nil || vm.snapshot.pendingPlanApproval != nil)
-                    ? AgentKitLocalized.string("conversation.approval_needed_allow_deny")
-                    : AgentKitLocalized.string("conversation.input_message"),
-                    isEnabled: !isArchived && !isPaused && !vm.isTurnActive
-                        && vm.snapshot.pendingAskUser == nil
-                        && vm.snapshot.pendingApproval == nil
-                        && vm.snapshot.pendingPlanApproval == nil,
-                    isDraft: false,
-                    isTurnRunning: vm.isTurnActive,
-                    onStop: { Task { await vm.cancelTurn() } },
-                    onSend: { text, model, assets in
-                        let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
-                        return await store.sendUserMessage(
-                            trimmed,
-                            model: model,
-                            through: vm
+            }
+
+            #if os(macOS)
+            WorkspaceChipBar()
+            #endif
+
+            DraftComposerPanel(
+                placeholder: vm.isAwaitingTurnAcceptance
+                ? AgentKitLocalized.string("conversation.submitting_task")
+                : vm.isLocallyQueued
+                ? AgentKitLocalized.string("conversation.queued_no_parallel")
+                : vm.lifecycleStatus == "queued"
+                ? vm.runtimeQueueDescription
+                : vm.lifecycleStatus == "accepted"
+                ? AgentKitLocalized.string("conversation.runtime_received")
+                : isPaused
+                ? AgentKitLocalized.string("conversation.paused_click_to_resume")
+                : isArchived
+                ? AgentKitLocalized.string("conversation.archived_restore_to_continue")
+                : (vm.snapshot.pendingAskUser != nil)
+                ? AgentKitLocalized.string("conversation.answer_questions_to_continue")
+                : (vm.snapshot.pendingApproval != nil || vm.snapshot.pendingPlanApproval != nil)
+                ? AgentKitLocalized.string("conversation.approval_needed_allow_deny")
+                : AgentKitLocalized.string("conversation.input_message"),
+                isEnabled: !isArchived && !isPaused && !vm.isTurnActive
+                    && vm.snapshot.pendingAskUser == nil
+                    && vm.snapshot.pendingApproval == nil
+                    && vm.snapshot.pendingPlanApproval == nil,
+                isDraft: false,
+                isTurnRunning: vm.isTurnActive,
+                onStop: { Task { await vm.cancelTurn() } },
+                onSend: { text, model, assets in
+                    let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+                    return await store.sendUserMessage(
+                        trimmed,
+                        model: model,
+                        through: vm
+                    )
+                },
+                viewModel: vm,
+                onModelChange: { newID in
+#if os(iOS)
+                    Task {
+                        try? AgentRuntime.shared.reconfigure(
+                            secretsJSON: await CredentialSettings.currentSecretsJSON(),
+                            modelName: newID
                         )
-                    },
-                    viewModel: vm,
-                    onModelChange: { newID in
-#if os(iOS)
-                        Task {
-                            try? AgentRuntime.shared.reconfigure(
-                                secretsJSON: await CredentialSettings.currentSecretsJSON(),
-                                modelName: newID
-                            )
-                        }
-#endif
                     }
-                )
-                .environment(modelSettings)
-                // 渐变穿透背景
-                .background {
+#endif
+                }
+            )
+            .environment(modelSettings)
+            .background {
 #if os(iOS)
-                    GeometryReader { proxy in
+                GeometryReader { proxy in
+                    LinearGradient(
+                        stops: [
+                            .init(color: .clear, location: 0.0),
+                            .init(color: Color(UIColor.systemBackground).opacity(0.4), location: 0.25),
+                            .init(color: Color(UIColor.systemBackground).opacity(0.95), location: 0.8)
+                        ],
+                        startPoint: .top,
+                        endPoint: .bottom
+                    )
+                    .background(.bar)
+                    .mask {
                         LinearGradient(
-                            stops: [
-                                .init(color: .clear, location: 0.0),
-                                .init(color: Color(UIColor.systemBackground).opacity(0.4), location: 0.25),
-                                .init(color: Color(UIColor.systemBackground).opacity(0.95), location: 0.8)
-                            ],
+                            colors: [.clear, .black.opacity(0.6), .black],
                             startPoint: .top,
                             endPoint: .bottom
                         )
-                        .background(.bar) // 引入系统 Bar 材质
-                        .mask {
-                            // 用垂直 alpha 渐变控制 Bar 的渐隐
-                            LinearGradient(
-                                colors: [.clear, .black.opacity(0.6), .black],
-                                startPoint: .top,
-                                endPoint: .bottom
-                            )
-                        }
                     }
-                    .ignoresSafeArea(edges: .bottom)
-#endif
                 }
+                .ignoresSafeArea(edges: .bottom)
+#endif
             }
-            .animation(.easeOut(duration: 0.25), value: vm.snapshot.pendingAskUser != nil)
-            .animation(.easeOut(duration: 0.25), value: vm.snapshot.pendingApproval != nil)
-            .animation(.easeOut(duration: 0.25), value: vm.snapshot.pendingPlanApproval != nil)
-            .animation(.easeOut(duration: 0.25), value: isPaused)
-            .animation(.easeOut(duration: 0.25), value: isArchived)
         }
+        .animation(.easeOut(duration: 0.25), value: vm.snapshot.pendingAskUser != nil)
+        .animation(.easeOut(duration: 0.25), value: vm.snapshot.pendingApproval != nil)
+        .animation(.easeOut(duration: 0.25), value: vm.snapshot.pendingPlanApproval != nil)
+        .animation(.easeOut(duration: 0.25), value: isPaused)
+        .animation(.easeOut(duration: 0.25), value: isArchived)
     }
     
     @ViewBuilder

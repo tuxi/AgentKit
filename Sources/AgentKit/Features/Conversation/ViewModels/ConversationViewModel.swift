@@ -740,7 +740,9 @@ public final class ConversationViewModel {
             }
         case .turnFinished(let turnID, _, _):
             // 只处理当前 turn 的终态事件，防止超时兜底后旧 turn 事件覆盖新 turn 状态。
-            guard turnID == currentTurnID || currentTurnID == nil else { return }
+            // turnID 为空字符串时视为 nil（wire 层 turnID ?? "" 的遗留行为）。
+            let eventTurnID = turnID.isEmpty ? nil : turnID
+            guard eventTurnID == currentTurnID || eventTurnID == nil || currentTurnID == nil else { return }
             cancelTimeoutTask?.cancel()
             cancelTimeoutTask = nil
             isAwaitingTurnAcceptance = false
