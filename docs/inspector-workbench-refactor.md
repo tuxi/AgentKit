@@ -242,7 +242,11 @@ InspectorWorkbenchView(
   可选中文件树和自适应 `FileWorkspaceView`；AgentKit 公开 `AgentCodePreviewView`，
   让宿主在 macOS 复用 `NativeCodePreviewView`，其他平台保留现有 SwiftUI 预览。
 - 2026-08-01：文件标签保存 `selectedFilePath`，读取实时工作区；时间线 `FilePayload`
-  继续表示 Agent 事件快照，两者不隐式覆盖。FileViewerKit 回归 25 项测试通过。
+  继续表示 Agent 事件快照，两者不隐式覆盖。
+- 2026-08-01：首次宿主验证发现 macOS `OutlineGroup` 在展开目录的布局 pass 中同步观察
+  懒加载 children 变化，会触发 AppKit 重复 Update Constraints 并以 `EXC_BAD_ACCESS`
+  终止。文件树已改为显式递归分支：展开状态先稳定，再异步单飞加载 children；
+  FileViewerKit 回归 26 项测试通过，chater `Talkify-MacDirect` macOS 构建通过。
 - 2026-08-01：本阶段宿主构建暂受工作区中另一组未提交并发改动阻塞：
   `ConversationListViewModel.refreshTask` 的推断类型为 `Task<()?, Never>`，而声明为
   `Task<Void, Never>`。该改动不属于 Inspector 重构，因此未在本阶段代为修改。
