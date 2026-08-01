@@ -247,6 +247,10 @@ InspectorWorkbenchView(
   懒加载 children 变化，会触发 AppKit 重复 Update Constraints 并以 `EXC_BAD_ACCESS`
   终止。文件树已改为显式递归分支：展开状态先稳定，再异步单飞加载 children；
   FileViewerKit 回归 26 项测试通过，chater `Talkify-MacDirect` macOS 构建通过。
+- 2026-08-01：第二次宿主验证发现拖拽 Inspector 分割线仍可触发同类约束循环。
+  原因是 macOS 没有 compact size class，文件工作区在 280–480pt 内仍强制树与预览双栏，
+  同时 detail 曾声明低于最小宽度的 `idealWidth: 0`。现改用 `ViewThatFits` 按父级 proposal
+  无状态切换单双栏，并统一 detail/Inspector 的合法宽度区间；macOS 宿主构建通过。
 - 2026-08-01：本阶段宿主构建暂受工作区中另一组未提交并发改动阻塞：
   `ConversationListViewModel.refreshTask` 的推断类型为 `Task<()?, Never>`，而声明为
   `Task<Void, Never>`。该改动不属于 Inspector 重构，因此未在本阶段代为修改。
