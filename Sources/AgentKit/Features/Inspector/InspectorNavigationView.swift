@@ -44,17 +44,38 @@ public struct InspectorNavigationView: View {
     /// 文件内容提供者（用于 filePreview / diffPreview destination）
     let fileProvider: (any FileContentProvider)?
 
-    @State private var path = InspectorPathState()
+    @State private var ownedPath = InspectorPathState()
+
+    /// 外部传入时，导航历史由 conversation/tab session 持有。
+    private let externalPath: InspectorPathState?
 
     public init(
         initialSelection: InspectorSelection?,
-        fileProvider: (any FileContentProvider)? = nil
+        fileProvider: (any FileContentProvider)? = nil,
+        pathState: InspectorPathState? = nil
     ) {
         self.initialSelection = initialSelection
         self.fileProvider = fileProvider
+        self.externalPath = pathState
     }
 
     public var body: some View {
+        InspectorNavigationContent(
+            initialSelection: initialSelection,
+            fileProvider: fileProvider,
+            path: externalPath ?? ownedPath
+        )
+    }
+}
+
+private struct InspectorNavigationContent: View {
+    let initialSelection: InspectorSelection?
+    let fileProvider: (any FileContentProvider)?
+    let path: InspectorPathState
+
+    var body: some View {
+        @Bindable var path = path
+
         NavigationStack(path: $path.path) {
             InspectorView(selection: initialSelection)
                 .navigationDestination(
@@ -69,6 +90,9 @@ public struct InspectorNavigationView: View {
         }
         .onAppear {
             path.isActive = true
+        }
+        .onDisappear {
+            path.isActive = false
         }
     }
 

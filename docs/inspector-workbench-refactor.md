@@ -86,20 +86,27 @@ Inspector 文件入口
 
 ## 4. 状态模型方向
 
-最终工作台状态应按任务或 conversation 隔离：
+工作台状态按任务或 conversation 隔离。Phase 2 已落地为引用类型状态树：
 
 ```swift
-struct InspectorWorkspaceState {
+@Observable final class InspectorWorkspaceState {
+    let conversationID: String?
     var isPresented: Bool
-    var selectedTabID: InspectorTab.ID?
-    var tabs: [InspectorTab]
+    var selectedTabID: InspectorTabState.ID?
+    var tabs: [InspectorTabState]
+    let selectionPathState: InspectorPathState
 }
 
-struct InspectorTab {
-    var id: UUID
-    var entry: InspectorEntry
-    var navigationPath: [InspectorDestination]
-    var session: InspectorSession
+@Observable final class InspectorTabState {
+    let id: UUID
+    let session: InspectorSessionState
+    let pathState: InspectorPathState
+}
+
+@Observable final class InspectorSessionState {
+    let id: UUID
+    let entry: InspectorEntry
+    var hostResourceID: String?
 }
 ```
 
@@ -111,7 +118,9 @@ struct InspectorTab {
 - 文件：workspace、文件路径、展开节点、选区和滚动位置；
 - 侧边聊天：辅助 conversation ID。
 
-第一阶段不立即把该状态塞入 `WorkspaceStore`，先建立主入口和兼容容器，避免一次改动同时影响宿主、时间线点击和 Inspector 深层导航。
+`WorkspaceStore` 按 conversation ID 保留 `InspectorWorkspaceState`；conversation 切换时只替换
+当前状态引用。PTY、WebView 和辅助聊天等资源仍由宿主持有，以 `InspectorSessionState.id`
+作为稳定绑定键。
 
 ## 5. API 边界
 
@@ -147,11 +156,11 @@ struct InspectorTab {
 
 ### Phase 2：入口会话与标签
 
-- [ ] 增加 Inspector tab/session 模型。
-- [ ] 每个 tab 独立保存 NavigationPath。
-- [ ] 关闭 Inspector 仅隐藏，不销毁资源。
-- [ ] conversation 切换时恢复各自 Inspector 状态。
-- [ ] 增加标签新增、关闭和选择交互。
+- [x] 增加 Inspector tab/session 模型。
+- [x] 每个 tab 独立保存 NavigationPath。
+- [x] 关闭 Inspector 仅隐藏，不销毁 session 状态。
+- [x] conversation 切换时恢复各自 Inspector 状态。
+- [x] 增加标签新增、关闭和选择交互。
 
 ### Phase 3：文件入口
 
@@ -222,3 +231,9 @@ InspectorWorkbenchView(
   Workspace Browser，其余尚未实现的入口显示明确的阶段性状态，不创建伪会话。
 - 2026-08-01：宿主接入通过 `Talkify-MacDirect` macOS 构建与 `Talkify` iOS
   Simulator 构建；现有 Swift 6 concurrency 警告不属于本轮改造。
+- 2026-08-01：Phase 2 建立 conversation-scoped `InspectorWorkspaceState`、稳定的
+  `InspectorSessionState` 身份、可增删选的标签栏，以及每标签独立的
+  `InspectorPathState`；时间线 selection 使用单独 path，关闭 Inspector 时清理该临时
+  selection，但不销毁长期入口 session。
+- 2026-08-01：Phase 2 完整回归为 317 项测试通过、1 项跳过、0 项失败；chater 的
+  `Talkify-MacDirect` macOS 构建与 `Talkify` iOS Simulator 构建均通过。

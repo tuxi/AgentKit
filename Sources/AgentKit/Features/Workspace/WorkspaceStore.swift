@@ -34,6 +34,7 @@ public final class WorkspaceStore {
     public var selectedConversation: ConversationRef? {
         didSet {
             guard oldValue != selectedConversation else { return }
+            switchInspectorWorkspace(to: selectedConversation?.id)
             supervisor.setSelectedSessionID(selectedConversation?.id)
             if let conversation = selectedConversation {
                 // 选中一个真实会话即丢弃未提交的草稿。
@@ -82,8 +83,29 @@ public final class WorkspaceStore {
     /// 此间 workspace 尚未就绪 → UI 应禁止再选目录、禁止发消息。
     public private(set) var isPreparingWorkspace = false
 
-    public private(set) var inspectorSelection: InspectorSelection?
-    public var isInspectorPresented: Bool = false
+    public private(set) var inspectorSelection: InspectorSelection? {
+        didSet {
+            inspectorWorkspaceState.selection = inspectorSelection
+        }
+    }
+
+    public var isInspectorPresented: Bool = false {
+        didSet {
+            inspectorWorkspaceState.isPresented = isInspectorPresented
+            // 产物 selection 是临时详情，不是长期 session。关闭面板时丢弃它，
+            // 但保留入口标签、宿主资源身份与各自导航路径。
+            if !isInspectorPresented, inspectorSelection != nil {
+                inspectorSelection = nil
+            }
+        }
+    }
+
+    /// 当前 conversation 的 Inspector 会话。切换 conversation 时替换引用，
+    /// 再切回来会恢复同一批标签与导航路径。
+    public private(set) var inspectorWorkspaceState = InspectorWorkspaceState()
+
+    @ObservationIgnored
+    private var inspectorWorkspaceStates: [String: InspectorWorkspaceState] = [:]
 
     /// P4.5: Workbench 预览面板状态（独立状态树）。
     public let workbench = WorkbenchState()
@@ -1011,8 +1033,33 @@ public final class WorkspaceStore {
 
     // MARK: - Inspector
 
+    private func switchInspectorWorkspace(to conversationID: String?) {
+        let previousState = inspectorWorkspaceState
+        previousState.selection = inspectorSelection
+        previousState.isPresented = isInspectorPresented
+        inspectorWorkspaceStates[inspectorWorkspaceKey(previousState.conversationID)] = previousState
+
+        let key = inspectorWorkspaceKey(conversationID)
+        let nextState: InspectorWorkspaceState
+        if let existing = inspectorWorkspaceStates[key] {
+            nextState = existing
+        } else {
+            nextState = InspectorWorkspaceState(conversationID: conversationID)
+            inspectorWorkspaceStates[key] = nextState
+        }
+
+        inspectorWorkspaceState = nextState
+        inspectorSelection = nextState.selection
+        isInspectorPresented = nextState.isPresented
+    }
+
+    private func inspectorWorkspaceKey(_ conversationID: String?) -> String {
+        conversationID ?? "__agentkit_draft__"
+    }
+
     /// 点击对话详情里的某个内容时调用，弹出右侧检查器。
     public func showInspector(_ selection: InspectorSelection) {
+        inspectorWorkspaceState.selectionPathState.popToRoot()
         inspectorSelection = selection
         isInspectorPresented = true
     }
