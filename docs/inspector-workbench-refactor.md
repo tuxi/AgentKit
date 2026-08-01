@@ -167,9 +167,10 @@ Inspector 文件入口
 - [x] 使用 FileViewerKit 文件树构建宽屏文件工作区。
 - [x] 保留 `NativeCodePreviewView` 作为 macOS 优先代码渲染器。
 - [x] 统一实时文件和 Agent 事件快照的语义。
-- [ ] 消除 AgentKit/FileViewerKit 两套 provider 与 Diff 模型的重复转换。
+- [x] 消除实时文件内容与类型识别的重复 provider 实现。
+- [ ] 消除 AgentKit/FileViewerKit 两套 Diff 模型转换（并入 Phase 4）。
 - [x] 建立大文本上限、二进制拒绝和图片、视频、PDF 的类型分发。
-- [ ] 补齐超大文件分段读取、视频/PDF 加载失败恢复等边界状态。
+- [x] 补齐超大文件分段读取、视频/PDF 加载失败恢复等边界状态。
 
 ### Phase 4：审阅入口
 
@@ -257,6 +258,11 @@ InspectorWorkbenchView(
 - 2026-08-01：chater iOS 的 Workspace Provider 不再复制文件类型识别和文本读取，
   改为复用 FileViewerKit 的受根目录约束 provider，再向旧 AgentKit 文本协议做投影；
   Diff 模型转换保留到 Phase 4。FileViewerKit 28 项测试、macOS 与 iOS 宿主构建通过。
+- 2026-08-01：Phase 3 文件预览收尾：Provider 增加带默认实现的 `textChunk` 能力，
+  本地 provider 按 UTF-8 安全边界读取 256 KB 分段；超大文本自动显示首段并支持继续加载。
+  视频通过 AVPlayer 状态和失败通知展示可重试错误，PDF 在进入 PDFKit 前验证文档并支持重试。
+  FileViewerKit 29 项测试、chater macOS 与 iOS Simulator 构建通过。实时文件预览部分完成，
+  剩余 Diff 数据模型统一随 Phase 4 审阅入口实施。
 - 2026-08-01：本阶段宿主构建暂受工作区中另一组未提交并发改动阻塞：
   `ConversationListViewModel.refreshTask` 的推断类型为 `Task<()?, Never>`，而声明为
   `Task<Void, Never>`。该改动不属于 Inspector 重构，因此未在本阶段代为修改。
