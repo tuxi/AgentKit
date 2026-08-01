@@ -179,7 +179,8 @@ Inspector 文件入口
 - [x] macOS 宿主通过受工作区根目录约束的 Git provider 注入数据。
 - [x] FileViewerKit 提供统一 `LineDiffBuilder` 和自适应 `ReviewWorkspaceView`。
 - [ ] 文件树与 Diff 双向定位及未修改行折叠。
-- [ ] 将 iOS 旧 Workspace diff 完全迁移到统一 builder，移除剩余模型转换。
+- [x] iOS Workspace diff 迁移到统一 builder，并将旧 AgentKit 模型转换集中为单一兼容适配器。
+- [ ] 最终移除 AgentKit 旧 Diff 协议模型；需先确认 AgentKit 是否允许依赖独立展示包。
 - [ ] 暂存、撤销、提交、分支比较和行评论。
 
 ### Phase 5：终端、浏览器、侧边聊天
@@ -270,6 +271,12 @@ InspectorWorkbenchView(
   `FileReviewProvider`、`LineDiffBuilder` 与自适应 `ReviewWorkspaceView`；chater macOS 从
   `git status --porcelain -z` 读取 A/M/D 和未跟踪文件，以 `HEAD` 与当前工作区内容生成统一
   Diff。审阅选择与文件浏览选择独立保存；暂不支持暂存、撤销、提交、分支比较和行评论。
+- 2026-08-01：Phase 4.2 收敛 Diff 计算链路：chater iOS 的两套 provider 均先生成
+  FileViewerKit canonical hunks，删除宿主内重复的 `LineDiffer`；AgentKit 旧 Inspector 协议
+  暂由唯一的 `AgentKitDiffCompatibilityAdapter` 承接，避免 AgentKit 反向依赖展示包。
+  同时补齐新增、删除、尾部换行和远距离多 hunk 回归用例。iOS 的 loose Git object
+  读取修正了 zlib wrapper、嵌套 tree 和 packed ref，并通过 5000 行嵌套文件 fixture；
+  packfile object 解析仍明确留作后续能力。
 - 2026-08-01：本阶段宿主构建暂受工作区中另一组未提交并发改动阻塞：
   `ConversationListViewModel.refreshTask` 的推断类型为 `Task<()?, Never>`，而声明为
   `Task<Void, Never>`。该改动不属于 Inspector 重构，因此未在本阶段代为修改。
