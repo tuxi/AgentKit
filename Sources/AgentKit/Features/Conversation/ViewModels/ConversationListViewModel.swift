@@ -16,6 +16,8 @@ public final class ConversationListViewModel {
     /// 从 Runtime 拉取的会话列表（仅含 `id`，v1 无 metadata）。
     public private(set) var conversations: [ConversationRef] = []
     public private(set) var archivedConversations: [ConversationRef] = []
+    public private(set) var conversationItems: [ConversationListItem] = []
+    public private(set) var archivedConversationItems: [ConversationListItem] = []
 
     /// 异步操作中的错误。
     public private(set) var errorMessage: String?
@@ -23,6 +25,8 @@ public final class ConversationListViewModel {
     /// 是否正在加载。
     public private(set) var isLoading = false
     public private(set) var isLoadingArchived = false
+    public private(set) var hasLoadedConversations = false
+    public private(set) var hasLoadedArchivedConversations = false
 
     /// Conversations currently executing a destructive delete workflow.
     public private(set) var deletingConversationIDs: Set<String> = []
@@ -33,6 +37,14 @@ public final class ConversationListViewModel {
     public private(set) var revision = 0
 
     private let client: RuntimeClient
+    /// A single flight prevents a slow, older list request from publishing after
+    /// a newer refresh trigger (activation, polling, or a local mutation).
+    @ObservationIgnored private var refreshTask: Task<Void, Never>?
+    @ObservationIgnored private var refreshTaskID: UUID?
+    /// Refresh results started before, or while, a local mutation are stale.
+    /// They must never overwrite the mutation's authoritative response.
+    private var mutationGeneration = 0
+    private var activeMutationCount = 0
 
     // MARK: - Init
 
@@ -44,10 +56,10 @@ public final class ConversationListViewModel {
 
     /// 将一个新会话插入列表顶部（P5.0：commitDraft 创建后调用）。
     public func prepend(_ ref: ConversationRef) {
-        if let index = conversations.firstIndex(where: { $0.id == ref.id }) {
-            conversations.remove(at: index)
-        }
-        conversations.insert(ref, at: 0)
+        var updated = conversations
+        updated.removeAll { $0.id == ref.id }
+        updated.insert(ref, at: 0)
+        setConversations(updated)
         revision += 1
     }
 
@@ -58,6 +70,42 @@ public final class ConversationListViewModel {
     /// 无人重新触发 → 列表恒空。故对该错误做**有界轮询重试**，等端口就绪后自然拉到。
     /// macOS（固定端口）`baseURL` 永不为 nil，不会进重试分支，行为不变。
     public func refresh() async {
+        if let refreshTask {
+            await refreshTask.value
+            return
+        }
+
+        let taskID = UUID()
+        let task = Task { [weak self] in
+            guard let self else { return }
+            await self.performRefresh()
+        }
+        refreshTask = task
+        refreshTaskID = taskID
+        await task.value
+        if refreshTaskID == taskID {
+            refreshTask = nil
+            refreshTaskID = nil
+        }
+    }
+
+    /// A completed mutation must be followed by its own fetch. If a poll was
+    /// already in flight, waiting for it alone could otherwise publish the
+    /// pre-mutation snapshot after the local optimistic update.
+    private func refreshAfterMutation() async {
+        if let refreshTask {
+            let taskID = refreshTaskID
+            await refreshTask.value
+            if refreshTaskID == taskID {
+                self.refreshTask = nil
+                self.refreshTaskID = nil
+            }
+        }
+        await refresh()
+    }
+
+    private func performRefresh() async {
+        let refreshGeneration = mutationGeneration
         isLoading = true
         errorMessage = nil
         defer { isLoading = false }
@@ -66,8 +114,11 @@ public final class ConversationListViewModel {
         let maxAttempts = 30          // ≈ 30 × 150ms = 4.5s，覆盖冷启动 start() 的延迟
         for attempt in 1...maxAttempts {
             do {
-                conversations = try await client.listConversations()
-                revision += 1
+                let fetched = try await client.listConversations()
+                guard refreshGeneration == mutationGeneration,
+                      activeMutationCount == 0 else { return }
+                publishConversations(fetched)
+                hasLoadedConversations = true
                 errorMessage = nil
                 #if os(iOS)
                 RuntimeConnectionMonitor.shared.markConnected()
@@ -102,8 +153,10 @@ public final class ConversationListViewModel {
         isLoadingArchived = true
         defer { isLoadingArchived = false }
         do {
-            archivedConversations = try await client.listArchivedConversations()
-            revision += 1
+            let fetched = try await client.listArchivedConversations()
+            guard activeMutationCount == 0 else { return }
+            publishArchivedConversations(fetched)
+            hasLoadedArchivedConversations = true
             errorMessage = nil
         } catch {
             errorMessage = error.localizedDescription
@@ -113,7 +166,50 @@ public final class ConversationListViewModel {
     public func clearArchived() {
         guard !archivedConversations.isEmpty else { return }
         archivedConversations = []
+        archivedConversationItems = []
+        hasLoadedArchivedConversations = false
         revision += 1
+    }
+
+    private func publishConversations(_ incoming: [ConversationRef]) {
+        guard conversationsChanged(conversations, incoming) else { return }
+        setConversations(incoming)
+        revision += 1
+    }
+
+    private func publishArchivedConversations(_ incoming: [ConversationRef]) {
+        guard conversationsChanged(archivedConversations, incoming) else { return }
+        setArchivedConversations(incoming)
+        revision += 1
+    }
+
+    private func conversationsChanged(_ old: [ConversationRef], _ new: [ConversationRef]) -> Bool {
+        guard old.count == new.count else { return true }
+        return zip(old, new).contains { current, replacement in
+            current.id != replacement.id
+                || current.uiID != replacement.uiID
+                || current.workspaceGroupingID != replacement.workspaceGroupingID
+                || current.workspaceGroupingName != replacement.workspaceGroupingName
+        }
+    }
+
+    private func setConversations(_ values: [ConversationRef]) {
+        conversations = values
+        conversationItems = values.map(ConversationListItem.init)
+    }
+
+    private func setArchivedConversations(_ values: [ConversationRef]) {
+        archivedConversations = values
+        archivedConversationItems = values.map(ConversationListItem.init)
+    }
+
+    private func beginMutation() {
+        mutationGeneration += 1
+        activeMutationCount += 1
+    }
+
+    private func endMutation() {
+        activeMutationCount -= 1
     }
 
     #if os(iOS)
@@ -145,15 +241,21 @@ public final class ConversationListViewModel {
     /// callers continue to use the shared-workspace-compatible path overload.
     @discardableResult
     public func createConversation(request: CreateConversationRequest) async -> ConversationRef? {
+        beginMutation()
         isLoading = true
         errorMessage = nil
         do {
             let ref = try await client.createConversation(request: request)
-            conversations.insert(ref, at: 0)
+            var updated = conversations
+            updated.insert(ref, at: 0)
+            setConversations(updated)
             revision += 1
+            endMutation()
+            await refreshAfterMutation()
             isLoading = false
             return ref
         } catch {
+            endMutation()
             errorMessage = error.localizedDescription
             isLoading = false
             return nil
@@ -163,13 +265,17 @@ public final class ConversationListViewModel {
     /// 重命名会话。
     @discardableResult
     public func renameConversation(_ ref: ConversationRef, name: String) async -> ConversationRef? {
+        beginMutation()
         do {
-            let updated = try await client.renameConversation(id: ref.id, name: name)
-            // 整体赋回新数组，让 SwiftUI Observation / List diff 明确看到元素内容变化。
-            conversations = conversations.map { $0.id == ref.id ? updated : $0 }
+            var updated = try await client.renameConversation(id: ref.id, name: name)
+            updated.name = name
+            setConversations(conversations.map { $0.id == ref.id ? updated : $0 })
             revision += 1
+            endMutation()
+            await refreshAfterMutation()
             return updated
         } catch {
+            endMutation()
             errorMessage = error.localizedDescription
             return nil
         }
@@ -183,6 +289,7 @@ public final class ConversationListViewModel {
         worktreeDisposition: ConversationWorktreeDisposition,
         forceWorktreeRemoval: Bool = false
     ) async throws {
+        beginMutation()
         deletingConversationIDs.insert(ref.id)
         errorMessage = nil
         defer { deletingConversationIDs.remove(ref.id) }
@@ -201,10 +308,13 @@ public final class ConversationListViewModel {
                 )
             }
             try await client.deleteConversation(id: ref.id)
-            conversations.removeAll { $0.id == ref.id }
-            archivedConversations.removeAll { $0.id == ref.id }
+            setConversations(conversations.filter { $0.id != ref.id })
+            setArchivedConversations(archivedConversations.filter { $0.id != ref.id })
             revision += 1
+            endMutation()
+            await refreshAfterMutation()
         } catch {
+            endMutation()
             errorMessage = error.localizedDescription
             throw error
         }
@@ -212,6 +322,7 @@ public final class ConversationListViewModel {
 
     @discardableResult
     public func archiveConversation(_ ref: ConversationRef) async throws -> ConversationRef {
+        beginMutation()
         archivingConversationIDs.insert(ref.id)
         errorMessage = nil
         defer { archivingConversationIDs.remove(ref.id) }
@@ -222,12 +333,16 @@ public final class ConversationListViewModel {
                 throw RuntimeHTTPError.invalidResponse
             }
             let archived = ref.withArchivedAt(archivedAt)
-            conversations.removeAll { $0.id == ref.id }
-            archivedConversations.removeAll { $0.id == ref.id }
-            archivedConversations.insert(archived, at: 0)
+            setConversations(conversations.filter { $0.id != ref.id })
+            var updatedArchived = archivedConversations.filter { $0.id != ref.id }
+            updatedArchived.insert(archived, at: 0)
+            setArchivedConversations(updatedArchived)
             revision += 1
+            endMutation()
+            await refreshAfterMutation()
             return archived
         } catch {
+            endMutation()
             errorMessage = error.localizedDescription
             throw error
         }
@@ -235,6 +350,7 @@ public final class ConversationListViewModel {
 
     @discardableResult
     public func restoreConversation(_ ref: ConversationRef) async throws -> ConversationRef {
+        beginMutation()
         restoringConversationIDs.insert(ref.id)
         errorMessage = nil
         defer { restoringConversationIDs.remove(ref.id) }
@@ -242,12 +358,16 @@ public final class ConversationListViewModel {
         do {
             _ = try await client.restoreConversation(id: ref.id)
             let restored = ref.withArchivedAt(nil)
-            archivedConversations.removeAll { $0.id == ref.id }
-            conversations.removeAll { $0.id == ref.id }
-            conversations.insert(restored, at: 0)
+            setArchivedConversations(archivedConversations.filter { $0.id != ref.id })
+            var updatedConversations = conversations.filter { $0.id != ref.id }
+            updatedConversations.insert(restored, at: 0)
+            setConversations(updatedConversations)
             revision += 1
+            endMutation()
+            await refreshAfterMutation()
             return restored
         } catch {
+            endMutation()
             errorMessage = error.localizedDescription
             throw error
         }

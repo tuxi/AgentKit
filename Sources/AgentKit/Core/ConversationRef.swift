@@ -53,7 +53,9 @@ public struct ConversationRef: Identifiable, Hashable, Sendable, Codable {
         pausedAt.map { Date(timeIntervalSince1970: TimeInterval($0)) }
     }
     
-    var uiID: String {
+    /// UI-only content identity. It deliberately changes when a visible row
+    /// changes, while `id` remains the durable conversation identity.
+    public var presentationID: String {
         [
             id,
             name ?? "-",
@@ -63,6 +65,8 @@ public struct ConversationRef: Identifiable, Hashable, Sendable, Codable {
             archivedAt ?? "-",
         ].joined(separator: "|")
     }
+
+    var uiID: String { presentationID }
 
     enum CodingKeys: String, CodingKey {
         case id

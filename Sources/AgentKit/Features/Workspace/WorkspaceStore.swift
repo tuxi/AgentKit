@@ -203,6 +203,44 @@ public final class WorkspaceStore {
     private var lastNetworkResumeAttempt: Date?
     #endif
 
+    // MARK: - Conversation list refresh lifecycle
+
+    @ObservationIgnored private var conversationListPollingTask: Task<Void, Never>?
+    private var isConversationListVisible = false
+    private var isAppActive = true
+
+    /// The host calls this as the sidebar/drawer enters and leaves view. Polling
+    /// never runs for a hidden list, which also avoids background network work.
+    public func setConversationListVisible(_ visible: Bool) {
+        guard isConversationListVisible != visible else { return }
+        isConversationListVisible = visible
+        updateConversationListPolling()
+        if visible, isAppActive {
+            Task { await refreshConversationList() }
+        }
+    }
+
+    /// The canonical list refresh path. `ConversationListViewModel` coalesces
+    /// overlapping calls, so an older response cannot overwrite a newer one.
+    public func refreshConversationList() async {
+        await listViewModel.refresh()
+        await refreshRuntimeState()
+    }
+
+    private func updateConversationListPolling() {
+        conversationListPollingTask?.cancel()
+        conversationListPollingTask = nil
+        guard isAppActive, isConversationListVisible else { return }
+
+        conversationListPollingTask = Task { [weak self] in
+            while !Task.isCancelled {
+                try? await Task.sleep(for: .seconds(3))
+                guard !Task.isCancelled, let self else { return }
+                await self.refreshConversationList()
+            }
+        }
+    }
+
     // MARK: - Init
 
     public init(
@@ -632,19 +670,19 @@ public final class WorkspaceStore {
 
     /// 前台恢复：同进程 thaw 自动续跑当前会话；冷启动仅刷新 paused 列表，等用户点「继续」。
     public func handleAppBecameActive() async {
+        isAppActive = true
+        updateConversationListPolling()
         #if os(iOS)
         let wasAlive = AgentRuntime.shared.isAlive
         // 前台探活：iOS 挂起会回收回环 listening socket，但指针/端口仍在 → 指针存活≠listener存活。
         // ensureHealthy() 探 /healthz，死则重启 runtime（新端口，会话从 DB 重载），杜绝「回来后恒 -1004」。
         let healthy = await RuntimeConnectionMonitor.shared.ensureHealthy()
-        await listViewModel.refresh()
-        await refreshRuntimeState()
+        await refreshConversationList()
 
         guard wasAlive, healthy else { return }
         await resumePausedConversationsAfterThaw()
         #else
-        await listViewModel.refresh()
-        await refreshRuntimeState()
+        await refreshConversationList()
         #endif
     }
 
@@ -716,6 +754,8 @@ public final class WorkspaceStore {
 
     /// 后台进入：请求 runtime 做有界 suspend/checkpoint，不销毁 server。
     public func handleAppEnteredBackground() {
+        isAppActive = false
+        updateConversationListPolling()
         try? localStateStore.flush()
         #if os(iOS)
         supervisor.stopActivityMonitoring()
@@ -726,6 +766,8 @@ public final class WorkspaceStore {
     /// Release workspace-scoped polling and sockets when the host removes the
     /// workspace root view. Runtime sessions remain server-owned and resumable.
     public func handleWorkspaceDisappeared() {
+        isConversationListVisible = false
+        updateConversationListPolling()
         try? localStateStore.flush()
         supervisor.stopActivityMonitoring()
         Task { await supervisor.disconnectAll() }
@@ -965,6 +1007,7 @@ public final class WorkspaceStore {
             listViewModel.prepend(ref)
             selectedConversation = ref  // supervisor reuses the connected controller
             draft = nil
+            await refreshConversationList()
         } catch {
             if let createdConversation,
                (try? localStateStore.state(for: .session(createdConversation.id))) != nil {
@@ -975,6 +1018,7 @@ public final class WorkspaceStore {
                 listViewModel.prepend(createdConversation)
                 selectedConversation = createdConversation
                 draft = nil
+                await refreshConversationList()
             } else {
                 draft?.state = .failed(error.localizedDescription)
                 persistDraftMetadata()
