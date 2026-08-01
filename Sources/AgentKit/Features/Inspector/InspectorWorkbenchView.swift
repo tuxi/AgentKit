@@ -78,7 +78,11 @@ private struct InspectorTabWorkbench: View {
     var body: some View {
         VStack(spacing: 0) {
             if !state.tabs.isEmpty {
-                InspectorTabBar(state: state)
+                InspectorTabBar(state: state) { entry in
+                    let tab = state.open(entry, reusingExisting: true)
+                    onOpenEntry(entry)
+                    onOpenTab?(tab)
+                }
                 Divider()
             }
 
@@ -93,7 +97,7 @@ private struct InspectorTabWorkbench: View {
                 .id(tab.id)
             } else {
                 InspectorLandingView { entry in
-                    let tab = state.open(entry, reusingExisting: false)
+                    let tab = state.open(entry, reusingExisting: true)
                     onOpenEntry(entry)
                     onOpenTab?(tab)
                 }
@@ -105,6 +109,7 @@ private struct InspectorTabWorkbench: View {
 
 private struct InspectorTabBar: View {
     let state: InspectorWorkspaceState
+    let onOpenEntry: (InspectorEntry) -> Void
 
     var body: some View {
         HStack(spacing: 6) {
@@ -143,13 +148,27 @@ private struct InspectorTabBar: View {
             }
             .scrollIndicators(.hidden)
 
-            Button {
-                state.showLanding()
+            
+            Menu {
+                ForEach(InspectorEntry.allCases) { entry in
+                    Button {
+                        onOpenEntry(entry)
+                    } label: {
+                        HStack(spacing: 12) {
+                            Image(systemName: entry.systemImage)
+                                .frame(width: 20)
+
+                            Text(entry.title)
+                        }
+                        .contentShape(Rectangle())
+                    }
+                    .buttonStyle(.plain)
+                    .accessibilityIdentifier("inspector.entry.\(entry.rawValue)")
+                }
             } label: {
                 Image(systemName: "plus")
                     .frame(width: 28, height: 28)
             }
-            .buttonStyle(.plain)
             .accessibilityLabel("新建 Inspector 标签")
             .accessibilityIdentifier("inspector.tab.new")
         }
@@ -206,35 +225,27 @@ private struct InspectorLandingView: View {
     let onOpenEntry: (InspectorEntry) -> Void
 
     var body: some View {
-        VStack(spacing: 0) {
-            Spacer(minLength: 24)
+        VStack(spacing: 4) {
+            ForEach(InspectorEntry.allCases) { entry in
+                Button {
+                    onOpenEntry(entry)
+                } label: {
+                    HStack(spacing: 12) {
+                        Image(systemName: entry.systemImage)
+                            .frame(width: 20)
 
-            VStack(spacing: 4) {
-                ForEach(InspectorEntry.allCases) { entry in
-                    Button {
-                        onOpenEntry(entry)
-                    } label: {
-                        HStack(spacing: 12) {
-                            Image(systemName: entry.systemImage)
-                                .frame(width: 20)
+                        Text(entry.title)
 
-                            Text(entry.title)
-
-                            Spacer(minLength: 24)
-                        }
-                        .contentShape(Rectangle())
-                        .padding(.horizontal, 16)
-                        .frame(minHeight: 44)
+                        Spacer(minLength: 24)
                     }
-                    .buttonStyle(.plain)
-                    .accessibilityIdentifier("inspector.entry.\(entry.rawValue)")
+                    .contentShape(Rectangle())
+                    .padding(.horizontal, 16)
+                    .frame(minHeight: 44)
                 }
+                .buttonStyle(.plain)
+                .accessibilityIdentifier("inspector.entry.\(entry.rawValue)")
             }
-            .frame(maxWidth: 420)
-
-            Spacer(minLength: 24)
         }
-        .padding(24)
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .background(.background)
         .accessibilityElement(children: .contain)
