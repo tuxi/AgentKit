@@ -361,7 +361,7 @@ public struct ConversationDetailView: View {
                             startPoint: .top,
                             endPoint: .bottom
                         )
-                        .background(Color.approvalSecondaryFill) // 叠加轻微毛玻璃效果
+                        .background(.ultraThinMaterial) // 叠加轻微毛玻璃效果
                         .mask {
                             LinearGradient(
                                 colors: [.clear, .black.opacity(0.6), .black],
