@@ -57,6 +57,7 @@ enum ToolTranscriptFamily: Hashable {
     case todo
     case plan
     case workflow
+    case session
     case other
 }
 
@@ -88,6 +89,9 @@ enum ToolTranscriptPresenter {
         // 是主形态，这张普通卡仍并存 —— 届时考虑在投影层合并二者。
         if tool.toolName == "task" {
             return taskPresentation(for: tool)
+        }
+        if let presentation = sessionPresentation(for: tool) {
+            return presentation
         }
         let family = family(for: tool)
         let target = targetValue(for: tool)
@@ -159,6 +163,100 @@ enum ToolTranscriptPresenter {
             changeSummary: nil,
             outputKind: .text
         )
+    }
+
+    private static func sessionPresentation(for tool: ToolNodePayload) -> ToolTranscriptPresentation? {
+        let name = tool.toolName.lowercased()
+        guard ["list_sessions", "create_session", "send_to_session", "wait_sessions", "read_session"].contains(name) else {
+            return nil
+        }
+        let args: [String: JSONValue] = {
+            if case .object(let dict)? = tool.args { return dict }
+            return [:]
+        }()
+        let title: String
+        let detail: String?
+        switch name {
+        case "list_sessions":
+            title = "List sessions"
+            detail = sessionListDetail(args)
+        case "create_session":
+            title = "Create session"
+            detail = firstNonEmptyString(args, keys: ["name", "workspace_path"]).map(shortDisplayName)
+        case "send_to_session":
+            title = "Send to session"
+            detail = sessionSendDetail(args)
+        case "wait_sessions":
+            title = "Wait for sessions"
+            detail = waitTargetsDetail(args)
+        case "read_session":
+            title = "Read session"
+            detail = firstNonEmptyString(args, keys: ["id"]).map(shortSessionID)
+        default:
+            return nil
+        }
+        return ToolTranscriptPresentation(
+            callID: tool.callID,
+            family: .session,
+            statusTone: statusTone(for: tool),
+            statusText: statusText(for: tool),
+            title: title,
+            detail: detail,
+            elapsed: tool.elapsedMs.map(formatElapsed),
+            changeSummary: nil,
+            outputKind: .json
+        )
+    }
+
+    private static func sessionListDetail(_ args: [String: JSONValue]) -> String? {
+        var parts: [String] = []
+        if let project = args["project"]?.stringValue.nilIfEmpty {
+            parts.append(shortDisplayName(project))
+        }
+        if let status = args["status"]?.stringValue.nilIfEmpty {
+            parts.append(status)
+        }
+        return parts.isEmpty ? nil : parts.joined(separator: " | ")
+    }
+
+    private static func sessionSendDetail(_ args: [String: JSONValue]) -> String? {
+        let id = firstNonEmptyString(args, keys: ["id"]).map(shortSessionID)
+        let message = firstNonEmptyString(args, keys: ["message"]).map(firstLineSnippet)
+        switch (id, message) {
+        case (.some(let id), .some(let message)):
+            return "\(id): \(message)"
+        case (.some(let id), nil):
+            return id
+        case (nil, .some(let message)):
+            return message
+        case (nil, nil):
+            return nil
+        }
+    }
+
+    private static func waitTargetsDetail(_ args: [String: JSONValue]) -> String? {
+        guard case .array(let targets)? = args["targets"], !targets.isEmpty else {
+            return nil
+        }
+        if targets.count == 1,
+           case .object(let target) = targets[0],
+           let id = target["id"]?.stringValue.nilIfEmpty {
+            return shortSessionID(id)
+        }
+        return "\(targets.count) targets"
+    }
+
+    private static func firstNonEmptyString(_ args: [String: JSONValue], keys: [String]) -> String? {
+        keys.lazy.compactMap { args[$0]?.stringValue.nilIfEmpty }.first
+    }
+
+    private static func firstLineSnippet(_ text: String) -> String {
+        let firstLine = text.components(separatedBy: "\n").first ?? text
+        return firstLine.count > 60 ? String(firstLine.prefix(57)) + "..." : firstLine
+    }
+
+    private static func shortSessionID(_ id: String) -> String {
+        id.count > 16 ? String(id.prefix(13)) + "..." : id
     }
 
     private static func title(for family: ToolTranscriptFamily, target: String?, tool: ToolNodePayload) -> String {
@@ -257,6 +355,9 @@ enum ToolTranscriptPresenter {
         if TodoToolPayload.isTodoWriteTool(name) { return .todo }
         if name == "enter_plan_mode" || name == "propose_plan" { return .plan }
         if name == "plan_workflow" { return .workflow }
+        if name == "list_sessions" || name == "create_session" || name == "send_to_session" || name == "wait_sessions" || name == "read_session" {
+            return .session
+        }
         // download_file — pulls external content, semantically read.
         if name == "download_file" { return .read }
         if name.contains("read") || name.contains("cat") || name.contains("view") || name.contains("open") || name.contains("get") {
@@ -352,6 +453,7 @@ enum ToolTranscriptPresenter {
         case .todo: return "Todo"
         case .plan: return "Plan"
         case .workflow: return "Workflow"
+        case .session: return "Coordinate"
         case .other: return fallback
         }
     }
@@ -371,6 +473,7 @@ enum ToolTranscriptPresenter {
         case .todo: return count == 1 ? "item" : "items"
         case .plan: return count == 1 ? "plan" : "plans"
         case .workflow: return count == 1 ? "workflow" : "workflows"
+        case .session: return count == 1 ? "session action" : "session actions"
         case .other: return count == 1 ? "tool" : "tools"
         }
     }
@@ -425,6 +528,8 @@ enum ToolTranscriptPresenter {
             return count == 1 ? "entered plan mode" : "made \(count) plans"
         case .workflow:
             return count == 1 ? "ran a workflow" : "ran \(count) workflows"
+        case .session:
+            return count == 1 ? "coordinated a session" : "coordinated \(count) sessions"
         case .other:
             return count == 1 ? "used a tool" : "used \(count) tools"
         }

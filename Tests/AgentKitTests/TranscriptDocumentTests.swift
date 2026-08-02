@@ -102,6 +102,72 @@ final class TranscriptDocumentTests: XCTestCase {
         XCTAssertEqual(ToolTranscriptPresenter.presentation(for: run).statusText, "running")
     }
 
+    func testToolPresenterNamesCrossSessionActions() {
+        let list = ToolNodePayload(
+            callID: "s1",
+            toolName: "list_sessions",
+            args: .object([
+                "project": .string("/Users/me/work/ios-app"),
+                "status": .string("idle"),
+            ]),
+            status: .completed
+        )
+        let create = ToolNodePayload(
+            callID: "s2",
+            toolName: "create_session",
+            args: .object([
+                "workspace_path": .string("/Users/me/work/backend-api"),
+                "execution_policy": .string("shared_workspace"),
+            ]),
+            status: .completed
+        )
+        let send = ToolNodePayload(
+            callID: "s3",
+            toolName: "send_to_session",
+            args: .object([
+                "id": .string("session_abcdef1234567890"),
+                "message": .string("Confirm the API contract.\nThen report affected files."),
+            ]),
+            status: .running
+        )
+        let wait = ToolNodePayload(
+            callID: "s4",
+            toolName: "wait_sessions",
+            args: .object([
+                "targets": .array([
+                    .object(["id": .string("ios"), "turn_id": .string("turn-1"), "cursor": .number(10)]),
+                    .object(["id": .string("web"), "turn_id": .string("turn-2"), "cursor": .number(12)]),
+                ]),
+            ]),
+            status: .completed
+        )
+        let readSession = ToolNodePayload(
+            callID: "s5",
+            toolName: "read_session",
+            args: .object(["id": .string("session_abcdef1234567890")]),
+            status: .completed
+        )
+
+        let listPresentation = ToolTranscriptPresenter.presentation(for: list)
+        XCTAssertEqual(listPresentation.title, "List sessions")
+        XCTAssertEqual(listPresentation.detail, "ios-app | idle")
+        XCTAssertEqual(listPresentation.outputKind, .json)
+
+        XCTAssertEqual(ToolTranscriptPresenter.presentation(for: create).title, "Create session")
+        XCTAssertEqual(ToolTranscriptPresenter.presentation(for: create).detail, "backend-api")
+
+        let sendPresentation = ToolTranscriptPresenter.presentation(for: send)
+        XCTAssertEqual(sendPresentation.title, "Send to session")
+        XCTAssertEqual(sendPresentation.detail, "session_abcde...: Confirm the API contract.")
+        XCTAssertEqual(sendPresentation.statusText, "running")
+
+        XCTAssertEqual(ToolTranscriptPresenter.presentation(for: wait).title, "Wait for sessions")
+        XCTAssertEqual(ToolTranscriptPresenter.presentation(for: wait).detail, "2 targets")
+
+        XCTAssertEqual(ToolTranscriptPresenter.presentation(for: readSession).title, "Read session")
+        XCTAssertEqual(ToolTranscriptPresenter.presentation(for: readSession).detail, "session_abcde...")
+    }
+
     func testCollapsedToolProducesToggleActionWithoutOutput() {
         let turn = makeTurn(toolOutput: "secret output")
         let transcript = TurnTranscriptBuilder.build(
