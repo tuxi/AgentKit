@@ -179,7 +179,8 @@ Inspector 文件入口
 - [x] macOS 宿主通过受工作区根目录约束的 Git provider 注入数据。
 - [x] FileViewerKit 提供统一 `LineDiffBuilder` 和自适应 `ReviewWorkspaceView`。
 - [x] 变更文件按目录树组织，选择与 Diff 联动，并展示 hunk 之间的未修改行数。
-- [ ] 从 Diff/时间线反向定位文件树，以及按需展开被省略的原文件内容。
+- [x] 通过 provider 按需加载并展开/收起 hunk 间被省略的原文件内容。
+- [ ] 从 Diff/时间线反向定位文件树。
 - [x] iOS Workspace diff 迁移到统一 builder，并将旧 AgentKit 模型转换集中为单一兼容适配器。
 - [ ] 最终移除 AgentKit 旧 Diff 协议模型；需先确认 AgentKit 是否允许依赖独立展示包。
 - [ ] 暂存、撤销、提交、分支比较和行评论。
@@ -286,3 +287,9 @@ InspectorWorkbenchView(
   `DiffHunk` 公开 old/new 行数，Diff 在 hunk 前显示保守计算的“未修改行”折叠提示。
   当前提示有意保持只读：canonical hunk 尚未携带被省略正文，后续接入原文件按需读取后
   再提供展开交互，避免按钮承诺无法呈现的数据。
+- 2026-08-02：Phase 4.4 为 `FileReviewProvider` 增加可选的未修改行读取能力；折叠条首次
+  展开时异步加载真实正文，展示 old/new 双行号，收起后保留本地缓存，并提供加载失败重试。
+  chater macOS provider 缓存生成本轮 Diff 时的文本行快照，因此即使磁盘文件随后变化，
+  展开内容也不会与屏幕上的旧 hunk 错位。FileViewerKit 42 项测试、macOS Direct 与 iOS
+  Simulator 宿主构建通过。宿主新增真实 Git fixture，但现有 macOS 测试 scheme 配置阻止
+  执行：Direct scheme 无 Test Action，主 scheme 又由 `AppDistribution.swift` 禁止用于 macOS。
