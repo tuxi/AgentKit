@@ -471,7 +471,7 @@ struct DraftComposerPanel: View {
         guard canSend,
               let selectedModel,
               let runtimeAlias = modelSettings.runtimeAlias(for: selectedModel) else { return }
-        let toSend = text
+        let toSend = trimmed
         submittedTextSnapshot = toSend
         persistCurrentDraft()
         isSending = true
@@ -1552,6 +1552,7 @@ struct AskUserBar: View {
                     ScrollView(.vertical) {
                         optionsList
                     }
+                    .frame(height: 500)
                 }
                 
                 // Custom input (only when allowCustom)
