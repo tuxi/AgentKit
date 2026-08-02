@@ -429,9 +429,9 @@ public struct ConversationListView: View {
             Button {
                 let workspacePath = group.descriptor.workspacePath
                 let url = URL(fileURLWithPath: workspacePath)
-                store.selectWorkspace(Workspace(url: url))
+                store.beginDraft()
                 DispatchQueue.main.async {
-                    store.beginDraft()
+                    store.selectWorkspace(Workspace(url: url))
                 }
             } label: {
                 Label("新建任务", systemImage: "square.and.pencil")
@@ -957,9 +957,10 @@ private struct ConversationRow: View {
             case .cancelled:
                 statusLabel("已取消", systemImage: "xmark.circle.fill", color: .secondary)
             case .idle where ref.isPaused:
-                Label("已暂停", systemImage: "pause.circle.fill")
-                    .font(.caption2.weight(.medium))
-                    .foregroundStyle(.orange)
+                EmptyView()
+//                Label("已暂停", systemImage: "pause.circle.fill")
+//                    .font(.caption2.weight(.medium))
+//                    .foregroundStyle(.orange)
             case .idle where ref.isArchived:
                 statusLabel("已归档", systemImage: "archivebox.fill", color: .secondary)
             case .idle where ref.name != nil:
@@ -971,7 +972,8 @@ private struct ConversationRow: View {
                 EmptyView()
             }
         }
-        .padding(.horizontal, 11)
+        .padding(.leading, 25)
+        .padding(.trailing, 11)
         .padding(.vertical, 7)
     }
 
