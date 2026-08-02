@@ -22,6 +22,11 @@ public struct ConversationDetailView: View {
     private let conversation: ConversationRef?
     private let viewModel: ConversationViewModel?
     
+    /// Height of the floating macOS bottom bar. The timeline pins its newest
+    /// content just above this bar instead of hiding it behind the bar, while
+    /// the scroll range still extends behind the bar for manual scrolling.
+    @State private var bottomBarHeight: CGFloat = 0
+    
     public init(conversation: ConversationRef? = nil) {
         self.conversation = conversation
         self.viewModel = nil
@@ -47,16 +52,16 @@ public struct ConversationDetailView: View {
         .frame(maxWidth: 800) // 仅限制内部 content 宽度
         .frame(maxWidth: .infinity) // 保持整体居中
         .toolbar { toolbarContent }
-        #if os(iOS)
+#if os(iOS)
         .navigationBarTitleDisplayMode(.inline)
-        #endif
+#endif
     }
     
     // MARK: - Draft (no session yet)
     
     private var draftView: some View {
         Group {
-            #if os(iOS)
+#if os(iOS)
             ScrollView {
                 VStack(spacing: 18) {
                     Spacer(minLength: 150)
@@ -72,7 +77,7 @@ public struct ConversationDetailView: View {
             .safeAreaInset(edge: .bottom, spacing: 6) {
                 draftComposer
             }
-            #else
+#else
             ScrollView {
                 VStack(spacing: 18) {
                     Spacer(minLength: 120)
@@ -84,7 +89,7 @@ public struct ConversationDetailView: View {
                 .frame(maxWidth: .infinity)
             }
             .background(.bar)
-            #endif
+#endif
         }
         .scrollDismissesKeyboard(.interactively)
         .task {
@@ -96,7 +101,7 @@ public struct ConversationDetailView: View {
             }
         }
     }
-
+    
     private var draftTitleView: some View {
         Text(draftTitle)
             .font(.system(size: 28, weight: .medium))
@@ -106,14 +111,14 @@ public struct ConversationDetailView: View {
             .minimumScaleFactor(0.82)
             .padding(.horizontal, 24)
     }
-
+    
     @ViewBuilder
     private var draftFailureBanner: some View {
         if case .failed(let message) = store.draft?.state {
             failureBanner(message)
         }
     }
-
+    
     private var draftComposer: some View {
         DraftComposerPanel(
             placeholder: store.isPreparingWorkspace ? AgentKitLocalized.string("conversation.preparing_workspace") : AgentKitLocalized.string("conversation.describe_placeholder"),
@@ -168,12 +173,12 @@ public struct ConversationDetailView: View {
     }
     
     // MARK: - Active session
-
+    
     private func activeView(vm: ConversationViewModel) -> some View {
         let isPaused = false// vm.lifecycleStatus == "paused"
         || (vm.lifecycleStatus == nil && store.selectedConversation?.isPaused == true)
         let isArchived = vm.isArchived
-
+        
         let banner: some View = Group {
             if isArchived, let conversation = vm.conversation {
                 ArchivedConversationBar(
@@ -194,19 +199,30 @@ public struct ConversationDetailView: View {
                 .transition(.move(edge: .top).combined(with: .opacity))
             }
         }
-
-        #if os(macOS)
+        
+#if os(macOS)
         // macOS: Use VStack layout instead of safeAreaInset to avoid
         // Auto Layout os_unfair_lock deadlock between NSISEngine and
         // performSelector:withObject:afterDelay: during constraint updates.
-        return VStack(spacing: 0) {
-            banner
-            residentTimelines(activeViewModel: vm)
+        return ZStack(alignment: .bottom) {
+            VStack(spacing: 0) {
+                banner
+                residentTimelines(activeViewModel: vm, bottomInset: bottomBarHeight)
+            }
             activeBottomBar(vm: vm, isPaused: isPaused, isArchived: isArchived)
+            // Measure the floating bar's own height directly. A PreferenceKey
+            // set from a `.background` GeometryReader does not propagate on
+            // macOS (reduce only ever sees the default 0), so the inset
+            // never reached the timeline. onGeometryChange observes the
+            // bar's real frame instead.
+                .onGeometryChange(for: CGFloat.self) { proxy in
+                    proxy.size.height
+                } action: { height in
+                    bottomBarHeight = height
+                }
         }
-        .background(.bar)
         .padding(.horizontal, 20)
-        #else
+#else
         return VStack(spacing: 0) {
             banner
             residentTimelines(activeViewModel: vm)
@@ -222,9 +238,17 @@ public struct ConversationDetailView: View {
         .safeAreaInset(edge: .bottom, spacing: 8) {
             activeBottomBar(vm: vm, isPaused: isPaused, isArchived: isArchived)
         }
-        #endif
+#endif
     }
-
+    
+    private var inputAreaBackgroundColor: Color {
+#if os(iOS)
+        Color(UIColor.systemBackground)
+#else
+        Color(NSColor.underPageBackgroundColor) // 或 controlBackgroundColor
+#endif
+    }
+   
     /// Bottom bar shared by both macOS (inline VStack) and iOS (safeAreaInset).
     @ViewBuilder
     private func activeBottomBar(vm: ConversationViewModel, isPaused: Bool, isArchived: Bool) -> some View {
@@ -243,7 +267,7 @@ public struct ConversationDetailView: View {
                     )
                     .transition(.move(edge: .bottom).combined(with: .opacity))
                 }
-
+                
                 if let plan = vm.snapshot.pendingPlanApproval {
                     PlanApprovalBar(
                         plan: plan,
@@ -256,7 +280,7 @@ public struct ConversationDetailView: View {
                     )
                     .transition(.move(edge: .bottom).combined(with: .opacity))
                 }
-
+                
                 if let approval = vm.snapshot.pendingApproval {
                     ApprovalBar(
                         request: approval,
@@ -273,11 +297,11 @@ public struct ConversationDetailView: View {
                     .transition(.move(edge: .bottom).combined(with: .opacity))
                 }
             }
-
-            #if os(macOS)
-            WorkspaceChipBar()
-            #endif
-
+            
+            //            #if os(macOS)
+            //            WorkspaceChipBar()
+            //            #endif
+            
             DraftComposerPanel(
                 placeholder: vm.isAwaitingTurnAcceptance
                 ? AgentKitLocalized.string("conversation.submitting_task")
@@ -297,9 +321,9 @@ public struct ConversationDetailView: View {
                 ? AgentKitLocalized.string("conversation.approval_needed_allow_deny")
                 : AgentKitLocalized.string("conversation.input_message"),
                 isEnabled: !isArchived && !isPaused && !vm.isTurnActive
-                    && vm.snapshot.pendingAskUser == nil
-                    && vm.snapshot.pendingApproval == nil
-                    && vm.snapshot.pendingPlanApproval == nil,
+                && vm.snapshot.pendingAskUser == nil
+                && vm.snapshot.pendingApproval == nil
+                && vm.snapshot.pendingPlanApproval == nil,
                 isDraft: false,
                 isTurnRunning: vm.isTurnActive,
                 onStop: { Task { await vm.cancelTurn() } },
@@ -325,28 +349,37 @@ public struct ConversationDetailView: View {
             )
             .environment(modelSettings)
             .background {
-#if os(iOS)
                 GeometryReader { proxy in
-                    LinearGradient(
-                        stops: [
-                            .init(color: .clear, location: 0.0),
-                            .init(color: Color(UIColor.systemBackground).opacity(0.4), location: 0.25),
-                            .init(color: Color(UIColor.systemBackground).opacity(0.95), location: 0.8)
-                        ],
-                        startPoint: .top,
-                        endPoint: .bottom
-                    )
-                    .background(.bar)
-                    .mask {
+                    ZStack(alignment: .top) {
+                        // 1. 渐变背景
                         LinearGradient(
-                            colors: [.clear, .black.opacity(0.6), .black],
+                            stops: [
+                                .init(color: .clear, location: 0.0),
+                                .init(color: inputAreaBackgroundColor.opacity(0.6), location: 0.3),
+                                .init(color: inputAreaBackgroundColor, location: 0.8)
+                            ],
                             startPoint: .top,
                             endPoint: .bottom
                         )
+                        .background(.ultraThinMaterial) // 叠加轻微毛玻璃效果
+                        .mask {
+                            LinearGradient(
+                                colors: [.clear, .black.opacity(0.6), .black],
+                                startPoint: .top,
+                                endPoint: .bottom
+                            )
+                        }
+                        
+                        // 2. 顶部分隔线（极轻微，增强物理边界感）
+                        LinearGradient(
+                            colors: [.clear, Color.primary.opacity(0.08), .clear],
+                            startPoint: .leading,
+                            endPoint: .trailing
+                        )
+                        .frame(height: 1)
                     }
                 }
                 .ignoresSafeArea(edges: .bottom)
-#endif
             }
         }
         .animation(.easeOut(duration: 0.25), value: vm.snapshot.pendingAskUser != nil)
@@ -357,7 +390,7 @@ public struct ConversationDetailView: View {
     }
     
     @ViewBuilder
-    private func residentTimelines(activeViewModel: ConversationViewModel) -> some View {
+    private func residentTimelines(activeViewModel: ConversationViewModel, bottomInset: CGFloat = 0) -> some View {
 #if os(macOS)
         let activeID = activeViewModel.conversation?.id
         let residentIDs = activeID.map { id in
@@ -373,7 +406,8 @@ public struct ConversationDetailView: View {
                     let isVisible = conversationID == activeID
                     ConversationTimelineView(
                         viewModel: resident,
-                        isVisible: isVisible
+                        isVisible: isVisible,
+                        bottomInset: bottomInset
                     )
                     .opacity(isVisible ? 1 : 0)
                     .allowsHitTesting(isVisible)
@@ -404,10 +438,10 @@ public struct ConversationDetailView: View {
                             Label(
                                 approval.conversationName,
                                 systemImage: approval.kind == .plan
-				        ? "list.clipboard"
-				        : approval.kind == .askUser
-				        ? "questionmark.bubble"
-				        : "hand.raised"
+                                ? "list.clipboard"
+                                : approval.kind == .askUser
+                                ? "questionmark.bubble"
+                                : "hand.raised"
                             )
                         }
                     }
@@ -420,7 +454,7 @@ public struct ConversationDetailView: View {
                 .help(AgentKitLocalized.string("conversation.view_all_pending"))
             }
         }
-     
+        
         if viewModel != nil || store.activeConversationViewModel != nil {
             ToolbarItem {
                 Menu {
@@ -464,7 +498,7 @@ public struct ConversationDetailView: View {
             }
         }
     }
-
+    
     private func shareConversation(as format: ConversationShareFormat) {
         guard let vm = store.activeConversationViewModel, !vm.snapshot.turns.isEmpty else { return }
         let rawTitle = vm.conversation?.name?.trimmingCharacters(in: .whitespacesAndNewlines)

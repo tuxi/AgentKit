@@ -19,6 +19,10 @@ struct ConversationWebWorkbenchView: NSViewRepresentable {
     let extensionContributions: [String: [TimelineWebContribution]]
     let timelineExtensions: [any TimelineExtension]
     let isVisible: Bool
+    /// Height of the floating macOS bottom bar. The workbench mirrors it as
+    /// bottom document padding so pinned content rests above the bar while the
+    /// scroll range still extends behind it.
+    let bottomInset: CGFloat
     let onFatalFailure: @MainActor () -> Void
 
     @Environment(WorkspaceStore.self) private var workspaceStore
@@ -84,6 +88,7 @@ struct ConversationWebWorkbenchView: NSViewRepresentable {
             openURL: openURL
         )
         context.coordinator.setVisible(isVisible)
+        context.coordinator.updateBottomInset(bottomInset)
     }
 
     static func dismantleNSView(
@@ -138,6 +143,7 @@ struct ConversationWebWorkbenchView: NSViewRepresentable {
         private var shouldRestoreViewportAfterReload = false
         private var isViewportInteracting = false
         private var isVisible = true
+        private var appliedBottomInset: CGFloat = 0
         private var lastApplyDurationMilliseconds: Double = 0
         private let actionRegistry = ConversationWebActionRegistry()
 
@@ -248,6 +254,23 @@ struct ConversationWebWorkbenchView: NSViewRepresentable {
             )
         }
 
+        func updateBottomInset(_ inset: CGFloat) {
+            guard inset != appliedBottomInset else { return }
+            appliedBottomInset = inset
+            applyBottomInsetToPage()
+        }
+
+        /// Mirrors the floating bottom bar's height into the page. The page
+        /// owns the padding via `setBottomInset` (a CSS variable on the root
+        /// element, immune to React re-renders) and re-pins through its scroll
+        /// controller so newest content lands exactly above the bar.
+        private func applyBottomInsetToPage() {
+            guard isPageReady, let webView else { return }
+            webView.evaluateJavaScript(
+                "window.AgentKitWorkbench?.setBottomInset(\(appliedBottomInset))"
+            )
+        }
+
         func loadShell() {
             let indexURL = ConversationWebSchemeHandler.indexURL
             shellURL = indexURL
@@ -273,6 +296,7 @@ struct ConversationWebWorkbenchView: NSViewRepresentable {
                 }
                 isPageReady = true
                 applyVisibilityToPage()
+                applyBottomInsetToPage()
                 // A fresh Web process has no document even when Swift retains
                 // an acknowledged revision from before a reload.
                 inFlightDocument = nil
@@ -519,9 +543,9 @@ struct ConversationWebWorkbenchView: NSViewRepresentable {
 
             if let duration = body["applyDurationMilliseconds"] as? Double {
                 lastApplyDurationMilliseconds = duration
-                Self.logger.debug(
-                    "Applied Web revision \(revision, privacy: .public) in \(duration, privacy: .public) ms"
-                )
+//                Self.logger.debug(
+//                    "Applied Web revision \(revision, privacy: .public) in \(duration, privacy: .public) ms"
+//                )
             }
             if appliedSourceVersion != sourceVersion, isVisible, !isViewportInteracting {
                 scheduleLatestDocumentSend()

@@ -20,6 +20,11 @@ struct MacNativeChatTimeline: NSViewRepresentable {
     let timelineExtensions: [any TimelineExtension]
     let conversationID: String?
     let workspaceRoot: URL?
+    /// Height of the floating macOS bottom bar. The document is extended by
+    /// this amount as transparent bottom padding, so pinned newest content
+    /// rests exactly at the bar's top edge while the extended scroll range
+    /// still lets content slide down behind the bar.
+    let bottomInset: CGFloat
 
     @Environment(WorkspaceStore.self) private var workspaceStore
     @Environment(\.openURL) private var openURL
@@ -74,6 +79,7 @@ struct MacNativeChatTimeline: NSViewRepresentable {
 
     func updateNSView(_ scrollView: NSScrollView, context: Context) {
         let coordinator = context.coordinator
+        let previousInset = coordinator.parent.bottomInset
         coordinator.parent = self
 
         // Capture pin state before invalidating row heights. A row may grow by
@@ -92,6 +98,13 @@ struct MacNativeChatTimeline: NSViewRepresentable {
                 change.changedRows,
                 followBottom: wasPinnedToBottom
             )
+        }
+
+        // The floating bottom bar grew or shrank (e.g. an approval card
+        // appeared). Re-pin immediately so newest content keeps resting just
+        // above the bar instead of sliding behind it.
+        if coordinator.isPinnedToBottom, previousInset != bottomInset {
+            coordinator.scrollToBottomImmediately()
         }
     }
 
@@ -120,6 +133,14 @@ struct MacNativeChatTimeline: NSViewRepresentable {
             ))
         }
 
+        // Reserve the floating bottom bar's height as transparent padding at
+        // the end of the document. Pinning to the absolute document bottom then
+        // rests the newest content exactly at the bar's top edge, while the
+        // extended range still lets the user scroll content down behind the bar.
+        if bottomInset > 0 {
+            rows.append(.bottomPadding(bottomInset))
+        }
+
         return rows
     }
 
@@ -132,6 +153,9 @@ struct MacNativeChatTimeline: NSViewRepresentable {
         // a snapshot arrives, while normal turn rows remain value-diffed.
         case extensionContent(turnID: String, extensionID: String, generation: UInt64, content: AnyView)
         case thinking(turnStartedAt: Date?, isThinking: Bool, modelStats: ModelStats?)
+        /// Transparent padding reserving the floating bottom bar's height. It
+        /// is always the last row and never renders content.
+        case bottomPadding(CGFloat)
 
         var identity: String {
             switch self {
@@ -141,6 +165,8 @@ struct MacNativeChatTimeline: NSViewRepresentable {
                 return "extension.\(extensionID).\(turnID)"
             case .thinking:
                 return "thinking-timer"
+            case .bottomPadding:
+                return "bottom-padding"
             }
         }
 
@@ -155,6 +181,8 @@ struct MacNativeChatTimeline: NSViewRepresentable {
                 return lhsStart == rhsStart
                     && lhsThinking == rhsThinking
                     && lhsStats == rhsStats
+            case (.bottomPadding(let lhs), .bottomPadding(let rhs)):
+                return lhs == rhs
             default:
                 return false
             }
@@ -186,6 +214,10 @@ struct MacNativeChatTimeline: NSViewRepresentable {
                     isThinking: isThinking,
                     modelStats: modelStats
                 ))
+            case .bottomPadding:
+                // The spacer row renders a plain transparent cell in
+                // `viewFor`; it never hosts SwiftUI content.
+                content = AnyView(EmptyView())
             }
 
             return AnyView(
@@ -323,6 +355,21 @@ struct MacNativeChatTimeline: NSViewRepresentable {
                     isThinking: isThinking,
                     modelStats: modelStats
                 )
+                return cell
+            }
+
+            if case .bottomPadding = targetRow {
+                let cell: NSTableCellView
+                if let reusable = tableView.makeView(
+                    withIdentifier: .chatTimelineSpacerCell,
+                    owner: self
+                ) as? NSTableCellView {
+                    cell = reusable
+                } else {
+                    let newCell = NSTableCellView(frame: .zero)
+                    newCell.identifier = .chatTimelineSpacerCell
+                    cell = newCell
+                }
                 return cell
             }
 
@@ -479,6 +526,9 @@ struct MacNativeChatTimeline: NSViewRepresentable {
 
         func tableView(_ tableView: NSTableView, heightOfRow row: Int) -> CGFloat {
             guard rows.indices.contains(row) else { return tableView.rowHeight }
+            // The spacer row never depends on viewport width and must stay
+            // measurable before the initial table width is known.
+            if case .bottomPadding(let height) = rows[row] { return height }
             guard let width = stableTableWidth() else {
                 return heightCache[rows[row].identity] ?? tableView.rowHeight
             }
@@ -673,6 +723,9 @@ struct MacNativeChatTimeline: NSViewRepresentable {
             guard let scrollView,
                   let documentView = scrollView.documentView else { return true }
             let currentY = scrollView.contentView.bounds.origin.y
+            // The document is extended by the bar-height padding row, so the
+            // absolute bottom already corresponds to newest content resting at
+            // the floating bar's top edge.
             let maxY = max(0, documentView.frame.height - scrollView.contentView.bounds.height)
             return abs(currentY - maxY) <= tolerance
         }
@@ -815,6 +868,7 @@ private extension NSUserInterfaceItemIdentifier {
     static let chatTimelineCell = NSUserInterfaceItemIdentifier("AgentKit.ChatTimeline.Cell")
     static let nativeTurnTimelineCell = NSUserInterfaceItemIdentifier("AgentKit.ChatTimeline.NativeTurnCell")
     static let nativeThinkingTimelineCell = NSUserInterfaceItemIdentifier("AgentKit.ChatTimeline.NativeThinkingCell")
+    static let chatTimelineSpacerCell = NSUserInterfaceItemIdentifier("AgentKit.ChatTimeline.SpacerCell")
 }
 
 /// A fully native Turn row. Its TextKit view is updated incrementally and its

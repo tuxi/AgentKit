@@ -61,6 +61,11 @@ body {
   min-height: 100vh;
   margin: 0 auto;
   padding: 16px;
+  /* Height of the floating native bottom bar, injected by
+     window.AgentKitWorkbench.setBottomInset(). Extends the document so the
+     pinned newest content rests above the bar while the scroll range still
+     lets content slide down behind it. */
+  padding-bottom: calc(16px + var(--workbench-bottom-inset, 0px));
 }
 
 .turn {

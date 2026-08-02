@@ -22,6 +22,10 @@ public struct TurnTimelineView: View {
     let workspaceRoot: URL?
     let rendererMode: ConversationRendererMode
     let isVisible: Bool
+    /// Height of the floating bottom bar in the macOS layout. The timeline pins
+    /// its newest content just above this bar; the scroll range still extends
+    /// behind it so the user can scroll content underneath the bar.
+    let bottomInset: CGFloat
     @State private var didWebRendererFail = false
 
     public init(
@@ -30,7 +34,8 @@ public struct TurnTimelineView: View {
         conversationID: String? = nil,
         workspaceRoot: URL? = nil,
         rendererMode: ConversationRendererMode = .auto,
-        isVisible: Bool = true
+        isVisible: Bool = true,
+        bottomInset: CGFloat = 0
     ) {
         self.snapshot = snapshot
         self.timelineExtensions = timelineExtensions
@@ -38,6 +43,7 @@ public struct TurnTimelineView: View {
         self.workspaceRoot = workspaceRoot
         self.rendererMode = rendererMode
         self.isVisible = isVisible
+        self.bottomInset = bottomInset
     }
     
     // 获取当前排在最底部的view的id
@@ -61,6 +67,7 @@ public struct TurnTimelineView: View {
                 extensionContributions: webExtensionContributions,
                 timelineExtensions: timelineExtensions,
                 isVisible: isVisible,
+                bottomInset: bottomInset,
                 onFatalFailure: { didWebRendererFail = true }
             )
         case .native, .auto:
@@ -70,7 +77,8 @@ public struct TurnTimelineView: View {
                 snapshot: snapshot,
                 timelineExtensions: timelineExtensions,
                 conversationID: conversationID,
-                workspaceRoot: workspaceRoot
+                workspaceRoot: workspaceRoot,
+                bottomInset: bottomInset
             )
         }
         #else

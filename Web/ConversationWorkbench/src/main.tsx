@@ -1861,6 +1861,21 @@ function App(): React.JSX.Element {
         }
         window.dispatchEvent(new Event(workbenchSuspensionEvent));
       },
+      /**
+       * Height (pt) of the floating native bottom bar. Mirrored as bottom
+       * padding on the shell via a CSS variable on <html>, which React never
+       * re-renders, so it survives every revision. Re-pins through the scroll
+       * controller: the document just grew, so a pinned viewport must move to
+       * the new bottom for newest content to land exactly above the bar.
+       */
+      setBottomInset(inset: number) {
+        const clamped = Math.max(0, Math.round(inset));
+        document.documentElement.style.setProperty(
+          "--workbench-bottom-inset",
+          `${clamped}px`,
+        );
+        viewportController.contentDidChangeBeforePaint();
+      },
       viewportDiagnostics() {
         return viewportController.diagnostics();
       },
