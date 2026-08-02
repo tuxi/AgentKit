@@ -31,6 +31,7 @@ public struct ConversationListView: View {
     @State private var didInitializeExpansion = false
     @State private var isProjectsExpanded = true
     @State private var isArchivedExpanded = false
+    @State private var showsRecentConversations = false
     @State private var deletionTarget: ConversationRef?
     @State private var forcedDeletion: ForcedWorktreeDeletion?
     @State private var deletionErrorMessage: String?
@@ -73,6 +74,30 @@ public struct ConversationListView: View {
 
     private var archivedConversationItemsByID: [String: ConversationListItem] {
         Dictionary(uniqueKeysWithValues: viewModel.archivedConversationItems.map { ($0.id, $0) })
+    }
+
+    /// The Runtime list does not require a per-row detail request for this MVP.
+    /// Prefer the local session activity timestamp and retain Runtime order for
+    /// remote history that has not yet been opened on this device.
+    private var recentConversationItems: [ConversationListItem] {
+        let query = searchText.trimmingCharacters(in: .whitespacesAndNewlines)
+        return viewModel.conversationItems.enumerated()
+            .filter { _, item in
+                query.isEmpty
+                    || item.ref.id.localizedCaseInsensitiveContains(query)
+                    || (item.ref.name ?? "").localizedCaseInsensitiveContains(query)
+            }
+            .sorted { lhs, rhs in
+                let left = activityDate(for: lhs.element.ref)
+                let right = activityDate(for: rhs.element.ref)
+                return left == right ? lhs.offset < rhs.offset : left > right
+            }
+            .map(\.element)
+    }
+
+    private func activityDate(for conversation: ConversationRef) -> Date {
+        (try? store.localStateStore.state(for: .session(conversation.id)))?.updatedAt
+            ?? .distantPast
     }
 
     /// 侧边栏仅用的展示分组。每个真实会话固定属于一个 workspace；旧数据或通用会话
@@ -233,12 +258,12 @@ public struct ConversationListView: View {
             }
 
             projectGroupHeader
-            if !conversationGroups.isEmpty {
-
-                if isProjectsExpanded {
-                    ForEach(conversationGroups) { group in
-                        workspaceGroup(group)
-                    }
+            if showsRecentConversations {
+                recentConversationRows
+                projectOnlyRows
+            } else if !conversationGroups.isEmpty, isProjectsExpanded {
+                ForEach(conversationGroups) { group in
+                    workspaceGroup(group)
                 }
             }
 
@@ -266,30 +291,101 @@ public struct ConversationListView: View {
     }
 
     private var projectGroupHeader: some View {
-        Button {
-            isProjectsExpanded.toggle()
-        } label: {
+        HStack(spacing: 4) {
+            Button {
+                if showsRecentConversations {
+                    showsRecentConversations = false
+                } else {
+                    isProjectsExpanded.toggle()
+                }
+            } label: {
             HStack(spacing: 7) {
-                Text("项目")
+                Text(showsRecentConversations ? "最近对话" : "项目")
                     .font(.system(size: 13, weight: .semibold))
-                    .foregroundStyle(.secondary)
-                Image(systemName: isProjectsExpanded
-                      ? "chevron.down"
-                      : "chevron.right")
-                    .font(.system(size: 10, weight: .bold))
-                    .foregroundStyle(.tertiary)
+                    .foregroundStyle(showsRecentConversations ? Color.accentColor : .secondary)
+                if !showsRecentConversations {
+                    Image(systemName: isProjectsExpanded ? "chevron.down" : "chevron.right")
+                        .font(.system(size: 10, weight: .bold))
+                        .foregroundStyle(.tertiary)
+                }
                 Spacer(minLength: 0)
             }
             .padding(.horizontal, 6)
             .padding(.top, 13)
             .padding(.bottom, 7)
             .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .accessibilityLabel(showsRecentConversations ? "返回项目视图" : (isProjectsExpanded ? "收起项目" : "展开项目"))
+
+            Button {
+                showsRecentConversations = !showsRecentConversations
+            } label: {
+                Image(systemName: showsRecentConversations ? "bell.fill" : "bell")
+                    .font(.system(size: 14, weight: .medium))
+                    .foregroundStyle(showsRecentConversations ? Color.accentColor : .secondary)
+                    .padding(6)
+            }
+            .buttonStyle(.plain)
+            .help("按最新对话查看")
         }
-        .buttonStyle(.plain)
         .listRowInsets(.init())
         .listRowSeparator(.hidden)
         .listRowBackground(Color.clear)
-        .accessibilityLabel(isProjectsExpanded ? "收起项目" : "展开项目")
+    }
+
+    @ViewBuilder
+    private var recentConversationRows: some View {
+        ForEach(recentConversationItems) { item in
+                let ref = item.ref
+                ConversationRow(
+                    item: item,
+                    activity: store.supervisor.activity(for: ref),
+                    queueReason: store.supervisor.queueReason(for: ref.id)
+                )
+                .tag(ref)
+                .listRowInsets(.init(top: 0, leading: 12, bottom: 0, trailing: 12))
+                .listRowSeparator(.hidden)
+                .listRowBackground(Color.clear)
+                .contextMenu {
+                    Button {
+                        beginRename(conversationID: ref.id, fallback: ref)
+                    } label: {
+                        Label("重命名", systemImage: "pencil")
+                    }
+                    if store.supportsConversationArchive {
+                        Button {
+                            performArchive(ref)
+                        } label: {
+                            Label("归档", systemImage: "archivebox")
+                        }
+                        .disabled(!canArchive(ref))
+                    }
+                }
+        }
+    }
+
+    @ViewBuilder
+    private var projectOnlyRows: some View {
+        Text("项目")
+            .font(.system(size: 13, weight: .semibold))
+            .foregroundStyle(.secondary)
+            .padding(.horizontal, 6)
+            .padding(.top, 13)
+            .padding(.bottom, 7)
+            .listRowInsets(.init())
+            .listRowSeparator(.hidden)
+            .listRowBackground(Color.clear)
+        ForEach(visibleProjectWorkspaces) { workspace in
+                Button {
+                    store.beginDraft()
+                    store.selectWorkspace(workspace)
+                } label: {
+                    Label(workspace.name, systemImage: "folder")
+                }
+                .buttonStyle(.plain)
+                .listRowSeparator(.hidden)
+        }
     }
 
     @ViewBuilder
