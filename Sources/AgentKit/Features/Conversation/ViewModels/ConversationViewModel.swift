@@ -111,7 +111,17 @@ public final class ConversationViewModel {
             lifecycleStatus = activity.state
             queueReason = nil
             queuePosition = nil
+        case "idle":
+            // Runtime 确认无活跃生命周期，清除客户端残留状态。
+            // 防止 WebSocket 断开后轮询拿到 "idle" 却无法清理的情况。
+            lifecycleStatus = nil
+            queueReason = nil
+            queuePosition = nil
+            pausedAt = nil
+            currentTurnID = nil
+            releaseTurnPermit()
         default:
+            DLLog("activity.state: ", activity.state)
             break
         }
     }
@@ -269,7 +279,13 @@ public final class ConversationViewModel {
         self.snapshot = .empty(sessionID: conversation.id)
         currentTurnID = nil
         detail = nil
-        lifecycleStatus = conversation.turnStatus
+        // 仅在尚无任何生命周期状态时，用 ConversationRef.turnStatus 兜底。
+        // refreshActivitySnapshot() 已在 connect() 之前通过 applyRuntimeActivity
+        // 注入了更权威的轮询数据，此时 lifecycleStatus 已非 nil，不会被覆盖。
+        // ConversationRef.turnStatus 是列表接口的缓存，仅作冷启动 fallback。
+        if lifecycleStatus == nil {
+            lifecycleStatus = conversation.turnStatus
+        }
         queueReason = nil
         queuePosition = nil
         pausedAt = conversation.pausedDate
@@ -667,7 +683,12 @@ public final class ConversationViewModel {
         }
         lastInputRejection = nil
         isAwaitingTurnAcceptance = false
-        currentTurnID = currentTurnID ?? turnID
+        // 只接受非空 turnID：wire 层 turnID ?? "" 可能在 Runtime 尚未分配
+        // turn_id 时产生空字符串，覆盖 currentTurnID 后会导致后续终态事件的
+        // turnID guard 匹配失败。
+        if currentTurnID == nil, !turnID.isEmpty {
+            currentTurnID = turnID
+        }
     }
 
     private func handleSubmissionRejected(requestID: String?, rejection: AgentInputRejection) {
@@ -730,7 +751,12 @@ public final class ConversationViewModel {
             queuePosition = position
         case .turnStarted(let turnID, _, _, _):
             isAwaitingTurnAcceptance = false
-            currentTurnID = turnID
+            // 只接受非空 turnID，避免 wire 层 turnID ?? "" 的兜底空字符串
+            // 覆盖掉 turn_accepted 已确定的 currentTurnID，导致后续
+            // turn_finished 的 turnID guard 匹配失败、lifecycle 永久卡在 "running"。
+            if !turnID.isEmpty {
+                currentTurnID = turnID
+            }
             lifecycleStatus = "running"
             queueReason = nil
             queuePosition = nil
