@@ -178,7 +178,8 @@ Inspector 文件入口
 - [x] 展示本地 A/M/D 文件、筛选、刷新、增删统计和当前文件选择。
 - [x] macOS 宿主通过受工作区根目录约束的 Git provider 注入数据。
 - [x] FileViewerKit 提供统一 `LineDiffBuilder` 和自适应 `ReviewWorkspaceView`。
-- [ ] 文件树与 Diff 双向定位及未修改行折叠。
+- [x] 变更文件按目录树组织，选择与 Diff 联动，并展示 hunk 之间的未修改行数。
+- [ ] 从 Diff/时间线反向定位文件树，以及按需展开被省略的原文件内容。
 - [x] iOS Workspace diff 迁移到统一 builder，并将旧 AgentKit 模型转换集中为单一兼容适配器。
 - [ ] 最终移除 AgentKit 旧 Diff 协议模型；需先确认 AgentKit 是否允许依赖独立展示包。
 - [ ] 暂存、撤销、提交、分支比较和行评论。
@@ -280,3 +281,8 @@ InspectorWorkbenchView(
 - 2026-08-01：本阶段宿主构建暂受工作区中另一组未提交并发改动阻塞：
   `ConversationListViewModel.refreshTask` 的推断类型为 `Task<()?, Never>`，而声明为
   `Task<Void, Never>`。该改动不属于 Inspector 重构，因此未在本阶段代为修改。
+- 2026-08-02：Phase 4.3 将审阅文件列表升级为显式递归目录树，目录聚合 A/M/D 状态并
+  独立保存展开集合；继续避开曾在 macOS Inspector 分栏中触发约束循环的 `OutlineGroup`。
+  `DiffHunk` 公开 old/new 行数，Diff 在 hunk 前显示保守计算的“未修改行”折叠提示。
+  当前提示有意保持只读：canonical hunk 尚未携带被省略正文，后续接入原文件按需读取后
+  再提供展开交互，避免按钮承诺无法呈现的数据。
