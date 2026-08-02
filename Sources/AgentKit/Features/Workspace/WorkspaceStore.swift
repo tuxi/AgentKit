@@ -234,7 +234,7 @@ public final class WorkspaceStore {
 
         conversationListPollingTask = Task { [weak self] in
             while !Task.isCancelled {
-                try? await Task.sleep(for: .seconds(3))
+                try? await Task.sleep(for: .seconds(8))
                 guard !Task.isCancelled, let self else { return }
                 await self.refreshConversationList()
             }
