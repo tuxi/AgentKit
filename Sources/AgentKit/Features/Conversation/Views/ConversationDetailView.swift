@@ -209,6 +209,7 @@ public struct ConversationDetailView: View {
                 banner
                 residentTimelines(activeViewModel: vm, bottomInset: bottomBarHeight)
             }
+            .padding(.horizontal, 20)
             activeBottomBar(vm: vm, isPaused: isPaused, isArchived: isArchived)
             // Measure the floating bar's own height directly. A PreferenceKey
             // set from a `.background` GeometryReader does not propagate on
@@ -221,7 +222,6 @@ public struct ConversationDetailView: View {
                     bottomBarHeight = height
                 }
         }
-        .padding(.horizontal, 20)
 #else
         return VStack(spacing: 0) {
             banner
@@ -355,8 +355,8 @@ public struct ConversationDetailView: View {
                         LinearGradient(
                             stops: [
                                 .init(color: .clear, location: 0.0),
-                                .init(color: inputAreaBackgroundColor.opacity(0.6), location: 0.3),
-                                .init(color: inputAreaBackgroundColor, location: 0.8)
+                                .init(color: inputAreaBackgroundColor.opacity(0.18), location: 0.3),
+                                .init(color: inputAreaBackgroundColor.opacity(0.37), location: 0.9)
                             ],
                             startPoint: .top,
                             endPoint: .bottom
