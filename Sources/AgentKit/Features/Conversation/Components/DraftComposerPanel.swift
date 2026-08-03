@@ -130,7 +130,31 @@ struct DraftComposerPanel: View {
                         
 #if os(macOS)
                         Menu {
-                            Button(AgentKitLocalized.string("composer.request_approval")) { }
+                            Button {
+                                
+                            } label: {
+                                VStack {
+                                    Text(AgentKitLocalized.string("composer.request_approval"))
+                                    Text("访问外部文件或者编辑文件时始终询问")
+                                }
+                            }
+                            Button {
+                                
+                            } label: {
+                                VStack {
+                                    Text(AgentKitLocalized.string("替我批准"))
+                                    Text("仅针对检查到的风险操作请求批准")
+                                }
+                            }
+                            Button {
+                                
+                            } label: {
+                                VStack {
+                                    Text(AgentKitLocalized.string("完全访问权限"))
+                                    Text("可完全不受限制的访问外部文件或者编辑文件")
+                                }
+                            }
+                            
                         } label: {
                             Label(AgentKitLocalized.string("composer.request_approval"), systemImage: "hand.raised")
                                 .font(.system(size: 13, weight: .medium))
@@ -1086,6 +1110,7 @@ struct PlanApprovalBar: View {
     let plan: PlanApprovalRequest
     let onApprove: () -> Void
     let onReject: () -> Void
+    @State private var contentHeight: CGFloat = 0
     
     private var displayPath: String? {
         plan.planPath ?? plan.filePath
@@ -1110,8 +1135,14 @@ struct PlanApprovalBar: View {
                     ScrollView(.vertical, showsIndicators: true) {
                         MarkdownRenderer(text: plan.content)
                             .font(.caption)
+                            .onGeometryChange(for: CGFloat.self) { poxy in
+                                poxy.size.height
+                            } action: { newValue in
+                                contentHeight = newValue
+                            }
+
                     }
-                    .frame(maxHeight: 300)
+                    .frame(height: max(0, min(280, contentHeight)))
                     .padding(12)
                     .background(.quaternary.opacity(0.3))
                     .clipShape(RoundedRectangle(cornerRadius: 8))
@@ -1138,6 +1169,9 @@ struct PlanApprovalBar: View {
             .padding(.horizontal, 12)
             .padding(.vertical, 10)
         }
+        .background(Color.approvalPanelBackground)
+        .layerBorder()
+        .padding(12)
     }
     
     private var isWorkflowDAG: Bool {
@@ -1528,6 +1562,7 @@ struct AskUserBar: View {
     let request: AskUserRequest
     let onSubmit: ([String], String?) -> Void
     let onSkip: () -> Void
+    @State var optionsListHeight: CGFloat = 0
     
     @State private var selectedLabels: Set<String> = []
     @State private var customText: String = ""
@@ -1556,8 +1591,13 @@ struct AskUserBar: View {
                 if isExpanded {
                     ScrollView(.vertical) {
                         optionsList
+                            .onGeometryChange(for: CGFloat.self) { proxy in
+                                proxy.size.height
+                            } action: { newValue in
+                                self.optionsListHeight = newValue
+                            }
                     }
-                    .frame(height: 500)
+                    .frame(height: max(0, min(280, self.optionsListHeight)))
                 }
                 
                 // Custom input (only when allowCustom)
