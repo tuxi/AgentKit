@@ -243,6 +243,13 @@ struct ConversationWebWorkbenchView: NSViewRepresentable {
             isVisible = visible
             if visible {
                 applyVisibilityToPage()
+                // The page may have sat suspended through one or more
+                // appearance changes while hidden. AppKit only re-resolves
+                // effectiveAppearance for views that are actively drawing, so
+                // any callback that fired while hidden carried a stale color
+                // that the hex dedupe guard swallowed. Force a re-injection
+                // with the current appearance now that the view is active.
+                applyHostBackgroundToPage(force: true)
                 scheduleLatestDocumentSend(delayMilliseconds: 0)
             } else {
                 sendTask?.cancel()
@@ -276,14 +283,18 @@ struct ConversationWebWorkbenchView: NSViewRepresentable {
         }
 
         /// Re-pushes the resolved host background color to the page. Called on
-        /// page-ready and whenever the effective appearance changes (light/dark
-        /// switch).
-        private func applyHostBackgroundToPage() {
+        /// page-ready, whenever the effective appearance changes (light/dark
+        /// switch), and with `force` when a suspended page is activated. The
+        /// hex dedupe guard normally skips unchanged colors, but a page that
+        /// sat hidden through an appearance change may hold a stale cached hex
+        /// (AppKit only lazily re-resolves `effectiveAppearance` for views that
+        /// are actively drawing), so activation forces a fresh injection.
+        private func applyHostBackgroundToPage(force: Bool = false) {
             guard isPageReady, let webView, let hostView else { return }
             guard let hex = Self.resolvedHostBackgroundHex(
                 for: hostView.effectiveAppearance
             ) else { return }
-            guard hex != appliedHostBackgroundHex else { return }
+            guard force || hex != appliedHostBackgroundHex else { return }
             appliedHostBackgroundHex = hex
             webView.evaluateJavaScript(
                 "window.AgentKitWorkbench?.setHostBackground(\"\(hex)\")"
