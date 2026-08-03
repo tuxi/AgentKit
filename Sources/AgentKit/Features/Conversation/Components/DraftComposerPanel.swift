@@ -803,10 +803,16 @@ private struct IOSModelPickerSheet: View {
 #endif
 
 private struct DraftComposerSurfaceModifier: ViewModifier {
+    @Environment(\.colorScheme) private var colorScheme
     func body(content: Content) -> some View {
 #if os(macOS)
         content
-            .background(Color.draftPanelBackground)
+            .background(colorScheme == .dark ?         Color(NSColor(
+                calibratedRed: 44.0 / 255.0,
+                green: 44.0 / 255.0,
+                blue: 46.0 / 255.0,
+                alpha: 1
+              )) : Color(NSColor.windowBackgroundColor))
             .clipShape(RoundedRectangle(cornerRadius: 20, style: .continuous))
             .padding()
             .shadow(color: .black.opacity(0.10), radius: 20, y: 10)
@@ -1017,23 +1023,6 @@ extension Color {
 #endif
     }
     
-    static var draftPanelBackground: Color {
-#if os(macOS)
-        Color(NSColor(
-            calibratedRed: 44.0 / 255.0,
-            green: 44.0 / 255.0,
-            blue: 46.0 / 255.0,
-            alpha: 1
-          ))
-#else
-        Color(UIColor { traits in
-            // 浅色模式：接近纯白，带极低明度的灰（或利用材质的半透明）
-            traits.userInterfaceStyle == .dark
-            ? UIColor.tertiarySystemBackground
-            : UIColor.systemBackground.withAlphaComponent(0.01) // 几乎透明，让 Material 唱主角
-        })
-#endif
-    }
     
     static var draftPanelFooterBackground: Color {
 #if os(macOS)
