@@ -995,7 +995,12 @@ extension Color {
     
     static var draftPanelBackground: Color {
 #if os(macOS)
-        Color(NSColor.controlBackgroundColor)
+        Color(NSColor(
+            calibratedRed: 44.0 / 255.0,
+            green: 44.0 / 255.0,
+            blue: 46.0 / 255.0,
+            alpha: 1
+          ))
 #else
         Color(UIColor { traits in
             // 浅色模式：接近纯白，带极低明度的灰（或利用材质的半透明）

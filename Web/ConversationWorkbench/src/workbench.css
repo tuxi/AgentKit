@@ -1,10 +1,15 @@
 :root {
   color-scheme: light dark;
-  /* Light mode stays transparent so the native .bar material shows through.
-     Dark mode gets an opaque surface a few shades lighter than the floating
-     composer bar (NSColor.controlBackgroundColor ~ #1E1E1E) so the content
-     area reads as a distinct layer above the input bar. */
-  --background: light-dark(transparent, rgb(44 44 46));
+  /* Canvas background. The native host injects the detail page's resolved
+     main background color (sampled from the .bar material on macOS) as
+     --workbench-background via window.AgentKitWorkbench.setHostBackground().
+     macOS WKWebView cannot be truly transparent, so the canvas must be an
+     opaque approximation of the host material; these fallbacks cover the
+     first paint / export until the host injects. */
+  --background: var(
+    --workbench-background,
+    light-dark(rgb(249 249 249), rgb(44 44 46))
+  );
   --text: light-dark(rgb(35 35 35), rgb(226 226 226));
   --secondary: light-dark(rgb(104 104 104), rgb(157 157 157));
   --subtle: light-dark(rgb(0 0 0 / 5%), rgb(255 255 255 / 6%));

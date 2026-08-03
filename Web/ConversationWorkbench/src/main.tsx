@@ -1876,6 +1876,19 @@ function App(): React.JSX.Element {
         );
         viewportController.contentDidChangeBeforePaint();
       },
+      /**
+       * Resolved background color of the native detail page, sampled from its
+       * .bar material and injected by the host. Set as a CSS variable on
+       * <html> so the opaque canvas matches the surrounding native chrome;
+       * re-injected whenever the effective appearance changes.
+       */
+      setHostBackground(hex: string) {
+        if (!/^#[0-9a-f]{6}$/i.test(hex)) return;
+        document.documentElement.style.setProperty(
+          "--workbench-background",
+          hex,
+        );
+      },
       viewportDiagnostics() {
         return viewportController.diagnostics();
       },

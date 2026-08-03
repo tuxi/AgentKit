@@ -229,6 +229,8 @@ declare global {
     AgentKitWorkbench?: {
       applyUpdateBase64(payload: string): void;
       setSuspended(suspended: boolean): void;
+      setHostBackground(hex: string): void;
+      setBottomInset(inset: number): void;
       viewportDiagnostics(): {
         pinned: boolean;
         interacting: boolean;

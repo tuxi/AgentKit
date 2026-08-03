@@ -10,18 +10,18 @@
 import SwiftUI
 
 public struct ConversationTimelineView: View {
-
+    
     @Environment(WorkspaceStore.self) private var store
     let viewModel: ConversationViewModel
     let isVisible: Bool
     let bottomInset: CGFloat
-
+    
     public init(viewModel: ConversationViewModel, isVisible: Bool = true, bottomInset: CGFloat = 0) {
         self.viewModel = viewModel
         self.isVisible = isVisible
         self.bottomInset = bottomInset
     }
-
+    
     public var body: some View {
         TurnTimelineView(
             snapshot: viewModel.snapshot,
@@ -32,9 +32,9 @@ public struct ConversationTimelineView: View {
             isVisible: isVisible,
             bottomInset: bottomInset
         )
-            // Scope identity to this resident session. The view remains mounted
-            // across ordinary selection changes, so returning preserves its DOM
-            // and viewport; only its first mount starts at the bottom.
-            .id(viewModel.conversation?.id)
+        // Scope identity to this resident session. The view remains mounted
+        // across ordinary selection changes, so returning preserves its DOM
+        // and viewport; only its first mount starts at the bottom.
+        .id(viewModel.conversation?.id)
     }
 }

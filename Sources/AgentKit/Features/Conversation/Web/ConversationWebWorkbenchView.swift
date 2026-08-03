@@ -144,6 +144,7 @@ struct ConversationWebWorkbenchView: NSViewRepresentable {
         private var isViewportInteracting = false
         private var isVisible = true
         private var appliedBottomInset: CGFloat = 0
+        private var appliedHostBackgroundHex: String?
         private var lastApplyDurationMilliseconds: Double = 0
         private let actionRegistry = ConversationWebActionRegistry()
 
@@ -165,6 +166,9 @@ struct ConversationWebWorkbenchView: NSViewRepresentable {
             self.messageProxy = messageProxy
             self.schemeHandler = schemeHandler
             self.onFatalFailure = onFatalFailure
+            hostView.onEffectiveAppearanceChange = { [weak self] in
+                self?.applyHostBackgroundToPage()
+            }
         }
 
         func detach() {
@@ -271,6 +275,57 @@ struct ConversationWebWorkbenchView: NSViewRepresentable {
             )
         }
 
+        /// Re-pushes the resolved host background color to the page. Called on
+        /// page-ready and whenever the effective appearance changes (light/dark
+        /// switch).
+        private func applyHostBackgroundToPage() {
+            guard isPageReady, let webView, let hostView else { return }
+            guard let hex = Self.resolvedHostBackgroundHex(
+                for: hostView.effectiveAppearance
+            ) else { return }
+            guard hex != appliedHostBackgroundHex else { return }
+            appliedHostBackgroundHex = hex
+            webView.evaluateJavaScript(
+                "window.AgentKitWorkbench?.setHostBackground(\"\(hex)\")"
+            )
+        }
+
+        /// The detail page's main background is SwiftUI `.bar` material, which
+        /// is live-blurred and cannot be sampled offscreen (materials only
+        /// render inside a window — an offscreen snapshot yields a constant,
+        /// appearance-independent value). Since the macOS WKWebView canvas must
+        /// be opaque anyway, approximate `.bar` with fixed solid colors per
+        /// appearance: near-white in light mode, #2C2C2E in dark (matching the
+        /// hand-tuned value previously used).
+        @MainActor
+        private static func resolvedHostBackgroundHex(
+            for appearance: NSAppearance?
+        ) -> String? {
+            let isDark = appearance?.bestMatch(from: [.darkAqua, .aqua])
+                == .darkAqua
+            let color = isDark
+            ? NSColor.windowBackgroundColor
+                : NSColor(
+                    calibratedRed: 249.0 / 255.0,
+                    green: 249.0 / 255.0,
+                    blue: 249.0 / 255.0,
+                    alpha: 1
+                )
+            return hex(from: color)
+        }
+
+        /// Colorspace-safe hex conversion: some NSColors (e.g. `clear`,
+        /// grayscale/profile colors) reject `redComponent` with an exception
+        /// unless converted first. Returns nil when conversion fails so the
+        /// caller keeps the previous value instead of crashing.
+        private static func hex(from color: NSColor) -> String? {
+            guard let srgb = color.usingColorSpace(.sRGB) else { return nil }
+            let r = Int((srgb.redComponent * 255).rounded())
+            let g = Int((srgb.greenComponent * 255).rounded())
+            let b = Int((srgb.blueComponent * 255).rounded())
+            return String(format: "#%02X%02X%02X", r, g, b)
+        }
+
         func loadShell() {
             let indexURL = ConversationWebSchemeHandler.indexURL
             shellURL = indexURL
@@ -297,6 +352,7 @@ struct ConversationWebWorkbenchView: NSViewRepresentable {
                 isPageReady = true
                 applyVisibilityToPage()
                 applyBottomInsetToPage()
+                applyHostBackgroundToPage()
                 // A fresh Web process has no document even when Swift retains
                 // an acknowledged revision from before a reload.
                 inFlightDocument = nil
@@ -757,6 +813,9 @@ struct ConversationWebWorkbenchView: NSViewRepresentable {
 @MainActor
 final class ConversationWebWorkbenchHostView: NSView {
     let webView: WKWebView
+    /// Fired when the window's effective appearance changes (light/dark
+    /// switch), so the coordinator can re-inject the host background color.
+    var onEffectiveAppearanceChange: (() -> Void)?
 
     init(webView: WKWebView) {
         self.webView = webView
@@ -768,6 +827,11 @@ final class ConversationWebWorkbenchHostView: NSView {
     @available(*, unavailable)
     required init?(coder: NSCoder) {
         fatalError("init(coder:) has not been implemented")
+    }
+
+    override func viewDidChangeEffectiveAppearance() {
+        super.viewDidChangeEffectiveAppearance()
+        onEffectiveAppearanceChange?()
     }
 
     override func layout() {

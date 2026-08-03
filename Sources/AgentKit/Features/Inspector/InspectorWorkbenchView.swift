@@ -96,10 +96,14 @@ private struct InspectorTabWorkbench: View {
                 )
                 .id(tab.id)
             } else {
-                InspectorLandingView { entry in
-                    let tab = state.open(entry, reusingExisting: true)
-                    onOpenEntry(entry)
-                    onOpenTab?(tab)
+                HStack {
+                    Spacer()
+                    InspectorLandingView { entry in
+                        let tab = state.open(entry, reusingExisting: true)
+                        onOpenEntry(entry)
+                        onOpenTab?(tab)
+                    }
+                    Spacer()
                 }
             }
         }
@@ -225,7 +229,7 @@ private struct InspectorLandingView: View {
     let onOpenEntry: (InspectorEntry) -> Void
 
     var body: some View {
-        VStack(spacing: 4) {
+        VStack(alignment: .leading, spacing: 4) {
             ForEach(InspectorEntry.allCases) { entry in
                 Button {
                     onOpenEntry(entry)
@@ -235,8 +239,6 @@ private struct InspectorLandingView: View {
                             .frame(width: 20)
 
                         Text(entry.title)
-
-                        Spacer(minLength: 24)
                     }
                     .contentShape(Rectangle())
                     .padding(.horizontal, 16)
@@ -247,7 +249,6 @@ private struct InspectorLandingView: View {
             }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
-        .background(.background)
         .accessibilityElement(children: .contain)
         .accessibilityIdentifier("inspector.landing")
     }

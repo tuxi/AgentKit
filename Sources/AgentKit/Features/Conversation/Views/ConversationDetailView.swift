@@ -15,6 +15,7 @@ import SwiftUI
 
 public struct ConversationDetailView: View {
     
+    @Environment(\.colorScheme) private var colorScheme
     @Environment(WorkspaceStore.self) private var store
     @Environment(AgentRouter.self) private var router
     @Environment(ModelSettingsStore.self) private var modelSettings
@@ -49,7 +50,7 @@ public struct ConversationDetailView: View {
                 draftView
             }
         }
-        .frame(maxWidth: 800) // 仅限制内部 content 宽度
+//        .frame(maxWidth: 800) // 仅限制内部 content 宽度
         .frame(maxWidth: .infinity) // 保持整体居中
         .toolbar { toolbarContent }
 #if os(iOS)
@@ -88,7 +89,15 @@ public struct ConversationDetailView: View {
                 }
                 .frame(maxWidth: .infinity)
             }
-            .background(.bar)
+//            .background(.bar)
+            .background(Color(nsColor: colorScheme == .dark
+                              ? NSColor.windowBackgroundColor
+                              : NSColor(
+                                calibratedRed: 249.0 / 255.0,
+                                green: 249.0 / 255.0,
+                                blue: 249.0 / 255.0,
+                                alpha: 1
+                              )))
 #endif
         }
         .scrollDismissesKeyboard(.interactively)
@@ -210,6 +219,14 @@ public struct ConversationDetailView: View {
                 residentTimelines(activeViewModel: vm, bottomInset: bottomBarHeight)
             }
             .padding(.horizontal, 20)
+            .background(Color(nsColor: colorScheme == .dark
+                              ? NSColor.windowBackgroundColor
+                              : NSColor(
+                                calibratedRed: 249.0 / 255.0,
+                                green: 249.0 / 255.0,
+                                blue: 249.0 / 255.0,
+                                alpha: 1
+                              )))
             activeBottomBar(vm: vm, isPaused: isPaused, isArchived: isArchived)
             // Measure the floating bar's own height directly. A PreferenceKey
             // set from a `.background` GeometryReader does not propagate on
@@ -248,7 +265,7 @@ public struct ConversationDetailView: View {
         Color(NSColor.underPageBackgroundColor) // 或 controlBackgroundColor
 #endif
     }
-   
+    
     /// Bottom bar shared by both macOS (inline VStack) and iOS (safeAreaInset).
     @ViewBuilder
     private func activeBottomBar(vm: ConversationViewModel, isPaused: Bool, isArchived: Bool) -> some View {
@@ -349,14 +366,15 @@ public struct ConversationDetailView: View {
             )
             .environment(modelSettings)
             .background {
+#if os(iOS)
                 GeometryReader { proxy in
                     ZStack(alignment: .top) {
                         // 1. 渐变背景
                         LinearGradient(
                             stops: [
                                 .init(color: .clear, location: 0.0),
-                                .init(color: inputAreaBackgroundColor.opacity(0.18), location: 0.3),
-                                .init(color: inputAreaBackgroundColor.opacity(0.37), location: 0.9)
+                                .init(color: inputAreaBackgroundColor.opacity(0.5), location: 0.3),
+                                .init(color: inputAreaBackgroundColor.opacity(0.78), location: 0.9)
                             ],
                             startPoint: .top,
                             endPoint: .bottom
@@ -380,6 +398,28 @@ public struct ConversationDetailView: View {
                     }
                 }
                 .ignoresSafeArea(edges: .bottom)
+#else
+                ZStack(alignment: .top) {
+                    Color.clear
+                        .background(.ultraThinMaterial) // 叠加轻微毛玻璃效果
+                        .mask {
+                            LinearGradient(
+                                colors: [.clear, .black.opacity(0.6), .black],
+                                startPoint: .top,
+                                endPoint: .bottom
+                            )
+                        }
+                    
+                    // 顶部分隔线（极轻微，增强物理边界感）
+                    LinearGradient(
+                        colors: [.clear, Color.primary.opacity(0.08), .clear],
+                        startPoint: .leading,
+                        endPoint: .trailing
+                    )
+                    .frame(height: 1)
+                }
+                .ignoresSafeArea(edges: .bottom)
+#endif
             }
         }
         .animation(.easeOut(duration: 0.25), value: vm.snapshot.pendingAskUser != nil)
@@ -418,7 +458,7 @@ public struct ConversationDetailView: View {
         }
         // The Web workbench is transparent. Keep one background source across
         // its loading gate and rendered state so no inset color seam appears.
-        .background(.bar)
+        //        .background(.bar)
 #else
         ConversationTimelineView(viewModel: activeViewModel)
 #endif
