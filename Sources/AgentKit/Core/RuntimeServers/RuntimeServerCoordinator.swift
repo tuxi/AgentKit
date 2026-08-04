@@ -448,7 +448,7 @@ public final class RuntimeServerCoordinator {
             }
             let capabilities = try await client.runtimeCapabilities()
             let models = try await client.runtimeModels()
-            guard models.schema == "runtime-model-catalog/v1" else {
+            guard models.hasSupportedSchema else {
                 throw RuntimeServerPreflightError.invalidModelCatalogSchema(
                     models.schema
                 )

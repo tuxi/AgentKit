@@ -127,6 +127,9 @@ public final class AgentRuntime: @unchecked Sendable {
 
     private var server: MobileServer?
     private var injectedSecretsJSON: String?
+    /// connection-flattening v2: 持久化的 connection DEFINITIONS（non-secret），
+    /// restart() 时与 secretsJSON 一起保留。gomobile ABI 支持后透传给 runtime。
+    private var injectedConnectionsJSON: String?
     private var startupModelNameOverride: String?
     private var configuration = EmbeddedRuntimeConfiguration.platformDefault()
     let runtimeAccessCredentialStore = EmbeddedRuntimeAccessCredentialStore()
@@ -199,29 +202,82 @@ public final class AgentRuntime: @unchecked Sendable {
         try server.resumeSession(sessionID)
     }
 
-    public func reconfigure(secretsJSON: String = "", modelName: String = "") throws {
-        guard let server else { return }
-        try server.reconfigure(secretsJSON, modelName: modelName)
+    /// 3-arg reconfigure（connection-flattening v2）。
+    ///
+    /// 每个参数独立遵循 "" = keep current 语义。`connectionsJSON` 携带连接定义
+    /// （non-secret），`secretsJSON` 只携带值。
+    ///
+    /// gomobile ABI 已落地：`mobile.Server.ReconfigureConnections`（CodeAgentRuntime
+    /// 1.4.0 新增方法，非破坏性）经 `serverReconfigure(_:connectionsJSON:secretsJSON:modelName:)`
+    /// 透传；对仍为 1.3.x 的 runtime 自动回退 2-arg `reconfigure:modelName:`（此时
+    /// connectionsJSON 被丢弃，定义仍经 configYAML 注入）。
+    public func reconfigure(
+        connectionsJSON: String = "",
+        secretsJSON: String = "",
+        modelName: String = ""
+    ) throws {
+        if !connectionsJSON.isEmpty {
+            injectedConnectionsJSON = connectionsJSON
+        }
         if !secretsJSON.isEmpty {
             injectedSecretsJSON = secretsJSON
         }
+        guard let server else { return }
+        try serverReconfigure(
+            server,
+            connectionsJSON: connectionsJSON,
+            secretsJSON: secretsJSON,
+            modelName: modelName
+        )
+    }
+
+    /// 2-arg 兼容入口（旧调用方 / UI）。等价于 `connectionsJSON = ""`。
+    public func reconfigure(secretsJSON: String = "", modelName: String = "") throws {
+        try reconfigure(connectionsJSON: "", secretsJSON: secretsJSON, modelName: modelName)
+    }
+
+    /// 将 (connectionsJSON, secretsJSON, modelName) 透传给 gomobile 桥接的
+    /// `mobile.Server.ReconfigureConnections`（CodeAgentRuntime 1.4.0，非破坏性新增）。
+    ///
+    /// 桥接选择子（gobind 约定：首参无 label，后续参按 Go 参数名）：
+    /// `reconfigureConnections:secretsJSON:modelName:error:` → Swift
+    /// `reconfigureConnections(_ connectionsJSON: String?, secretsJSON: String?,
+    /// modelName: String?) throws`（与 Mobile.objc.h 1.4.0 声明一致）。
+    ///
+    /// 语义与 2-arg `reconfigure` 相同：connectionsJSON/secretsJSON/modelName 各自
+    /// "" = keep current。
+    private func serverReconfigure(
+        _ server: MobileServer,
+        connectionsJSON: String,
+        secretsJSON: String,
+        modelName: String
+    ) throws {
+        try server.reconfigureConnections(connectionsJSON, secretsJSON: secretsJSON, modelName: modelName)
     }
 
     @discardableResult
     public func restart() throws -> Int {
         stop()
-        return try launch(secretsJSON: injectedSecretsJSON ?? "")
+        return try launch(
+            connectionsJSON: injectedConnectionsJSON ?? "",
+            secretsJSON: injectedSecretsJSON ?? ""
+        )
     }
 
     @discardableResult
     public func ensureStarted(with credentialStore: any CredentialStore) async throws -> Int {
         let map = (try? await credentialStore.all()) ?? CredentialMap()
         let secretsJSON = map.toSecretsJSON()
-        let finalSecrets = secretsJSON == "{}" ? AgentSettings.secretsJSON() : secretsJSON
+        let finalSecrets = secretsJSON
         startupModelNameOverride = ""
 
         if let server {
-            try server.reconfigure(finalSecrets, modelName: "")
+            try serverReconfigure(
+                server,
+                connectionsJSON: injectedConnectionsJSON ?? "",
+                secretsJSON: finalSecrets,
+                modelName: ""
+            )
             injectedSecretsJSON = finalSecrets
             return server.port()
         }
@@ -237,7 +293,12 @@ public final class AgentRuntime: @unchecked Sendable {
         guard let server else { return }
         let map = (try? await credentialStore.all()) ?? CredentialMap()
         let secretsJSON = map.toSecretsJSON()
-        try server.reconfigure(secretsJSON, modelName: "")
+        try serverReconfigure(
+            server,
+            connectionsJSON: injectedConnectionsJSON ?? "",
+            secretsJSON: secretsJSON,
+            modelName: ""
+        )
         injectedSecretsJSON = secretsJSON
         startupModelNameOverride = ""
     }
@@ -352,7 +413,7 @@ public final class AgentRuntime: @unchecked Sendable {
     }
 
     @discardableResult
-    private func launch(secretsJSON: String = "") throws -> Int {
+    private func launch(connectionsJSON: String = "", secretsJSON: String = "") throws -> Int {
         stop()
 
         let fileManager = FileManager.default
@@ -369,12 +430,16 @@ public final class AgentRuntime: @unchecked Sendable {
         Self.bootstrapExecutablePath(config.executableSearchPaths)
         Self.installBundledSkills(in: config.dataDirectory)
 
-        let finalSecrets = secretsJSON.isEmpty ? AgentSettings.secretsJSON() : secretsJSON
+        // A4.2: 持久化 (connectionsJSON, secretsJSON) 对，restart() 时保留。
+        injectedConnectionsJSON = connectionsJSON
+        let finalSecrets = secretsJSON
         injectedSecretsJSON = finalSecrets
         let model = startupModelNameOverride ?? AgentSettings.model
         let serverAccessToken = runtimeAccessCredentialStore.rotate()
 
         var error: NSError?
+        // gomobile MobileStart 尚无 connectionsJSON 参数（A4.3 版本升级后透传）；
+        // 连接定义此刻仍经 configYAML 注入。connectionsJSON 已持久化供后续 ABI 使用。
         guard let newServer = MobileStart(
             config.workspaceDirectory.path,
             config.dataDirectory.path,
@@ -393,6 +458,17 @@ public final class AgentRuntime: @unchecked Sendable {
             )
         }
         server = newServer
+        // M5: MobileStart 不带 connectionsJSON（ABI 是 Server 上的新方法，非 Start
+        // 签名变更）。restart()/持久化路径若携带了已注入的连接定义，在此热重放——
+        // 1.4.0+ runtime 经 reconfigureConnections 生效；1.3.x 回退 2-arg 无副作用。
+        if !connectionsJSON.isEmpty {
+            try? serverReconfigure(
+                newServer,
+                connectionsJSON: connectionsJSON,
+                secretsJSON: finalSecrets,
+                modelName: ""
+            )
+        }
         return newServer.port()
     }
 

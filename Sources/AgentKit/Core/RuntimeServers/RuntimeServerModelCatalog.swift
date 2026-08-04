@@ -30,6 +30,11 @@ public struct RuntimeServerModelIdentity: Codable, Hashable, Sendable {
 }
 
 public struct RuntimeServerModelCatalog: Codable, Sendable, Equatable {
+    /// Bridging period: accept every schema under this prefix (v1 AND v2) so
+    /// old SDK binaries interoperate with v2 runtimes and vice-versa. Any
+    /// future version keeps the prefix contract.
+    public static let supportedSchemaPrefix = "runtime-model-catalog/"
+
     public let schema: String
     public let revision: Int64
     public let defaultRuntimeAlias: String
@@ -38,6 +43,11 @@ public struct RuntimeServerModelCatalog: Codable, Sendable, Equatable {
     enum CodingKeys: String, CodingKey {
         case schema, revision, connections
         case defaultRuntimeAlias = "default_runtime_alias"
+    }
+
+    /// True when the catalog schema is a supported version (prefix match).
+    public var hasSupportedSchema: Bool {
+        schema.hasPrefix(Self.supportedSchemaPrefix)
     }
 
     public init(
@@ -104,10 +114,13 @@ public struct RuntimeServerModelConnection: Codable, Sendable, Equatable, Identi
     public let providerID: String
     public let displayName: String
     public let billingSource: String
+    /// v2 addition (optional for interop): per-connection credential subobject,
+    /// e.g. `{ "status": "missing", "source": "injected" }` (wire v2 §4).
+    public let credential: RuntimeServerConnectionCredential?
     public let models: [RuntimeServerModelDescriptor]
 
     enum CodingKeys: String, CodingKey {
-        case id, models
+        case id, models, credential
         case providerID = "provider_id"
         case displayName = "display_name"
         case billingSource = "billing_source"
@@ -118,13 +131,32 @@ public struct RuntimeServerModelConnection: Codable, Sendable, Equatable, Identi
         providerID: String,
         displayName: String,
         billingSource: String,
+        credential: RuntimeServerConnectionCredential? = nil,
         models: [RuntimeServerModelDescriptor]
     ) {
         self.id = id
         self.providerID = providerID
         self.displayName = displayName
         self.billingSource = billingSource
+        self.credential = credential
         self.models = models
+    }
+}
+
+/// Per-connection credential state/source (wire v2 §4, non-secret).
+public struct RuntimeServerConnectionCredential: Codable, Sendable, Equatable {
+    /// "configured" | "missing" | "none"
+    public let status: String?
+    /// "env" | "injected" | "keychain" | "none"
+    public let source: String?
+
+    enum CodingKeys: String, CodingKey {
+        case status, source
+    }
+
+    public init(status: String? = nil, source: String? = nil) {
+        self.status = status
+        self.source = source
     }
 }
 
@@ -137,6 +169,9 @@ public struct RuntimeServerModelDescriptor: Codable, Sendable, Equatable {
     public let supportsReasoning: Bool
     public let inputModalities: [String]
     public let available: Bool
+    /// v2 addition (optional for interop): why the model is unavailable, e.g.
+    /// "quota exhausted" / "provider error". Present only when available == false.
+    public let unavailableReason: String?
 
     enum CodingKeys: String, CodingKey {
         case available
@@ -147,6 +182,7 @@ public struct RuntimeServerModelDescriptor: Codable, Sendable, Equatable {
         case supportsTools = "supports_tools"
         case supportsReasoning = "supports_reasoning"
         case inputModalities = "input_modalities"
+        case unavailableReason = "unavailable_reason"
     }
 
     public init(
@@ -157,7 +193,8 @@ public struct RuntimeServerModelDescriptor: Codable, Sendable, Equatable {
         supportsTools: Bool,
         supportsReasoning: Bool,
         inputModalities: [String],
-        available: Bool
+        available: Bool,
+        unavailableReason: String? = nil
     ) {
         self.runtimeAlias = runtimeAlias
         self.wireModelID = wireModelID
@@ -167,5 +204,6 @@ public struct RuntimeServerModelDescriptor: Codable, Sendable, Equatable {
         self.supportsReasoning = supportsReasoning
         self.inputModalities = inputModalities
         self.available = available
+        self.unavailableReason = unavailableReason
     }
 }

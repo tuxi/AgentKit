@@ -47,15 +47,35 @@ public struct CredentialMap: Codable, Sendable {
 
     // MARK: - secretsJSON
 
+    /// secretsJSON 顶层 key 的编码模式（connection-flattening bridging 期）。
+    ///
+    /// - `namespaced`: v1 的 `{namespace}/{name}`（`gateway/default`、`llm/deepseek`）——
+    ///   持久化身份，默认模式，输出与历史字节一致。
+    /// - `flat`: v2 扁平 connection id（`gateway`、`deepseek`）。
+    /// - `dual`: bridging 期同时输出两种 key；flat key 追加在后，因此当多个
+    ///   namespace 的 name 相同（如 `llm/foo` 与 `mcp/foo`）时 flat 后者覆盖前者。
+    public enum SecretsJSONKeyMode: String, Sendable {
+        case namespaced
+        case flat
+        case dual
+    }
+
+    /// 默认（v1）模式：`{namespace}/{name}` key，输出与历史完全一致。
+    public func toSecretsJSON() -> String {
+        toSecretsJSON(keyMode: .namespaced)
+    }
+
     /// 转为 Runtime 能理解的 secretsJSON 格式。
     ///
-    /// key = `CredentialTarget.id`（url.PathEscape 编码）。
+    /// key = `CredentialTarget.id`（namespace/name，url.PathEscape 编码）或
+    /// `CredentialTarget.flatID`（v2 扁平 connection id），由 `keyMode` 决定。
     /// value = Go credential wire JSON 的字符串（`type` / `secret` /
-    /// `expires_at`，不含 metadata）。顶层保持 `[String:String]`，兼容
-    /// `MobileStart` 的 gomobile 边界；Go Runtime 会再解析字符串内的对象。
+    /// `expires_at`，不含 metadata），**三种模式下 value 形状字节一致**。
+    /// 顶层保持 `[String:String]`，兼容 `MobileStart` 的 gomobile 边界；
+    /// Go Runtime 会再解析字符串内的对象。
     ///
     /// **关键：`refresh_token` 永不进入 Runtime**。
-    public func toSecretsJSON() -> String {
+    public func toSecretsJSON(keyMode: SecretsJSONKeyMode) -> String {
         struct RuntimeCredential: Encodable {
             let type: String
             let secret: String
@@ -80,7 +100,15 @@ public struct CredentialMap: Codable, Sendable {
                   let value = String(data: data, encoding: .utf8) else {
                 continue
             }
-            dict[target.id] = value
+            switch keyMode {
+            case .namespaced:
+                dict[target.id] = value
+            case .flat:
+                dict[target.flatID] = value
+            case .dual:
+                dict[target.id] = value
+                dict[target.flatID] = value
+            }
         }
         guard let data = try? encoder.encode(dict),
               let json = String(data: data, encoding: .utf8) else {

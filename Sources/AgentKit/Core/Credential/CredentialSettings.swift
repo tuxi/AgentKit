@@ -48,13 +48,14 @@ public enum CredentialSettings {
 
     // MARK: - Convenience
 
-    /// 当前有效的 secretsJSON（优先 CredentialStore，回退 AgentSettings）。
+    /// 当前有效的 secretsJSON（v1 namespaced 模式，仅来自 CredentialStore）。
+    ///
+    /// 决策 A2.3（connection-flattening）：**删除** 旧 `AgentSettings.secretsJSON()`
+    /// env-name key 通道（`DEEPSEEK_API_KEY` 等）。env-name 无法映射到扁平
+    /// connection id，新注入通道只认 connection id；旧 Keychain 值由
+    /// `migrateFromLegacyIfNeeded()` 迁移到 CredentialMap。空 store → `"{}"`。
     public static func currentSecretsJSON() async -> String {
         let map = (try? await store.all()) ?? CredentialMap()
-        let json = map.toSecretsJSON()
-        if json == "{}" {
-            return AgentSettings.secretsJSON()
-        }
-        return json
+        return map.toSecretsJSON()
     }
 }

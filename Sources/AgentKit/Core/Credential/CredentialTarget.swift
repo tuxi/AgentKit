@@ -71,12 +71,29 @@ extension CredentialTarget: Identifiable {
     /// 例如 `github.enterprise.com/org/project` → `github.enterprise.com%2Forg%2Fproject`。
     ///
     /// **此方法需与 Go 侧 `Target.String()` 保持完全一致。**
+    /// 扁平化（connection-flattening）期间此格式仍是**持久化身份**（Keychain
+    /// account、UserDefaults、transcript 引用），不得改变。
     public var id: String {
         var componentAllowed = CharacterSet.urlPathAllowed
         componentAllowed.remove(charactersIn: "/")
         let escapedNamespace = namespace.addingPercentEncoding(withAllowedCharacters: componentAllowed) ?? namespace
         let escapedName = name.addingPercentEncoding(withAllowedCharacters: componentAllowed) ?? name
         return "\(escapedNamespace)/\(escapedName)"
+    }
+
+    /// 扁平化后的 flat connection id（v2 secretsJSON key，bridging 期间与 `id` 并存）。
+    ///
+    /// 规则（与 runtime 的 connection-id 方案对齐）：
+    ///   - `gateway/default` → `gateway`
+    ///   - `llm/<connectionID>` / `mcp/<name>` → `<name>`
+    ///
+    /// 注意：`llm/foo` 与 `mcp/foo` 会得到相同的 flat key；dual 模式下后者覆盖前者，
+    /// 调用方应避免同名 target 并存。
+    public var flatID: String {
+        switch namespace {
+        case "gateway": return "gateway"
+        default: return name
+        }
     }
 }
 

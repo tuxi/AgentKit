@@ -227,7 +227,7 @@ struct RuntimeServerPreflightService: Sendable {
         } catch {
             throw RuntimeServerPreflightError.modelCatalogUnavailable
         }
-        guard models.schema == "runtime-model-catalog/v1" else {
+        guard models.hasSupportedSchema else {
             throw RuntimeServerPreflightError.invalidModelCatalogSchema(models.schema)
         }
         return RuntimeServerPreflightResult(

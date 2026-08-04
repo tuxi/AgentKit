@@ -233,6 +233,69 @@ public enum RuntimeProviderConfigurationBuilder {
         )
     }
 
+    /// connection-flattening v2：把 enabled connection 序列化为 connectionsJSON
+    /// （connection DEFINITIONS，non-secret）。顶层为 `{ "connections": { "<id>": {...} } }`
+    /// map（对齐 design-connection-injection-channel §4），无 schema 字段。
+    /// models 一并携带（alias → wire id / context / pricing）。secrets 仍走
+    /// secretsJSON；credential 声明只描述来源。
+    public static func buildConnectionsJSON(
+        connections: [ProviderConnection]
+    ) throws -> String {
+        let enabled = connections.filter(\.isEnabled)
+        var definitions: [String: RuntimeConnectionDefinition] = [:]
+        for connection in enabled {
+            let api: String
+            switch connection.transport {
+            case .ollama:
+                api = "ollama"
+            case .openAIChatCompletions:
+                api = connection.isTalkifyGateway ? "gateway" : "openai"
+            }
+
+            let credential: RuntimeConnectionCredentialDeclaration?
+            switch connection.authentication {
+            case .gatewayAccount:
+                credential = RuntimeConnectionCredentialDeclaration(
+                    source: "injected",
+                    ref: "gateway",
+                    env: nil
+                )
+            case .apiKey:
+                credential = RuntimeConnectionCredentialDeclaration(
+                    source: "injected",
+                    ref: connection.id,
+                    env: nil
+                )
+            case .none:
+                credential = nil
+            }
+
+            let models = connection.models.map { model in
+                RuntimeConnectionModelDefinition(
+                    runtimeAlias: UnifiedModelDescriptor.makeRuntimeAlias(
+                        connectionID: connection.id,
+                        wireModelID: model.id
+                    ),
+                    wireModelID: model.id,
+                    contextWindow: model.contextWindow,
+                    inputPricePerMillion: model.inputPricePerMillion,
+                    outputPricePerMillion: model.outputPricePerMillion,
+                    cacheInputPricePerMillion: model.cacheInputPricePerMillion
+                )
+            }
+
+            definitions[connection.id] = RuntimeConnectionDefinition(
+                id: connection.id,
+                api: api,
+                baseURL: connection.baseURL.absoluteString.trimmingTrailingSlashes,
+                credential: credential,
+                models: models
+            )
+        }
+        let document = RuntimeConnectionsDocument(connections: definitions)
+        return try document.encodedJSON()
+    }
+
     private static func encode(_ document: RuntimeConfigDocument) throws -> String {
         let encoder = JSONEncoder()
         encoder.outputFormatting = [.prettyPrinted, .sortedKeys, .withoutEscapingSlashes]

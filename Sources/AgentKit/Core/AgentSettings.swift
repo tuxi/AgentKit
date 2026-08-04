@@ -45,18 +45,10 @@ public enum AgentSettings {
         return ""
     }
 
-    /// MobileStart 的 `secretsJSON`。无 key → 返回 `{}`（runtime 将缺凭证，UI 应提示用户填写）。
-    /// 用 JSONEncoder 转义，避免 key 中的特殊字符破坏 JSON。
-    public static func secretsJSON() -> String {
-        let key = apiKey
-        let tavilyApiKey = tavilyApiKey
-        guard !key.isEmpty else { return "{}" }
-        guard let data = try? JSONEncoder().encode(["DEEPSEEK_API_KEY": key, "TAVILY_API_KEY": tavilyApiKey]),
-              let json = String(data: data, encoding: .utf8) else {
-            return "{}"
-        }
-        return json
-    }
+    /// 已随 connection-flattening 移除（决策 A2.3）：
+    /// 旧 env-name key secretsJSON（`DEEPSEEK_API_KEY` / `TAVILY_API_KEY`）无法映射到
+    /// 扁平 connection id；注入通道只使用 CredentialMap（namespace/name 或 flat）。
+    /// 旧 Keychain 值仍保留，供 `CredentialSettings.migrateFromLegacyIfNeeded()` 迁移。
 }
 
 // MARK: - UI store
