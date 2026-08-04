@@ -50,7 +50,6 @@ public struct ConversationDetailView: View {
                 draftView
             }
         }
-//        .frame(maxWidth: 800) // 仅限制内部 content 宽度
         .frame(maxWidth: .infinity) // 保持整体居中
         .toolbar { toolbarContent }
 #if os(iOS)

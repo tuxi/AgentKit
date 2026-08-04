@@ -73,7 +73,11 @@ struct MacComposerTextView: NSViewRepresentable {
         context.coordinator.parent = self
         guard let textView = scrollView.documentView as? ComposerNSTextView else { return }
 
-        if textView.string != text {
+        // 流式消息更新会频繁触发 updateNSView。若此时用户正在使用输入法
+        // （拼音/中文等），textView 处于 marked text（组字）状态。设置 .string
+        // 会无条件清除 marked text，导致中文输入被打断。英文/数字不经过 marked
+        // text 阶段，因此不受影响。
+        if textView.string != text, !textView.hasMarkedText() {
             textView.string = text
         }
         textView.placeholderString = placeholder

@@ -797,7 +797,7 @@ public final class WorkspaceStore {
             }
         }
 
-        #if os(iOS)
+//        #if os(iOS)
         do {
             try AgentRuntime.shared.resumeRuntime(sessionID: sessionID)
             activeConversationViewModel?.markResumeRequested()
@@ -807,11 +807,11 @@ public final class WorkspaceStore {
                 lifecycleErrorMessage = error.localizedDescription
             }
         }
-        #else
-        if !silent {
-            lifecycleErrorMessage = "当前平台不支持端侧续跑。"
-        }
-        #endif
+//        #else
+//        if !silent {
+//            lifecycleErrorMessage = "当前平台不支持端侧续跑。"
+//        }
+//        #endif
     }
 
     // MARK: - Draft lifecycle (P5.0)
