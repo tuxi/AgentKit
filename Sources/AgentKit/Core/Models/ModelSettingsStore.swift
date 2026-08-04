@@ -157,7 +157,10 @@ public final class ModelSettingsStore {
     public func isModelAvailable(_ modelID: String?) -> Bool {
         guard let modelID, !modelID.isEmpty else { return false }
         if let unifiedModels {
-            return unifiedModels.contains { $0.id == modelID }
+            let index = unifiedModels.first {
+                $0.id == modelID
+            }
+            return index != nil
         }
         return gatewayModels?.contains { $0.id == modelID && $0.available != false } ?? false
     }

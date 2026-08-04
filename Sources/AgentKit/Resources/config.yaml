@@ -59,8 +59,8 @@ models:
     context_window: 128000
     
 agent:
-  max_steps: 33
-  max_parallel_tools: 4
+  max_steps: 68
+  max_parallel_tools: 6
   compact_ratio: 0.75
   # 不固定 subagent_model：让 task 继承当前主 agent 的模型、Provider 和登录凭据。
   # 子 agent 因而始终保持和设备登录态一致的 Gateway 鉴权链。
@@ -84,6 +84,6 @@ web:
     gateway_timeout_seconds: 600
 
 runtime:
-  max_concurrent_turns: 5
+  max_concurrent_turns: 10
 
 currency: "$"
