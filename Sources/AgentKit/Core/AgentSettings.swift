@@ -21,9 +21,11 @@ public enum AgentSettings {
 
     static let keychain = KeychainStore(service: keychainService)
 
-    /// 可选模型 = bundled config（Resources/config.yaml）里注册的别名（`modelName` 按别名选择，
-    /// 不是 provider 模型串）。空串 = 用 config.default_model（当前 = deepseek-pro）。
-    /// ⚠️ 必须与 Resources/config.yaml 的 `models:` 别名保持同步（暂无 YAML 解析，手工对齐）。
+    /// 可选模型 = bundled settings.json 模板里注册的别名（`modelName` 按别名选择，
+    /// 不是 provider 模型串）。空串 = 用模板 default_model（当前 = gateway）。
+    /// 动态构造的模型别名（`provider.<b64>.model.<b64>`，由
+    /// `RuntimeProviderConfigurationBuilder` 生成）不在本列表中，`model` 会按
+    /// Gateway 模型 ID 保留原值。
     public static let availableModels: [String] = ["", "deepseek", "deepseek-pro"]
 
     // MARK: - Reads（runtime 用）
