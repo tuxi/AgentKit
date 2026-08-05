@@ -216,6 +216,9 @@ public struct ExecutionReducer: Sendable {
             return resolvePlan(planID: planID, status: .approved, graph: &graph)
         case .planRejected(_, let planID):
             return resolvePlan(planID: planID, status: .rejected, graph: &graph)
+        case .planStateChanged:
+            // 计划状态机迁移：无执行图节点，仅反映在 RuntimeSnapshot.planState。
+            return []
 
         // ── Approval ──
         case .approvalRequest(let turnID, let request):

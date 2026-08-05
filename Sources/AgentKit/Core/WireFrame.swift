@@ -52,6 +52,8 @@ struct WireFrame: Decodable {
     let textAnnotations: [AgentTextAnnotation]?
     let failure: String?
     let planId: String?
+    /// v1.4: `plan_state_changed` 事件的 plan_state 字段（none|planning|proposing|approved|rejected|executing）。
+    let planState: String?
     let title: String?
     let content: String?
     let skillVersion: String?
@@ -110,6 +112,7 @@ struct WireFrame: Decodable {
         case toolName = "tool_name"
         case toolArgs = "tool_args"
         case planId = "plan_id"
+        case planState = "plan_state"
         case title, content
         case skillVersion = "skill_version"
         case promptTokens = "prompt_tokens"

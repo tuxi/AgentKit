@@ -99,6 +99,8 @@ public enum AgentEvent: Sendable {
     case planProposed(turnID: String?, planID: String, content: String)
     case planApproved(turnID: String?, planID: String)
     case planRejected(turnID: String?, planID: String)
+    /// `plan_state_changed`：计划状态机迁移（每次真实迁移都会发出）。
+    case planStateChanged(planState: PlanState)
 
     // ── ask_user ──
     case askUserRequest(turnID: String?, request: AskUserRequest)
@@ -138,6 +140,36 @@ public enum AgentEvent: Sendable {
     case workflowToolStream(turnID: String?, workflow: WorkflowToolStreamData)
     /// Transient tool stream end marker.
     case workflowToolStreamEnd(turnID: String?, workflowID: String, nodeName: String)
+}
+
+// MARK: - PlanState
+
+/// 计划状态机状态（runtime `plan_state_changed` 事件）。
+/// 未知/缺失值优雅降级，解码永不失败 —— 保持 SDK 前向兼容属性。
+public enum PlanState: Sendable, Equatable {
+    case none
+    case planning
+    case proposing
+    case approved
+    case rejected
+    case executing
+    /// 未知（未来新增）的 plan_state 原始值，原样保留。
+    case unknown(String)
+
+    /// 从 wire 字符串构造。nil / 空串 → `.none`（无计划进行中的语义默认值）；
+    /// 无法识别的值 → `.unknown(rawValue)`。
+    public init(wireValue: String?) {
+        switch wireValue?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() {
+        case "none": self = .none
+        case "planning": self = .planning
+        case "proposing": self = .proposing
+        case "approved": self = .approved
+        case "rejected": self = .rejected
+        case "executing": self = .executing
+        case nil, "": self = .none
+        default: self = .unknown(wireValue ?? "")
+        }
+    }
 }
 
 // MARK: - WireFrame → AgentEvent conversion
@@ -536,6 +568,9 @@ extension AgentEvent {
 
         case "plan_rejected":
             return .planRejected(turnID: turnID, planID: wire.planId ?? wire.text ?? "")
+
+        case "plan_state_changed":
+            return .planStateChanged(planState: PlanState(wireValue: wire.planState))
 
         case "task_started":
             return .taskStarted(

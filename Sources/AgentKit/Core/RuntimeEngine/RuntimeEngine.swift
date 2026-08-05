@@ -37,6 +37,9 @@ public struct RuntimeSnapshot: Sendable {
     /// When the current turn started (turn_started → turn_finished). Non-nil =
     /// the agent is actively working on a turn. Drives the live working indicator.
     public let turnStartedAt: Date?
+    /// Latest plan state-machine state (`plan_state_changed`). `.none` when no
+    /// plan is in progress.
+    public let planState: PlanState
   
     public init(timeline: [ExecutionNode],
                 turns: [ConversationTurn] = [],
@@ -48,7 +51,8 @@ public struct RuntimeSnapshot: Sendable {
                 isLive: Bool = false,
                 generation: UInt64 = 0,
                 modelStartedAt: Date? = nil,
-                turnStartedAt: Date? = nil) {
+                turnStartedAt: Date? = nil,
+                planState: PlanState = .none) {
         self.timeline = timeline
         self.turns = turns
         self.pendingApproval = pendingApprovals.first
@@ -62,6 +66,7 @@ public struct RuntimeSnapshot: Sendable {
         self.generation = generation
         self.modelStartedAt = modelStartedAt
         self.turnStartedAt = turnStartedAt
+        self.planState = planState
     }
 
     /// Empty snapshot for initial state.
@@ -177,6 +182,9 @@ public actor RuntimeEngine {
     /// to finish without a corresponding terminal event.
     private var activeTurnID: String?
 
+    /// Latest plan state-machine state (`plan_state_changed`).
+    private var _planState: PlanState = .none
+
     /// Whether the live WebSocket is connected.
     private var isLive: Bool = false
 
@@ -216,6 +224,10 @@ public actor RuntimeEngine {
         }
         if case .planApproved = event { _pendingPlanApproval = nil }
         if case .planRejected = event { _pendingPlanApproval = nil }
+        // Track latest plan state-machine state
+        if case .planStateChanged(let planState) = event {
+            _planState = planState
+        }
         // Track ask_user (dedup: skip already resolved IDs)
         if case .askUserRequest(_, let request) = event,
            !resolvedAskUserIDs.contains(request.id) {
@@ -539,7 +551,8 @@ public actor RuntimeEngine {
             isLive: isLive,
             generation: generation,
             modelStartedAt: _modelStartedAt,
-            turnStartedAt: _turnStartedAt
+            turnStartedAt: _turnStartedAt,
+            planState: _planState
         )
     }
 

@@ -59,7 +59,7 @@ models:
     context_window: 128000
     
 agent:
-  max_steps: 68
+  max_steps: 100
   max_parallel_tools: 6
   compact_ratio: 0.75
   # 不固定 subagent_model：让 task 继承当前主 agent 的模型、Provider 和登录凭据。
