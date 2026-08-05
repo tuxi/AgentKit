@@ -78,7 +78,6 @@ public struct RuntimeServerSwitchAssessment: Sendable, Equatable {
     }
 }
 
-#if canImport(CodeAgentRuntime)
 @MainActor
 @Observable
 public final class RuntimeServerCoordinator {
@@ -98,7 +97,7 @@ public final class RuntimeServerCoordinator {
 
     public init(
         registry: RuntimeServerRegistry = RuntimeServerRegistry(),
-        embeddedStatusMonitor: RuntimeServerStatusMonitor = .embedded,
+        embeddedStatusMonitor: RuntimeServerStatusMonitor = .init(),
         runtimeCredentialStore: any CredentialStore = KeychainCredentialStore(
             service: "com.agentkit.runtime-server-access"
         ),
@@ -132,12 +131,26 @@ public final class RuntimeServerCoordinator {
     ) throws -> DefaultAgentClient {
         switch connection.kind {
         case .embedded:
+#if canImport(CodeAgentRuntime)
             return DefaultAgentClient.fromRuntime()
+#else
+            throw RuntimeServerRegistryError.invalidEmbeddedConnection
+#endif
         case .local, .remote:
-            guard let endpoint = connection.endpoint else {
+            
+            guard connection.endpoint != nil else {
                 throw RuntimeServerRegistryError.invalidExternalEndpoint
             }
-            let environment = try RuntimeEnvironment(origin: endpoint)
+            // Read the current endpoint from the registry on every request,
+            // not a snapshot at client-creation time.
+            let environment = RuntimeEnvironment { [weak self] in
+                guard let `self` = self else { return nil }
+                // DispatchQueue.main.sync 安全——如果已经在主线程（MainActor 调用场景），它就是直通；如果在后台线程（URLSession delegate 场景），等主线程空闲即执行，不会死锁。
+                return DispatchQueue.main.sync {
+                    self.registry.connection(id: connection.id)?.endpoint
+                }
+            }
+            
             switch connection.authentication {
             case .none:
                 return DefaultAgentClient(
@@ -232,6 +245,17 @@ public final class RuntimeServerCoordinator {
             displayName: displayName ?? invitation.serverDisplayName,
             preflight: preflight,
             accessToken: pairing.credential
+        )
+    }
+
+    /// Store a temporary bearer token for an external connection in the
+    /// Keychain-backed credential store. Used by the daemon boot path on
+    /// macOS Direct to inject a freshly generated access token without
+    /// going through the full pairing/preflight flow.
+    public func injectBearerToken(for connectionID: String, token: String) async throws {
+        try await runtimeCredentialStore.set(
+            Credential(kind: .bearer, secret: token),
+            for: .runtimeAccess(connectionID)
         )
     }
 
@@ -403,16 +427,28 @@ public final class RuntimeServerCoordinator {
 
     @discardableResult
     public func checkEmbedded(repairIfNeeded: Bool = false) async -> Bool {
-        await embeddedStatusMonitor.checkEmbedded(repairIfNeeded: repairIfNeeded)
+#if canImport(CodeAgentRuntime)
+        return await embeddedStatusMonitor.checkEmbedded(repairIfNeeded: repairIfNeeded)
+#else
+        return false
+#endif
     }
 
     @discardableResult
     public func restartEmbedded() async -> Bool {
-        await embeddedStatusMonitor.restartEmbedded()
+#if canImport(CodeAgentRuntime)
+        return await embeddedStatusMonitor.restartEmbedded()
+#else
+        return false
+#endif
     }
 
     public var embeddedDiagnostics: RuntimeServerDiagnosticSnapshot {
+#if canImport(CodeAgentRuntime)
         embeddedStatusMonitor.diagnosticSnapshot
+#else
+        RuntimeServerDiagnosticSnapshot(connectionID: "", status: .offline, endpoint: nil, runtimeProfile: nil, lastCheckedAt: nil, lastConnectedAt: nil, lastErrorDescription: nil)
+#endif
     }
 
     public func externalStatusMonitor(
@@ -438,6 +474,7 @@ public final class RuntimeServerCoordinator {
         let preflight: RuntimeServerPreflightResult
         switch connection.kind {
         case .embedded:
+#if canImport(CodeAgentRuntime)
             let client = try makeHTTPClient(connection: connection)
             guard try await client.healthCheck() else {
                 throw RuntimeServerPreflightError.offline
@@ -464,6 +501,19 @@ public final class RuntimeServerCoordinator {
                 modelCatalog: models,
                 checkedAt: Date()
             )
+#else
+            preflight = try await preflightService.test(
+                connection: connection,
+                credentialStore: runtimeCredentialStore
+            )
+            if let expected = connection.serverID,
+               expected != preflight.info.serverID {
+                throw RuntimeServerPreflightError.serverIdentityChanged(
+                    expected: expected,
+                    actual: preflight.info.serverID
+                )
+            }
+#endif
         case .local, .remote:
             preflight = try await preflightService.test(
                 connection: connection,
@@ -485,12 +535,16 @@ public final class RuntimeServerCoordinator {
     ) throws -> RuntimeHTTPClient {
         switch connection.kind {
         case .embedded:
+#if canImport(CodeAgentRuntime)
             let runtime = AgentRuntime.shared
             return RuntimeHTTPClient(
                 environment: .fromRuntime(),
                 credentialStore: runtime.runtimeAccessCredentialStore,
                 credentialTarget: runtime.runtimeAccessCredentialStore.target
             )
+#else
+            throw RuntimeServerRegistryError.invalidEmbeddedConnection
+#endif
         case .local, .remote:
             guard let endpoint = connection.endpoint else {
                 throw RuntimeServerRegistryError.invalidExternalEndpoint
@@ -568,4 +622,3 @@ private extension Optional {
         return self
     }
 }
-#endif

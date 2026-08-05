@@ -2,8 +2,7 @@
 //  RuntimeServerStatusMonitor.swift
 //  AgentKit
 //
-//  Cross-platform status source for the embedded Runtime. External Server
-//  probing is added in Phase C without changing the observable status model.
+//  Status monitor for any Runtime server (embedded or external).
 //
 
 import Foundation
@@ -53,6 +52,7 @@ public struct RuntimeServerDiagnosticSnapshot: Sendable, Equatable {
 }
 
 #if canImport(CodeAgentRuntime)
+
 @MainActor
 struct EmbeddedRuntimeLifecycle {
     var isAlive: @MainActor () -> Bool
@@ -85,10 +85,11 @@ struct EmbeddedRuntimeLifecycle {
     )
 }
 
+#endif // canImport(CodeAgentRuntime)
+
 @MainActor
 @Observable
 public final class RuntimeServerStatusMonitor {
-    public static let embedded = RuntimeServerStatusMonitor()
 
     public private(set) var status: RuntimeServerConnectionStatus = .checking
     public private(set) var lastCheckedAt: Date?
@@ -96,45 +97,77 @@ public final class RuntimeServerStatusMonitor {
     public private(set) var lastErrorDescription: String?
     public private(set) var runtimeInfo: RuntimeServerInfo?
 
-    private let lifecycle: EmbeddedRuntimeLifecycle
+    #if canImport(CodeAgentRuntime)
+    /// Non-nil only when monitoring the embedded gomobile runtime.
+    private let lifecycle: EmbeddedRuntimeLifecycle?
+    #endif
+
     @ObservationIgnored private var inflight: Task<Bool, Never>?
     @ObservationIgnored private var inflightRepairsIfNeeded = false
 
-    public convenience init() {
-        self.init(lifecycle: .live)
-    }
+    // MARK: - Init
 
-    init(lifecycle: EmbeddedRuntimeLifecycle) {
+    #if canImport(CodeAgentRuntime)
+    /// Creates a monitor for the embedded gomobile runtime.
+    public static let embedded = RuntimeServerStatusMonitor(lifecycle: .live)
+
+    private convenience init(lifecycle: EmbeddedRuntimeLifecycle) {
+        self.init()
         self.lifecycle = lifecycle
     }
+    #endif
+
+    /// Creates a monitor not tied to any specific runtime lifecycle.
+    /// Use this for external/daemon servers that manage their own health checks.
+    public init() {}
+
+    // MARK: - Status queries (always available)
 
     public var diagnosticSnapshot: RuntimeServerDiagnosticSnapshot {
-        RuntimeServerDiagnosticSnapshot(
+        #if canImport(CodeAgentRuntime)
+        let endpoint = lifecycle?.endpoint()
+        let profile = runtimeInfo?.runtimeProfile ?? lifecycle?.profile()
+        #else
+        let endpoint: URL? = nil
+        let profile: String? = runtimeInfo?.runtimeProfile
+        #endif
+        return RuntimeServerDiagnosticSnapshot(
             connectionID: RuntimeServerConnection.embeddedID,
             status: status,
-            endpoint: lifecycle.endpoint(),
+            endpoint: endpoint,
             runtimeInfo: runtimeInfo,
-            runtimeProfile: runtimeInfo?.runtimeProfile ?? lifecycle.profile(),
+            runtimeProfile: profile,
             lastCheckedAt: lastCheckedAt,
             lastConnectedAt: lastConnectedAt,
             lastErrorDescription: lastErrorDescription
         )
     }
 
-    /// Checks the embedded listener. When `repairIfNeeded` is true, a missing or
-    /// stale listener is started/restarted. Calls are coalesced so foreground
-    /// restoration and settings diagnostics cannot race one another.
+    /// Report a successful connection (HTTP request / Agent Wire handshake).
+    /// Avoids an extra health probe by setting status directly.
+    public func markConnected() {
+        status = .connected
+        lastCheckedAt = Date()
+        lastConnectedAt = lastCheckedAt
+        lastErrorDescription = nil
+    }
+
+    // MARK: - Embedded lifecycle (only when gomobile runtime is linked)
+
+    #if canImport(CodeAgentRuntime)
+
     @discardableResult
     public func checkEmbedded(repairIfNeeded: Bool = false) async -> Bool {
+        guard let lifecycle else { return false }
         if let inflight {
             let joinedRepair = inflightRepairsIfNeeded
             let healthy = await inflight.value
             if !healthy, repairIfNeeded, !joinedRepair {
-                return await runCheck(repairIfNeeded: true)
+                return await runCheck(lifecycle: lifecycle, repairIfNeeded: true)
             }
             return healthy
         }
-        let task = Task { await self.runCheck(repairIfNeeded: repairIfNeeded) }
+        let task = Task { await self.runCheck(lifecycle: lifecycle, repairIfNeeded: repairIfNeeded) }
         inflight = task
         inflightRepairsIfNeeded = repairIfNeeded
         let healthy = await task.value
@@ -143,13 +176,13 @@ public final class RuntimeServerStatusMonitor {
         return healthy
     }
 
-    /// Explicit user-requested restart used by the Embedded Server settings row.
     @discardableResult
     public func restartEmbedded() async -> Bool {
+        guard let lifecycle else { return false }
         if let inflight {
             _ = await inflight.value
         }
-        let task = Task { await self.runRestart() }
+        let task = Task { await self.runRestart(lifecycle: lifecycle) }
         inflight = task
         inflightRepairsIfNeeded = true
         let healthy = await task.value
@@ -158,16 +191,7 @@ public final class RuntimeServerStatusMonitor {
         return healthy
     }
 
-    /// A successful Runtime HTTP request or Agent Wire handshake can avoid an
-    /// extra health probe by reporting the connection directly.
-    public func markConnected() {
-        status = .connected
-        lastCheckedAt = Date()
-        lastConnectedAt = lastCheckedAt
-        lastErrorDescription = nil
-    }
-
-    private func runCheck(repairIfNeeded: Bool) async -> Bool {
+    private func runCheck(lifecycle: EmbeddedRuntimeLifecycle, repairIfNeeded: Bool) async -> Bool {
         lastCheckedAt = Date()
         lastErrorDescription = nil
 
@@ -185,12 +209,12 @@ public final class RuntimeServerStatusMonitor {
                 lastErrorDescription = Self.safeDescription(error)
                 return false
             }
-            return await finishHealthCheck()
+            return await finishHealthCheck(lifecycle: lifecycle)
         }
 
         status = .checking
         if await lifecycle.healthCheck() {
-            return await finishAuthenticatedCheck()
+            return await finishAuthenticatedCheck(lifecycle: lifecycle)
         }
 
         guard repairIfNeeded else {
@@ -198,10 +222,10 @@ public final class RuntimeServerStatusMonitor {
             lastErrorDescription = "Embedded Runtime listener is unavailable."
             return false
         }
-        return await runRestart()
+        return await runRestart(lifecycle: lifecycle)
     }
 
-    private func runRestart() async -> Bool {
+    private func runRestart(lifecycle: EmbeddedRuntimeLifecycle) async -> Bool {
         status = .reconnecting
         lastCheckedAt = Date()
         lastErrorDescription = nil
@@ -212,20 +236,20 @@ public final class RuntimeServerStatusMonitor {
             lastErrorDescription = Self.safeDescription(error)
             return false
         }
-        return await finishHealthCheck()
+        return await finishHealthCheck(lifecycle: lifecycle)
     }
 
-    private func finishHealthCheck() async -> Bool {
+    private func finishHealthCheck(lifecycle: EmbeddedRuntimeLifecycle) async -> Bool {
         lastCheckedAt = Date()
         if await lifecycle.healthCheck() {
-            return await finishAuthenticatedCheck()
+            return await finishAuthenticatedCheck(lifecycle: lifecycle)
         }
         status = .offline
         lastErrorDescription = "Embedded Runtime did not pass its health check."
         return false
     }
 
-    private func finishAuthenticatedCheck() async -> Bool {
+    private func finishAuthenticatedCheck(lifecycle: EmbeddedRuntimeLifecycle) async -> Bool {
         do {
             let info = try await lifecycle.runtimeInfo()
             guard info.isAgentWireV1Compatible else {
@@ -256,5 +280,6 @@ public final class RuntimeServerStatusMonitor {
             .trimmingCharacters(in: .whitespacesAndNewlines)
         return description.isEmpty ? "Embedded Runtime configuration failed." : description
     }
+
+    #endif // canImport(CodeAgentRuntime)
 }
-#endif

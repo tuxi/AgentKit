@@ -3,7 +3,7 @@
 //  AgentKit
 //
 
-#if os(macOS) && canImport(CodeAgentRuntime)
+#if os(macOS)
 import CryptoKit
 import Foundation
 import Observation
@@ -27,13 +27,16 @@ public final class RuntimeSharingController {
     public private(set) var serviceName: String?
     public private(set) var lastError: String?
 
+    #if canImport(CodeAgentRuntime)
     @ObservationIgnored private let runtime: AgentRuntime
+    #endif
     @ObservationIgnored private let identityStore: RuntimeSharingTLSIdentityStore
     @ObservationIgnored private let advertiser = RuntimeBonjourAdvertiser()
     @ObservationIgnored private var enrollmentTask: Task<Void, Never>?
     @ObservationIgnored private var identity: RuntimeSharingTLSIdentity?
     @ObservationIgnored private var runtimeInfo: RuntimeServerInfo?
 
+    #if canImport(CodeAgentRuntime)
     public init(
         runtime: AgentRuntime = .shared,
         deviceRegistry: RuntimeSharedDeviceRegistry = RuntimeSharedDeviceRegistry(),
@@ -47,6 +50,19 @@ public final class RuntimeSharingController {
             keychain: identityKeychain
         )
     }
+    #else
+    public init(
+        deviceRegistry: RuntimeSharedDeviceRegistry = RuntimeSharedDeviceRegistry(),
+        identityKeychain: KeychainStore = KeychainStore(
+            service: "com.agentkit.runtime-sharing"
+        )
+    ) {
+        self.deviceRegistry = deviceRegistry
+        self.identityStore = RuntimeSharingTLSIdentityStore(
+            keychain: identityKeychain
+        )
+    }
+    #endif
 
     public var isSharing: Bool { status.state == .running }
 
@@ -54,6 +70,7 @@ public final class RuntimeSharingController {
         displayName: String? = nil,
         listenAddress: String = "0.0.0.0:0"
     ) async throws {
+#if canImport(CodeAgentRuntime)
         _ = try runtime.ensureStarted()
         let info = try await embeddedRuntimeInfo()
         let resolvedName = displayName?.trimmingCharacters(
@@ -94,9 +111,11 @@ public final class RuntimeSharingController {
             displayName: resolvedName
         )
         startEnrollmentPolling()
+        #endif
     }
 
     public func stopSharing() {
+#if canImport(CodeAgentRuntime)
         enrollmentTask?.cancel()
         enrollmentTask = nil
         advertiser.stop()
@@ -113,10 +132,12 @@ public final class RuntimeSharingController {
         )
         advertisedOrigin = nil
         serviceName = nil
+#endif
     }
 
     @discardableResult
     public func refreshStatus() -> RuntimeSharedListenerStatus {
+#if canImport(CodeAgentRuntime)
         do {
             status = try runtime.sharedListenerStatus()
             lastError = status.lastError
@@ -124,11 +145,15 @@ public final class RuntimeSharingController {
             lastError = error.localizedDescription
         }
         return status
+#else
+        return RuntimeSharedListenerStatus(state: .stopped, listenAddress: nil, listenOrigin: nil, port: 0, startedAt: nil, stoppedAt: nil, lastTransitionAt: nil, lastError: nil)
+#endif
     }
 
     public func createPairingInvitation(
         validity: TimeInterval = 120
     ) throws -> RuntimePairingInvitation {
+#if canImport(CodeAgentRuntime)
         guard status.state == .running,
               let identity,
               let info = runtimeInfo,
@@ -159,16 +184,23 @@ public final class RuntimeSharingController {
             bootstrapExpiresAt: expiresAt,
             spkiSHA256: identity.spkiSHA256
         )
+#else
+        throw RuntimeSharingError.runtimeNotStarted
+#endif
+
     }
 
     public func revokeDevice(_ deviceID: String) throws {
+#if canImport(CodeAgentRuntime)
         // Persist the revocation tombstone first. A process restart therefore
         // cannot accidentally restore access if the live update is interrupted.
         try deviceRegistry.markRevoked(deviceID: deviceID)
         try runtime.updateSharedDevices(deviceRegistry.validationRecords())
+#endif
     }
 
     private func startEnrollmentPolling() {
+#if canImport(CodeAgentRuntime)
         enrollmentTask?.cancel()
         enrollmentTask = Task { [weak self] in
             while !Task.isCancelled {
@@ -176,8 +208,10 @@ public final class RuntimeSharingController {
                 try? await Task.sleep(for: .milliseconds(250))
             }
         }
+#endif
     }
 
+#if canImport(CodeAgentRuntime)
     private func processPendingEnrollments() {
         guard let pending = try? runtime.pendingSharedEnrollments() else {
             return
@@ -197,7 +231,9 @@ public final class RuntimeSharingController {
             }
         }
     }
+    #endif
 
+#if canImport(CodeAgentRuntime)
     private func embeddedRuntimeInfo() async throws -> RuntimeServerInfo {
         let client = RuntimeHTTPClient(
             environment: .fromRuntime(),
@@ -206,6 +242,7 @@ public final class RuntimeSharingController {
         )
         return try await client.runtimeInfo()
     }
+#endif
 
     private static func advertisedHost() -> String {
         let value = ProcessInfo.processInfo.hostName

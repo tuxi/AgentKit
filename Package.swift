@@ -33,7 +33,7 @@ let package = Package(
             dependencies: [
                 .product(name: "ClientToolProtocol", package: "ClientToolProtocol"),
                 .product(name: "Markdown", package: "swift-markdown"),
-                .target(name: "CodeAgentRuntime", condition: .when(platforms: [.iOS, .macOS])),
+                .target(name: "CodeAgentRuntime", condition: .when(platforms: [.iOS])),
             ],
             path: "Sources/AgentKit",
             resources: [

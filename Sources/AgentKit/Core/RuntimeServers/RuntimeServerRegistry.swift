@@ -33,6 +33,7 @@ public final class RuntimeServerRegistry {
         var restored = decoded.filter { connection in
             (try? connection.validate()) != nil
         }
+#if canImport(CodeAgentRuntime)
         if let index = restored.firstIndex(where: { $0.id == RuntimeServerConnection.embeddedID }) {
             restored[index] = .embedded(
                 displayName: restored[index].displayName,
@@ -41,6 +42,11 @@ public final class RuntimeServerRegistry {
         } else {
             restored.insert(.embedded(), at: 0)
         }
+#else
+        restored.removeAll {
+            $0.id == RuntimeServerConnection.embeddedID
+        }
+#endif
         self.connections = restored
 
         let requestedActive = defaults.string(forKey: activeStorageKey)

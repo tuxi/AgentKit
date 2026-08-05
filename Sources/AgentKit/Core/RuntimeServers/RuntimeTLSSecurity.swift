@@ -33,6 +33,12 @@ enum RuntimeTLSSecurity {
             return (.performDefaultHandling, nil)
         }
         guard let policy else {
+            // Accept self-signed certificates on loopback (daemon may have
+            // TLS enabled from ~/.codeagent/settings.json).
+            let host = challenge.protectionSpace.host.lowercased()
+            if host == "127.0.0.1" || host == "localhost" || host == "::1" {
+                return (.useCredential, URLCredential(trust: trust))
+            }
             return (.performDefaultHandling, nil)
         }
         guard challenge.protectionSpace.host.lowercased() == policy.expectedHost,
