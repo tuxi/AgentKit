@@ -79,10 +79,10 @@ final class ProviderConnectionsTests: XCTestCase {
         )
 
         XCTAssertEqual(generated.models.count, 3)
-        XCTAssertFalse(generated.configYAML.contains("secret"))
-        XCTAssertFalse(generated.configYAML.contains("api-key-value"))
+        XCTAssertFalse(generated.settingsJSON.contains("secret"))
+        XCTAssertFalse(generated.settingsJSON.contains("api-key-value"))
 
-        let root = try jsonObject(generated.configYAML)
+        let root = try jsonObject(generated.settingsJSON)
         let models = try XCTUnwrap(root["models"] as? [String: Any])
         XCTAssertEqual(models.count, 3)
 
@@ -97,13 +97,38 @@ final class ProviderConnectionsTests: XCTestCase {
         XCTAssertEqual(search["provider"] as? String, "gateway")
     }
 
+    func testSettingsModelCarriesCatalogMetadata() throws {
+        let direct = try makeConnection(
+            id: "company-production",
+            models: [
+                ProviderModel(id: "qwen3-coder", displayName: "Qwen3 Coder", supportsTools: true, supportsReasoning: true, inputModalities: [.text, .image]),
+            ]
+        )
+        let generated = try RuntimeProviderConfigurationBuilder.build(connections: [direct])
+        let root = try jsonObject(generated.settingsJSON)
+        let models = try XCTUnwrap(root["models"] as? [String: Any])
+        let model = try XCTUnwrap(models.first?.value as? [String: Any])
+        let catalog = try XCTUnwrap(model["catalog"] as? [String: Any])
+
+        XCTAssertEqual(catalog["connection_id"] as? String, "company-production")
+        XCTAssertEqual(catalog["provider_id"] as? String, "openai-compatible")
+        XCTAssertEqual(catalog["connection_display_name"] as? String, "company-production")
+        XCTAssertEqual(catalog["display_name"] as? String, "Qwen3 Coder")
+        XCTAssertEqual(catalog["supports_tools"] as? Bool, true)
+        XCTAssertEqual(catalog["supports_reasoning"] as? Bool, true)
+        XCTAssertEqual(
+            (catalog["input_modalities"] as? [String])?.sorted(),
+            ["image", "text"]
+        )
+    }
+
     func testRuntimeConfigurationOmitsGatewaySearchWithoutGatewayConnection() throws {
         let direct = try makeConnection(
             id: "direct",
             models: [ProviderModel(id: "deepseek-chat")]
         )
         let generated = try RuntimeProviderConfigurationBuilder.build(connections: [direct])
-        let root = try jsonObject(generated.configYAML)
+        let root = try jsonObject(generated.settingsJSON)
         let web = try XCTUnwrap(root["web"] as? [String: Any])
         XCTAssertNil(web["search"])
         XCTAssertNotNil(web["fetch"])
@@ -111,7 +136,7 @@ final class ProviderConnectionsTests: XCTestCase {
 
     func testEmptyRuntimeConfigurationHasNoGatewayOrCallableModel() throws {
         let generated = try RuntimeProviderConfigurationBuilder.buildEmpty()
-        let root = try jsonObject(generated.configYAML)
+        let root = try jsonObject(generated.settingsJSON)
         XCTAssertTrue(generated.isEmptyCatalog)
         XCTAssertNil(generated.defaultModelID)
         XCTAssertEqual(root["default_model"] as? String, "")
@@ -260,6 +285,50 @@ final class ProviderConnectionsTests: XCTestCase {
         let target = CredentialTarget.llm("enterprise/a model")
         XCTAssertTrue(target.id.contains("%2F"))
         XCTAssertEqual(CredentialTarget(id: target.id), target)
+    }
+
+    func testSettingsDocumentCarriesBehaviorSectionsWhenProvided() throws {
+        let direct = try makeConnection(id: "deepseek")
+        let permissions = RuntimeSettingsPermissions(
+            allow: ["Read", "Bash"],
+            deny: ["Write"],
+            protectedPaths: ["~/Documents/Private"]
+        )
+        let verify = RuntimeSettingsVerify(command: "verify-tool", enabled: true)
+        let hooks = [
+            RuntimeSettingsHook(event: "PostToolUse", match: "Bash*", command: "hook-cmd"),
+        ]
+        let generated = try RuntimeProviderConfigurationBuilder.build(
+            connections: [direct],
+            permissions: permissions,
+            verify: verify,
+            hooks: hooks
+        )
+
+        let root = try jsonObject(generated.settingsJSON)
+        let perms = try XCTUnwrap(root["permissions"] as? [String: Any])
+        XCTAssertEqual(perms["allow"] as? [String], ["Read", "Bash"])
+        XCTAssertEqual(perms["deny"] as? [String], ["Write"])
+        XCTAssertEqual(perms["protected_paths"] as? [String], ["~/Documents/Private"])
+
+        let verifySection = try XCTUnwrap(root["verify"] as? [String: Any])
+        XCTAssertEqual(verifySection["command"] as? String, "verify-tool")
+        XCTAssertEqual(verifySection["enabled"] as? Bool, true)
+
+        let hooksSection = try XCTUnwrap(root["hooks"] as? [[String: Any]])
+        XCTAssertEqual(hooksSection.count, 1)
+        XCTAssertEqual(hooksSection[0]["event"] as? String, "PostToolUse")
+        XCTAssertEqual(hooksSection[0]["match"] as? String, "Bash*")
+        XCTAssertEqual(hooksSection[0]["command"] as? String, "hook-cmd")
+    }
+
+    func testSettingsDocumentOmitsBehaviorSectionsByDefault() throws {
+        let direct = try makeConnection(id: "deepseek")
+        let generated = try RuntimeProviderConfigurationBuilder.build(connections: [direct])
+        let root = try jsonObject(generated.settingsJSON)
+        XCTAssertNil(root["permissions"])
+        XCTAssertNil(root["verify"])
+        XCTAssertNil(root["hooks"])
     }
 
     private func makeConnection(

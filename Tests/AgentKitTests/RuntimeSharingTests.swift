@@ -122,7 +122,7 @@ final class RuntimeSharingTests: XCTestCase {
                 isDirectory: true
             ),
             profile: .fullDesktop,
-            runtimeConfigYAML: "models: {}"
+            runtimeSettingsJSON: "{}"
         ))
         defer { runtime.stop() }
 

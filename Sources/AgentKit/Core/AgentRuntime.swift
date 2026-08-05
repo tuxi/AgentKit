@@ -31,10 +31,13 @@ public struct EmbeddedRuntimeConfiguration: Sendable {
     public var workspaceDirectory: URL
     public var dataDirectory: URL
     public var profile: EmbeddedRuntimeProfile
-    /// Optional host-generated Code-Agent configuration document. JSON is
-    /// accepted because Code-Agent decodes it through YAML. Nil uses the
-    /// AgentKit bundled Gateway-compatible configuration.
-    public var runtimeConfigYAML: String?
+    /// Optional host-generated Code-Agent SETTINGS document (settings.File JSON
+    /// shape, design-config-settings-merge.md). The runtime's settings.ParseJSON
+    /// treats it as the single config source: infrastructure
+    /// (models/credentials/agent/provider/web/default_model/subagent_model) AND
+    /// behavior (permissions/verify/hooks). Nil uses the AgentKit bundled
+    /// Gateway-compatible settings.json template.
+    public var runtimeSettingsJSON: String?
     /// Extra executable lookup paths prepended before the Go runtime starts.
     /// This matters for macOS apps launched from Finder, which inherit a minimal PATH.
     public var executableSearchPaths: [String]
@@ -43,13 +46,13 @@ public struct EmbeddedRuntimeConfiguration: Sendable {
         workspaceDirectory: URL,
         dataDirectory: URL,
         profile: EmbeddedRuntimeProfile,
-        runtimeConfigYAML: String? = nil,
+        runtimeSettingsJSON: String? = nil,
         executableSearchPaths: [String] = []
     ) {
         self.workspaceDirectory = workspaceDirectory
         self.dataDirectory = dataDirectory
         self.profile = profile
-        self.runtimeConfigYAML = runtimeConfigYAML
+        self.runtimeSettingsJSON = runtimeSettingsJSON
         self.executableSearchPaths = executableSearchPaths
     }
 
@@ -68,7 +71,7 @@ public struct EmbeddedRuntimeConfiguration: Sendable {
             workspaceDirectory: home,
             dataDirectory: appDirectory,
             profile: .fullDesktop,
-            runtimeConfigYAML: nil,
+            runtimeSettingsJSON: nil,
             executableSearchPaths: [
                 "/opt/homebrew/bin",
                 "/usr/local/bin",
@@ -82,7 +85,7 @@ public struct EmbeddedRuntimeConfiguration: Sendable {
             workspaceDirectory: documents,
             dataDirectory: support,
             profile: .sandboxed,
-            runtimeConfigYAML: nil
+            runtimeSettingsJSON: nil
         )
         #endif
     }
@@ -150,13 +153,13 @@ public final class AgentRuntime: @unchecked Sendable {
         self.configuration = configuration
     }
 
-    /// Installs a generated Provider configuration before Runtime startup.
+    /// Installs a generated Provider settings document before Runtime startup.
     /// Structural Provider changes on a live Runtime still require stop/configure/start.
     public func configureProviderConnections(
         _ generated: GeneratedRuntimeProviderConfiguration
     ) throws {
         var updated = configuration
-        updated.runtimeConfigYAML = generated.configYAML
+        updated.runtimeSettingsJSON = generated.settingsJSON
         try configure(updated)
     }
 
@@ -209,8 +212,7 @@ public final class AgentRuntime: @unchecked Sendable {
     ///
     /// gomobile ABI 已落地：`mobile.Server.ReconfigureConnections`（CodeAgentRuntime
     /// 1.4.0 新增方法，非破坏性）经 `serverReconfigure(_:connectionsJSON:secretsJSON:modelName:)`
-    /// 透传；对仍为 1.3.x 的 runtime 自动回退 2-arg `reconfigure:modelName:`（此时
-    /// connectionsJSON 被丢弃，定义仍经 configYAML 注入）。
+    /// 透传。启动路径（MobileStart）的单一配置源为 settingsJSON（1.4.8）。
     public func reconfigure(
         connectionsJSON: String = "",
         secretsJSON: String = "",
@@ -438,12 +440,13 @@ public final class AgentRuntime: @unchecked Sendable {
         let serverAccessToken = runtimeAccessCredentialStore.rotate()
 
         var error: NSError?
-        // gomobile MobileStart 尚无 connectionsJSON 参数（A4.3 版本升级后透传）；
-        // 连接定义此刻仍经 configYAML 注入。connectionsJSON 已持久化供后续 ABI 使用。
+        // MobileStart's 3rd param is now settingsJSON (1.4.8): the single config
+        // source. connectionsJSON (reconfigure channel) is hot-replayed below when
+        // a persisted definition document exists.
         guard let newServer = MobileStart(
             config.workspaceDirectory.path,
             config.dataDirectory.path,
-            config.runtimeConfigYAML ?? Self.bundledConfigYAML(),
+            config.runtimeSettingsJSON ?? Self.bundledSettingsJSON(),
             model,
             finalSecrets,
             serverAccessToken,
@@ -472,13 +475,13 @@ public final class AgentRuntime: @unchecked Sendable {
         return newServer.port()
     }
 
-    private static func bundledConfigYAML() -> String {
+    private static func bundledSettingsJSON() -> String {
         #if DEBUG
         let gatewayBaseURL = "http://192.168.1.13:12221/api/v1/agent"
         #else
         let gatewayBaseURL = "https://api.objc.com/api/v1/agent"
         #endif
-        guard let url = Bundle.module.url(forResource: "config", withExtension: "yaml"),
+        guard let url = Bundle.module.url(forResource: "settings", withExtension: "json"),
               let text = try? String(contentsOf: url, encoding: .utf8) else {
             return ""
         }

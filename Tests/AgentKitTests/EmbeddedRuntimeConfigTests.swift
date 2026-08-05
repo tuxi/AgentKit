@@ -4,18 +4,16 @@ import XCTest
 
 final class EmbeddedRuntimeConfigTests: XCTestCase {
     func testTaskSubagentInheritsAuthenticatedGatewayProvider() throws {
-        let configURL = try XCTUnwrap(
-            Bundle.module.url(forResource: "config", withExtension: "yaml")
+        let settingsURL = try XCTUnwrap(
+            Bundle.module.url(forResource: "settings", withExtension: "json")
         )
-        let config = try String(contentsOf: configURL, encoding: .utf8)
+        let settings = try String(contentsOf: settingsURL, encoding: .utf8)
 
-        XCTAssertTrue(config.contains("default_model: gateway"))
-        XCTAssertTrue(config.contains("namespace: gateway"))
-        XCTAssertTrue(config.contains("name: default"))
+        XCTAssertTrue(settings.contains("\"default_model\": \"gateway\""))
+        XCTAssertTrue(settings.contains("\"namespace\": \"gateway\""))
+        XCTAssertTrue(settings.contains("\"name\": \"default\""))
         XCTAssertFalse(
-            config.split(separator: "\n").contains {
-                $0.trimmingCharacters(in: .whitespaces).hasPrefix("subagent_model:")
-            },
+            settings.contains("subagent_model"),
             "The iOS task subagent must inherit the authenticated parent provider."
         )
     }

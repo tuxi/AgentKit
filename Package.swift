@@ -23,8 +23,8 @@ let package = Package(
     targets: [
         .binaryTarget(
             name: "CodeAgentRuntime",
-            url: "https://github.com/tuxi/code-agent-releases/releases/download/1.4.7/CodeAgentRuntime.xcframework.zip",
-            checksum: "859f80d04b71cca0b9fa79014dab5ccc453cdf23c96c90b391ca70a57f6e3845"
+            url: "https://github.com/tuxi/code-agent-releases/releases/download/1.4.9/CodeAgentRuntime.xcframework.zip",
+            checksum: "4d97d4e0559529497fdf10cc3478047f6f79fd25f3b22698b1a9a6f1bf588d6d"
         ),
         // Targets are the basic building blocks of a package, defining a module or a test suite.
         // Targets can depend on other targets in this package and products from dependencies.
@@ -37,7 +37,9 @@ let package = Package(
             ],
             path: "Sources/AgentKit",
             resources: [
-                // iOS 内嵌 runtime 的默认 config，经 Bundle.module 读取传给 MobileStart。
+                // iOS 内嵌 runtime 的默认 settings 文档（settings.File JSON 形状，
+                // 经 MobileStart 的 settingsJSON 参数注入）。
+                .copy("Resources/settings.json"),
                 .copy("Resources/config.yaml"),
                 .copy("Resources/skills"),   // 从 build/skills/ 拷贝到 app bundle
                 .copy("Resources/ConversationWeb"),
