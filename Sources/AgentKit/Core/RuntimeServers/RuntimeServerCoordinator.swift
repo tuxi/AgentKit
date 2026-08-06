@@ -423,6 +423,21 @@ public final class RuntimeServerCoordinator {
         return context.modelCatalog
     }
 
+    /// HTTP-backed provider store for the active server connection.
+    ///
+    /// Convenience for hosts that already own a `RuntimeServerCoordinator`:
+    /// resolves the Bearer token from this coordinator's runtime credential
+    /// store for the connection's target (`.runtimeAccess(id)`), so hosts never
+    /// touch the store directly. Embedded connections throw
+    /// `invalidEmbeddedConnection` — on iOS provider config stays host-injected.
+    public func makeProviderStore() throws -> any ProviderStore {
+        try ProviderStoreFactory.http(
+            for: activeConnection,
+            credentialStore: runtimeCredentialStore,
+            trustPolicy: activeConnection.trustPolicy
+        )
+    }
+
     // MARK: - Status
 
     @discardableResult

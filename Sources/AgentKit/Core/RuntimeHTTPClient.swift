@@ -75,6 +75,20 @@ struct RuntimeHTTPClient: Sendable {
         self.credentialTarget = credentialTarget
     }
 
+    /// Test seam: inject a preconfigured URLSession (e.g. a mock URLProtocol).
+    init(
+        environment: RuntimeEnvironment,
+        session: URLSession,
+        credentialStore: (any CredentialStore)? = nil,
+        credentialTarget: CredentialTarget = .runtimeAccess("default")
+    ) {
+        self.environment = environment
+        self.session = session
+        self.decoder = JSONDecoder()
+        self.credentialStore = credentialStore
+        self.credentialTarget = credentialTarget
+    }
+
     /// 每次调用时从 environment 延迟取 baseURL（Avoids snapshot stale port）。
     private func resolveBaseURL() throws -> URL {
         guard let url = environment.baseURL else {
@@ -166,6 +180,48 @@ struct RuntimeHTTPClient: Sendable {
         let (data, response) = try await session.data(for: request)
         try validateHTTP(response, data: data)
         return try decodeEnvelope(RuntimeCapabilitySnapshot.self, from: data)
+    }
+
+    // MARK: - Provider config (/v1/providers)
+
+    /// `GET /v1/providers` — full provider definition array.
+    /// Contract (frozen, verified against the live runtime):
+    /// `{"data":{"providers":[{id, enabled, base_url, api, credential, models}, ...]}}` —
+    /// each entry is a complete `RuntimeProviderDefinition`, identical in shape
+    /// to `GET /v1/providers/{id}`. Single shape; no fallback.
+    func listProviders() async throws -> [RuntimeProviderDefinition] {
+        let request = try await buildRequest("GET", pathComponents: "v1/providers")
+        let (data, response) = try await session.data(for: request)
+        try validateHTTP(response, data: data)
+        return try decodeEnvelope(RuntimeProvidersPayload.self, from: data).providers
+    }
+
+    /// `GET /v1/providers/{id}` — single provider definition (secrets stripped).
+    func getProvider(id: String) async throws -> RuntimeProviderDefinition {
+        let request = try await buildRequest("GET", pathComponents: "v1/providers", id)
+        let (data, response) = try await session.data(for: request)
+        try validateHTTP(response, data: data)
+        return try decodeEnvelope(RuntimeProviderDefinition.self, from: data)
+    }
+
+    /// `PUT /v1/providers/{id}` — create or update a provider definition.
+    func upsertProvider(_ definition: RuntimeProviderDefinition) async throws -> RuntimeProviderWriteResult {
+        let request = try await buildRequest(
+            "PUT",
+            pathComponents: "v1/providers", definition.id,
+            body: definition
+        )
+        let (data, response) = try await session.data(for: request)
+        try validateHTTP(response, data: data)
+        return try decodeEnvelope(RuntimeProviderWriteResult.self, from: data)
+    }
+
+    /// `DELETE /v1/providers/{id}` — remove a provider definition.
+    func deleteProvider(id: String) async throws -> RuntimeProviderWriteResult {
+        let request = try await buildRequest("DELETE", pathComponents: "v1/providers", id)
+        let (data, response) = try await session.data(for: request)
+        try validateHTTP(response, data: data)
+        return try decodeEnvelope(RuntimeProviderWriteResult.self, from: data)
     }
 
     /// `GET /v1/activity` — sessions owned by the authenticated principal/device.
@@ -505,6 +561,12 @@ private struct RuntimeEnvelope<T: Decodable>: Decodable {
     let code: Int
     let msg: String
     let data: T?
+}
+
+/// `GET /v1/providers` list payload (`data: {providers: [...]}` form).
+/// Each entry is a full provider definition, not a summary.
+private struct RuntimeProvidersPayload: Decodable {
+    let providers: [RuntimeProviderDefinition]
 }
 
 private struct RuntimeAuthenticationErrorPayload: Decodable {
