@@ -29,7 +29,8 @@ struct MacComposerTextView: NSViewRepresentable {
     let maxHeight: CGFloat
     /// 回车发送。是否满足发送条件由调用方在闭包内判断。
     let onSend: () -> Void
-    /// 拖拽文件到输入框时回调。返回 true 表示接受拖放。
+    /// 拖拽图片到输入框时回调（仅图片走附件流程）。返回 true 表示接受拖放。
+    /// 非图片文件/目录不经过此回调 —— 其完整路径会直接插入为输入框文本。
     var onFileDrop: (([URL]) -> Bool)? = nil
 
     func makeCoordinator() -> Coordinator { Coordinator(self) }
@@ -143,7 +144,8 @@ struct MacComposerTextView: NSViewRepresentable {
 // MARK: - ComposerNSTextView
 
 /// 带占位符绘制的 NSTextView（NSTextView 本身无 placeholder）。
-/// 同时支持拖拽文件作为附件添加。
+/// 拖放支持：图片文件走 onFileDrop（附件流程）；非图片文件/目录的
+/// 完整路径直接插入为输入框文本。
 final class ComposerNSTextView: NSTextView {
 
     var placeholderString: String = "" {
@@ -180,10 +182,9 @@ final class ComposerNSTextView: NSTextView {
     }
 
     override func draggingEntered(_ sender: NSDraggingInfo) -> NSDragOperation {
-        guard onFileDrop != nil,
-              let urls = fileURLs(from: sender.draggingPasteboard),
+        guard let urls = fileURLs(from: sender.draggingPasteboard),
               !urls.isEmpty,
-              urls.allSatisfy({ Self.isImageFile($0) }) else {
+              canAcceptDrop(urls) else {
             return []
         }
         isDropTargeted = true
@@ -191,10 +192,9 @@ final class ComposerNSTextView: NSTextView {
     }
 
     override func draggingUpdated(_ sender: NSDraggingInfo) -> NSDragOperation {
-        guard onFileDrop != nil,
-              let urls = fileURLs(from: sender.draggingPasteboard),
+        guard let urls = fileURLs(from: sender.draggingPasteboard),
               !urls.isEmpty,
-              urls.allSatisfy({ Self.isImageFile($0) }) else {
+              canAcceptDrop(urls) else {
             isDropTargeted = false
             return []
         }
@@ -212,12 +212,50 @@ final class ComposerNSTextView: NSTextView {
 
     override func performDragOperation(_ sender: NSDraggingInfo) -> Bool {
         isDropTargeted = false
-        guard let onFileDrop,
-              let urls = fileURLs(from: sender.draggingPasteboard),
+        guard let urls = fileURLs(from: sender.draggingPasteboard),
               !urls.isEmpty else { return false }
+
+        let pathURLs = urls.filter { !Self.isImageFile($0) }
         let imageURLs = urls.filter { Self.isImageFile($0) }
-        guard !imageURLs.isEmpty else { return false }
-        return onFileDrop(imageURLs)
+
+        var accepted = false
+        // 非图片（文件/目录）：完整路径直接插入为文本。
+        if !pathURLs.isEmpty {
+            insertPathText(pathURLs)
+            accepted = true
+        }
+        // 图片：走附件流程（拷贝到工作区或上传 gateway）。
+        if !imageURLs.isEmpty, let onFileDrop {
+            accepted = onFileDrop(imageURLs) || accepted
+        }
+        return accepted
+    }
+
+    /// 拖放是否可接受：只要包含非图片项（文件/目录）即可接受，其路径将作为文本插入；
+    /// 纯图片拖放仅在配置了 onFileDrop 时接受（附件流程）。
+    private func canAcceptDrop(_ urls: [URL]) -> Bool {
+        if urls.contains(where: { !Self.isImageFile($0) }) { return true }
+        return onFileDrop != nil
+    }
+
+    /// 将非图片文件/目录的完整路径作为文本插入到当前光标处。
+    /// 多个路径以空格分隔；若插入点前已有非空白字符则自动补一个空格分隔。
+    private func insertPathText(_ urls: [URL]) {
+        guard !urls.isEmpty, isEditable else { return }
+        let fullText = string
+        let joined = urls.map(\.path).joined(separator: " ")
+
+        let caret = min(max(selectedRange.location, 0), (fullText as NSString).length)
+        var insertion = joined
+        if caret > 0 {
+            let prev = fullText[fullText.index(fullText.startIndex, offsetBy: caret - 1)]
+            if !prev.isWhitespace {
+                insertion = " " + insertion
+            }
+        }
+        let range = NSRange(location: caret, length: 0)
+        replaceCharacters(in: range, with: insertion)
+        setSelectedRange(NSRange(location: caret + (insertion as NSString).length, length: 0))
     }
 
     private func fileURLs(from pasteboard: NSPasteboard) -> [URL]? {

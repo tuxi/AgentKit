@@ -375,7 +375,7 @@ struct DraftComposerPanel: View {
                 send()
             },
             onFileDrop: { urls in
-                handleDroppedFiles(urls)
+                handleDroppedImages(urls)
                 return true
             }
         )
@@ -658,7 +658,9 @@ struct DraftComposerPanel: View {
         }
     }
     
-    private func handleDroppedFiles(_ urls: [URL]) {
+    /// 处理拖入的图片附件（仅图片会走到这里 —— 非图片文件/目录由
+    /// MacComposerTextView 直接以完整路径文本插入输入框，不经过此方法）。
+    private func handleDroppedImages(_ urls: [URL]) {
         guard let key = persistenceKey,
               workspaceStore.canStageLocalUserAssets else { return }
         let remainingSlots = 4 - attachments.count
