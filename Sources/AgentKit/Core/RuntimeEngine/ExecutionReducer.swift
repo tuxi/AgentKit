@@ -787,7 +787,7 @@ public struct ExecutionReducer: Sendable {
                let prevNode = graph.nodes[prevID] {
                 if prevNode.status == .running {
                     // Orphaned preview — remove the node entirely.
-                    graph.nodes.removeValue(forKey: prevID)
+                    graph.removeNode(prevID)
                 }
             }
             internalState.streamingThinking = ""

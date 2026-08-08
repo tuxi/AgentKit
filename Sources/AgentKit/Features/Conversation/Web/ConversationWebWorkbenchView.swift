@@ -511,7 +511,7 @@ struct ConversationWebWorkbenchView: NSViewRepresentable {
                     )
                 }
             }
-            let document = ConversationWebDocumentBuilder.build(
+            let buildResult = ConversationWebDocumentBuilder.buildWithStableTurns(
                 snapshot: latestSnapshot,
                 conversationID: sourceConversationID,
                 revision: revision,
@@ -521,6 +521,7 @@ struct ConversationWebWorkbenchView: NSViewRepresentable {
                     actionRegistry.register(action)
                 }
             )
+            let document = buildResult.document
             actionRegistry.finishRevision(
                 retaining: ConversationWebDocumentBuilder.actionTokens(in: document)
             )
@@ -529,7 +530,8 @@ struct ConversationWebWorkbenchView: NSViewRepresentable {
             if let acknowledgedDocument {
                 update = ConversationWebDocumentDiffer.update(
                     from: acknowledgedDocument,
-                    to: document
+                    to: document,
+                    stableTurnIDs: buildResult.stableTurnIDs
                 )
             } else {
                 update = ConversationWebDocumentDiffer.reset(

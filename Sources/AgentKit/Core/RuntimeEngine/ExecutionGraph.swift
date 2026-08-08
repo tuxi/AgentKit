@@ -40,13 +40,33 @@ public struct ExecutionGraph: Sendable {
     /// Dedup index for addEdge — (from, to, type) triples already present.
     private var edgeKeys: Set<String> = []
 
+    /// Monotonic per-node revision, bumped on every upsert/update/remove.
+    /// The incremental projection layer compares revisions to detect exactly
+    /// which nodes changed since the last projection.
+    public private(set) var nodeRevisions: [NodeID: UInt64] = [:]
+
+    /// Node IDs mutated since the last `consumeChangedNodeIDs()` call. This is
+    /// the authoritative change source for incremental projection — it does not
+    /// rely on the reducer returning a complete changed-node list (some
+    /// handlers, e.g. turnFinished, finalize nodes without reporting them).
+    public private(set) var changedNodeIDs: Set<NodeID> = []
+
+    /// Insertion order of nodes (append-only). Lets the incremental projection
+    /// order a changed-node batch deterministically when assigning new nodes to
+    /// turns (a userInput node must start its turn before later nodes join it).
+    public private(set) var nodeOrder: [NodeID] = []
+    private var nodeOrderIndex: [NodeID: Int] = [:]
+
     public init() {}
 
     // MARK: - Mutations
 
     /// Upsert a node (by id).
     public mutating func upsertNode(_ node: GraphNode) {
+        let isNew = nodes[node.id] == nil
         nodes[node.id] = node
+        if isNew { recordAppend(node.id) }
+        recordChange(node.id)
         if rootID == nil {
             rootID = node.id
         }
@@ -57,6 +77,33 @@ public struct ExecutionGraph: Sendable {
         guard var node = nodes[id] else { return }
         transform(&node)
         nodes[id] = node
+        recordChange(id)
+    }
+
+    /// Remove a node. Records the removal as a change so incremental
+    /// projection can re-project the affected turn.
+    public mutating func removeNode(_ id: NodeID) {
+        guard nodes.removeValue(forKey: id) != nil else { return }
+        recordChange(id)
+    }
+
+    /// Consume and clear the set of nodes mutated since the last call.
+    /// Returns an ordered list (graph insertion order).
+    public mutating func consumeChangedNodeIDs() -> [NodeID] {
+        defer { changedNodeIDs.removeAll(keepingCapacity: true) }
+        return changedNodeIDs.sorted { lhs, rhs in
+            (nodeOrderIndex[lhs] ?? .max) < (nodeOrderIndex[rhs] ?? .max)
+        }
+    }
+
+    private mutating func recordChange(_ id: NodeID) {
+        nodeRevisions[id, default: 0] += 1
+        changedNodeIDs.insert(id)
+    }
+
+    private mutating func recordAppend(_ id: NodeID) {
+        nodeOrder.append(id)
+        nodeOrderIndex[id] = nodeOrder.count - 1
     }
 
     /// Add an edge. Deduplicates by (from, to, type).

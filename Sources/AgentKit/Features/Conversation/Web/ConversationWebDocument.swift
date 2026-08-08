@@ -184,6 +184,14 @@ enum ConversationWebDocumentBuilder {
         let extensionContributions: [String: [TimelineWebContribution]]
     }
 
+    /// Result of a build: the document plus the set of turn ids whose content
+    /// was reused verbatim from the reuse source (content version matched).
+    /// The differ uses this set to skip unchanged turns in O(1).
+    struct BuildResult {
+        let document: ConversationWebDocument
+        let stableTurnIDs: Set<String>
+    }
+
     static func build(
         snapshot: RuntimeSnapshot,
         conversationID: String?,
@@ -193,7 +201,51 @@ enum ConversationWebDocumentBuilder {
         assetIndexFactory: (ConversationTurn) -> AssetIndex = { AssetIndex(turn: $0) },
         registerAction: ((ConversationWebAction) -> String)? = nil
     ) -> ConversationWebDocument {
-        ConversationWebDocument(
+        buildResult(
+            snapshot: snapshot,
+            conversationID: conversationID,
+            revision: revision,
+            extensionContributions: extensionContributions,
+            reusing: reuseSource,
+            assetIndexFactory: assetIndexFactory,
+            registerAction: registerAction
+        ).document
+    }
+
+    /// Build and also report which turns were reused verbatim from the reuse
+    /// source (content version matched). The streaming Coordinator uses this
+    /// to let the differ skip unchanged turns in O(1).
+    static func buildWithStableTurns(
+        snapshot: RuntimeSnapshot,
+        conversationID: String?,
+        revision: UInt64? = nil,
+        extensionContributions: [String: [TimelineWebContribution]] = [:],
+        reusing reuseSource: ReuseSource? = nil,
+        assetIndexFactory: (ConversationTurn) -> AssetIndex = { AssetIndex(turn: $0) },
+        registerAction: ((ConversationWebAction) -> String)? = nil
+    ) -> BuildResult {
+        buildResult(
+            snapshot: snapshot,
+            conversationID: conversationID,
+            revision: revision,
+            extensionContributions: extensionContributions,
+            reusing: reuseSource,
+            assetIndexFactory: assetIndexFactory,
+            registerAction: registerAction
+        )
+    }
+
+    private static func buildResult(
+        snapshot: RuntimeSnapshot,
+        conversationID: String?,
+        revision: UInt64?,
+        extensionContributions: [String: [TimelineWebContribution]],
+        reusing reuseSource: ReuseSource?,
+        assetIndexFactory: (ConversationTurn) -> AssetIndex,
+        registerAction: ((ConversationWebAction) -> String)?
+    ) -> BuildResult {
+        var stableTurnIDs = Set<String>()
+        let document = ConversationWebDocument(
             protocolVersion: ConversationWebDocument.currentProtocolVersion,
             revision: revision ?? snapshot.generation,
             conversationID: conversationID ?? "unbound",
@@ -208,9 +260,11 @@ enum ConversationWebDocumentBuilder {
                 let previousDocumentTurn = reuseSource.flatMap {
                     index < $0.document.turns.count ? $0.document.turns[index] : nil
                 }
-                if previousTurn == turn,
+                if let previousTurn,
                    previousDocumentTurn?.id == turn.id,
-                   (reuseSource?.extensionContributions[turn.id] ?? []) == contributions {
+                   (reuseSource?.extensionContributions[turn.id] ?? []) == contributions,
+                   isContentUnchanged(previousTurn, turn) {
+                    stableTurnIDs.insert(turn.id)
                     return previousDocumentTurn!
                 }
                 return makeTurn(
@@ -226,6 +280,20 @@ enum ConversationWebDocumentBuilder {
             },
             live: makeLiveState(snapshot)
         )
+        return BuildResult(document: document, stableTurnIDs: stableTurnIDs)
+    }
+
+    /// O(1) when both turns carry a projection content version (non-zero);
+    /// falls back to deep equality for hand-built turns (tests, shares) where
+    /// the version is 0 and carries no meaning.
+    private static func isContentUnchanged(
+        _ lhs: ConversationTurn,
+        _ rhs: ConversationTurn
+    ) -> Bool {
+        if lhs.contentVersion > 0, rhs.contentVersion > 0 {
+            return lhs.contentVersion == rhs.contentVersion
+        }
+        return lhs == rhs
     }
 
     static func actionTokens(in document: ConversationWebDocument) -> Set<String> {

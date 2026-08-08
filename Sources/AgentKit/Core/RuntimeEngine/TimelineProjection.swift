@@ -79,7 +79,9 @@ public struct TimelineProjection: Sendable {
         return false
     }
 
-    private func buildTurn(nodes: [ExecutionNode], isLive: Bool) -> ConversationTurn {
+    /// Build a single turn from its merged ExecutionNodes. Exposed to the
+    /// incremental projection cache so unchanged turns skip re-projection.
+    func buildTurn(nodes: [ExecutionNode], isLive: Bool) -> ConversationTurn {
         // Unique, stable id = first node's id (the user node, created once).
         // Never the raw turn_id, which can collide across a server restart.
         let turnUID = nodes.first?.id ?? UUID().uuidString
@@ -250,8 +252,10 @@ public struct TimelineProjection: Sendable {
         return result
     }
 
-    /// Convert a single GraphNode to an ExecutionNode.
-    private func projectNode(_ graphNode: GraphNode) -> ExecutionNode? {
+    /// Convert a single GraphNode to an ExecutionNode. Exposed to the
+    /// incremental projection cache so unchanged nodes skip re-projection
+    /// (in particular, artifact compilation for completed tool nodes).
+    func projectNode(_ graphNode: GraphNode) -> ExecutionNode? {
         var kind: ExecutionNodeKind?
 
         switch graphNode.payload {
@@ -409,7 +413,10 @@ public struct TimelineProjection: Sendable {
 
     // MARK: - Merge
 
-    private func applyMerge(_ nodes: [ExecutionNode]) -> [ExecutionNode] {
+    /// Merge the given projected nodes per the merge policy. Exposed to the
+    /// incremental projection cache so a single changed turn can be re-merged
+    /// without re-projecting unchanged turns.
+    func applyMerge(_ nodes: [ExecutionNode]) -> [ExecutionNode] {
         guard nodes.count > 1 else { return nodes }
 
         var result: [ExecutionNode] = [nodes[0]]

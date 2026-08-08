@@ -1102,6 +1102,7 @@ struct PlanApprovalBar: View {
     let onApprove: () -> Void
     let onReject: () -> Void
     @State private var contentHeight: CGFloat = 0
+    @State private var titleHeight: CGFloat = 0
     
     private var displayPath: String? {
         plan.planPath ?? plan.filePath
@@ -1180,8 +1181,14 @@ struct PlanApprovalBar: View {
                     Text(plan.title)
                         .font(.subheadline.weight(.semibold))
                         .textSelection(.enabled)
+                        .onGeometryChange(for: CGFloat.self) { proxy in
+                            proxy.size.height
+                        } action: { newValue in
+                            titleHeight = newValue
+                        }
+
                 }
-                .frame(maxHeight: 70)
+                .frame(maxHeight: min(titleHeight, 70))
                 
                 Text(isWorkflowDAG ? "Workflow Plan" : "Proposed Plan")
                     .font(.caption)

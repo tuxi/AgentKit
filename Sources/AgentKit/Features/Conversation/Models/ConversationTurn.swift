@@ -25,10 +25,15 @@ public struct ConversationTurn: Identifiable, Sendable, Equatable {
     public let todos: [TodoItem]
     public let footer: TurnStats?          // nil while no model_finished yet
     public let isLive: Bool                // this turn is still streaming
+    /// Monotonic content version assigned by the incremental projection layer.
+    /// Incremented whenever the turn is re-projected with changed content.
+    /// `0` means "never projected" (hand-built turns in tests/shares) — Web
+    /// consumers treat it as "unknown, fall back to deep equality".
+    public let contentVersion: UInt64
 
     public init(id: String, userPrompt: MessageNodePayload?,
                 blocks: [TurnBlock], plans: [TurnPlan] = [], todos: [TodoItem] = [],
-                footer: TurnStats?, isLive: Bool) {
+                footer: TurnStats?, isLive: Bool, contentVersion: UInt64 = 0) {
         self.id = id
         self.userPrompt = userPrompt
         self.blocks = blocks
@@ -36,12 +41,22 @@ public struct ConversationTurn: Identifiable, Sendable, Equatable {
         self.todos = todos
         self.footer = footer
         self.isLive = isLive
+        self.contentVersion = contentVersion
     }
 
     /// Nothing worth rendering — skip (e.g. a stray leading run with only
     /// demoted meta events).
     public var isEmpty: Bool {
         userPrompt == nil && blocks.isEmpty && plans.isEmpty && todos.isEmpty && footer == nil
+    }
+
+    /// Returns a copy with an updated content version (content is unchanged).
+    /// Used by the incremental projection layer to stamp stable turns.
+    public func withContentVersion(_ version: UInt64) -> ConversationTurn {
+        ConversationTurn(
+            id: id, userPrompt: userPrompt, blocks: blocks, plans: plans,
+            todos: todos, footer: footer, isLive: isLive, contentVersion: version
+        )
     }
 }
 

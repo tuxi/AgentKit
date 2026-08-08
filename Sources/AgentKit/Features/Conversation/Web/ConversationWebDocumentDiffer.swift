@@ -144,14 +144,24 @@ enum ConversationWebDocumentDiffer {
 
     static func update(
         from old: ConversationWebDocument?,
-        to new: ConversationWebDocument
+        to new: ConversationWebDocument,
+        stableTurnIDs: Set<String> = []
     ) -> ConversationWebUpdate? {
-        guard old != new else { return nil }
         guard let old,
               old.conversationID == new.conversationID,
               new.revision == old.revision + 1,
               canPatchTurnShape(from: old.turns, to: new.turns) else {
             return reset(new)
+        }
+
+        // Short-circuit when every turn is stable (content version matched the
+        // reuse source) and only the revision field differs — nothing to send.
+        // (A full `old != new` deep comparison is avoided here: the revision
+        // field differs on every patch, so it could never short-circuit anyway.)
+        if stableTurnIDs.count == new.turns.count,
+           old.todos == new.todos,
+           old.live == new.live {
+            return nil
         }
 
         var operations: [ConversationWebUpdate.Operation] = []
@@ -160,13 +170,20 @@ enum ConversationWebDocumentDiffer {
         }
 
         let commonCount = min(old.turns.count, new.turns.count)
-        for index in 0..<commonCount where old.turns[index] != new.turns[index] {
-            appendTurnOperations(
-                from: old.turns[index],
-                to: new.turns[index],
-                at: index,
-                into: &operations
-            )
+        for index in 0..<commonCount {
+            let newTurn = new.turns[index]
+            // Turns whose content version matched the reuse source are known to
+            // be identical to the acknowledged document — skip the deep
+            // comparison entirely.
+            if stableTurnIDs.contains(newTurn.id) { continue }
+            if old.turns[index] != newTurn {
+                appendTurnOperations(
+                    from: old.turns[index],
+                    to: newTurn,
+                    at: index,
+                    into: &operations
+                )
+            }
         }
         if new.turns.count > old.turns.count {
             for turn in new.turns.dropFirst(old.turns.count) {

@@ -139,6 +139,9 @@ public actor RuntimeEngine {
     private var reducer: ExecutionReducer
     private let timelineProjection: TimelineProjection
     private let presenter: ExecutionPresenter
+    /// Incremental turn projection cache. Re-projects only changed turns so
+    /// per-event cost scales with the change, not the whole conversation.
+    private var projectionCache: TurnProjectionCache
 
     /// Pending approval queue. Order reflects arrival order from the server;
     /// the protocol guarantees serial tool execution, so concurrent approvals
@@ -206,6 +209,7 @@ public actor RuntimeEngine {
         self.reducer = ExecutionReducer()
         self.timelineProjection = TimelineProjection(mergePolicy: mergePolicy)
         self.presenter = ExecutionPresenter()
+        self.projectionCache = TurnProjectionCache(mergePolicy: mergePolicy)
     }
 
     // MARK: - Public API
@@ -536,10 +540,11 @@ public actor RuntimeEngine {
     }
 
     private func buildSnapshot() -> RuntimeSnapshot {
-        // Project the graph exactly once per snapshot; timeline and turns
-        // both derive from the same node walk.
-        let timeline = timelineProjection.projectNodes(graph)
-        let turns = timelineProjection.projectTurns(nodes: timeline, isLive: isLive)
+        // Project the graph incrementally — only turns touched since the last
+        // yield are re-projected; unchanged turns keep their cached values and
+        // content versions. This makes per-event cost scale with the change
+        // rather than the whole conversation.
+        let (timeline, turns) = projectionCache.project(graph: &graph, isLive: isLive)
         return RuntimeSnapshot(
             timeline: timeline,
             turns: turns,
