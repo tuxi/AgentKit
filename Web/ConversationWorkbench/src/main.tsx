@@ -1399,6 +1399,90 @@ function activateSelectableAction(
   dispatchAction(actionID);
 }
 
+// ── Context-management chips & verification blocks (system blocks) ──
+
+/** Doc emoji per context event; compacted must not reuse the prune icon. */
+function contextChipIcon(kind: string | undefined): string {
+  switch (kind) {
+    case "contextEdited": return "🧹";
+    case "contextPruned": return "✂️";
+    case "contextCompact": return "📄";
+    default: return "";
+  }
+}
+
+/** Lightweight inline chip for context_edited / context_pruned / compacted. */
+function ContextChip({ block }: { block: ConversationWebBlock }): React.JSX.Element {
+  const ineffective = block.metadata?.ineffective === "true";
+  return (
+    <span
+      className="context-chip"
+      data-tone={ineffective ? "warning" : undefined}
+      title={block.text}
+    >
+      <span aria-hidden="true">{contextChipIcon(block.systemKind)}</span>{" "}
+      {block.text}
+      {ineffective ? <span className="context-chip-flag">压缩无效</span> : null}
+    </span>
+  );
+}
+
+/** pre_mutation renders as a thinking-style self-check disclosure. */
+function PreMutationBlock({ block }: { block: ConversationWebBlock }): React.JSX.Element {
+  return (
+    <details className="thinking-block pre-mutation-block" data-status={block.status}>
+      <summary className="thinking-summary">
+        <span className="thinking-label">
+          <span aria-hidden="true">💭</span> 编辑前自检
+        </span>
+        <span className="disclosure-chevron" aria-hidden="true">›</span>
+      </summary>
+      <div className="thinking-body">
+        {block.text ? <Markdown block={{ ...block, kind: "markdown" }} /> : null}
+      </div>
+    </details>
+  );
+}
+
+/** Tone heuristic for verified output text ("<command>: <result>"). */
+function verifiedTone(text: string): "success" | "danger" | "warning" | "neutral" {
+  const lower = text.toLowerCase();
+  if (lower.includes("could not run") || lower.includes("cannot run")) return "warning";
+  if (lower.includes("exit status") || lower.includes("error") || lower.includes("failed")) return "danger";
+  if (lower.includes("passed") || lower.includes("ok") || lower.includes("success")) return "success";
+  return "neutral";
+}
+
+const verifiedLabel: Record<ReturnType<typeof verifiedTone>, string> = {
+  success: "✓ 验证通过",
+  danger: "✗ 验证失败",
+  warning: "⚠ 未能运行",
+  neutral: "≡ 验证输出",
+};
+
+/** verified renders as a terminal-output style card; failures auto-expand. */
+function VerifiedBlock({ block }: { block: ConversationWebBlock }): React.JSX.Element {
+  const text = block.text ?? "";
+  const tone = verifiedTone(text);
+  return (
+    <details
+      className="verified-block"
+      data-tone={tone}
+      open={tone === "danger" || tone === "warning"}
+    >
+      <summary className="verified-summary interactive">
+        <span className="verified-label">{verifiedLabel[tone]}</span>
+        <span className="disclosure-chevron" aria-hidden="true">›</span>
+      </summary>
+      {text ? (
+        <div className="overflow-frame code-frame verified-output" data-scroll-id={`verified:${block.id}`}>
+          <pre><code>{text}</code></pre>
+        </div>
+      ) : null}
+    </details>
+  );
+}
+
 const Block = memo(function Block({
   block,
 }: {
@@ -1474,6 +1558,17 @@ const Block = memo(function Block({
         </section>
       );
     case "system":
+      if (block.systemKind === "contextEdited"
+        || block.systemKind === "contextPruned"
+        || block.systemKind === "contextCompact") {
+        return <ContextChip block={block} />;
+      }
+      if (block.systemKind === "preMutation") {
+        return <PreMutationBlock block={block} />;
+      }
+      if (block.systemKind === "verified") {
+        return <VerifiedBlock block={block} />;
+      }
       return (
         <aside className="system-block" data-status={block.status}>
           <span>{block.title}</span> {block.text}

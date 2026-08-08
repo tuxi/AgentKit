@@ -91,7 +91,15 @@ public enum AgentEvent: Sendable {
 
     // ── 上下文 ──
     case reflected(turnID: String?, text: String)
-    case compacted(turnID: String?, beforeTokens: Int, afterTokens: Int, savedTokens: Int, summaryChars: Int, ratio: Double)
+    case compacted(turnID: String?, beforeTokens: Int, afterTokens: Int, savedTokens: Int, summaryChars: Int, ratio: Double, ineffective: Bool)
+    /// `context_edited`：清理过期低信号 tool 结果。`text` 形如 "cleared N stale tool results"。
+    case contextEdited(turnID: String?, text: String)
+    /// `context_pruned`：硬截断旧 tool 输出。`beforeTokens`/`savedTokens` 为 token 口径。
+    case contextPruned(turnID: String?, beforeTokens: Int, savedTokens: Int)
+    /// `pre_mutation`（P4.3-R）：编辑工具调用前的模型自检。
+    case preMutation(turnID: String?, text: String)
+    /// `verified`（P4.3-R）：编辑后确定性验证（go build/test）。`text` 形如 "<command>: <result>"。
+    case verified(turnID: String?, text: String)
 
     // ── 审批 ──
     case approvalRequest(turnID: String?, request: ApprovalRequest)
@@ -617,6 +625,22 @@ extension AgentEvent {
         case "reflected":
             return .reflected(turnID: turnID, text: wire.text ?? "")
 
+        case "context_edited":
+            return .contextEdited(turnID: turnID, text: wire.text ?? "")
+
+        case "context_pruned":
+            return .contextPruned(
+                turnID: turnID,
+                beforeTokens: wire.beforeTokens ?? 0,
+                savedTokens: wire.savedTokens ?? 0
+            )
+
+        case "pre_mutation":
+            return .preMutation(turnID: turnID, text: wire.text ?? "")
+
+        case "verified":
+            return .verified(turnID: turnID, text: wire.text ?? "")
+
         case "compacted":
             return .compacted(
                 turnID: turnID,
@@ -624,7 +648,8 @@ extension AgentEvent {
                 afterTokens: wire.afterTokens ?? 0,
                 savedTokens: wire.savedTokens ?? 0,
                 summaryChars: wire.summaryChars ?? 0,
-                ratio: wire.ratio ?? 0
+                ratio: wire.ratio ?? 0,
+                ineffective: wire.ineffective ?? false
             )
 
         default:

@@ -151,6 +151,10 @@ public enum SystemNodeKind: String, Sendable {
     case reflection
     case modelActivity
     case contextCompact
+    case contextEdited
+    case contextPruned
+    case preMutation
+    case verified
     case skillLoaded
     case error
 }

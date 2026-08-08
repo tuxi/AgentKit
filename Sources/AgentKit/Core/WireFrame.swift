@@ -69,6 +69,8 @@ struct WireFrame: Decodable {
     let savedTokens: Int?
     let summaryChars: Int?
     let ratio: Double?
+    /// `compacted` 新增（omitempty）：本次压缩是否无效（有效压缩收益趋近于零）。
+    let ineffective: Bool?
     let chunk: String?
     let err: String?
     /// v1.2 §5.1：`turn_failed` 结构化错误 `{code, message}`。`code` 是开放集合（如 `auth_expired`）。
@@ -93,6 +95,7 @@ struct WireFrame: Decodable {
     enum CodingKeys: String, CodingKey {
         case type, kind, at, step, id, server, seq
         case text, observation, output, assets, failure, err, error, ratio, todos, chunk
+        case ineffective
         case userAssets = "user_assets"
         case localAssets = "local_assets"
         case reason, position

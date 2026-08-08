@@ -83,6 +83,14 @@ struct ConversationWebDocument: Codable, Equatable, Sendable {
         let actionTooltip: String?
         let inlineActions: [InlineAction]
         let codeCopyActionIDs: [String]
+        /// Present only for system blocks: the raw `SystemNodeKind` (e.g.
+        /// "contextCompact", "preMutation", "verified"). The renderer uses this
+        /// to pick a kind-specific presentation; absent/other kinds render as a
+        /// plain system aside.
+        var systemKind: String? = nil
+        /// Present only for system blocks: kind-specific flags and values from
+        /// the graph node payload (e.g. `ineffective`, token counts).
+        var metadata: [String: String]? = nil
     }
 
     struct Tool: Codable, Equatable, Sendable {
@@ -606,7 +614,9 @@ enum ConversationWebDocumentBuilder {
                 actionID: nil,
                 actionTooltip: nil,
                 inlineActions: [],
-                codeCopyActionIDs: []
+                codeCopyActionIDs: [],
+                systemKind: payload.kind.rawValue,
+                metadata: payload.metadata.isEmpty ? nil : payload.metadata
             )
 
         case .childStream(let id, let payload):

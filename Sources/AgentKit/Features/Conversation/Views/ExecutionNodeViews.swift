@@ -125,6 +125,10 @@ struct SystemEventRow: View {
         switch payload.kind {
         case .modelActivity: return "cpu"
         case .contextCompact: return "compress"
+        case .contextEdited: return "trash"
+        case .contextPruned: return "scissors"
+        case .preMutation: return "brain"
+        case .verified: return "terminal"
         case .skillLoaded: return "sparkles"
         default: return "info.circle"
         }

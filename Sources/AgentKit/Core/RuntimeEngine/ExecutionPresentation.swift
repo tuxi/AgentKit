@@ -84,6 +84,14 @@ public struct PresentationResolver: Sendable {
                 return .compact
             case .contextCompact:
                 return .minimal
+            case .contextEdited:
+                return .minimal
+            case .contextPruned:
+                return .minimal
+            case .preMutation:
+                return .compact
+            case .verified:
+                return .compact
             case .skillLoaded:
                 return .minimal
             case .error:

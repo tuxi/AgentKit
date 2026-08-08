@@ -57,6 +57,12 @@ export interface ConversationWebBlock {
   actionTooltip?: string;
   inlineActions: InlineAction[];
   codeCopyActionIDs: string[];
+  /// Present only for system blocks: the raw SystemNodeKind (e.g.
+  /// "contextCompact", "preMutation", "verified").
+  systemKind?: string;
+  /// Present only for system blocks: kind-specific flags/values from the graph
+  /// node payload (e.g. "ineffective": "true").
+  metadata?: Record<string, string>;
 }
 
 export interface ConversationWebUserAsset {

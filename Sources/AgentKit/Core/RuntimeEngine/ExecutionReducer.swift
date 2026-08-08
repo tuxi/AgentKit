@@ -137,11 +137,29 @@ public struct ExecutionReducer: Sendable {
                                        elapsedMs: elapsedMs,
                                        err: err, ts: ts, graph: &graph)
 
-        // ── Context compaction (previously ignored!) ──
-        case .compacted(let turnID, let before, let after, let saved, _, let ratio):
+        // ── Context management (previously ignored!) ──
+        case .compacted(let turnID, let before, let after, let saved, _, let ratio, let ineffective):
             return handleCompacted(turnID: turnID ?? internalState.currentTurnID ?? "",
                                    beforeTokens: before, afterTokens: after,
-                                   savedTokens: saved, ratio: ratio, ts: ts, graph: &graph)
+                                   savedTokens: saved, ratio: ratio,
+                                   ineffective: ineffective, ts: ts, graph: &graph)
+
+        case .contextEdited(let turnID, let text):
+            return handleContextEdited(turnID: turnID ?? internalState.currentTurnID ?? "",
+                                       text: text, ts: ts, graph: &graph)
+
+        case .contextPruned(let turnID, let beforeTokens, let savedTokens):
+            return handleContextPruned(turnID: turnID ?? internalState.currentTurnID ?? "",
+                                       beforeTokens: beforeTokens, savedTokens: savedTokens,
+                                       ts: ts, graph: &graph)
+
+        case .preMutation(let turnID, let text):
+            return handlePreMutation(turnID: turnID ?? internalState.currentTurnID ?? "",
+                                     text: text, ts: ts, graph: &graph)
+
+        case .verified(let turnID, let text):
+            return handleVerified(turnID: turnID ?? internalState.currentTurnID ?? "",
+                                  text: text, ts: ts, graph: &graph)
 
         // ── Auto-approved (previously ignored!) ──
         case .autoApproved(let turnID, let toolName, let toolArgs, let text):
@@ -813,20 +831,73 @@ public struct ExecutionReducer: Sendable {
         return [nodeID]
     }
 
-    // MARK: - Context compaction handler (PREVIOUSLY IGNORED)
+    // MARK: - Context management handlers (PREVIOUSLY IGNORED)
 
     private mutating func handleCompacted(turnID: String, beforeTokens: Int, afterTokens: Int,
-                                           savedTokens: Int, ratio: Double, ts: TimeInterval,
+                                           savedTokens: Int, ratio: Double, ineffective: Bool,
+                                           ts: TimeInterval,
                                            graph: inout ExecutionGraph) -> [NodeID] {
         let text = "Context compacted: \(beforeTokens) → \(afterTokens) tokens (saved \(savedTokens))"
-        let metadata: [String: String] = [
+        var metadata: [String: String] = [
             "beforeTokens": String(beforeTokens),
             "afterTokens": String(afterTokens),
             "savedTokens": String(savedTokens),
             "ratio": String(format: "%.1f", ratio)
         ]
+        metadata["ineffective"] = String(ineffective)
         let nodeID = "\(turnID)_compact_\(UUID().uuidString.prefix(8))"
         let payload = SystemPayload(kind: .contextCompact, text: text, metadata: metadata)
+        let node = GraphNode(id: nodeID, kind: .system, payload: .system(payload),
+                             status: .completed, timestamp: ts, turnID: turnID)
+        appendNode(node, to: &graph)
+        return [nodeID]
+    }
+
+    private mutating func handleContextEdited(turnID: String, text: String, ts: TimeInterval,
+                                              graph: inout ExecutionGraph) -> [NodeID] {
+        guard !text.isEmpty else { return [] }
+        let nodeID = "\(turnID)_ctxedit_\(UUID().uuidString.prefix(8))"
+        let payload = SystemPayload(kind: .contextEdited, text: text)
+        let node = GraphNode(id: nodeID, kind: .system, payload: .system(payload),
+                             status: .completed, timestamp: ts, turnID: turnID)
+        appendNode(node, to: &graph)
+        return [nodeID]
+    }
+
+    private mutating func handleContextPruned(turnID: String, beforeTokens: Int, savedTokens: Int,
+                                              ts: TimeInterval,
+                                              graph: inout ExecutionGraph) -> [NodeID] {
+        let afterTokens = max(0, beforeTokens - savedTokens)
+        let text = "Context pruned: saved \(savedTokens) tokens (\(beforeTokens) → \(afterTokens))"
+        let metadata: [String: String] = [
+            "beforeTokens": String(beforeTokens),
+            "afterTokens": String(afterTokens),
+            "savedTokens": String(savedTokens)
+        ]
+        let nodeID = "\(turnID)_ctxprune_\(UUID().uuidString.prefix(8))"
+        let payload = SystemPayload(kind: .contextPruned, text: text, metadata: metadata)
+        let node = GraphNode(id: nodeID, kind: .system, payload: .system(payload),
+                             status: .completed, timestamp: ts, turnID: turnID)
+        appendNode(node, to: &graph)
+        return [nodeID]
+    }
+
+    private mutating func handlePreMutation(turnID: String, text: String, ts: TimeInterval,
+                                            graph: inout ExecutionGraph) -> [NodeID] {
+        guard !text.isEmpty else { return [] }
+        let nodeID = "\(turnID)_premut_\(UUID().uuidString.prefix(8))"
+        let payload = SystemPayload(kind: .preMutation, text: text)
+        let node = GraphNode(id: nodeID, kind: .system, payload: .system(payload),
+                             status: .completed, timestamp: ts, turnID: turnID)
+        appendNode(node, to: &graph)
+        return [nodeID]
+    }
+
+    private mutating func handleVerified(turnID: String, text: String, ts: TimeInterval,
+                                         graph: inout ExecutionGraph) -> [NodeID] {
+        guard !text.isEmpty else { return [] }
+        let nodeID = "\(turnID)_verified_\(UUID().uuidString.prefix(8))"
+        let payload = SystemPayload(kind: .verified, text: text)
         let node = GraphNode(id: nodeID, kind: .system, payload: .system(payload),
                              status: .completed, timestamp: ts, turnID: turnID)
         appendNode(node, to: &graph)

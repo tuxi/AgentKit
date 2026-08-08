@@ -49,6 +49,10 @@ struct SystemMessageView: View {
         case .reflection: return "反思"
         case .modelActivity: return "模型活动"
         case .contextCompact: return "上下文压缩"
+        case .contextEdited: return "上下文编辑"
+        case .contextPruned: return "上下文截断"
+        case .preMutation: return "编辑前自检"
+        case .verified: return "验证结果"
         case .skillLoaded: return "技能加载"
         }
     }
@@ -60,6 +64,10 @@ struct SystemMessageView: View {
         case .reflection: return "lightbulb"
         case .modelActivity: return "cpu"
         case .contextCompact: return "rectangle.compress.vertical"
+        case .contextEdited: return "trash"
+        case .contextPruned: return "scissors"
+        case .preMutation: return "brain"
+        case .verified: return "terminal"
         case .skillLoaded: return "sparkles"
         }
     }
@@ -71,6 +79,10 @@ struct SystemMessageView: View {
         case .reflection: return .purple
         case .modelActivity: return .blue
         case .contextCompact: return .orange
+        case .contextEdited: return .secondary
+        case .contextPruned: return .blue
+        case .preMutation: return .purple
+        case .verified: return .teal
         case .skillLoaded: return .green
         }
     }

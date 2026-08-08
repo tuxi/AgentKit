@@ -678,6 +678,102 @@ summary:active {
   padding: 4px 4px 8px 10px;
 }
 
+/* --- Context-management chips (context_edited / context_pruned / compacted) --- */
+
+.context-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  max-width: 100%;
+  padding: 3px 9px;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  background: var(--subtle);
+  color: var(--secondary);
+  font-size: 12px;
+  line-height: 1.5;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* compacted ineffective=true → 灰色/警告色标注“本次压缩无效” */
+.context-chip[data-tone="warning"] {
+  border-color: color-mix(in srgb, light-dark(rgb(155 101 0), rgb(228 173 58)) 55%, transparent);
+  color: light-dark(rgb(155 101 0), rgb(228 173 58));
+}
+
+.context-chip-flag {
+  flex: 0 0 auto;
+  padding: 1px 6px;
+  border-radius: 999px;
+  background: light-dark(rgb(228 173 58 / 22%), rgb(228 173 58 / 24%));
+  color: light-dark(rgb(155 101 0), rgb(228 173 58));
+  font-size: 11px;
+  font-weight: 600;
+}
+
+/* --- verified terminal card (P4.3-R) --- */
+
+.verified-block {
+  border: 1px solid var(--border);
+  border-inline-start-width: 3px;
+  border-radius: 10px;
+  background: var(--subtle);
+}
+
+.verified-block[data-tone="success"] {
+  border-inline-start-color: light-dark(#16833b, #47c86d);
+}
+
+.verified-block[data-tone="danger"] {
+  border-inline-start-color: var(--danger);
+}
+
+.verified-block[data-tone="warning"] {
+  border-inline-start-color: light-dark(#9b6500, #e4ad3a);
+}
+
+.verified-block[data-tone="neutral"] {
+  border-inline-start-color: var(--focus);
+}
+
+.verified-block > summary::marker {
+  content: "";
+}
+
+.verified-summary {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 8px 10px;
+  cursor: pointer;
+  user-select: text;
+  -webkit-user-select: text;
+}
+
+.verified-label {
+  color: var(--text);
+  font-size: 13px;
+  font-weight: 500;
+}
+
+.verified-block[data-tone="success"] .verified-label { color: light-dark(#16833b, #47c86d); }
+.verified-block[data-tone="danger"] .verified-label { color: var(--danger); }
+.verified-block[data-tone="warning"] .verified-label { color: light-dark(#9b6500, #e4ad3a); }
+
+.verified-block[open] > .verified-summary > .disclosure-chevron {
+  transform: rotate(90deg);
+}
+
+.verified-output {
+  margin: 0 10px 10px;
+}
+
+.verified-output pre {
+  font-size: 12px;
+}
+
 .child-stream {
   display: inline-flex;
   align-items: center;

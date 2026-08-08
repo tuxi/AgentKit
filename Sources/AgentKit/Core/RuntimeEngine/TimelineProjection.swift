@@ -194,11 +194,11 @@ public struct TimelineProjection: Sendable {
                     // approval → approval bar is the canonical UI; don't render
                     // a redundant "[modelActivity] Approval: …" system block.
                     break
-                } else if p.kind == .contextCompact || p.kind == .skillLoaded {
+                } else if p.kind == .skillLoaded {
                     // Demoted meta — not rendered in the main flow for now.
                     break
                 } else {
-                    // observation / reflection / error / subagent / approval.
+                    // observation / reflection / context events / error / subagent / approval.
                     flushTools()
                     blocks.append(.system(id: node.id, p))
                 }
@@ -316,6 +316,10 @@ public struct TimelineProjection: Sendable {
                 case .modelActivity:
                     return .modelActivity
                 case .contextCompact: return .contextCompact
+                case .contextEdited: return .contextEdited
+                case .contextPruned: return .contextPruned
+                case .preMutation: return .preMutation
+                case .verified: return .verified
                 case .skillLoaded: return .skillLoaded
                 case .error: return .error
                 }

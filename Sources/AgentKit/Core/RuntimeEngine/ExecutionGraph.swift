@@ -268,6 +268,10 @@ public struct SystemPayload: Sendable {
 public enum SystemPayloadKind: String, Sendable {
     case modelActivity
     case contextCompact
+    case contextEdited
+    case contextPruned
+    case preMutation
+    case verified
     case skillLoaded
     case error
 }
