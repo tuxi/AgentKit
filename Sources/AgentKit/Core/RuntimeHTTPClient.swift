@@ -329,6 +329,14 @@ struct RuntimeHTTPClient: Sendable {
         return try decodeEnvelope(ConversationDetail.self, from: data)
     }
 
+    /// `GET /v1/conversations/{id}/context` — 会话上下文窗口快照。
+    func getConversationContext(id: String) async throws -> ConversationContextSnapshot {
+        let request = try await buildRequest("GET", pathComponents: "v1/conversations", id, "context")
+        let (data, response) = try await session.data(for: request)
+        try validateHTTP(response, data: data)
+        return try decodeEnvelope(ConversationContextSnapshot.self, from: data)
+    }
+
     /// `PATCH /v1/conversations/{id}` — 修改会话名称。
     func renameConversation(id: String, name: String) async throws -> ConversationRef {
         let request = try await buildRequest("PATCH", pathComponents: "v1/conversations", id, body: ["name": name])

@@ -343,6 +343,10 @@ public final class CodeAgentTransport: AgentTransport, @unchecked Sendable {
         try await http.getConversationDetail(id: id)
     }
 
+    public func getConversationContext(id: String) async throws -> ConversationContextSnapshot {
+        try await http.getConversationContext(id: id)
+    }
+
     public func getMessages(conversationID: String) async throws -> [Message] {
         try await http.getMessages(conversationID: conversationID)
     }
@@ -686,6 +690,10 @@ public final class DefaultAgentClient: RuntimeClient, @unchecked Sendable {
 
     public func getConversationDetail(id: String) async throws -> ConversationDetail {
         try await transport.getConversationDetail(id: id)
+    }
+
+    public func getConversationContext(id: String) async throws -> ConversationContextSnapshot {
+        try await transport.getConversationContext(id: id)
     }
 
     public func getMessages(conversationID: String) async throws -> [Message] {

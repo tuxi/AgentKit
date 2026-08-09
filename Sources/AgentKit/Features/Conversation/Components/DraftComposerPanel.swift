@@ -69,6 +69,13 @@ struct DraftComposerPanel: View {
     
     @State private var showPermissionAlert = false
     
+    // MARK: - Context Window
+    @State private var contextSnapshot: ConversationContextSnapshot?
+    @State private var contextError: String?
+    @State private var isContextLoading = false
+    @State private var isContextPresented = false
+    @State private var contextRefreshTask: Task<Void, Never>?
+    
     var body: some View {
         VStack(spacing: 0) {
 #if os(iOS)
@@ -261,6 +268,47 @@ struct DraftComposerPanel: View {
                             .disabled(!canSend)
                             .accessibilityLabel(AgentKitLocalized.string("composer.send"))
                         }
+                        
+                        if sessionID != nil {
+                            Button {
+                                isContextPresented = true
+                                refreshContext()
+                            } label: {
+                                contextUsageRing
+                            }
+                            .buttonStyle(.plain)
+                            .accessibilityLabel(contextButtonAccessibilityLabel)
+#if os(macOS)
+                            .help(AgentKitLocalized.string("composer.context_window"))
+                            .popover(isPresented: $isContextPresented, arrowEdge: .bottom) {
+                                ContextWindowDetailView(
+                                    snapshot: contextSnapshot,
+                                    isLoading: isContextLoading,
+                                    errorMessage: contextError,
+                                    onRefresh: refreshContext
+                                )
+                            }
+#else
+                            .sheet(isPresented: $isContextPresented) {
+                                NavigationStack {
+                                    ContextWindowDetailView(
+                                        snapshot: contextSnapshot,
+                                        isLoading: isContextLoading,
+                                        errorMessage: contextError,
+                                        onRefresh: refreshContext
+                                    )
+                                    .toolbar {
+                                        ToolbarItem(placement: .topBarTrailing) {
+                                            Button(AgentKitLocalized.string("composer.done")) {
+                                                isContextPresented = false
+                                            }
+                                        }
+                                    }
+                                }
+                                .presentationDetents([.medium, .large])
+                            }
+#endif
+                        }
                     }
                     .padding(.horizontal, 14)
                     .padding(.bottom, 10)
@@ -298,6 +346,13 @@ struct DraftComposerPanel: View {
         }
         .onAppear {
             setupVoiceCallbacks()
+        }
+        .task(id: sessionID ?? "draft-context") {
+            refreshContext()
+        }
+        .onChange(of: isTurnRunning) { _, newValue in
+            // turn 结束时刷新上下文占用（压缩可能刚刚发生）。
+            if !newValue { refreshContext() }
         }
         .task(id: persistenceKey?.storageKey ?? "none-\(draftRevision)") {
             restoreLocalState()
@@ -515,6 +570,86 @@ struct DraftComposerPanel: View {
         }
         return nil
     }
+
+    // MARK: - Context Window
+
+    /// 当前活跃会话 id；草稿模式下为 nil（无上下文可展示）。
+    private var sessionID: String? {
+        viewModel?.conversation?.id
+    }
+
+    private var contextButtonAccessibilityLabel: String {
+        if let current = contextSnapshot?.current {
+            return String(
+                format: AgentKitLocalized.string("composer.context_window_usage"),
+                current.usagePct
+            )
+        }
+        return AgentKitLocalized.string("composer.context_window")
+    }
+
+    private var contextUsageRing: some View {
+        ZStack {
+            Circle()
+                .stroke(Color.primary.opacity(0.12), lineWidth: 3)
+            Circle()
+                .trim(from: 0, to: contextRingProgress)
+                .stroke(contextRingColor, style: StrokeStyle(lineWidth: 3, lineCap: .round))
+                .rotationEffect(.degrees(-90))
+            if let current = contextSnapshot?.current {
+                Text("\(Int(current.usagePct.rounded()))%")
+                    .font(.system(size: 6, weight: .regular))
+                    .foregroundStyle(.secondary)
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.68)
+            }
+        }
+        .frame(width: 22, height: 22)
+        .contentShape(Circle())
+    }
+
+    private var contextRingProgress: CGFloat {
+        guard let current = contextSnapshot?.current else { return 0 }
+        return CGFloat(ContextFormat.clamped(current.usagePct / 100))
+    }
+
+    private var contextRingColor: Color {
+        guard let current = contextSnapshot?.current else { return .secondary }
+        if current.usagePct >= current.thresholdPct { return .red }
+        if current.usagePct >= current.thresholdPct * 0.8 { return .orange }
+        return .green
+    }
+
+    private func refreshContext() {
+        guard let id = sessionID else { return }
+        contextRefreshTask?.cancel()
+        isContextLoading = true
+        contextRefreshTask = Task {
+            do {
+                let snapshot = try await workspaceStore.client.getConversationContext(id: id)
+                guard !Task.isCancelled else { return }
+                contextSnapshot = snapshot
+                contextError = nil
+            } catch {
+                guard !Task.isCancelled else { return }
+                contextSnapshot = nil
+                contextError = Self.mapContextError(error)
+            }
+            isContextLoading = false
+        }
+    }
+
+    private static func mapContextError(_ error: Error) -> String {
+        if let httpError = error as? RuntimeHTTPError {
+            switch httpError {
+            case .unsupported, .notFound:
+                return AgentKitLocalized.string("context_window.unsupported")
+            default:
+                return AgentKitLocalized.string("context_window.load_failed")
+            }
+        }
+        return AgentKitLocalized.string("context_window.load_failed")
+    }
     
     private func restoreLocalState(persistOutgoingText: Bool = true) {
         pendingSaveTask?.cancel()
@@ -563,6 +698,7 @@ struct DraftComposerPanel: View {
         if voiceService.state == .recording {
             voiceService.cancelRecording()
         }
+        contextRefreshTask?.cancel()
         persistCurrentText()
     }
     

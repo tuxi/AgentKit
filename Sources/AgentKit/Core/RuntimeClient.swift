@@ -122,6 +122,12 @@ public protocol RuntimeClient: Sendable {
     /// 会话概要（由已记录事件派生）。
     func getConversationDetail(id: String) async throws -> ConversationDetail
 
+    /// 会话上下文窗口快照（`GET /v1/conversations/{id}/context`）。
+    /// 客户端据此实时获知距离压缩还有多远 —— `current.prompt_tokens` 趋近
+    /// `model.compact_threshold` 时即将触发压缩。默认实现抛 `unsupported`
+    /// （mock / 旧 backend）。
+    func getConversationContext(id: String) async throws -> ConversationContextSnapshot
+
     /// 对话主干消息（user/assistant）。
     func getMessages(conversationID: String) async throws -> [Message]
 
@@ -224,6 +230,11 @@ extension RuntimeClient {
     }
 
     public func deleteConversation(id: String) async throws {
+        throw RuntimeHTTPError.unsupported
+    }
+
+    /// 默认实现：不支持上下文快照（mock backend）。
+    public func getConversationContext(id: String) async throws -> ConversationContextSnapshot {
         throw RuntimeHTTPError.unsupported
     }
 
