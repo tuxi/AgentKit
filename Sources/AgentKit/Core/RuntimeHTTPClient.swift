@@ -224,6 +224,15 @@ struct RuntimeHTTPClient: Sendable {
         return try decodeEnvelope(RuntimeProviderWriteResult.self, from: data)
     }
 
+    /// `GET /v1/provider-templates` — list built-in provider templates.
+    func listProviderTemplates() async throws -> [RuntimeProviderTemplate] {
+        let request = try await buildRequest("GET", pathComponents: "v1/provider-templates")
+        let (data, response) = try await session.data(for: request)
+        try validateHTTP(response, data: data)
+        let payload = try decodeEnvelope(RuntimeProviderTemplatesPayload.self, from: data)
+        return payload.templates
+    }
+
     /// `GET /v1/activity` — sessions owned by the authenticated principal/device.
     func activitySnapshot() async throws -> RuntimeActivitySnapshot {
         try await activitySnapshot(sinceSequence: nil)
@@ -575,6 +584,11 @@ private struct RuntimeEnvelope<T: Decodable>: Decodable {
 /// Each entry is a full provider definition, not a summary.
 private struct RuntimeProvidersPayload: Decodable {
     let providers: [RuntimeProviderDefinition]
+}
+
+/// `GET /v1/provider-templates` list payload (`data: {templates: [...]}` form).
+private struct RuntimeProviderTemplatesPayload: Decodable {
+    let templates: [RuntimeProviderTemplate]
 }
 
 private struct RuntimeAuthenticationErrorPayload: Decodable {

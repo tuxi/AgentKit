@@ -70,16 +70,30 @@ public struct RuntimeConnectionDefinition: Codable, Sendable, Equatable, Identif
     }
 }
 
-/// connection 的 credential 来源声明（non-secret）。
+/// Credential reference for a connection. Mirrors settings.CredentialRef:
+/// `{namespace, name}` resolves into the credentials section (e.g. `llm/deepseek`).
+/// Legacy `source`/`ref`/`env` fields are deprecated — use `namespace`/`name`.
 public struct RuntimeConnectionCredentialDeclaration: Codable, Sendable, Equatable {
-    /// `injected` | `env` | nil（无凭据）。
+    /// Credential namespace — typically `"llm"` or `"gateway"`.
+    public let namespace: String?
+    /// Credential name — the key within the namespace (e.g. provider id).
+    public let name: String?
+    /// Deprecated: use `namespace`/`name` instead.
     public let source: String?
-    /// 凭据注入所依据的 connection id（source == injected 时）。
+    /// Deprecated: use `name` instead.
     public let ref: String?
-    /// 环境变量名（source == env 时）。
+    /// Deprecated: use `namespace`/`name` instead.
     public let env: String?
 
-    public init(source: String? = nil, ref: String? = nil, env: String? = nil) {
+    public init(
+        namespace: String? = nil,
+        name: String? = nil,
+        source: String? = nil,
+        ref: String? = nil,
+        env: String? = nil
+    ) {
+        self.namespace = namespace
+        self.name = name
         self.source = source
         self.ref = ref
         self.env = env

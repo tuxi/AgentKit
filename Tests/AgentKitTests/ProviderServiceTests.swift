@@ -87,7 +87,7 @@ final class RuntimeProviderServiceTests: XCTestCase {
                     "id": "deepseek",
                     "api": "openai",
                     "base_url": "https://api.deepseek.com",
-                    "credential": ["source": "injected", "ref": "deepseek"],
+                    "credential": ["namespace": "llm", "name": "deepseek"],
                     "enabled": true,
                     "models": [[
                         "id": "deepseek-chat",
@@ -147,7 +147,7 @@ final class RuntimeProviderServiceTests: XCTestCase {
             "id": "deepseek",
             "api": "openai",
             "base_url": "https://api.deepseek.com",
-            "credential": ["source": "injected", "ref": "deepseek"],
+            "credential": ["namespace": "llm", "name": "deepseek"],
             "enabled": false,
             "models": [[
                 "id": "deepseek-chat",
@@ -165,7 +165,7 @@ final class RuntimeProviderServiceTests: XCTestCase {
         XCTAssertEqual(provider.api, "openai")
         XCTAssertEqual(provider.baseURL, "https://api.deepseek.com")
         XCTAssertEqual(provider.enabled, false)
-        XCTAssertEqual(provider.credential?.ref, "deepseek")
+        XCTAssertEqual(provider.credential?.name, "deepseek")
         XCTAssertEqual(provider.models.first?.id, "deepseek-chat")
     }
 
@@ -193,7 +193,7 @@ final class RuntimeProviderServiceTests: XCTestCase {
             id: "deepseek",
             api: "openai",
             baseURL: "https://api.deepseek.com",
-            credential: RuntimeConnectionCredentialDeclaration(source: "injected", ref: "deepseek"),
+            credential: RuntimeConnectionCredentialDeclaration(namespace: "llm", name: "deepseek"),
             enabled: false,
             models: [RuntimeProviderModelDefinition(
                 id: "deepseek-chat",
@@ -261,8 +261,8 @@ final class ProviderMappingTests: XCTestCase {
         let definition = gateway.asRuntimeProviderDefinition()
         XCTAssertEqual(definition.id, "talkify-gateway")
         XCTAssertEqual(definition.api, "gateway")
-        XCTAssertEqual(definition.credential?.source, "injected")
-        XCTAssertEqual(definition.credential?.ref, "gateway")
+        XCTAssertEqual(definition.credential?.namespace, "gateway")
+        XCTAssertEqual(definition.credential?.name, "default")
         XCTAssertEqual(definition.enabled, true)
         XCTAssertEqual(definition.models.first?.id, "deepseek-v4-pro")
     }
@@ -280,7 +280,8 @@ final class ProviderMappingTests: XCTestCase {
         )
         let definition = connection.asRuntimeProviderDefinition()
         XCTAssertEqual(definition.api, "openai")
-        XCTAssertEqual(definition.credential?.ref, "deepseek")
+        XCTAssertEqual(definition.credential?.name, "deepseek")
+        XCTAssertEqual(definition.credential?.namespace, "llm")
         XCTAssertEqual(definition.enabled, false)
         XCTAssertEqual(definition.models.first?.id, "deepseek-chat")
     }
@@ -305,7 +306,7 @@ final class ProviderMappingTests: XCTestCase {
             id: "deepseek",
             api: "openai",
             baseURL: "https://api.deepseek.com",
-            credential: RuntimeConnectionCredentialDeclaration(source: "injected", ref: "deepseek"),
+            credential: RuntimeConnectionCredentialDeclaration(namespace: "llm", name: "deepseek"),
             enabled: false,
             models: [RuntimeProviderModelDefinition(
                 id: "deepseek-chat",
@@ -342,7 +343,7 @@ final class LocalProviderStoreTests: XCTestCase {
             id: "deepseek",
             api: "openai",
             baseURL: "https://api.deepseek.com",
-            credential: RuntimeConnectionCredentialDeclaration(source: "injected", ref: "deepseek"),
+            credential: RuntimeConnectionCredentialDeclaration(namespace: "llm", name: "deepseek"),
             enabled: false,
             models: [RuntimeProviderModelDefinition(
                 id: "deepseek-chat"

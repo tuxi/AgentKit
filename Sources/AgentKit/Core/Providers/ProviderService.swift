@@ -22,33 +22,67 @@ import Foundation
 /// `runtime_alias` + `wire_model_id`. The providers protocol's ProviderModelDTO
 /// requires `id` (json tag "id"); capability fields are optional extras.
 public struct RuntimeProviderModelDefinition: Codable, Sendable, Equatable, Identifiable {
-    /// Wire model id sent to the provider (the runtime's ProviderModelDTO.id).
+    /// Wire model id sent to the provider.
     public let id: String
+    /// Short friendly name usable as default_model.
+    public let runtimeAlias: String?
+    /// Per-model API override (e.g. "responses" vs provider-level "openai").
+    public let api: String?
     public let displayName: String?
     public let contextWindow: Int?
+    public let temperature: Double?
+    public let inputPricePerMillion: Double?
+    public let outputPricePerMillion: Double?
+    public let cacheInputPricePerMillion: Double?
     public let supportsTools: Bool?
     public let supportsReasoning: Bool?
+    public let inputModalities: [String]?
+    public let webSearch: Bool?
 
     enum CodingKeys: String, CodingKey {
         case id
+        case runtimeAlias = "runtime_alias"
+        case api
         case displayName = "display_name"
         case contextWindow = "context_window"
+        case temperature
+        case inputPricePerMillion = "input_price_per_million"
+        case outputPricePerMillion = "output_price_per_million"
+        case cacheInputPricePerMillion = "cache_input_price_per_million"
         case supportsTools = "supports_tools"
         case supportsReasoning = "supports_reasoning"
+        case inputModalities = "input_modalities"
+        case webSearch = "web_search"
     }
 
     public init(
         id: String,
+        runtimeAlias: String? = nil,
+        api: String? = nil,
         displayName: String? = nil,
         contextWindow: Int? = nil,
+        temperature: Double? = nil,
+        inputPricePerMillion: Double? = nil,
+        outputPricePerMillion: Double? = nil,
+        cacheInputPricePerMillion: Double? = nil,
         supportsTools: Bool? = nil,
-        supportsReasoning: Bool? = nil
+        supportsReasoning: Bool? = nil,
+        inputModalities: [String]? = nil,
+        webSearch: Bool? = nil
     ) {
         self.id = id
+        self.runtimeAlias = runtimeAlias
+        self.api = api
         self.displayName = displayName
         self.contextWindow = contextWindow
+        self.temperature = temperature
+        self.inputPricePerMillion = inputPricePerMillion
+        self.outputPricePerMillion = outputPricePerMillion
+        self.cacheInputPricePerMillion = cacheInputPricePerMillion
         self.supportsTools = supportsTools
         self.supportsReasoning = supportsReasoning
+        self.inputModalities = inputModalities
+        self.webSearch = webSearch
     }
 }
 
@@ -116,6 +150,99 @@ public struct RuntimeProviderWriteResult: Codable, Sendable, Equatable {
     }
 }
 
+// MARK: - Provider Templates (GET /v1/provider-templates)
+
+/// A built-in provider template exposed by the runtime. Describes a known service
+/// the user can connect to with suggested models and defaults.
+public struct RuntimeProviderTemplate: Codable, Sendable, Equatable, Identifiable {
+    public let id: String
+    public let displayName: String?
+    public let summary: String?
+    public let kind: String?     // "api_key" | "local" | "gateway"
+    public let baseURL: String?
+    public let api: String?
+    public let env: String?
+    public let models: [RuntimeProviderTemplateModel]?
+
+    enum CodingKeys: String, CodingKey {
+        case id
+        case displayName = "display_name"
+        case summary
+        case kind
+        case baseURL = "base_url"
+        case api
+        case env
+        case models
+    }
+
+    public init(
+        id: String,
+        displayName: String? = nil,
+        summary: String? = nil,
+        kind: String? = nil,
+        baseURL: String? = nil,
+        api: String? = nil,
+        env: String? = nil,
+        models: [RuntimeProviderTemplateModel]? = nil
+    ) {
+        self.id = id
+        self.displayName = displayName
+        self.summary = summary
+        self.kind = kind
+        self.baseURL = baseURL
+        self.api = api
+        self.env = env
+        self.models = models
+    }
+}
+
+/// One suggested model in a provider template.
+public struct RuntimeProviderTemplateModel: Codable, Sendable, Equatable, Identifiable {
+    public let id: String
+    public let runtimeAlias: String?
+    public let contextWindow: Int?
+    public let supportsTools: Bool?
+    public let supportsReasoning: Bool?
+    public let inputModalities: [String]?
+    public let webSearch: Bool?
+    public let inputPricePerMillion: Double?
+    public let outputPricePerMillion: Double?
+
+    enum CodingKeys: String, CodingKey {
+        case id
+        case runtimeAlias = "runtime_alias"
+        case contextWindow = "context_window"
+        case supportsTools = "supports_tools"
+        case supportsReasoning = "supports_reasoning"
+        case inputModalities = "input_modalities"
+        case webSearch = "web_search"
+        case inputPricePerMillion = "input_price_per_million"
+        case outputPricePerMillion = "output_price_per_million"
+    }
+
+    public init(
+        id: String,
+        runtimeAlias: String? = nil,
+        contextWindow: Int? = nil,
+        supportsTools: Bool? = nil,
+        supportsReasoning: Bool? = nil,
+        inputModalities: [String]? = nil,
+        webSearch: Bool? = nil,
+        inputPricePerMillion: Double? = nil,
+        outputPricePerMillion: Double? = nil
+    ) {
+        self.id = id
+        self.runtimeAlias = runtimeAlias
+        self.contextWindow = contextWindow
+        self.supportsTools = supportsTools
+        self.supportsReasoning = supportsReasoning
+        self.inputModalities = inputModalities
+        self.webSearch = webSearch
+        self.inputPricePerMillion = inputPricePerMillion
+        self.outputPricePerMillion = outputPricePerMillion
+    }
+}
+
 // MARK: - Mapping (ProviderConnection ↔ RuntimeProviderDefinition)
 
 public extension ProviderConnection {
@@ -135,9 +262,9 @@ public extension ProviderConnection {
         let credential: RuntimeConnectionCredentialDeclaration?
         switch authentication {
         case .gatewayAccount:
-            credential = RuntimeConnectionCredentialDeclaration(source: "injected", ref: "gateway")
+            credential = RuntimeConnectionCredentialDeclaration(namespace: "gateway", name: "default")
         case .apiKey:
-            credential = RuntimeConnectionCredentialDeclaration(source: "injected", ref: id)
+            credential = RuntimeConnectionCredentialDeclaration(namespace: "llm", name: id)
         case .none:
             credential = nil
         }
@@ -145,10 +272,18 @@ public extension ProviderConnection {
         let models = self.models.map { model in
             RuntimeProviderModelDefinition(
                 id: model.id,
+                runtimeAlias: model.runtimeAlias,
+                api: model.api,
                 displayName: model.displayName,
                 contextWindow: model.contextWindow,
+                temperature: model.temperature,
+                inputPricePerMillion: model.inputPricePerMillion,
+                outputPricePerMillion: model.outputPricePerMillion,
+                cacheInputPricePerMillion: model.cacheInputPricePerMillion,
                 supportsTools: model.supportsTools,
-                supportsReasoning: model.supportsReasoning
+                supportsReasoning: model.supportsReasoning,
+                inputModalities: model.inputModalities.map { $0.rawValue },
+                webSearch: model.webSearch
             )
         }
 
@@ -173,7 +308,7 @@ public extension RuntimeProviderDefinition {
     func asProviderConnection() -> ProviderConnection {
         let transport: ProviderTransport = api == "ollama" ? .ollama : .openAIChatCompletions
         let authentication: ProviderAuthentication
-        if api == "gateway" || credential?.ref == "gateway" {
+        if api == "gateway" || credential?.namespace == "gateway" {
             authentication = .gatewayAccount
         } else if credential != nil {
             authentication = .apiKey
@@ -181,12 +316,23 @@ public extension RuntimeProviderDefinition {
             authentication = .none
         }
         let models = models.map { model in
-            ProviderModel(
+            let modalities: Set<ProviderInputModality>? = model.inputModalities.map { raw in
+                Set(raw.compactMap { ProviderInputModality(rawValue: $0) })
+            }
+            return ProviderModel(
                 id: model.id,
+                runtimeAlias: model.runtimeAlias,
+                api: model.api,
                 displayName: model.displayName,
                 contextWindow: model.contextWindow,
+                temperature: model.temperature,
                 supportsTools: model.supportsTools ?? true,
-                supportsReasoning: model.supportsReasoning ?? false
+                supportsReasoning: model.supportsReasoning ?? false,
+                inputModalities: modalities ?? [.text],
+                inputPricePerMillion: model.inputPricePerMillion,
+                outputPricePerMillion: model.outputPricePerMillion,
+                cacheInputPricePerMillion: model.cacheInputPricePerMillion,
+                webSearch: model.webSearch ?? false
             )
         }
         return ProviderConnection(
@@ -217,6 +363,7 @@ public protocol ProviderStore: Sendable {
     func getProvider(id: String) async throws -> RuntimeProviderDefinition?
     func upsertProvider(_ definition: RuntimeProviderDefinition) async throws -> RuntimeProviderWriteResult
     func deleteProvider(id: String) async throws -> RuntimeProviderWriteResult
+    func listProviderTemplates() async throws -> [RuntimeProviderTemplate]
 }
 
 /// Picks the store for a deployment. The two write paths never run together:
@@ -344,6 +491,10 @@ public struct RuntimeProviderService: ProviderStore, Sendable {
     public func deleteProvider(id: String) async throws -> RuntimeProviderWriteResult {
         try await client.deleteProvider(id: id)
     }
+
+    public func listProviderTemplates() async throws -> [RuntimeProviderTemplate] {
+        try await client.listProviderTemplates()
+    }
 }
 
 // MARK: - LocalProviderStore (registry-backed, iOS embedded)
@@ -377,6 +528,12 @@ public struct LocalProviderStore: ProviderStore {
     public func deleteProvider(id: String) async throws -> RuntimeProviderWriteResult {
         registry.remove(connectionID: id)
         return RuntimeProviderWriteResult(applied: true)
+    }
+
+    /// iOS embedded has no server to fetch templates from; the app layer keeps a
+    /// local "custom" fallback template.
+    public func listProviderTemplates() async throws -> [RuntimeProviderTemplate] {
+        []
     }
 }
 

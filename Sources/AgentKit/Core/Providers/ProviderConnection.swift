@@ -39,35 +39,50 @@ public enum ProviderInputModality: String, Codable, CaseIterable, Hashable, Send
 public struct ProviderModel: Codable, Hashable, Identifiable, Sendable {
     /// Wire model ID sent to the provider.
     public var id: String
+    /// Short friendly name usable as default_model.
+    public var runtimeAlias: String?
+    /// Per-model API override (e.g. "responses" vs provider-level "openai").
+    public var api: String?
     public var displayName: String?
     public var contextWindow: Int?
+    public var temperature: Double?
     public var supportsTools: Bool
     public var supportsReasoning: Bool
     public var inputModalities: Set<ProviderInputModality>
     public var inputPricePerMillion: Double?
     public var outputPricePerMillion: Double?
     public var cacheInputPricePerMillion: Double?
+    /// Whether this model supports web search tool use.
+    public var webSearch: Bool
 
     public init(
         id: String,
+        runtimeAlias: String? = nil,
+        api: String? = nil,
         displayName: String? = nil,
         contextWindow: Int? = nil,
+        temperature: Double? = nil,
         supportsTools: Bool = true,
         supportsReasoning: Bool = false,
         inputModalities: Set<ProviderInputModality> = [.text],
         inputPricePerMillion: Double? = nil,
         outputPricePerMillion: Double? = nil,
-        cacheInputPricePerMillion: Double? = nil
+        cacheInputPricePerMillion: Double? = nil,
+        webSearch: Bool = false
     ) {
         self.id = id
+        self.runtimeAlias = runtimeAlias
+        self.api = api
         self.displayName = displayName
         self.contextWindow = contextWindow
+        self.temperature = temperature
         self.supportsTools = supportsTools
         self.supportsReasoning = supportsReasoning
         self.inputModalities = inputModalities
         self.inputPricePerMillion = inputPricePerMillion
         self.outputPricePerMillion = outputPricePerMillion
         self.cacheInputPricePerMillion = cacheInputPricePerMillion
+        self.webSearch = webSearch
     }
 }
 
