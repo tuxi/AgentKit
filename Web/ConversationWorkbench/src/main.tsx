@@ -1514,6 +1514,46 @@ function VerifiedBlock({ block }: { block: ConversationWebBlock }): React.JSX.El
 function ThinkingBlock({ block }: { block: ConversationWebBlock }): React.JSX.Element {
   // Auto-expand while the model is streaming; collapse when it finishes.
   const { open, onSummaryClick } = useStreamingDisclosure(block.status === "streaming");
+  const streaming = block.status === "streaming";
+  const scrollRef = useRef<HTMLDivElement>(null);
+  const contentRef = useRef<HTMLDivElement>(null);
+
+  // While streaming, keep the newest tokens visible inside the fixed-height
+  // panel: follow the tail as the player reveals text, but only while the
+  // panel is at the bottom. Scrolling up to read pauses the follow — new
+  // tokens grow below the reading position instead of yanking the viewport —
+  // and scrolling back to the bottom resumes it. StreamingMarkdown owns its
+  // own render clock (rAF per frame), so the parent only re-renders on
+  // protocol batches — a ResizeObserver on the content catches every reveal
+  // step and pins the container without re-rendering React.
+  useLayoutEffect(() => {
+    if (!streaming) return;
+    const container = scrollRef.current;
+    const content = contentRef.current;
+    if (!container || !content) return;
+
+    const followThreshold = 8;
+    let followTail = true;
+    const pinToBottom = () => {
+      if (!followTail) return;
+      container.scrollTop = container.scrollHeight;
+    };
+    const handleScroll = () => {
+      const distanceFromBottom =
+        container.scrollHeight - container.scrollTop - container.clientHeight;
+      followTail = distanceFromBottom <= followThreshold;
+    };
+
+    pinToBottom();
+    container.addEventListener("scroll", handleScroll, { passive: true });
+    const observer = new ResizeObserver(pinToBottom);
+    observer.observe(content);
+    return () => {
+      container.removeEventListener("scroll", handleScroll);
+      observer.disconnect();
+    };
+  }, [streaming]);
+
   return (
     <details
       className="thinking-block"
@@ -1529,7 +1569,11 @@ function ThinkingBlock({ block }: { block: ConversationWebBlock }): React.JSX.El
         <span className="disclosure-chevron" aria-hidden="true">›</span>
       </summary>
       <div className="thinking-body">
-        {block.text ? <Markdown block={{ ...block, kind: "markdown" }} /> : null}
+        <div ref={scrollRef} className="thinking-scroll">
+          <div ref={contentRef} className="thinking-scroll-content">
+            {block.text ? <Markdown block={{ ...block, kind: "markdown" }} /> : null}
+          </div>
+        </div>
       </div>
     </details>
   );

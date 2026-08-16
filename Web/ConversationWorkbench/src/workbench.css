@@ -675,7 +675,26 @@ summary:active {
 }
 
 .thinking-body {
-  padding: 4px 4px 8px 10px;
+  padding: 4px 4px 8px 4px;
+}
+
+/* Bounded thinking panel. While streaming the card is open and this region
+   caps at --thinking-max-height, so a long stream never inflates the whole
+   conversation: the newest tokens are pinned to the bottom and older lines
+   scroll out of the fixed viewport (the auto-follow lives in ThinkingBlock).
+   When the content is shorter than the cap the panel fits it exactly. */
+.thinking-scroll {
+  max-height: var(--thinking-max-height, 240px);
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  padding: 8px 10px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--subtle);
+}
+
+.thinking-scroll-content {
+  min-width: 0;
 }
 
 /* --- Context-management chips (context_edited / context_pruned / compacted) --- */
