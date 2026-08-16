@@ -90,8 +90,8 @@ struct RuntimeHTTPClient: Sendable {
     }
 
     /// 每次调用时从 environment 延迟取 baseURL（Avoids snapshot stale port）。
-    private func resolveBaseURL() throws -> URL {
-        guard let url = environment.baseURL else {
+    private func resolveBaseURL() async throws -> URL {
+        guard let url = await environment.baseURL else {
             throw RuntimeHTTPError.runtimeNotStarted
         }
         return url
@@ -117,12 +117,12 @@ struct RuntimeHTTPClient: Sendable {
         return payload
     }
 
-    func resolveRuntimeURL(_ value: String) -> URL? {
+    func resolveRuntimeURL(_ value: String) async -> URL? {
         guard !value.isEmpty else { return nil }
         if let absolute = URL(string: value), absolute.scheme != nil {
             return absolute
         }
-        guard let baseURL = try? resolveBaseURL() else {
+        guard let baseURL = try? await resolveBaseURL() else {
             return URL(string: value)
         }
         return URL(string: value, relativeTo: baseURL)?.absoluteURL
@@ -138,7 +138,7 @@ struct RuntimeHTTPClient: Sendable {
         body: (any Encodable)? = nil,
         timeout: TimeInterval = 60
     ) async throws -> URLRequest {
-        var url = try resolveBaseURL()
+        var url = try await resolveBaseURL()
         for comp in pathComponents { url = url.appendingPathComponent(comp) }
         if let items = queryItems, var components = URLComponents(url: url, resolvingAgainstBaseURL: false) {
             components.queryItems = items
@@ -527,7 +527,7 @@ struct RuntimeHTTPClient: Sendable {
 
     /// `GET /healthz` — 存活探针（不注入 credential，无需认证）。
     func healthCheck() async throws -> Bool {
-        let url = try resolveBaseURL().appendingPathComponent("healthz")
+        let url = try await resolveBaseURL().appendingPathComponent("healthz")
         var request = URLRequest(url: url)
         request.httpMethod = "GET"
         request.timeoutInterval = 3

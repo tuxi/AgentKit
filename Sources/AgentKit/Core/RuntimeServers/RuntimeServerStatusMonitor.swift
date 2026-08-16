@@ -67,7 +67,13 @@ struct EmbeddedRuntimeLifecycle {
         isAlive: { AgentRuntime.shared.isAlive },
         start: { try AgentRuntime.shared.ensureStarted() },
         restart: { try AgentRuntime.shared.restart() },
-        endpoint: { RuntimeEnvironment.fromRuntime().baseURL },
+        // 闭包是同步 @MainActor，直接读动态端口即可，避免走 async 的
+        // RuntimeEnvironment（baseURL 现在需要 await）。
+        endpoint: {
+            let port = AgentRuntime.shared.port()
+            guard port > 0 else { return nil }
+            return URL(string: "http://127.0.0.1:\(port)")
+        },
         profile: { AgentRuntime.shared.currentConfiguration.profile.rawValue },
         healthCheck: {
             let client = RuntimeHTTPClient(environment: .fromRuntime())
@@ -111,15 +117,18 @@ public final class RuntimeServerStatusMonitor {
     /// Creates a monitor for the embedded gomobile runtime.
     public static let embedded = RuntimeServerStatusMonitor(lifecycle: .live)
 
-    private convenience init(lifecycle: EmbeddedRuntimeLifecycle) {
-        self.init()
+    private init(lifecycle: EmbeddedRuntimeLifecycle) {
         self.lifecycle = lifecycle
     }
     #endif
 
     /// Creates a monitor not tied to any specific runtime lifecycle.
     /// Use this for external/daemon servers that manage their own health checks.
-    public init() {}
+    public init() {
+#if canImport(CodeAgentRuntime)
+        self.lifecycle = nil
+#endif
+    }
 
     // MARK: - Status queries (always available)
 

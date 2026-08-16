@@ -121,7 +121,7 @@ public actor UserAssetDraftCoordinator {
         onStateChange: @escaping @MainActor @Sendable () -> Void = {}
     ) async throws -> [LocalUserAssetRef] {
         let attachments = try store.state(for: key)?.composerDraft.attachments ?? []
-        guard attachments.count <= 4 else {
+        guard attachments.count <= maxFilesCount else {
             throw UserAssetValidationError.tooManyAssets(attachments.count)
         }
         for attachment in attachments where attachment.delivery == .localOnly {

@@ -18,7 +18,10 @@ import Foundation
 /// 2. `let env = RuntimeEnvironment.fromRuntime()` → 持有 provider（不读值）
 /// 3. 发起连接时 provider 才执行 → 获取当前真实端口
 public struct RuntimeEnvironment: Sendable {
-    private let originProvider: @Sendable () -> URL?
+    /// Async provider：某些环境（如 `RuntimeServerCoordinator` 的远端连接）需要读取
+    /// `@MainActor` 状态才能拿到 endpoint。provider 用 `async` 表达"挂起而非阻塞"，
+    /// 从机制上避免 `DispatchQueue.main.sync` 在主线程 / 后台线程的死锁。
+    private let originProvider: @Sendable () async -> URL?
 
     // MARK: - Init
 
@@ -41,42 +44,48 @@ public struct RuntimeEnvironment: Sendable {
     }
 
     /// 每次取值时动态执行 provider（用于 `.fromRuntime()`）。
-    init(originProvider: @Sendable @escaping () -> URL?) {
+    init(originProvider: @Sendable @escaping () async -> URL?) {
         self.originProvider = originProvider
     }
 
     // MARK: - Properties (lazy via provider)
 
-    public var host: String { baseURL?.host ?? "" }
+    public var host: String {
+        get async { await baseURL?.host ?? "" }
+    }
     public var port: Int {
-        guard let url = baseURL else { return -1 }
-        if let port = url.port { return port }
-        return url.scheme?.lowercased() == "https" ? 443 : 80
+        get async {
+            guard let url = await baseURL else { return -1 }
+            if let port = url.port { return port }
+            return url.scheme?.lowercased() == "https" ? 443 : 80
+        }
     }
 
     /// HTTP base URL。端口无效（≤0）时返回 nil。
     public var baseURL: URL? {
-        originProvider().map(Self.normalizedOrigin)
+        get async { await originProvider().map(Self.normalizedOrigin) }
     }
 
     /// Agent Wire origin derived without changing host, port or authority.
     public var wsURL: String? {
-        guard let baseURL,
-              var components = URLComponents(
-                url: baseURL,
-                resolvingAgainstBaseURL: false
-              ) else {
-            return nil
+        get async {
+            guard let origin = await baseURL,
+                  var components = URLComponents(
+                    url: origin,
+                    resolvingAgainstBaseURL: false
+                  ) else {
+                return nil
+            }
+            switch components.scheme?.lowercased() {
+            case "http":
+                components.scheme = "ws"
+            case "https":
+                components.scheme = "wss"
+            default:
+                return nil
+            }
+            return components.url?.absoluteString
         }
-        switch components.scheme?.lowercased() {
-        case "http":
-            components.scheme = "ws"
-        case "https":
-            components.scheme = "wss"
-        default:
-            return nil
-        }
-        return components.url?.absoluteString
     }
 
     // MARK: - Presets

@@ -169,7 +169,7 @@ public protocol AgentTransport: Sendable {
     func getAssetContent(conversationID: String, assetID: String) async throws -> AgentAssetContentResponse
 
     /// Resolve a runtime-relative URL such as `/v1/.../blob` against the active backend.
-    func resolveRuntimeURL(_ value: String) -> URL?
+    func resolveRuntimeURL(_ value: String) async -> URL?
 
     // MARK: - Tool registration
 
@@ -261,7 +261,7 @@ extension AgentTransport {
         throw RuntimeHTTPError.unsupported
     }
 
-    public func resolveRuntimeURL(_ value: String) -> URL? {
+    public func resolveRuntimeURL(_ value: String) async -> URL? {
         URL(string: value)
     }
 

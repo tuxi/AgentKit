@@ -123,14 +123,18 @@ final class RuntimeServerConnectionsTests: XCTestCase {
         )
     }
 
-    func testRuntimeEnvironmentPreservesHTTPSOriginAndDerivesWSS() throws {
+    func testRuntimeEnvironmentPreservesHTTPSOriginAndDerivesWSS() async throws {
         let environment = try RuntimeEnvironment(
             origin: XCTUnwrap(URL(string: "https://agent.example.com:9443/"))
         )
-        XCTAssertEqual(environment.baseURL?.absoluteString, "https://agent.example.com:9443")
-        XCTAssertEqual(environment.wsURL, "wss://agent.example.com:9443")
-        XCTAssertEqual(environment.host, "agent.example.com")
-        XCTAssertEqual(environment.port, 9443)
+        let baseURL = await environment.baseURL
+        let wsURL = await environment.wsURL
+        let host = await environment.host
+        let port = await environment.port
+        XCTAssertEqual(baseURL?.absoluteString, "https://agent.example.com:9443")
+        XCTAssertEqual(wsURL, "wss://agent.example.com:9443")
+        XCTAssertEqual(host, "agent.example.com")
+        XCTAssertEqual(port, 9443)
     }
 
     func testConversationIdentityIncludesServerScope() {

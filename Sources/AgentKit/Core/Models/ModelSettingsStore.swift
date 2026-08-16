@@ -158,18 +158,19 @@ public final class ModelSettingsStore {
         guard let modelID, !modelID.isEmpty else { return false }
         if let unifiedModels {
             let index = unifiedModels.first {
-                $0.id == modelID
+                $0.id == modelID || modelID == $0.providerID + "/" + $0.wireModelID
             }
             return index != nil
         }
         return gatewayModels?.contains { $0.id == modelID && $0.available != false } ?? false
     }
 
-    /// Converts an App Stable ID into the alias Code-Agent resolves each turn.
-    /// Legacy Gateway-only mode intentionally preserves the old wire model ID.
-    public func runtimeAlias(for modelID: String) -> String? {
+    public func getWireModelID(for modelID: String) -> String? {
         if let unifiedModels {
-            return unifiedModels.first { $0.id == modelID }?.runtimeAlias
+            let curModel = unifiedModels.first { $0.id == modelID }
+            if let curModel {
+                return curModel.connectionID + "/" + curModel.wireModelID
+            }
         }
         return isModelAvailable(modelID) ? modelID : nil
     }

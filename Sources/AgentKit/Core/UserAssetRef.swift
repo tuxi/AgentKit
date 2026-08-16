@@ -208,7 +208,7 @@ public enum UserAssetValidationError: Error, LocalizedError, Sendable, Equatable
         case .invalidSHA256: return "图片摘要格式无效"
         case .invalidFilename: return "图片文件名无效"
         case .duplicateAssetID: return "同一轮不能重复添加同一图片"
-        case .tooManyAssets: return "每轮最多发送 4 张图片"
+        case .tooManyAssets: return "每轮最多发送 10 张图片"
         }
     }
 }

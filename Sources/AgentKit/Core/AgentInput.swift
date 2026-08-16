@@ -8,6 +8,8 @@
 //  Protocol: AgentKit Runtime Protocol v1.1 §AgentInput
 //
 
+let maxFilesCount: Int = 10
+
 import Foundation
 import ClientToolProtocol
 
@@ -125,7 +127,7 @@ public struct AgentInput: Sendable {
         }
 
         let attachmentCount = assets.count + localAssets.count
-        guard attachmentCount <= 4 else {
+        guard attachmentCount <= maxFilesCount else {
             throw UserAssetValidationError.tooManyAssets(attachmentCount)
         }
         if !assets.isEmpty {

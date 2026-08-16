@@ -60,7 +60,7 @@ public final class RuntimeServerRegistry {
         connections.first { $0.id == activeConnectionID } ?? .embedded()
     }
 
-    public func connection(id: String) -> RuntimeServerConnection? {
+   public func connection(id: String) -> RuntimeServerConnection? {
         connections.first { $0.id == id }
     }
 

@@ -184,7 +184,7 @@ public final class AgentWireSocket: @unchecked Sendable {
             let target = self.credentialTarget
             self.wsClient.connectionValidatorRequest = { [weak self] in
                 guard let self,
-                      let wsBase = self.environment.wsURL,
+                      let wsBase = await self.environment.wsURL,
                       let url = URL(string: "\(wsBase)/\(streamKind.streamPath(id: conversationID))")
                 else { return nil }
                 var request = URLRequest(url: url)

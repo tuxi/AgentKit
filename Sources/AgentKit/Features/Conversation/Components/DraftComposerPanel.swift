@@ -514,7 +514,7 @@ struct DraftComposerPanel: View {
         viewModel?.selectedModel = modelID
         modelSettings.didUseModel(modelID, conversation: viewModel?.conversation?.id ?? "")
         persistModel(modelID)
-        if let runtimeAlias = modelSettings.runtimeAlias(for: modelID) {
+        if let runtimeAlias = modelSettings.getWireModelID(for: modelID) {
             onModelChange?(runtimeAlias)
         }
     }
@@ -549,13 +549,13 @@ struct DraftComposerPanel: View {
         
         guard canSend,
               let selectedModel,
-              let runtimeAlias = modelSettings.runtimeAlias(for: selectedModel) else { return }
+              let wireModelId = modelSettings.getWireModelID(for: selectedModel) else { return }
         let toSend = trimmed
         submittedTextSnapshot = toSend
         persistCurrentDraft()
         isSending = true
         Task {
-            _ = await onSend(toSend, runtimeAlias, readyAssets)
+            _ = await onSend(toSend, wireModelId, readyAssets)
             refreshAttachmentsFromLocalState()
             isSending = false
         }
@@ -799,12 +799,13 @@ struct DraftComposerPanel: View {
     private func handleDroppedImages(_ urls: [URL]) {
         guard let key = persistenceKey,
               workspaceStore.canStageLocalUserAssets else { return }
-        let remainingSlots = 4 - attachments.count
+        let remainingSlots = maxFilesCount - attachments.count
         guard remainingSlots > 0 else { return }
         Task {
             await workspaceStore.addDroppedFiles(
                 urls,
-                for: key
+                for: key,
+                maxFilesCount: maxFilesCount
             ) {
                 refreshAttachmentsFromLocalState()
             }

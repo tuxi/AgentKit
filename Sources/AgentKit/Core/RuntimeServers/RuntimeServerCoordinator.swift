@@ -142,11 +142,12 @@ public final class RuntimeServerCoordinator {
                 throw RuntimeServerRegistryError.invalidExternalEndpoint
             }
             // Read the current endpoint from the registry on every request,
-            // not a snapshot at client-creation time.
+            // not a snapshot at client-creation time. The provider is async and
+            // hops to the MainActor via await — suspension, not blocking — so it
+            // can never deadlock the main thread the way DispatchQueue.main.sync did.
             let environment = RuntimeEnvironment { [weak self] in
                 guard let `self` = self else { return nil }
-                // DispatchQueue.main.sync 安全——如果已经在主线程（MainActor 调用场景），它就是直通；如果在后台线程（URLSession delegate 场景），等主线程空闲即执行，不会死锁。
-                return DispatchQueue.main.sync {
+                return await MainActor.run {
                     self.registry.connection(id: connection.id)?.endpoint
                 }
             }
@@ -506,7 +507,7 @@ public final class RuntimeServerCoordinator {
                 )
             }
             preflight = RuntimeServerPreflightResult(
-                endpoint: try RuntimeEnvironment.fromRuntime().baseURL
+                endpoint: try await RuntimeEnvironment.fromRuntime().baseURL
                     .unwrap(or: RuntimeHTTPError.runtimeNotStarted),
                 kind: .embedded,
                 authentication: .bearer,

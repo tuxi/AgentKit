@@ -404,6 +404,7 @@ public final class WorkspaceStore {
     public func addDroppedFiles(
         _ urls: [URL],
         for key: ConversationLocalStateKey,
+        maxFilesCount: Int,
         onStateChange: @escaping @MainActor @Sendable () -> Void = {}
     ) async {
         guard canStageLocalUserAssets,
@@ -421,7 +422,7 @@ public final class WorkspaceStore {
 
             let currentCount = (try? localStateStore.state(for: key))?
                 .composerDraft.attachments.count ?? 0
-            let remaining = max(0, 4 - currentCount)
+            let remaining = max(0, maxFilesCount - currentCount)
             guard remaining > 0 else { return }
 
             let toAdd = Array(urls.prefix(remaining))

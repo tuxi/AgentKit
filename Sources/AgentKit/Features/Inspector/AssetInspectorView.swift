@@ -96,6 +96,8 @@ struct AssetPreviewInspectorView: View {
     @State private var errorMessage: String?
     @State private var contentLoadError: String?
     @State private var focusRevision = 0
+    @State private var resolvedMediaURL: URL?
+    @State private var resolvedThumbnailURL: URL?
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
@@ -104,6 +106,7 @@ struct AssetPreviewInspectorView: View {
             content
         }
         .task(id: loadTaskID) {
+            await resolvePreviewURLs()
             await loadRuntimePreview()
         }
     }
@@ -282,12 +285,12 @@ struct AssetPreviewInspectorView: View {
     }
 
     private var mediaURL: URL? {
-        localWorkspaceMediaURL ?? displayAsset.mediaURL ?? resolvedPreviewURL(for: "media_url")
+        localWorkspaceMediaURL ?? displayAsset.mediaURL ?? resolvedMediaURL
     }
 
     private var fallbackMediaURL: URL? {
         let candidates = [
-            resolvedPreviewURL(for: "media_url"),
+            resolvedMediaURL,
             displayAsset.mediaURL
         ]
         return candidates.first { candidate in
@@ -297,7 +300,7 @@ struct AssetPreviewInspectorView: View {
     }
 
     private var thumbnailURL: URL? {
-        resolvedPreviewURL(for: "thumbnail_url")
+        resolvedThumbnailURL
     }
 
     private var previewMetadata: [String: JSONValue]? {
@@ -396,6 +399,7 @@ struct AssetPreviewInspectorView: View {
             loadedMetadata = preview.metadata
             isTruncated = preview.truncated
             source = preview.source
+            await resolvePreviewURLs()
 
             guard shouldLoadFullContent(asset: preview.asset, mimeType: preview.mimeType) else { return }
             do {
@@ -409,6 +413,7 @@ struct AssetPreviewInspectorView: View {
                 loadedSizeBytes = full.sizeBytes
                 isTruncated = full.truncated
                 source = "content"
+                await resolvePreviewURLs()
             } catch {
                 // Preview is still useful; content can be rejected for directories,
                 // non-text assets, or server-side caps.
@@ -433,6 +438,8 @@ struct AssetPreviewInspectorView: View {
         isTruncated = false
         source = payload.asset.fallbackPreviewSource
         contentLoadError = nil
+        resolvedMediaURL = nil
+        resolvedThumbnailURL = nil
     }
 
     private func shouldLoadFullContent(asset: AgentAssetRef, mimeType: String?) -> Bool {
@@ -463,9 +470,16 @@ struct AssetPreviewInspectorView: View {
         return localContent.utf8.count > loadedContent.utf8.count
     }
 
-    private func resolvedPreviewURL(for key: String) -> URL? {
+    private func resolvedPreviewURL(for key: String) async -> URL? {
         guard let value = previewMetadata?[key]?.string, !value.isEmpty else { return nil }
-        return store.client.resolveRuntimeURL(value)
+        return await store.client.resolveRuntimeURL(value)
+    }
+
+    /// media/thumbnail 相对 URL 异步解析（resolveRuntimeURL 现在是 async）。
+    /// 在 .task 与 preview metadata 更新后调用，结果存 @State 供同步计算属性读取。
+    private func resolvePreviewURLs() async {
+        resolvedMediaURL = await resolvedPreviewURL(for: "media_url")
+        resolvedThumbnailURL = await resolvedPreviewURL(for: "thumbnail_url")
     }
 
     private func byteCount(_ value: Int64) -> String {
