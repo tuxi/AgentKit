@@ -1292,21 +1292,49 @@ function TodoPanel({
   );
 }
 
+/**
+ * Disclosure state for the auto-expanding cards (thinking / tool / tool-group).
+ *
+ * While `streaming` the card is forced open and toggle clicks are ignored; the
+ * moment streaming ends it collapses again unless the user explicitly toggled
+ * it open. This mirrors the native fallback transcript, where a thinking card
+ * renders `isStreaming || expandedThinkingIDs.contains(id)`. User toggles are
+ * only recorded outside streaming, so a running card cannot be collapsed
+ * mid-stream and then silently pinned.
+ *
+ * The returned `open` value is fully controlled: the summary click handler
+ * preventDefaults the native toggle so the browser never fights React.
+ */
+function useStreamingDisclosure(
+  streaming: boolean,
+): { open: boolean; onSummaryClick: (event: React.MouseEvent<HTMLElement>) => void } {
+  const [userExpanded, setUserExpanded] = useState(false);
+  const onSummaryClick = (event: React.MouseEvent<HTMLElement>) => {
+    if (!window.getSelection()?.isCollapsed) {
+      event.preventDefault();
+      return;
+    }
+    event.preventDefault();
+    if (!streaming) setUserExpanded((value) => !value);
+  };
+  return { open: streaming || userExpanded, onSummaryClick };
+}
+
 function Tool({ tool }: { tool: ConversationWebTool }): React.JSX.Element {
   const statusText = visibleExecutionStatus(tool.status, tool.statusText);
+  // Auto-expand while the tool runs; collapse when it finishes.
+  const { open, onSummaryClick } = useStreamingDisclosure(tool.status === "running");
   return (
     <details
       className="tool"
       data-status={tool.status}
       data-tool-id={tool.id}
-      data-disclosure-id={`tool:${tool.id}`}
+      open={open}
     >
       <summary
         className="interactive tool-summary"
         data-focus-id={`tool:${tool.id}`}
-        onClick={(event) => {
-          if (!window.getSelection()?.isCollapsed) event.preventDefault();
-        }}
+        onClick={onSummaryClick}
       >
         <span className="tool-title">{tool.name}</span>
         {tool.changeSummary ? <ChangeSummary value={tool.changeSummary} /> : null}
@@ -1483,6 +1511,58 @@ function VerifiedBlock({ block }: { block: ConversationWebBlock }): React.JSX.El
   );
 }
 
+function ThinkingBlock({ block }: { block: ConversationWebBlock }): React.JSX.Element {
+  // Auto-expand while the model is streaming; collapse when it finishes.
+  const { open, onSummaryClick } = useStreamingDisclosure(block.status === "streaming");
+  return (
+    <details
+      className="thinking-block"
+      data-status={block.status}
+      open={open}
+    >
+      <summary
+        className="thinking-summary"
+        data-focus-id={`thinking:${block.id}`}
+        onClick={onSummaryClick}
+      >
+        <span className="thinking-label">{block.title ?? "Thinking"}</span>
+        <span className="disclosure-chevron" aria-hidden="true">›</span>
+      </summary>
+      <div className="thinking-body">
+        {block.text ? <Markdown block={{ ...block, kind: "markdown" }} /> : null}
+      </div>
+    </details>
+  );
+}
+
+function ToolGroupBlock({ block }: { block: ConversationWebBlock }): React.JSX.Element {
+  const statusText = visibleExecutionStatus(block.status);
+  // Auto-expand while any tool in the group is running; collapse when done.
+  const { open, onSummaryClick } = useStreamingDisclosure(block.status === "running");
+  return (
+    <details
+      className="tool-group"
+      data-status={block.status}
+      open={open}
+    >
+      <summary
+        className="interactive tool-group-summary"
+        data-focus-id={`tool-group:${block.id}`}
+        onClick={onSummaryClick}
+      >
+        <span className="tool-group-title">{block.title}</span>
+        {statusText ? (
+          <span className="tool-status" data-tone={block.status}>{statusText}</span>
+        ) : null}
+        <span className="disclosure-chevron" aria-hidden="true">›</span>
+      </summary>
+      <div className="tool-group-tools">
+        {block.tools.map((tool) => <Tool key={tool.id} tool={tool} />)}
+      </div>
+    </details>
+  );
+}
+
 const Block = memo(function Block({
   block,
 }: {
@@ -1492,44 +1572,10 @@ const Block = memo(function Block({
     case "markdown":
       return <Markdown block={block} />;
     case "thinking":
-      return (
-        <details className="thinking-block" data-status={block.status}>
-          <summary className="thinking-summary">
-            <span className="thinking-label">{block.title ?? "Thinking"}</span>
-            <span className="disclosure-chevron" aria-hidden="true">›</span>
-          </summary>
-          <div className="thinking-body">
-            {block.text ? <Markdown block={{ ...block, kind: "markdown" }} /> : null}
-          </div>
-        </details>
-      );
+      return <ThinkingBlock block={block} />;
     case "toolGroup":
       if (block.tools.length > 1) {
-        const statusText = visibleExecutionStatus(block.status);
-        return (
-          <details
-            className="tool-group"
-            data-status={block.status}
-            data-disclosure-id={`tool-group:${block.id}`}
-          >
-            <summary
-              className="interactive tool-group-summary"
-              data-focus-id={`tool-group:${block.id}`}
-              onClick={(event) => {
-                if (!window.getSelection()?.isCollapsed) event.preventDefault();
-              }}
-            >
-              <span className="tool-group-title">{block.title}</span>
-              {statusText ? (
-                <span className="tool-status" data-tone={block.status}>{statusText}</span>
-              ) : null}
-              <span className="disclosure-chevron" aria-hidden="true">›</span>
-            </summary>
-            <div className="tool-group-tools">
-              {block.tools.map((tool) => <Tool key={tool.id} tool={tool} />)}
-            </div>
-          </details>
-        );
+        return <ToolGroupBlock block={block} />;
       }
       return (
         <section className="tool-group" data-status={block.status}>
