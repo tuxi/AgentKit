@@ -233,6 +233,15 @@ struct RuntimeHTTPClient: Sendable {
         return payload.templates
     }
 
+    /// `POST /v1/secrets` — updates the runtime's mutable injected credential
+    /// resolver so provider keys become available without a restart (A2).
+    /// Body: `{"<namespace>/<name>": {"type":"bearer","secret":"..."}}`.
+    func pushSecrets(_ entries: [String: RuntimeSecretEntry]) async throws {
+        let request = try await buildRequest("POST", pathComponents: "v1/secrets", body: entries)
+        let (data, response) = try await session.data(for: request)
+        try validateHTTP(response, data: data)
+    }
+
     /// `GET /v1/activity` — sessions owned by the authenticated principal/device.
     func activitySnapshot() async throws -> RuntimeActivitySnapshot {
         try await activitySnapshot(sinceSequence: nil)
@@ -593,6 +602,18 @@ private struct RuntimeProviderTemplatesPayload: Decodable {
 
 private struct RuntimeAuthenticationErrorPayload: Decodable {
     let code: String
+}
+
+/// One credential entry in a `POST /v1/secrets` body — mirrors the runtime's
+/// `{type, secret}` wire shape (Talkify's RuntimeSecretsClient uses the same).
+public struct RuntimeSecretEntry: Codable, Sendable, Equatable {
+    public let type: String
+    public let secret: String
+
+    public init(type: String, secret: String) {
+        self.type = type
+        self.secret = secret
+    }
 }
 
 // MARK: - Clone result

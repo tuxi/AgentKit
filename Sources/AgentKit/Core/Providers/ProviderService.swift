@@ -6,9 +6,10 @@
 //
 //  Desktop/server hosts manage provider configuration through the runtime
 //  (single source of truth, persisted by the runtime to <root>/.codeagent/
-//  settings.json). iOS embedded has no disk settings.json — provider config
-//  stays host-injected (configureProviderConnections / buildConnectionsJSON),
-//  and the local ProviderConnectionRegistry remains the write path there.
+//  settings.json). iOS embedded now uses the same HTTP surface: the embedded
+//  runtime persists providers to <DataDir>/.codeagent/settings.json and
+//  exposes /v1/providers + /v1/secrets exactly like the daemon, so the local
+//  ProviderConnectionRegistry is a read-only cache on every platform.
 //
 
 import Foundation
@@ -201,6 +202,7 @@ public struct RuntimeProviderTemplateModel: Codable, Sendable, Equatable, Identi
     public let id: String
     public let runtimeAlias: String?
     public let contextWindow: Int?
+    public let temperature: Double?
     public let supportsTools: Bool?
     public let supportsReasoning: Bool?
     public let inputModalities: [String]?
@@ -212,6 +214,7 @@ public struct RuntimeProviderTemplateModel: Codable, Sendable, Equatable, Identi
         case id
         case runtimeAlias = "runtime_alias"
         case contextWindow = "context_window"
+        case temperature = "temperature"
         case supportsTools = "supports_tools"
         case supportsReasoning = "supports_reasoning"
         case inputModalities = "input_modalities"
@@ -224,6 +227,7 @@ public struct RuntimeProviderTemplateModel: Codable, Sendable, Equatable, Identi
         id: String,
         runtimeAlias: String? = nil,
         contextWindow: Int? = nil,
+        temperature: Double? = nil,
         supportsTools: Bool? = nil,
         supportsReasoning: Bool? = nil,
         inputModalities: [String]? = nil,
@@ -234,6 +238,7 @@ public struct RuntimeProviderTemplateModel: Codable, Sendable, Equatable, Identi
         self.id = id
         self.runtimeAlias = runtimeAlias
         self.contextWindow = contextWindow
+        self.temperature = temperature
         self.supportsTools = supportsTools
         self.supportsReasoning = supportsReasoning
         self.inputModalities = inputModalities
@@ -352,25 +357,27 @@ public extension RuntimeProviderDefinition {
 
 /// Host-facing provider-management surface.
 ///
-/// Two write paths exist and MUST NOT run simultaneously:
-/// - desktop/server: `RuntimeProviderService` (HTTP-backed) — the runtime is
-///   the single source of truth.
-/// - iOS embedded: `LocalProviderStore` (registry-backed) — no disk settings.json;
-///   config stays host-injected.
-/// Choose via `ProviderStoreFactory` based on the deployment (see `runtimeKind`).
+/// Every deployment uses the HTTP-backed `RuntimeProviderService`: the runtime
+/// (daemon or embedded) is the single source of truth, persisting providers to
+/// its settings.json. `LocalProviderStore` (registry-backed) is retained only
+/// as a migration fallback and must not be used for new writes.
 public protocol ProviderStore: Sendable {
     func listProviders() async throws -> [RuntimeProviderDefinition]
     func getProvider(id: String) async throws -> RuntimeProviderDefinition?
     func upsertProvider(_ definition: RuntimeProviderDefinition) async throws -> RuntimeProviderWriteResult
     func deleteProvider(id: String) async throws -> RuntimeProviderWriteResult
     func listProviderTemplates() async throws -> [RuntimeProviderTemplate]
+    /// `POST /v1/secrets` — push provider credential values into the runtime's
+    /// mutable injected resolver so models become available without a restart.
+    func pushSecrets(_ entries: [String: RuntimeSecretEntry]) async throws
 }
 
-/// Picks the store for a deployment. The two write paths never run together:
-/// embedded (iOS) → local registry; local/remote runtime server (desktop) → HTTP.
+/// Picks the store for a deployment. All active deployments use the HTTP-backed
+/// store; `embedded(registry:)` exists only for migration/fallback.
 public enum ProviderStoreFactory {
-    /// iOS embedded: registry-backed store. Writes apply locally and must be
-    /// re-injected via `configureProviderConnections` / `buildConnectionsJSON`.
+    /// Registry-backed store (migration fallback only). Writes apply locally
+    /// and must be re-injected; prefer `http(for:credentialStore:)` which now
+    /// also serves the embedded runtime.
     @MainActor
     public static func embedded(registry: ProviderConnectionRegistry) -> any ProviderStore {
         LocalProviderStore(registry: registry)
@@ -391,38 +398,50 @@ public enum ProviderStoreFactory {
         )
     }
 
-    /// Connection-scoped HTTP-backed store (desktop/server).
+    /// Connection-scoped HTTP-backed store (embedded + desktop/server).
     ///
     /// Resolves the Bearer token through `credentialStore` for the connection's
     /// credential target (`.runtimeAccess(connection.id)`) — the same path
-    /// `/v1/runtime/models` uses. Embedded connections are rejected: on iOS
-    /// there is no disk settings.json, so `/v1/providers` writes are not
-    /// applicable; use `ProviderStoreFactory.embedded(registry:)` instead.
+    /// `/v1/runtime/models` uses. Embedded connections resolve the rotated
+    /// process-local Runtime Access credential directly from `AgentRuntime`,
+    /// because the embedded loopback listener has no fixed endpoint.
     public static func http(
         for connection: RuntimeServerConnection,
         credentialStore: any CredentialStore,
         trustPolicy: RuntimeServerTrustPolicy? = nil
     ) throws -> any ProviderStore {
-        guard connection.kind != .embedded else {
+        switch connection.kind {
+        case .embedded:
+            #if canImport(CodeAgentRuntime)
+            let runtime = AgentRuntime.shared
+            return RuntimeProviderService(
+                environment: .fromRuntime(),
+                credentialStore: runtime.runtimeAccessCredentialStore,
+                credentialTarget: runtime.runtimeAccessCredentialStore.target,
+                trustPolicy: trustPolicy
+            )
+            #else
             throw RuntimeServerRegistryError.invalidEmbeddedConnection
-        }
-        guard let endpoint = connection.endpoint else {
-            throw RuntimeServerRegistryError.invalidExternalEndpoint
-        }
-        let environment = try RuntimeEnvironment(origin: endpoint)
-        switch connection.authentication {
-        case .none:
-            return RuntimeProviderService(
-                environment: environment,
-                trustPolicy: trustPolicy
-            )
-        case .bearer:
-            return RuntimeProviderService(
-                environment: environment,
-                credentialStore: credentialStore,
-                credentialTarget: connection.credentialTarget,
-                trustPolicy: trustPolicy
-            )
+            #endif
+        case .local, .remote:
+            guard let endpoint = connection.endpoint else {
+                throw RuntimeServerRegistryError.invalidExternalEndpoint
+            }
+            let environment = try RuntimeEnvironment(origin: endpoint)
+            switch connection.authentication {
+            case .none:
+                return RuntimeProviderService(
+                    environment: environment,
+                    trustPolicy: trustPolicy
+                )
+            case .bearer:
+                return RuntimeProviderService(
+                    environment: environment,
+                    credentialStore: credentialStore,
+                    credentialTarget: connection.credentialTarget,
+                    trustPolicy: trustPolicy
+                )
+            }
         }
     }
 }
@@ -459,9 +478,9 @@ public struct RuntimeProviderService: ProviderStore, Sendable {
 
     #if canImport(CodeAgentRuntime)
     /// Embedded convenience: lazy loopback port + the process-local Runtime
-    /// Access credential. NOTE: on iOS the runtime has no disk settings.json,
-    /// so `/v1/providers` writes are expected to be rejected by the runtime —
-    /// use `ProviderStoreFactory.embedded` for the iOS write path.
+    /// Access credential. The embedded runtime persists its providers to
+    /// `<DataDir>/.codeagent/settings.json`, so `/v1/providers` reads and writes
+    /// work exactly like the daemon's user-scope file.
     public static func fromRuntime() -> RuntimeProviderService {
         let runtime = AgentRuntime.shared
         return RuntimeProviderService(
@@ -494,6 +513,10 @@ public struct RuntimeProviderService: ProviderStore, Sendable {
 
     public func listProviderTemplates() async throws -> [RuntimeProviderTemplate] {
         try await client.listProviderTemplates()
+    }
+
+    public func pushSecrets(_ entries: [String: RuntimeSecretEntry]) async throws {
+        try await client.pushSecrets(entries)
     }
 }
 
@@ -534,6 +557,12 @@ public struct LocalProviderStore: ProviderStore {
     /// local "custom" fallback template.
     public func listProviderTemplates() async throws -> [RuntimeProviderTemplate] {
         []
+    }
+
+    /// Registry-backed store has no runtime /v1/secrets surface; credential
+    /// values flow through the host's legacy injection path instead.
+    public func pushSecrets(_ entries: [String: RuntimeSecretEntry]) async throws {
+        // No-op: migration fallback only.
     }
 }
 
