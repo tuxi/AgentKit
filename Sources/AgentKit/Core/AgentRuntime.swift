@@ -477,7 +477,7 @@ public final class AgentRuntime: @unchecked Sendable {
 
     private static func bundledSettingsJSON() -> String {
         #if DEBUG
-        let gatewayBaseURL = "http://192.168.1.13:12221/api/v1/agent"
+        let gatewayBaseURL = "http://192.168.1.10:12221/api/v1/agent"
         #else
         let gatewayBaseURL = "https://api.objc.com/api/v1/agent"
         #endif

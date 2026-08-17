@@ -5,57 +5,10 @@
       "default": {
         "source": "injected"
       }
-    },
-    "llm": {
-      "deepseek": {
-        "source": "env",
-        "env": "DEEPSEEK_API_KEY"
-      },
-      "qwen": {
-        "source": "env",
-        "env": "DASHSCOPE_API_KEY"
-      },
-      "glm": {
-        "source": "env",
-        "env": "GLM_API_KEY"
-      }
     }
   },
-  "models": {
-    "gateway": {
-      "provider": "openai",
-      "base_url": "__GATEWAY_BASE_URL__",
-      "model": "",
-      "credential": {
-        "namespace": "gateway",
-        "name": "default"
-      },
-      "context_window": 128000
-    },
-    "deepseek": {
-      "provider": "openai",
-      "base_url": "https://api.deepseek.com",
-      "model": "deepseek-v4-flash",
-      "credential": {
-        "namespace": "llm",
-        "name": "deepseek"
-      },
-      "temperature": 0.2,
-      "context_window": 128000,
-      "input_price_per_million": 0.27,
-      "output_price_per_million": 1.10,
-      "cache_input_price_per_million": 0.027
-    },
-    "deepseek-pro": {
-      "provider": "openai",
-      "base_url": "https://api.deepseek.com",
-      "model": "deepseek-v4-pro",
-      "credential": {
-        "namespace": "llm",
-        "name": "deepseek"
-      },
-      "context_window": 128000
-    }
+  "providers": {
+      
   },
   "agent": {
     "max_steps": 100,

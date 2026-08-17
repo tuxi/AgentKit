@@ -201,15 +201,15 @@ public extension ProviderConnection {
         if id == Self.talkifyGatewayID && authentication != .gatewayAccount {
             throw ProviderConnectionValidationError.reservedGatewayID
         }
-        if authentication == .gatewayAccount && id != Self.talkifyGatewayID {
-            throw ProviderConnectionValidationError.gatewayMustUseReservedID
-        }
-        guard Self.isAllowedBaseURL(
-            baseURL,
-            allowsInsecurePrivateNetworkHTTP: allowsInsecurePrivateNetworkHTTP
-        ) else {
-            throw ProviderConnectionValidationError.invalidBaseURL
-        }
+//        if authentication == .gatewayAccount && id != Self.talkifyGatewayID {
+//            throw ProviderConnectionValidationError.gatewayMustUseReservedID
+//        }
+//        guard Self.isAllowedBaseURL(
+//            baseURL,
+//            allowsInsecurePrivateNetworkHTTP: allowsInsecurePrivateNetworkHTTP
+//        ) else {
+//            throw ProviderConnectionValidationError.invalidBaseURL
+//        }
 
         var modelIDs = Set<String>()
         for model in models {

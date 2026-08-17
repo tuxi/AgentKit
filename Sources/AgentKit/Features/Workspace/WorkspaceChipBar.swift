@@ -321,7 +321,18 @@ struct WorkspaceChipBar: View {
                         Label(AgentKitLocalized.string("workspace.new_blank_project"), systemImage: "folder.badge.plus")
                     }
                     Button {
-                        isImporterPresented = true
+                        if isImporterPresented == true {
+                            isImporterPresented = false
+                            Task {
+                                try? await Task.sleep(for: .seconds(1))
+                                await MainActor.run {
+                                    isImporterPresented = true
+                                }
+                            }
+                        } else {
+                            isImporterPresented = true
+                        }
+                        
                     } label: {
                         #if os(macOS)
                         Label(AgentKitLocalized.string("workspace.use_existing_folder"), systemImage: "folder")

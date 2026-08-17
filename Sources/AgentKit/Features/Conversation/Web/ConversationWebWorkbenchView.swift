@@ -291,6 +291,7 @@ struct ConversationWebWorkbenchView: NSViewRepresentable {
         /// are actively drawing), so activation forces a fresh injection.
         private func applyHostBackgroundToPage(force: Bool = false) {
             guard isPageReady, let webView, let hostView else { return }
+            hostView.setNeedsDisplay(webView.bounds)
             guard let hex = Self.resolvedHostBackgroundHex(
                 for: hostView.effectiveAppearance
             ) else { return }
@@ -314,15 +315,17 @@ struct ConversationWebWorkbenchView: NSViewRepresentable {
         ) -> String? {
             let isDark = appearance?.bestMatch(from: [.darkAqua, .aqua])
                 == .darkAqua
-            let color = isDark
-            ? NSColor.windowBackgroundColor
-                : NSColor(
+            if isDark {
+               return "#1E1E1E" // "#1E1E1E"是NSColor.windowBackgroundColor在Dark主题时算出来的hex颜色值，为什么使用"#1E1E1E"而不是windowBackgroundColor，因为在系统切换主题时，首次拿到的ex(from: windowBackgroundColor)是#FFFFFF，导致错误的显示出白色
+            } else {
+                let color = NSColor(
                     calibratedRed: 249.0 / 255.0,
                     green: 249.0 / 255.0,
                     blue: 249.0 / 255.0,
                     alpha: 1
                 )
-            return hex(from: color)
+                return hex(from: color)
+            }
         }
 
         /// Colorspace-safe hex conversion: some NSColors (e.g. `clear`,

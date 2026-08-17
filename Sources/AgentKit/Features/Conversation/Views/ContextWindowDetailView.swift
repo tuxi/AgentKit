@@ -16,11 +16,14 @@ struct ContextWindowDetailView: View {
     let onRefresh: () -> Void
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 14) {
-            header
-            content
+        ScrollView {
+            VStack(alignment: .leading, spacing: 14) {
+                header
+                content
+                Spacer()
+            }
+            .padding(16)
         }
-        .padding(16)
 #if os(macOS)
         .frame(width: 340)
 #endif

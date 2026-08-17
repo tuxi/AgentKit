@@ -499,10 +499,10 @@ public struct ConversationListView: View {
                         #if os(macOS)
                         Divider()
                         Button {
-                            if let workspacePath = store.selectedConversation?.workspacePath {
-                                // 在 Finder 中定位并高亮选中该文件
-                                NSWorkspace.shared.selectFile(workspacePath, inFileViewerRootedAtPath: "")
-                            }
+                            
+                            let workspacePath = item.ref.workspacePath
+                            // 在 Finder 中定位并高亮选中该文件
+                            NSWorkspace.shared.selectFile(workspacePath, inFileViewerRootedAtPath: "")
                         } label: {
                             Label("在Finder中显示", systemImage: "folder")
                         }
