@@ -729,7 +729,7 @@ public final class WorkspaceStore {
         let ids = Set(pausedRetainedSessionIDs + listViewModel.conversations.filter(\.isPaused).map(\.id))
         for sessionID in ids {
             do {
-                try AgentRuntime.shared.resumeRuntime(sessionID: sessionID)
+                try await AgentRuntime.shared.resumeRuntime(sessionID: sessionID)
                 supervisor.controller(sessionID: sessionID)?.markResumeRequested()
             } catch {
                 // Silent lifecycle recovery is best-effort. A selected paused session
@@ -760,7 +760,7 @@ public final class WorkspaceStore {
         try? localStateStore.flush()
         #if os(iOS)
         supervisor.stopActivityMonitoring()
-        AgentRuntime.shared.suspendRuntime()
+        Task { await AgentRuntime.shared.suspendRuntime() }
         #endif
     }
 
@@ -800,7 +800,7 @@ public final class WorkspaceStore {
 
         #if os(iOS)
         do {
-            try AgentRuntime.shared.resumeRuntime(sessionID: sessionID)
+            try await AgentRuntime.shared.resumeRuntime(sessionID: sessionID)
             activeConversationViewModel?.markResumeRequested()
             await listViewModel.refresh()
         } catch {

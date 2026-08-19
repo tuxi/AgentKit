@@ -355,7 +355,7 @@ public struct ConversationDetailView: View {
                 onModelChange: { newID in
 #if os(iOS)
                     Task {
-                        try? AgentRuntime.shared.reconfigure(
+                        try? await AgentRuntime.shared.reconfigure(
                             secretsJSON: await CredentialSettings.currentSecretsJSON(),
                             modelName: newID
                         )

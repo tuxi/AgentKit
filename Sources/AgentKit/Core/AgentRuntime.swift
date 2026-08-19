@@ -137,49 +137,72 @@ public final class AgentRuntime: @unchecked Sendable {
     private var configuration = EmbeddedRuntimeConfiguration.platformDefault()
     let runtimeAccessCredentialStore = EmbeddedRuntimeAccessCredentialStore()
 
-    public var isAlive: Bool { server != nil }
+    private let lifecycleCoordinator = EmbeddedRuntimeCoordinator.shared
+    private let snapshotLock = NSLock()
+    private var runtimeIsAlive = false
+    private var runtimePort = -1
+    private var runtimeEndpoint = ""
+
+    public var isAlive: Bool {
+        snapshotLock.lock()
+        defer { snapshotLock.unlock() }
+        return runtimeIsAlive
+    }
     public var currentConfiguration: EmbeddedRuntimeConfiguration { configuration }
 
     /// Configure the embedded host before it starts. Changing filesystem/profile
     /// policy on a live runtime requires an explicit stop followed by configure.
-    public func configure(_ configuration: EmbeddedRuntimeConfiguration) throws {
-        guard server == nil else {
-            throw NSError(
-                domain: "AgentKit.EmbeddedRuntime",
-                code: -3,
-                userInfo: [NSLocalizedDescriptionKey: "Stop the embedded runtime before changing its configuration."]
-            )
+    public func configure(_ configuration: EmbeddedRuntimeConfiguration) async throws {
+        try await lifecycleCoordinator.run {
+            guard self.server == nil else {
+                throw NSError(
+                    domain: "AgentKit.EmbeddedRuntime",
+                    code: -3,
+                    userInfo: [NSLocalizedDescriptionKey: "Stop the embedded runtime before changing its configuration."]
+                )
+            }
+            self.configuration = configuration
         }
-        self.configuration = configuration
     }
 
     /// Installs a generated Provider settings document before Runtime startup.
     /// Structural Provider changes on a live Runtime still require stop/configure/start.
     public func configureProviderConnections(
         _ generated: GeneratedRuntimeProviderConfiguration
-    ) throws {
-        var updated = configuration
-        updated.runtimeSettingsJSON = generated.settingsJSON
-        try configure(updated)
-    }
-
-    @discardableResult
-    public func ensureStarted() throws -> Int {
-        if let server {
-            return server.port()
+    ) async throws {
+        try await lifecycleCoordinator.run {
+            var updated = self.configuration
+            updated.runtimeSettingsJSON = generated.settingsJSON
+            guard self.server == nil else {
+                throw NSError(
+                    domain: "AgentKit.EmbeddedRuntime",
+                    code: -3,
+                    userInfo: [NSLocalizedDescriptionKey: "Stop the embedded runtime before changing its configuration."]
+                )
+            }
+            self.configuration = updated
         }
-        return try launch()
     }
 
     @discardableResult
-    public func start() throws -> Int { try ensureStarted() }
+    public func ensureStarted() async throws -> Int {
+        try await lifecycleCoordinator.run {
+            if let server = self.server {
+                return server.port()
+            }
+            return try self.launch()
+        }
+    }
+
+    @discardableResult
+    public func start() async throws -> Int { try await ensureStarted() }
 
     /// iOS checkpoints active work during its background grace period. macOS
     /// deliberately keeps full-desktop turns running while the app is inactive.
-    public func suspendRuntime(timeoutMillis: Int = 2000) {
+    public func suspendRuntime(timeoutMillis: Int = 2000) async {
         #if os(iOS)
-        guard let server else { return }
-        DispatchQueue.global(qos: .background).async {
+        await lifecycleCoordinator.run {
+            guard let server = self.server else { return }
             let backgroundTask = RuntimeBackgroundTaskGuard()
             backgroundTask.begin(name: "AgentRuntime.Suspend")
             let watchdog = DispatchWorkItem { backgroundTask.end() }
@@ -194,15 +217,17 @@ public final class AgentRuntime: @unchecked Sendable {
         #endif
     }
 
-    public func resumeRuntime(sessionID: String) throws {
-        guard let server else {
-            throw NSError(
-                domain: "AgentKit.EmbeddedRuntime",
-                code: -2,
-                userInfo: [NSLocalizedDescriptionKey: "Runtime is not started."]
-            )
+    public func resumeRuntime(sessionID: String) async throws {
+        try await lifecycleCoordinator.run {
+            guard let server = self.server else {
+                throw NSError(
+                    domain: "AgentKit.EmbeddedRuntime",
+                    code: -2,
+                    userInfo: [NSLocalizedDescriptionKey: "Runtime is not started."]
+                )
+            }
+            try server.resumeSession(sessionID)
         }
-        try server.resumeSession(sessionID)
     }
 
     /// 3-arg reconfigure（connection-flattening v2）。
@@ -217,25 +242,27 @@ public final class AgentRuntime: @unchecked Sendable {
         connectionsJSON: String = "",
         secretsJSON: String = "",
         modelName: String = ""
-    ) throws {
-        if !connectionsJSON.isEmpty {
-            injectedConnectionsJSON = connectionsJSON
+    ) async throws {
+        try await lifecycleCoordinator.run {
+            if !connectionsJSON.isEmpty {
+                self.injectedConnectionsJSON = connectionsJSON
+            }
+            if !secretsJSON.isEmpty {
+                self.injectedSecretsJSON = secretsJSON
+            }
+            guard let server = self.server else { return }
+            try self.serverReconfigure(
+                server,
+                connectionsJSON: connectionsJSON,
+                secretsJSON: secretsJSON,
+                modelName: modelName
+            )
         }
-        if !secretsJSON.isEmpty {
-            injectedSecretsJSON = secretsJSON
-        }
-        guard let server else { return }
-        try serverReconfigure(
-            server,
-            connectionsJSON: connectionsJSON,
-            secretsJSON: secretsJSON,
-            modelName: modelName
-        )
     }
 
     /// 2-arg 兼容入口（旧调用方 / UI）。等价于 `connectionsJSON = ""`。
-    public func reconfigure(secretsJSON: String = "", modelName: String = "") throws {
-        try reconfigure(connectionsJSON: "", secretsJSON: secretsJSON, modelName: modelName)
+    public func reconfigure(secretsJSON: String = "", modelName: String = "") async throws {
+        try await reconfigure(connectionsJSON: "", secretsJSON: secretsJSON, modelName: modelName)
     }
 
     /// 将 (connectionsJSON, secretsJSON, modelName) 透传给 gomobile 桥接的
@@ -258,12 +285,31 @@ public final class AgentRuntime: @unchecked Sendable {
     }
 
     @discardableResult
-    public func restart() throws -> Int {
-        stop()
-        return try launch(
-            connectionsJSON: injectedConnectionsJSON ?? "",
-            secretsJSON: injectedSecretsJSON ?? ""
-        )
+    public func restart() async throws -> Int {
+        try await lifecycleCoordinator.run {
+            self.stopUnlocked()
+            return try self.launch(
+                connectionsJSON: self.injectedConnectionsJSON ?? "",
+                secretsJSON: self.injectedSecretsJSON ?? ""
+            )
+        }
+    }
+
+    @discardableResult
+    public func restart(
+        with credentialStore: any CredentialStore
+    ) async throws -> Int {
+        let map = (try? await credentialStore.all()) ?? CredentialMap()
+        let secretsJSON = map.toSecretsJSON()
+
+        return try await lifecycleCoordinator.run {
+            self.startupModelNameOverride = ""
+            self.stopUnlocked()
+            return try self.launch(
+                connectionsJSON: self.injectedConnectionsJSON ?? "",
+                secretsJSON: secretsJSON
+            )
+        }
     }
 
     @discardableResult
@@ -271,19 +317,21 @@ public final class AgentRuntime: @unchecked Sendable {
         let map = (try? await credentialStore.all()) ?? CredentialMap()
         let secretsJSON = map.toSecretsJSON()
         let finalSecrets = secretsJSON
-        startupModelNameOverride = ""
 
-        if let server {
-            try serverReconfigure(
-                server,
-                connectionsJSON: injectedConnectionsJSON ?? "",
-                secretsJSON: finalSecrets,
-                modelName: ""
-            )
-            injectedSecretsJSON = finalSecrets
-            return server.port()
+        return try await lifecycleCoordinator.run {
+            self.startupModelNameOverride = ""
+            if let server = self.server {
+                try self.serverReconfigure(
+                    server,
+                    connectionsJSON: self.injectedConnectionsJSON ?? "",
+                    secretsJSON: finalSecrets,
+                    modelName: ""
+                )
+                self.injectedSecretsJSON = finalSecrets
+                return server.port()
+            }
+            return try self.launch(secretsJSON: finalSecrets)
         }
-        return try launch(secretsJSON: finalSecrets)
     }
 
     @discardableResult
@@ -292,64 +340,81 @@ public final class AgentRuntime: @unchecked Sendable {
     }
 
     public func reconfigure(with credentialStore: any CredentialStore) async throws {
-        guard let server else { return }
         let map = (try? await credentialStore.all()) ?? CredentialMap()
         let secretsJSON = map.toSecretsJSON()
-        try serverReconfigure(
-            server,
-            connectionsJSON: injectedConnectionsJSON ?? "",
-            secretsJSON: secretsJSON,
-            modelName: ""
-        )
-        injectedSecretsJSON = secretsJSON
-        startupModelNameOverride = ""
+        try await lifecycleCoordinator.run {
+            guard let server = self.server else { return }
+            try self.serverReconfigure(
+                server,
+                connectionsJSON: self.injectedConnectionsJSON ?? "",
+                secretsJSON: secretsJSON,
+                modelName: ""
+            )
+            self.injectedSecretsJSON = secretsJSON
+            self.startupModelNameOverride = ""
+        }
     }
 
-    public func endpoint() -> String { server?.endpoint() ?? "" }
-    public func port() -> Int { server?.port() ?? -1 }
+    public func endpoint() -> String {
+        snapshotLock.lock()
+        defer { snapshotLock.unlock() }
+        return runtimeEndpoint
+    }
+
+    public func port() -> Int {
+        snapshotLock.lock()
+        defer { snapshotLock.unlock() }
+        return runtimePort
+    }
 
     // MARK: - Shared Runtime listener
 
     func startSharedListener(
         configuration: RuntimeSharedListenerConfiguration
-    ) throws {
-        guard let server else {
-            throw RuntimeSharingError.runtimeNotStarted
+    ) async throws {
+        try await lifecycleCoordinator.run {
+            guard let server = self.server else {
+                throw RuntimeSharingError.runtimeNotStarted
+            }
+            let data = try JSONEncoder.runtimeSharing.encode(configuration)
+            guard let json = String(data: data, encoding: .utf8) else {
+                throw RuntimeSharingError.sharedListenerUnavailable
+            }
+            try server.startSharedListener(json)
         }
-        let data = try JSONEncoder.runtimeSharing.encode(configuration)
-        guard let json = String(data: data, encoding: .utf8) else {
-            throw RuntimeSharingError.sharedListenerUnavailable
-        }
-        try server.startSharedListener(json)
     }
 
-    func stopSharedListener() throws {
-        try server?.stopSharedListener()
+    func stopSharedListener() async throws {
+        try await lifecycleCoordinator.run {
+            try self.server?.stopSharedListener()
+        }
     }
 
-    func sharedListenerStatus() throws -> RuntimeSharedListenerStatus {
-        guard let server else {
-            return RuntimeSharedListenerStatus(
-                state: .stopped,
-                listenAddress: nil,
-                listenOrigin: nil,
-                port: 0,
-                startedAt: nil,
-                stoppedAt: nil,
-                lastTransitionAt: nil,
-                lastError: nil
+    func sharedListenerStatus() async throws -> RuntimeSharedListenerStatus {
+        try await lifecycleCoordinator.run {
+            guard let server = self.server else {
+                return RuntimeSharedListenerStatus(
+                    state: .stopped,
+                    listenAddress: nil,
+                    listenOrigin: nil,
+                    port: 0,
+                    startedAt: nil,
+                    stoppedAt: nil,
+                    lastTransitionAt: nil,
+                    lastError: nil
+                )
+            }
+            var error: NSError?
+            let json = server.sharedListenerStatus(&error)
+            if let error { throw error }
+            guard let data = json.data(using: .utf8) else {
+                throw RuntimeSharingError.sharedListenerUnavailable
+            }
+            return try JSONDecoder.runtimeSharing.decode(
+                RuntimeSharedListenerStatus.self,
+                from: data
             )
         }
-        var error: NSError?
-        let json = server.sharedListenerStatus(&error)
-        if let error { throw error }
-        guard let data = json.data(using: .utf8) else {
-            throw RuntimeSharingError.sharedListenerUnavailable
-        }
-        return try JSONDecoder.runtimeSharing.decode(
-            RuntimeSharedListenerStatus.self,
-            from: data
-        )
     }
 
     func rotateSharedBootstrap(
@@ -409,14 +474,25 @@ public final class AgentRuntime: @unchecked Sendable {
         try server.updateSharedDevices(json)
     }
 
-    public func stop() {
+    public func stop() async {
+        await lifecycleCoordinator.run {
+            self.stopUnlocked()
+        }
+    }
+
+    private func stopUnlocked() {
         try? server?.stop()
         server = nil
+        snapshotLock.lock()
+        runtimeIsAlive = false
+        runtimePort = -1
+        runtimeEndpoint = ""
+        snapshotLock.unlock()
     }
 
     @discardableResult
     private func launch(connectionsJSON: String = "", secretsJSON: String = "") throws -> Int {
-        stop()
+        stopUnlocked()
 
         let fileManager = FileManager.default
         let config = configuration
@@ -461,6 +537,11 @@ public final class AgentRuntime: @unchecked Sendable {
             )
         }
         server = newServer
+        snapshotLock.lock()
+        runtimeIsAlive = true
+        runtimePort = newServer.port()
+        runtimeEndpoint = newServer.endpoint()
+        snapshotLock.unlock()
         // M5: MobileStart 不带 connectionsJSON（ABI 是 Server 上的新方法，非 Start
         // 签名变更）。restart()/持久化路径若携带了已注入的连接定义，在此热重放——
         // 1.4.0+ runtime 经 reconfigureConnections 生效；1.3.x 回退 2-arg 无副作用。

@@ -56,8 +56,8 @@ public struct RuntimeServerDiagnosticSnapshot: Sendable, Equatable {
 @MainActor
 struct EmbeddedRuntimeLifecycle {
     var isAlive: @MainActor () -> Bool
-    var start: @MainActor () throws -> Int
-    var restart: @MainActor () throws -> Int
+    var start: @MainActor () async throws -> Int
+    var restart: @MainActor () async throws -> Int
     var endpoint: @MainActor () -> URL?
     var profile: @MainActor () -> String
     var healthCheck: @MainActor () async -> Bool
@@ -68,10 +68,10 @@ struct EmbeddedRuntimeLifecycle {
             AgentRuntime.shared.isAlive
         },
         start: {
-            try AgentRuntime.shared.ensureStarted()
+            try await AgentRuntime.shared.ensureStarted()
         },
         restart: {
-            try AgentRuntime.shared.restart()
+            try await AgentRuntime.shared.restart()
         },
         // 闭包是同步 @MainActor，直接读动态端口即可，避免走 async 的
         // RuntimeEnvironment（baseURL 现在需要 await）。
@@ -220,7 +220,7 @@ public final class RuntimeServerStatusMonitor {
             }
             status = .starting
             do {
-                _ = try lifecycle.start()
+                _ = try await lifecycle.start()
             } catch {
                 status = .configurationError
                 lastErrorDescription = Self.safeDescription(error)
@@ -247,7 +247,7 @@ public final class RuntimeServerStatusMonitor {
         lastCheckedAt = Date()
         lastErrorDescription = nil
         do {
-            _ = try lifecycle.restart()
+            _ = try await lifecycle.restart()
         } catch {
             status = .configurationError
             lastErrorDescription = Self.safeDescription(error)

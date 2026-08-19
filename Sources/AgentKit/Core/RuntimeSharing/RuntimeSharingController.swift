@@ -71,7 +71,7 @@ public final class RuntimeSharingController {
         listenAddress: String = "0.0.0.0:0"
     ) async throws {
 #if canImport(CodeAgentRuntime)
-        _ = try runtime.ensureStarted()
+        _ = try await runtime.ensureStarted()
         let info = try await embeddedRuntimeInfo()
         let resolvedName = displayName?.trimmingCharacters(
             in: .whitespacesAndNewlines
@@ -88,8 +88,8 @@ public final class RuntimeSharingController {
             devices: deviceRegistry.validationRecords(),
             enrollmentTimeoutSeconds: 60
         )
-        try runtime.startSharedListener(configuration: configuration)
-        let status = try runtime.sharedListenerStatus()
+        try await runtime.startSharedListener(configuration: configuration)
+        let status = try await runtime.sharedListenerStatus()
         guard status.state == .running, status.port > 0 else {
             throw RuntimeSharingError.sharedListenerUnavailable
         }
@@ -119,8 +119,10 @@ public final class RuntimeSharingController {
         enrollmentTask?.cancel()
         enrollmentTask = nil
         advertiser.stop()
-        try? runtime.stopSharedListener()
-        status = (try? runtime.sharedListenerStatus()) ?? RuntimeSharedListenerStatus(
+        Task { [runtime] in
+            try? await runtime.stopSharedListener()
+        }
+        status = RuntimeSharedListenerStatus(
             state: .stopped,
             listenAddress: nil,
             listenOrigin: nil,
@@ -136,10 +138,10 @@ public final class RuntimeSharingController {
     }
 
     @discardableResult
-    public func refreshStatus() -> RuntimeSharedListenerStatus {
+    public func refreshStatus() async -> RuntimeSharedListenerStatus {
 #if canImport(CodeAgentRuntime)
         do {
-            status = try runtime.sharedListenerStatus()
+            status = try await runtime.sharedListenerStatus()
             lastError = status.lastError
         } catch {
             lastError = error.localizedDescription
