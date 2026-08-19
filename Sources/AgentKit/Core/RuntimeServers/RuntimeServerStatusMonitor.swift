@@ -64,9 +64,15 @@ struct EmbeddedRuntimeLifecycle {
     var runtimeInfo: @MainActor () async throws -> RuntimeServerInfo
 
     static let live = EmbeddedRuntimeLifecycle(
-        isAlive: { AgentRuntime.shared.isAlive },
-        start: { try AgentRuntime.shared.ensureStarted() },
-        restart: { try AgentRuntime.shared.restart() },
+        isAlive: {
+            AgentRuntime.shared.isAlive
+        },
+        start: {
+            try AgentRuntime.shared.ensureStarted()
+        },
+        restart: {
+            try AgentRuntime.shared.restart()
+        },
         // 闭包是同步 @MainActor，直接读动态端口即可，避免走 async 的
         // RuntimeEnvironment（baseURL 现在需要 await）。
         endpoint: {
@@ -74,7 +80,9 @@ struct EmbeddedRuntimeLifecycle {
             guard port > 0 else { return nil }
             return URL(string: "http://127.0.0.1:\(port)")
         },
-        profile: { AgentRuntime.shared.currentConfiguration.profile.rawValue },
+        profile: {
+            AgentRuntime.shared.currentConfiguration.profile.rawValue
+        },
         healthCheck: {
             let client = RuntimeHTTPClient(environment: .fromRuntime())
             return (try? await client.healthCheck()) == true

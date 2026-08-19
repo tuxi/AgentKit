@@ -23,12 +23,21 @@ public struct AgentCodePreviewView: View {
     }
 
     public var body: some View {
-        FileArtifactBody(
-            filePath: filePath,
-            content: content,
-            language: language,
-            maxHeight: nil,
-            focusLine: focusLine
-        )
+        VStack {
+            ScrollView(.horizontal, showsIndicators: false) {
+                Text(filePath)
+                    .font(.system(size: 11))
+                    .lineLimit(1)
+                    .padding(.horizontal, 10)
+            }
+            .frame(height: 15)
+            FileArtifactBody(
+                filePath: filePath,
+                content: content,
+                language: language,
+                maxHeight: nil,
+                focusLine: focusLine
+            )
+        }
     }
 }

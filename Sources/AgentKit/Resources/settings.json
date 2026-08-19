@@ -8,8 +8,28 @@
     }
   },
   "providers": {
-      
-  },
+      "gateway": {
+        "enabled": true,
+        "base_url": "__GATEWAY_BASE_URL__",
+        "api": "openai",
+        "credential": {
+          "namespace": "gateway",
+          "name": "default"
+        },
+        "models": [
+          {
+            "id": "deepseek-v4-flash",
+            "runtime_alias": "gateway",
+            "context_window": 128000,
+            "temperature": 0.2,
+            "supports_tools": true,
+            "input_modalities": [
+              "text"
+            ]
+          }
+        ]
+      }
+    },
   "agent": {
     "max_steps": 100,
     "max_parallel_tools": 6,
