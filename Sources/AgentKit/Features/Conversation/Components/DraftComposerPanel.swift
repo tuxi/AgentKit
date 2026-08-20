@@ -79,12 +79,14 @@ struct DraftComposerPanel: View {
     var body: some View {
         VStack(spacing: 0) {
 #if os(iOS)
-            WorkspaceChipBar()
-                .padding(.horizontal, 4)
-                .padding(.top, 3)
-            Divider()
-                .opacity(0.45)
-                .padding(.horizontal, 12)
+            if isDraft {
+                WorkspaceChipBar()
+                    .padding(.horizontal, 4)
+                    .padding(.top, 3)
+                Divider()
+                    .opacity(0.45)
+                    .padding(.horizontal, 12)
+            }
 #endif
             
             VStack(spacing: 8) {
@@ -596,15 +598,8 @@ struct DraftComposerPanel: View {
                 .trim(from: 0, to: contextRingProgress)
                 .stroke(contextRingColor, style: StrokeStyle(lineWidth: 3, lineCap: .round))
                 .rotationEffect(.degrees(-90))
-            if let current = contextSnapshot?.current {
-                Text("\(Int(current.usagePct.rounded()))%")
-                    .font(.system(size: 6, weight: .regular))
-                    .foregroundStyle(.secondary)
-                    .lineLimit(1)
-                    .minimumScaleFactor(0.68)
-            }
         }
-        .frame(width: 22, height: 22)
+        .frame(width: 11, height: 11)
         .contentShape(Circle())
     }
 

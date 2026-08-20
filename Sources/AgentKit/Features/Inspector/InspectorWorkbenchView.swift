@@ -107,6 +107,7 @@ private struct InspectorTabWorkbench: View {
                 }
             }
         }
+        .padding(.top, 10)
         .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
 }
