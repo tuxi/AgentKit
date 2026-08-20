@@ -69,8 +69,8 @@ enum RuntimeTLSSecurity {
     }
 
     static func constantTimeEqual(_ lhs: String, _ rhs: String) -> Bool {
-        let a = Array(lhs.utf8)
-        let b = Array(rhs.utf8)
+        let a = Array(decodeRuntimeSHA256(lhs) ?? Data(lhs.utf8))
+        let b = Array(decodeRuntimeSHA256(rhs) ?? Data(rhs.utf8))
         guard a.count == b.count else { return false }
         var difference: UInt8 = 0
         for index in a.indices {

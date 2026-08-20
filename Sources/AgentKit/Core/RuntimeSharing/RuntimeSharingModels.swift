@@ -114,6 +114,19 @@ public struct RuntimePairingInvitation: Codable, Sendable, Equatable {
     public let bootstrapSecret: String
     public let bootstrapExpiresAt: Date
     public let spkiSHA256: String
+    
+    enum CodingKeys: String, CodingKey {
+        case version
+        case serverID = "server_id"
+        case serverDisplayName = "server_display_name"
+        case serviceType = "service_type"
+        case serviceName = "service_name"
+        case fallbackHost = "fallback_host"
+        case port
+        case bootstrapSecret = "bootstrap_secret"
+        case bootstrapExpiresAt = "bootstrap_expires_at"
+        case spkiSHA256 = "spki_sha256"
+    }
 
     public init(
         version: Int = 1,
@@ -152,7 +165,7 @@ public struct RuntimePairingInvitation: Codable, Sendable, Equatable {
         guard invitation.version == 1,
               invitation.port > 0,
               invitation.bootstrapSecret.utf8.count >= 32,
-              Data(base64Encoded: invitation.spkiSHA256)?.count == 32 else {
+              decodeRuntimeSHA256(invitation.spkiSHA256) != nil else {
             throw RuntimeSharingError.invalidInvitation
         }
         return invitation

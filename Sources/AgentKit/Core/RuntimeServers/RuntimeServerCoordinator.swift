@@ -197,7 +197,7 @@ public final class RuntimeServerCoordinator {
         )
     }
 
-    /// Completes a QR/Bonjour pairing against a Mac Embedded Runtime. The
+    /// Completes a QR/Bonjour pairing against a shared Mac Runtime. The
     /// plaintext device credential exists only in this call and is written to
     /// the Runtime Access Keychain before the connection is returned.
     @discardableResult
@@ -211,9 +211,12 @@ public final class RuntimeServerCoordinator {
         guard invitation.bootstrapExpiresAt > Date() else {
             throw RuntimeSharingError.invitationExpired
         }
+        let fallbackHost = Self.normalizedSharingFallbackHost(
+            invitation.fallbackHost
+        )
         let endpoint = try (
             resolvedEndpoint ?? URL(
-                string: "https://\(invitation.fallbackHost):\(invitation.port)"
+                string: "https://\(fallbackHost):\(invitation.port)"
             )
         ).unwrap(or: RuntimeSharingError.invalidInvitation)
         let trustPolicy = RuntimeServerTrustPolicy(
@@ -623,6 +626,20 @@ public final class RuntimeServerCoordinator {
             suffix += 1
         }
         return "\(base)-\(suffix)"
+    }
+
+    private static func normalizedSharingFallbackHost(_ value: String) -> String {
+        let host = value.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !host.isEmpty,
+              host.lowercased() != "localhost",
+              !host.contains("."),
+              !host.contains(":") else {
+            return host
+        }
+        // Code-Agent's Bonjour advertiser publishes this hostname as
+        // <hostname>.local. The daemon invitation historically returned the
+        // bare hostname, so normalize only that unqualified-host case.
+        return "\(host).local"
     }
 }
 

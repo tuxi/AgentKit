@@ -151,7 +151,7 @@ public struct RuntimeServerConnection: Codable, Identifiable, Sendable, Equatabl
         if let trustPolicy {
             guard endpoint.scheme?.lowercased() == "https",
                   endpoint.host?.lowercased() == trustPolicy.expectedHost,
-                  Data(base64Encoded: trustPolicy.spkiSHA256)?.count == 32 else {
+                  decodeRuntimeSHA256(trustPolicy.spkiSHA256) != nil else {
                 throw RuntimeServerRegistryError.invalidExternalEndpoint
             }
         }
