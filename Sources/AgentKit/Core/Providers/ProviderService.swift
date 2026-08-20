@@ -372,6 +372,8 @@ public protocol ProviderStore: Sendable {
     /// `POST /v1/secrets` — push provider credential values into the runtime's
     /// mutable injected resolver so models become available without a restart.
     func pushSecrets(_ entries: [String: RuntimeSecretEntry]) async throws
+    /// `POST /v1/settings/reload` — apply a settings.json snapshot immediately.
+    func reloadSettings() async throws
 }
 
 /// Picks the store for a deployment. All active deployments use the HTTP-backed
@@ -520,6 +522,10 @@ public struct RuntimeProviderService: ProviderStore, Sendable {
     public func pushSecrets(_ entries: [String: RuntimeSecretEntry]) async throws {
         try await client.pushSecrets(entries)
     }
+
+    public func reloadSettings() async throws {
+        try await client.reloadSettings()
+    }
 }
 
 // MARK: - LocalProviderStore (registry-backed, iOS embedded)
@@ -564,6 +570,10 @@ public struct LocalProviderStore: ProviderStore {
     /// Registry-backed store has no runtime /v1/secrets surface; credential
     /// values flow through the host's legacy injection path instead.
     public func pushSecrets(_ entries: [String: RuntimeSecretEntry]) async throws {
+        // No-op: migration fallback only.
+    }
+
+    public func reloadSettings() async throws {
         // No-op: migration fallback only.
     }
 }

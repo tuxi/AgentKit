@@ -242,6 +242,15 @@ struct RuntimeHTTPClient: Sendable {
         try validateHTTP(response, data: data)
     }
 
+    /// `POST /v1/settings/reload` — explicitly applies the persisted settings
+    /// snapshot. Normally the runtime watcher applies atomic settings writes;
+    /// this is useful when a host needs an immediate acknowledgement.
+    func reloadSettings() async throws {
+        let request = try await buildRequest("POST", pathComponents: "v1/settings/reload")
+        let (data, response) = try await session.data(for: request)
+        try validateHTTP(response, data: data)
+    }
+
     /// `GET /v1/activity` — sessions owned by the authenticated principal/device.
     func activitySnapshot() async throws -> RuntimeActivitySnapshot {
         try await activitySnapshot(sinceSequence: nil)
