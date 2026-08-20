@@ -182,6 +182,31 @@ struct RuntimeHTTPClient: Sendable {
         return try decodeEnvelope(RuntimeCapabilitySnapshot.self, from: data)
     }
 
+    func listWorkspaceGitBranches(workspacePath: String) async throws -> WorkspaceGitBranchResult {
+        try await performWorkspaceGitBranchRequest(endpoint: "list", body: WorkspaceGitBranchListRequest(workspacePath: workspacePath))
+    }
+
+    func createWorkspaceGitBranch(_ value: WorkspaceGitBranchCreateRequest) async throws -> WorkspaceGitBranchResult {
+        try await performWorkspaceGitBranchRequest(endpoint: "create", body: value)
+    }
+
+    func checkoutWorkspaceGitBranch(_ value: WorkspaceGitBranchCheckoutRequest) async throws -> WorkspaceGitBranchResult {
+        try await performWorkspaceGitBranchRequest(endpoint: "checkout", body: value)
+    }
+
+    private func performWorkspaceGitBranchRequest<T: Encodable>(endpoint: String, body: T) async throws -> WorkspaceGitBranchResult {
+        let request = try await buildRequest("POST", pathComponents: "v1", "workspaces", "git", "branches", endpoint, body: body)
+        let (data, response) = try await session.data(for: request)
+        guard let http = response as? HTTPURLResponse else { throw RuntimeHTTPError.invalidResponse }
+        guard (200...299).contains(http.statusCode) else {
+            if let envelope = try? decoder.decode(RuntimeEnvelope<WorkspaceGitBranchErrorPayload>.self, from: data), let payload = envelope.data {
+                throw RuntimeHTTPError.workspaceGit(payload)
+            }
+            throw RuntimeHTTPError.unexpectedStatus(http.statusCode, body: String(data: data, encoding: .utf8) ?? "")
+        }
+        return try decodeEnvelope(WorkspaceGitBranchResult.self, from: data)
+    }
+
     // MARK: - Provider config (/v1/providers)
 
     /// `GET /v1/providers` — full provider definition array.
@@ -735,6 +760,7 @@ enum RuntimeHTTPError: Error {
     case unexpectedStatus(Int, body: String)
     /// 当前 client/transport 不支持该能力（如 mock）。
     case unsupported
+    case workspaceGit(WorkspaceGitBranchErrorPayload)
 }
 
 extension RuntimeHTTPError: LocalizedError {
@@ -746,6 +772,7 @@ extension RuntimeHTTPError: LocalizedError {
         case .authenticationRequired: return "Runtime Server 需要访问凭证。"
         case .authenticationInvalid:  return "Runtime Server 访问凭证无效。"
         case .unsupported:       return "当前后端不支持该操作。"
+        case .workspaceGit(let payload): return payload.message
         case .unexpectedStatus(let code, let body):
             let msg = Self.extractMessage(from: body)
             return msg.isEmpty ? "请求失败（HTTP \(code)）。" : msg

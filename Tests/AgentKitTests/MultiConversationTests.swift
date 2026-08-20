@@ -449,6 +449,13 @@ final class MultiConversationTests: XCTestCase {
             .appendingPathComponent("AgentKitDraftRestore-\(UUID().uuidString)", isDirectory: true)
         try FileManager.default.createDirectory(at: workspaceURL, withIntermediateDirectories: true)
         defer { try? FileManager.default.removeItem(at: workspaceURL) }
+        let gitURL = workspaceURL.appendingPathComponent(".git", isDirectory: true)
+        try FileManager.default.createDirectory(at: gitURL, withIntermediateDirectories: true)
+        try "ref: refs/heads/feature/current\n".write(
+            to: gitURL.appendingPathComponent("HEAD"),
+            atomically: true,
+            encoding: .utf8
+        )
         try localState.updateState(for: .draft(draftID)) { state in
             state.composerDraft.text = "continue after restart"
             state.composerDraft.workspacePath = workspaceURL.path
@@ -468,7 +475,7 @@ final class MultiConversationTests: XCTestCase {
 
         XCTAssertEqual(store.draft?.id, draftID)
         XCTAssertEqual(store.draft?.workspace?.url.path, workspaceURL.path)
-        XCTAssertEqual(store.draft?.workspace?.branch, "main")
+        XCTAssertEqual(store.draft?.workspace?.branch, "feature/current")
         XCTAssertEqual(store.draft?.clientRequestID, "create-stable")
         XCTAssertEqual(store.draft?.managedWorktreeSuggestedName, "steady-turing")
         XCTAssertEqual(store.draft?.managedWorktreeBaseRef, .fresh)

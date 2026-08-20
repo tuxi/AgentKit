@@ -319,18 +319,6 @@ public final class CodeAgentTransport: AgentTransport, @unchecked Sendable {
         try await http.cloneRepo(url: url, ref: ref)
     }
 
-    public func listWorkspaceGitBranches(workspacePath: String) async throws -> WorkspaceGitBranchResult {
-        try await http.listWorkspaceGitBranches(workspacePath: workspacePath)
-    }
-
-    public func createWorkspaceGitBranch(_ request: WorkspaceGitBranchCreateRequest) async throws -> WorkspaceGitBranchResult {
-        try await http.createWorkspaceGitBranch(request)
-    }
-
-    public func checkoutWorkspaceGitBranch(_ request: WorkspaceGitBranchCheckoutRequest) async throws -> WorkspaceGitBranchResult {
-        try await http.checkoutWorkspaceGitBranch(request)
-    }
-
     // MARK: - AgentTransport: Session state
 
     public var isConnected: Bool { socket?.isConnected ?? false }

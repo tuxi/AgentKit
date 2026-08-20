@@ -28,6 +28,8 @@ struct WorkspaceChipBar: View {
     @State private var isGitClonePresented = false
     @State private var cloneTask: Task<Void, Never>?
     @State private var cloneError: String?
+    @State private var isBranchCreatePresented = false
+    @State private var newBranchName = ""
 
     var body: some View {
         Group {
@@ -41,6 +43,9 @@ struct WorkspaceChipBar: View {
             #endif
         }
         .onAppear { store.projects.reload() }
+        .task(id: store.draft?.workspace?.id) {
+            await store.refreshDraftWorkspaceGitBranches()
+        }
         .fileImporter(
             isPresented: $isImporterPresented,
             allowedContentTypes: [.folder],
@@ -88,6 +93,34 @@ struct WorkspaceChipBar: View {
             Button(AgentKitLocalized.string("workspace.ok"), role: .cancel) { createError = nil }
         } message: {
             Text(createError ?? "")
+        }
+        .alert(
+            "分支操作失败",
+            isPresented: Binding(
+                get: { store.workspaceGitErrorMessage != nil },
+                set: { if !$0 { store.clearWorkspaceGitError() } }
+            )
+        ) {
+            Button("好", role: .cancel) { store.clearWorkspaceGitError() }
+        } message: {
+            Text(store.workspaceGitErrorMessage ?? "")
+        }
+        .sheet(isPresented: $isBranchCreatePresented) {
+            BranchCreateSheet(
+                name: $newBranchName,
+                isCreating: store.isLoadingWorkspaceGitBranches,
+                onCancel: { isBranchCreatePresented = false },
+                onCreate: {
+                    let name = newBranchName
+                    Task {
+                        await store.createDraftWorkspaceBranch(named: name)
+                        if store.workspaceGitErrorMessage == nil {
+                            newBranchName = ""
+                            isBranchCreatePresented = false
+                        }
+                    }
+                }
+            )
         }
     }
 
@@ -156,7 +189,9 @@ struct WorkspaceChipBar: View {
             workspaceMenu {
                 chip(icon: "folder", text: ws.name, showsChevron: true)
             }
-            if let branch = ws.branch {
+            if store.supportsWorkspaceGitBranch {
+                branchMenu(currentBranch: store.workspaceGitCheckout?.head.name ?? ws.branch)
+            } else if let branch = ws.branch {
                 chip(icon: "arrow.triangle.branch", text: branch)
             }
             if horizontalSizeClass == .regular {
@@ -195,6 +230,54 @@ struct WorkspaceChipBar: View {
 
     private var localChip: some View {
         chip(icon: "desktopcomputer", text: "Local")
+    }
+
+    private func branchMenu(currentBranch: String?) -> some View {
+        Menu {
+            if store.isLoadingWorkspaceGitBranches && store.workspaceGitBranches.isEmpty {
+                ProgressView("读取分支…")
+            } else if store.workspaceGitBranches.isEmpty {
+                Text("没有可用分支")
+            } else {
+                Section("分支") {
+                    ForEach(store.workspaceGitBranches) { branch in
+                        Button {
+                            guard !branch.isCurrent else { return }
+                            Task { await store.checkoutDraftWorkspaceBranch(branch.name) }
+                        } label: {
+                            HStack {
+                                Image(systemName: "arrow.triangle.branch")
+                                    .font(.system(size: 8))
+                                VStack(alignment: .leading) {
+                                    Text(branch.name)
+                                    if branch.isCheckedOutElsewhere {
+                                        Text("已在其他 worktree 中检出")
+                                            .font(.caption2)
+                                            .foregroundStyle(.secondary)
+                                    }
+                                }
+                                Spacer()
+                                if branch.isCurrent { Image(systemName: "checkmark") }
+                            }
+                        }
+                        .disabled(branch.isCurrent || branch.isCheckedOutElsewhere)
+                    }
+                }
+            }
+            Divider()
+            Button {
+                newBranchName = "code-agent/"
+                isBranchCreatePresented = true
+            } label: {
+                Label("创建并检出新分支…", systemImage: "plus")
+            }
+        } label: {
+            chip(icon: "arrow.triangle.branch", text: currentBranch ?? "分支", showsChevron: true)
+        }
+        .menuStyle(.borderlessButton)
+        .menuIndicator(.hidden)
+        .fixedSize()
+        .disabled(store.isPreparingWorkspace || store.isLoadingWorkspaceGitBranches)
     }
 
     private var managedWorktreeMenu: some View {
@@ -447,9 +530,8 @@ struct WorkspaceChipBar: View {
         prominent: Bool = false,
         showsChevron: Bool = false
     ) -> some View {
-        HStack(spacing: 4) {
+        HStack(spacing: 3) {
             Image(systemName: icon)
-                .font(.caption2)
             Text(text)
                 .font(.caption)
                 .lineLimit(1)

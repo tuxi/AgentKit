@@ -177,6 +177,15 @@ public final class WorkspaceStore {
         supervisor.runtimeCapabilities.supportsPublicGitClone
     }
 
+    public var supportsWorkspaceGitBranch: Bool {
+        supervisor.runtimeCapabilities.supportsWorkspaceGitBranch
+    }
+
+    public private(set) var workspaceGitBranches: [WorkspaceGitBranch] = []
+    public private(set) var workspaceGitCheckout: WorkspaceGitCheckoutState?
+    public private(set) var isLoadingWorkspaceGitBranches = false
+    public private(set) var workspaceGitErrorMessage: String?
+
     public var runtimeProjectsRoot: String? {
         supervisor.runtimeCapabilities.projectsRoot
     }
@@ -829,24 +838,37 @@ public final class WorkspaceStore {
 
                 let oldPath = recovered.state.composerDraft.workspacePath
                 let newPath = restoredDraft.workspace?.url.path
+                let oldBranch = recovered.state.composerDraft.workspaceBranch
+                let newBranch = restoredDraft.workspace?.branch
 
-                // 只在成功恢复且路径确实发生变化时写回。
+                // Restore the refreshed checkout metadata as well as a remapped
+                // sandbox path. The persisted branch is intentionally treated as
+                // a snapshot, so a branch change outside the app must be saved.
                 if let oldPath,
                    let newPath,
                    !oldPath.isEmpty,
-                   oldPath != newPath {
+                   (oldPath != newPath || oldBranch != newBranch) {
                     persistDraftMetadata()
                 }
             } else {
-                draft = SessionDraft(workspace: recentWorkspaces.mostRecent)
+                // RecentWorkspacesStore keeps a durable Workspace value, whose
+                // branch can be stale after an IDE/Terminal checkout. Resolve
+                // the current HEAD whenever a new draft is created.
+                let currentWorkspace = recentWorkspaces.mostRecent.map {
+                    Workspace(url: $0.url)
+                }
+                draft = SessionDraft(workspace: currentWorkspace)
                 persistDraftMetadata()
             }
         }
 
         draftNavigationRevision += 1
 
-        if runtimeCapabilityDiscoveryState != .available {
-            Task { await refreshRuntimeState() }
+        Task {
+            if runtimeCapabilityDiscoveryState != .available {
+                await refreshRuntimeState()
+            }
+            await refreshDraftWorkspaceGitBranches()
         }
     }
 
@@ -915,6 +937,84 @@ public final class WorkspaceStore {
         draft?.state = .ready
         recentWorkspaces.touch(workspace)
         persistDraftMetadata()
+        Task { await refreshDraftWorkspaceGitBranches() }
+    }
+
+    /// Refresh branch metadata for the current draft. The Runtime is the
+    /// authority for branch enumeration and checkout state; local Workspace
+    /// values only cache the display branch.
+    public func refreshDraftWorkspaceGitBranches() async {
+        guard supportsWorkspaceGitBranch, let workspace = draft?.workspace else {
+            workspaceGitBranches = []
+            workspaceGitCheckout = nil
+            return
+        }
+        isLoadingWorkspaceGitBranches = true
+        workspaceGitErrorMessage = nil
+        defer { isLoadingWorkspaceGitBranches = false }
+        do {
+            let result = try await client.listWorkspaceGitBranches(workspacePath: workspace.url.path)
+            applyWorkspaceGitBranchResult(result)
+        } catch {
+            workspaceGitErrorMessage = error.localizedDescription
+        }
+    }
+
+    public func checkoutDraftWorkspaceBranch(_ name: String) async {
+        guard supportsWorkspaceGitBranch, let workspace = draft?.workspace else { return }
+        isLoadingWorkspaceGitBranches = true
+        workspaceGitErrorMessage = nil
+        defer { isLoadingWorkspaceGitBranches = false }
+        do {
+            let result = try await client.checkoutWorkspaceGitBranch(
+                WorkspaceGitBranchCheckoutRequest(workspacePath: workspace.url.path, name: name)
+            )
+            applyWorkspaceGitBranchResult(result)
+            let refreshed = Workspace(url: workspace.url)
+            draft?.workspace = refreshed
+            recentWorkspaces.touch(refreshed)
+            persistDraftMetadata()
+        } catch {
+            workspaceGitErrorMessage = error.localizedDescription
+        }
+    }
+
+    public func createDraftWorkspaceBranch(named name: String) async {
+        guard supportsWorkspaceGitBranch, let workspace = draft?.workspace else { return }
+        let trimmed = name.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else {
+            workspaceGitErrorMessage = "分支名称不能为空。"
+            return
+        }
+        isLoadingWorkspaceGitBranches = true
+        workspaceGitErrorMessage = nil
+        defer { isLoadingWorkspaceGitBranches = false }
+        do {
+            let result = try await client.createWorkspaceGitBranch(
+                WorkspaceGitBranchCreateRequest(
+                    workspacePath: workspace.url.path,
+                    name: trimmed,
+                    checkout: true,
+                    clientRequestID: UUID().uuidString
+                )
+            )
+            applyWorkspaceGitBranchResult(result)
+            let refreshed = Workspace(url: workspace.url)
+            draft?.workspace = refreshed
+            recentWorkspaces.touch(refreshed)
+            persistDraftMetadata()
+        } catch {
+            workspaceGitErrorMessage = error.localizedDescription
+        }
+    }
+
+    private func applyWorkspaceGitBranchResult(_ result: WorkspaceGitBranchResult) {
+        workspaceGitBranches = result.branches
+        workspaceGitCheckout = result.checkout
+    }
+
+    public func clearWorkspaceGitError() {
+        workspaceGitErrorMessage = nil
     }
 
     public func setDraftManagedWorktreeEnabled(_ enabled: Bool) {
@@ -1061,10 +1161,13 @@ public final class WorkspaceStore {
             ), isDirectory.boolValue else {
                 return nil
             }
-            return Workspace(
-                url: URL(fileURLWithPath: newPath),
-                branch: composer.workspaceBranch
-            )
+            // `workspaceBranch` is only draft metadata and can be stale when
+            // the user switches branches outside the app between launches.
+            // Re-read the checkout's current HEAD instead of restoring the
+            // previous snapshot. The rest of the draft (text, model, worktree
+            // intent and idempotency identity) remains durable and is restored
+            // unchanged.
+            return Workspace(url: URL(fileURLWithPath: newPath))
         }
         return SessionDraft(
             id: recovered.id,
