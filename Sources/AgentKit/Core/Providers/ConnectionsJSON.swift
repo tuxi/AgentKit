@@ -41,7 +41,8 @@ public struct RuntimeConnectionsDocument: Codable, Sendable, Equatable {
 public struct RuntimeConnectionDefinition: Codable, Sendable, Equatable, Identifiable {
     /// flat connection id（与 v2 secretsJSON key 同源）。
     public let id: String
-    /// API 类型：`openai` | `ollama` | `gateway`。
+    /// API 类型：`openai` | `ollama`。Gateway 使用 `openai` 协议，
+    /// 通过 credential namespace `gateway` 表示身份。
     public let api: String
     public let baseURL: String
     /// credential 来源声明（non-secret）。

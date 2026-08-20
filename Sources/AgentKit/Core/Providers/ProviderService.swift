@@ -96,7 +96,7 @@ public struct RuntimeProviderModelDefinition: Codable, Sendable, Equatable, Iden
 public struct RuntimeProviderDefinition: Codable, Sendable, Equatable, Identifiable {
     /// Service id — same namespace as the flat secretsJSON / connectionsJSON key.
     public let id: String
-    /// `openai` | `ollama` | `gateway`.
+    /// `openai` | `ollama`. Gateway uses the OpenAI-compatible protocol.
     public let api: String
     public let baseURL: String
     public let credential: RuntimeConnectionCredentialDeclaration?
@@ -261,7 +261,9 @@ public extension ProviderConnection {
         case .ollama:
             api = "ollama"
         case .openAIChatCompletions:
-            api = isTalkifyGateway ? "gateway" : "openai"
+            // Gateway is a connection/credential kind. The runtime talks to
+            // it through the OpenAI-compatible Chat Completions protocol.
+            api = "openai"
         }
 
         let credential: RuntimeConnectionCredentialDeclaration?

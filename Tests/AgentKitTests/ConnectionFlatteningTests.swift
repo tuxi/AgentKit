@@ -256,7 +256,7 @@ final class ConnectionFlatteningTests: XCTestCase {
 
         let gateway = try XCTUnwrap(document.connections["talkify-gateway"])
         XCTAssertEqual(gateway.id, "talkify-gateway")
-        XCTAssertEqual(gateway.api, "gateway")
+        XCTAssertEqual(gateway.api, "openai")
         XCTAssertEqual(gateway.baseURL, "https://api.objc.com")
         XCTAssertEqual(gateway.credential?.source, "injected")
         XCTAssertEqual(gateway.credential?.ref, "gateway")

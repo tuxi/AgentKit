@@ -320,7 +320,9 @@ public enum RuntimeProviderConfigurationBuilder {
             case .ollama:
                 api = "ollama"
             case .openAIChatCompletions:
-                api = connection.isTalkifyGateway ? "gateway" : "openai"
+                // Gateway is a connection/credential kind, not a runtime wire
+                // protocol. Its endpoint is OpenAI Chat Completions compatible.
+                api = "openai"
             }
 
             let credential: RuntimeConnectionCredentialDeclaration?

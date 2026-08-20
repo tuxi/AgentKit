@@ -252,7 +252,7 @@ final class RuntimeProviderServiceTests: XCTestCase {
 
 final class ProviderMappingTests: XCTestCase {
 
-    func testGatewayConnectionMapsToGatewayProvider() throws {
+    func testGatewayConnectionMapsToOpenAIProviderWithGatewayCredential() throws {
         let gateway = ProviderConnection.talkifyGateway(
             baseURL: URL(string: "https://api.objc.com")!,
             models: [ProviderModel(id: "deepseek-v4-pro", displayName: "DeepSeek Pro")],
@@ -260,7 +260,7 @@ final class ProviderMappingTests: XCTestCase {
         )
         let definition = gateway.asRuntimeProviderDefinition()
         XCTAssertEqual(definition.id, "talkify-gateway")
-        XCTAssertEqual(definition.api, "gateway")
+        XCTAssertEqual(definition.api, "openai")
         XCTAssertEqual(definition.credential?.namespace, "gateway")
         XCTAssertEqual(definition.credential?.name, "default")
         XCTAssertEqual(definition.enabled, true)
