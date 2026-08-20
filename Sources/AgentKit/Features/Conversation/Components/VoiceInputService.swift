@@ -59,15 +59,24 @@ public final class VoiceInputService: ObservableObject, @unchecked Sendable {
 
     // MARK: - Public API
 
-    /// 请求语音识别权限。
+    /// 请求语音识别 + 麦克风权限（两者都必须授权才返回 true）。
+    /// macOS 上 Speech 与 Microphone 是两套独立的 TCC 权限，必须分别请求；
+    /// 仅 SFSpeechRecognizer.requestAuthorization 返回 .authorized 不代表麦克风可用。
     public func requestAuthorization() async -> Bool {
-        let status = await withCheckedContinuation { continuation in
+        // 1. 请求语音识别权限
+        let speechStatus = await withCheckedContinuation { continuation in
             SFSpeechRecognizer.requestAuthorization { status in
                 continuation.resume(returning: status)
             }
         }
-        await updateOnMain { self.authorizationStatus = status }
-        return status == .authorized
+        await updateOnMain { self.authorizationStatus = speechStatus }
+
+        // 2. 请求麦克风权限（iOS / macOS 均需显式请求）
+        //    macOS 上不能依赖 AVAudioRecorder.record() 隐式触发弹窗，
+        //    必须调用 AVAudioApplication.requestRecordPermission() 驱动 TCC 状态机。
+        let micAuthorized = await requestMicrophonePermission()
+
+        return speechStatus == .authorized && micAuthorized
     }
 
     /// 开始录音。
@@ -92,24 +101,32 @@ public final class VoiceInputService: ObservableObject, @unchecked Sendable {
             return
         }
 
-#if os(macOS)
-        // macOS：不预检麦克风权限，直接尝试录音。
-        // AVAudioRecorder 启动时会触发系统授权弹窗（需 Info.plist 配置 NSMicrophoneUsageDescription）。
-        // 若未授权，record() 返回 false 或 recorder 无法启动。
-#else
-        // iOS：预检权限，若未授权直接报 error 弹窗。
-        guard await requestMicrophonePermission() else {
-            await updateOnMain { self.state = .error(AgentKitLocalized.string("composer.voice_input.no_permission")) }
-            return
-        }
-#endif
+        // 麦克风权限已在上方 requestAuthorization() 中统一请求（iOS / macOS 均包含），
+        // 此处不再重复请求。
 
         do {
             try startAudioSession()
             try beginAudioRecording()
 
-            // 验证录音确实已启动（macOS 上若权限不足会静默失败）
+            // 验证录音确实已启动
             guard let recorder = audioRecorder, recorder.isRecording else {
+                await updateOnMain { self.state = .error(AgentKitLocalized.string("composer.voice_input.no_permission")) }
+                return
+            }
+
+            // 验证实际捕获到非静音音频。
+            // macOS 上当麦克风 TCC 权限为 .denied / .notDetermined 时，
+            // AVAudioRecorder.isRecording 仍为 true，但录制的是全零静音数据，
+            // 导致后续语音识别必然失败。此处通过电平检测主动拦截。
+            try? await Task.sleep(nanoseconds: 300_000_000)
+            recorder.updateMeters()
+            let power = recorder.averagePower(forChannel: 0)
+            // -50dB 以下视为静音（正常环境底噪通常在 -35dB ~ -10dB）
+            if power < -50 {
+                print("[VoiceInput] silence detected after 0.3s: power=\(power)dB — microphone permission likely denied or input device unavailable")
+                recorder.stop()
+                self.audioRecorder = nil
+                self.cleanupRecordingFile()
                 await updateOnMain { self.state = .error(AgentKitLocalized.string("composer.voice_input.no_permission")) }
                 return
             }
@@ -302,6 +319,8 @@ public final class VoiceInputService: ObservableObject, @unchecked Sendable {
         try session.setCategory(.playAndRecord, mode: .default, options: [.defaultToSpeaker, .allowBluetooth])
         try session.setActive(true, options: .notifyOthersOnDeactivation)
 #endif
+        // macOS 上无 AVAudioSession（该 API 仅 iOS/tvOS/watchOS 可用），
+        // AVAudioRecorder 会自行通过 CoreAudio 管理输入路由，无需显式配置。
     }
 
     private func stopAudioSession() {
