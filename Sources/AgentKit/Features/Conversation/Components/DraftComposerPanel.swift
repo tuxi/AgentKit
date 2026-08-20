@@ -91,7 +91,7 @@ struct DraftComposerPanel: View {
             
             VStack(spacing: 8) {
                 if voiceService.state == .recording || voiceService.state == .transcribing
-                    // *voiceService.state == .preparing*/
+                // *voiceService.state == .preparing*/
                 {
                     // 录音浮层占据整个底部区域（隐藏附件、模型选择器、工具栏）
                     VoiceRecordingOverlay(
@@ -572,14 +572,14 @@ struct DraftComposerPanel: View {
         }
         return nil
     }
-
+    
     // MARK: - Context Window
-
+    
     /// 当前活跃会话 id；草稿模式下为 nil（无上下文可展示）。
     private var sessionID: String? {
         viewModel?.conversation?.id
     }
-
+    
     private var contextButtonAccessibilityLabel: String {
         if let current = contextSnapshot?.current {
             return String(
@@ -589,7 +589,7 @@ struct DraftComposerPanel: View {
         }
         return AgentKitLocalized.string("composer.context_window")
     }
-
+    
     private var contextUsageRing: some View {
         ZStack {
             Circle()
@@ -602,19 +602,19 @@ struct DraftComposerPanel: View {
         .frame(width: 11, height: 11)
         .contentShape(Circle())
     }
-
+    
     private var contextRingProgress: CGFloat {
         guard let current = contextSnapshot?.current else { return 0 }
         return CGFloat(ContextFormat.clamped(current.usagePct / 100))
     }
-
+    
     private var contextRingColor: Color {
         guard let current = contextSnapshot?.current else { return .secondary }
         if current.usagePct >= current.thresholdPct { return .red }
         if current.usagePct >= current.thresholdPct * 0.8 { return .orange }
         return .green
     }
-
+    
     private func refreshContext() {
         guard let id = sessionID else { return }
         contextRefreshTask?.cancel()
@@ -633,7 +633,7 @@ struct DraftComposerPanel: View {
             isContextLoading = false
         }
     }
-
+    
     private static func mapContextError(_ error: Error) -> String {
         if let httpError = error as? RuntimeHTTPError {
             switch httpError {
@@ -946,7 +946,7 @@ private struct DraftComposerSurfaceModifier: ViewModifier {
                 green: 44.0 / 255.0,
                 blue: 46.0 / 255.0,
                 alpha: 1
-              )) : Color(NSColor.windowBackgroundColor))
+            )) : Color(NSColor.windowBackgroundColor))
             .clipShape(RoundedRectangle(cornerRadius: 20, style: .continuous))
             .padding()
             .shadow(color: .black.opacity(0.10), radius: 20, y: 10)
@@ -1264,7 +1264,7 @@ struct PlanApprovalBar: View {
                             } action: { newValue in
                                 contentHeight = newValue
                             }
-
+                        
                     }
                     .frame(height: max(0, min(280, contentHeight)))
                     .padding(12)
@@ -1318,7 +1318,7 @@ struct PlanApprovalBar: View {
                         } action: { newValue in
                             titleHeight = newValue
                         }
-
+                    
                 }
                 .frame(maxHeight: min(titleHeight, 70))
                 
