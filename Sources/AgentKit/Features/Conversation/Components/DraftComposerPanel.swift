@@ -75,6 +75,7 @@ struct DraftComposerPanel: View {
     @State private var isContextLoading = false
     @State private var isContextPresented = false
     @State private var contextRefreshTask: Task<Void, Never>?
+    @State private var contentWidth: CGFloat = 0
     
     var body: some View {
         VStack(spacing: 0) {
@@ -165,11 +166,15 @@ struct DraftComposerPanel: View {
                             }
                             
                         } label: {
-                            Label(AgentKitLocalized.string("composer.request_approval"), systemImage: "hand.raised")
-                                .font(.system(size: 13, weight: .medium))
-                                .labelStyle(.titleAndIcon)
-                            Image(systemName: "chevron.down")
-                                .font(.system(size: 9, weight: .semibold))
+                            if contentWidth <= 500 {
+                                Image(systemName: "hand.raised")
+                                    .font(.system(size: 13, weight: .medium))
+                                    .labelStyle(.titleAndIcon)
+                            } else {
+                                Label(AgentKitLocalized.string("composer.request_approval"), systemImage: "hand.raised")
+                                    .font(.system(size: 13, weight: .medium))
+                                    .labelStyle(.titleAndIcon)
+                            }
                         }
                         .menuStyle(.borderlessButton)
                         .fixedSize()
@@ -220,16 +225,14 @@ struct DraftComposerPanel: View {
                                 }
                             }
                         } label: {
-                            HStack(spacing: 4) {
+                            if contentWidth <= 500 {
+                                Image(systemName: "brain.head.profile")
+                                    .font(.system(size: 9, weight: .semibold))
+                            } else {
                                 Text(modelSettings.selectionDisplayName(for: selectedModel ?? ""))
                                     .font(.system(size: 13, weight: .medium))
                                     .lineLimit(1)
-                                Image(systemName: "chevron.up")
-                                    .font(.system(size: 9, weight: .semibold))
                             }
-                            .padding(.horizontal, 6)
-                            .padding(.vertical, 3)
-                            .cornerRadius(4)
                         }
                         .menuStyle(.borderlessButton)
                         .fixedSize()
@@ -327,6 +330,11 @@ struct DraftComposerPanel: View {
 #endif
         }
         .modifier(DraftComposerSurfaceModifier())
+        .onGeometryChange(for: CGFloat.self, of: { proxy in
+            return proxy.size.width
+        }, action: { oldValue, newValue in
+            contentWidth = newValue
+        })
 #if os(iOS)
         .sheet(isPresented: $isIOSModelPickerPresented) {
             IOSModelPickerSheet(

@@ -134,6 +134,7 @@ public struct RuntimeCapabilitySnapshot: Codable, Sendable, Equatable {
         if capabilities["managed_worktree_v1"] == true { flags.insert(.managedWorktree) }
         if capabilities["conversation_archive_v1"] == true { flags.insert(.conversationArchive) }
         if capabilities["public_git_clone_v1"] == true { flags.insert(.publicGitClone) }
+        if capabilities["workspace_git_branch_v1"] == true { flags.insert(.workspaceGitBranch) }
         return flags
     }
 
@@ -157,6 +158,8 @@ public struct RuntimeCapabilitySnapshot: Codable, Sendable, Equatable {
     public var supportsPublicGitClone: Bool {
         flags.contains(.publicGitClone) && projectsRoot?.isEmpty == false
     }
+
+    public var supportsWorkspaceGitBranch: Bool { flags.contains(.workspaceGitBranch) }
 }
 
 public struct RuntimeTerminalActivity: Codable, Sendable, Equatable {

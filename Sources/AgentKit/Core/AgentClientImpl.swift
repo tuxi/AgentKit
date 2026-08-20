@@ -150,6 +150,9 @@ public final class CodeAgentSessionChannel: RuntimeSessionChannel, @unchecked Se
         if values.contains("child_streaming") {
             flags.insert(.childStreaming)
         }
+        if values.contains("workspace_git_branch_v1") {
+            flags.insert(.workspaceGitBranch)
+        }
         return flags
     }
 }
@@ -209,6 +212,18 @@ public final class CodeAgentTransport: AgentTransport, @unchecked Sendable {
 
     public func runtimeCapabilities() async throws -> RuntimeCapabilitySnapshot {
         try await http.runtimeCapabilities()
+    }
+
+    public func listWorkspaceGitBranches(workspacePath: String) async throws -> WorkspaceGitBranchResult {
+        try await http.listWorkspaceGitBranches(workspacePath: workspacePath)
+    }
+
+    public func createWorkspaceGitBranch(_ request: WorkspaceGitBranchCreateRequest) async throws -> WorkspaceGitBranchResult {
+        try await http.createWorkspaceGitBranch(request)
+    }
+
+    public func checkoutWorkspaceGitBranch(_ request: WorkspaceGitBranchCheckoutRequest) async throws -> WorkspaceGitBranchResult {
+        try await http.checkoutWorkspaceGitBranch(request)
     }
 
     public func activitySnapshot() async throws -> RuntimeActivitySnapshot {
@@ -302,6 +317,18 @@ public final class CodeAgentTransport: AgentTransport, @unchecked Sendable {
 
     public func cloneRepo(url: String, ref: String?) async throws -> ClonedRepo {
         try await http.cloneRepo(url: url, ref: ref)
+    }
+
+    public func listWorkspaceGitBranches(workspacePath: String) async throws -> WorkspaceGitBranchResult {
+        try await http.listWorkspaceGitBranches(workspacePath: workspacePath)
+    }
+
+    public func createWorkspaceGitBranch(_ request: WorkspaceGitBranchCreateRequest) async throws -> WorkspaceGitBranchResult {
+        try await http.createWorkspaceGitBranch(request)
+    }
+
+    public func checkoutWorkspaceGitBranch(_ request: WorkspaceGitBranchCheckoutRequest) async throws -> WorkspaceGitBranchResult {
+        try await http.checkoutWorkspaceGitBranch(request)
     }
 
     // MARK: - AgentTransport: Session state
@@ -595,6 +622,18 @@ public final class DefaultAgentClient: RuntimeClient, @unchecked Sendable {
 
     public func runtimeCapabilities() async throws -> RuntimeCapabilitySnapshot {
         try await transport.runtimeCapabilities()
+    }
+
+    public func listWorkspaceGitBranches(workspacePath: String) async throws -> WorkspaceGitBranchResult {
+        try await transport.listWorkspaceGitBranches(workspacePath: workspacePath)
+    }
+
+    public func createWorkspaceGitBranch(_ request: WorkspaceGitBranchCreateRequest) async throws -> WorkspaceGitBranchResult {
+        try await transport.createWorkspaceGitBranch(request)
+    }
+
+    public func checkoutWorkspaceGitBranch(_ request: WorkspaceGitBranchCheckoutRequest) async throws -> WorkspaceGitBranchResult {
+        try await transport.checkoutWorkspaceGitBranch(request)
     }
 
     public func activitySnapshot() async throws -> RuntimeActivitySnapshot {

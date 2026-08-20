@@ -89,6 +89,10 @@ public protocol AgentTransport: Sendable {
     /// 默认实现抛 `unsupported`（mock / 不支持的 backend）。
     func cloneRepo(url: String, ref: String?) async throws -> ClonedRepo
 
+    func listWorkspaceGitBranches(workspacePath: String) async throws -> WorkspaceGitBranchResult
+    func createWorkspaceGitBranch(_ request: WorkspaceGitBranchCreateRequest) async throws -> WorkspaceGitBranchResult
+    func checkoutWorkspaceGitBranch(_ request: WorkspaceGitBranchCheckoutRequest) async throws -> WorkspaceGitBranchResult
+
     // MARK: - Session state
 
     /// 当前是否已连接到 backend session。

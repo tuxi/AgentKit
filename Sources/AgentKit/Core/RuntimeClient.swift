@@ -181,6 +181,12 @@ public protocol RuntimeClient: Sendable {
     /// Legacy convenience entry retained for source compatibility.
     /// 默认实现抛 `unsupported`（mock backend）。
     func cloneRepo(url: String, ref: String?) async throws -> ClonedRepo
+
+    // MARK: - Workspace Git branches
+
+    func listWorkspaceGitBranches(workspacePath: String) async throws -> WorkspaceGitBranchResult
+    func createWorkspaceGitBranch(_ request: WorkspaceGitBranchCreateRequest) async throws -> WorkspaceGitBranchResult
+    func checkoutWorkspaceGitBranch(_ request: WorkspaceGitBranchCheckoutRequest) async throws -> WorkspaceGitBranchResult
 }
 
 // MARK: - Backward compatibility
@@ -256,6 +262,18 @@ extension RuntimeClient {
     }
 
     public func cloneRepo(url: String, ref: String?) async throws -> ClonedRepo {
+        throw RuntimeHTTPError.unsupported
+    }
+
+    public func listWorkspaceGitBranches(workspacePath: String) async throws -> WorkspaceGitBranchResult {
+        throw RuntimeHTTPError.unsupported
+    }
+
+    public func createWorkspaceGitBranch(_ request: WorkspaceGitBranchCreateRequest) async throws -> WorkspaceGitBranchResult {
+        throw RuntimeHTTPError.unsupported
+    }
+
+    public func checkoutWorkspaceGitBranch(_ request: WorkspaceGitBranchCheckoutRequest) async throws -> WorkspaceGitBranchResult {
         throw RuntimeHTTPError.unsupported
     }
 

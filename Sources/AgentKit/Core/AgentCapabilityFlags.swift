@@ -69,6 +69,8 @@ public struct AgentCapabilityFlags: OptionSet, Sendable {
     public static let reasoningStreaming = AgentCapabilityFlags(rawValue: 1 << 17)
     /// 支持 task / multi-agent 通用只读 child-stream WS。
     public static let childStreaming = AgentCapabilityFlags(rawValue: 1 << 18)
+    /// Runtime can list, create and checkout local branches in an authorized workspace.
+    public static let workspaceGitBranch = AgentCapabilityFlags(rawValue: 1 << 19)
 
     // MARK: - Presets
 
