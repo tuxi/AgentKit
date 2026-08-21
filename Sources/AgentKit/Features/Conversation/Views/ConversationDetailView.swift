@@ -336,7 +336,7 @@ public struct ConversationDetailView: View {
                 : (vm.snapshot.pendingApproval != nil || vm.snapshot.pendingPlanApproval != nil)
                 ? AgentKitLocalized.string("conversation.approval_needed_allow_deny")
                 : AgentKitLocalized.string("conversation.input_message"),
-                isEnabled: !isArchived && !isPaused && !vm.isTurnActive
+                isEnabled: !isArchived && !vm.isTurnActive //  && !isPaused
                 && vm.snapshot.pendingAskUser == nil
                 && vm.snapshot.pendingApproval == nil
                 && vm.snapshot.pendingPlanApproval == nil,
