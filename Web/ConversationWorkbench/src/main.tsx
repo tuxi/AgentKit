@@ -1320,10 +1320,60 @@ function useStreamingDisclosure(
   return { open: streaming || userExpanded, onSummaryClick };
 }
 
+/**
+ * Follows the newest content inside a bounded scroll container while `active`.
+ * The container is pinned to the bottom on activation and whenever its content
+ * grows (ResizeObserver on the first element child), so a streaming stream
+ * never inflates the surrounding layout: older lines scroll out of the fixed
+ * viewport. Scrolling away from the bottom (beyond `followThreshold`) pauses
+ * the follow so new content never yanks the reading position, and scrolling
+ * back to the bottom resumes it.
+ *
+ * The container is passed as a value (from a callback ref backed by state),
+ * not a `useRef`, so the effect re-runs if the frame mounts later — a running
+ * tool's output frame can appear only once its first output batch arrives.
+ */
+function useTailFollow(
+  container: HTMLDivElement | null,
+  active: boolean,
+): void {
+  useLayoutEffect(() => {
+    if (!active || !container) return;
+    const content = container.firstElementChild as HTMLElement | null;
+    if (!content) return;
+
+    const followThreshold = 8;
+    let followTail = true;
+    const pinToBottom = () => {
+      if (!followTail) return;
+      container.scrollTop = container.scrollHeight;
+    };
+    const handleScroll = () => {
+      const distanceFromBottom =
+        container.scrollHeight - container.scrollTop - container.clientHeight;
+      followTail = distanceFromBottom <= followThreshold;
+    };
+
+    pinToBottom();
+    container.addEventListener("scroll", handleScroll, { passive: true });
+    const observer = new ResizeObserver(pinToBottom);
+    observer.observe(content);
+    return () => {
+      container.removeEventListener("scroll", handleScroll);
+      observer.disconnect();
+    };
+  }, [active, container]);
+}
+
 function Tool({ tool }: { tool: ConversationWebTool }): React.JSX.Element {
   const statusText = visibleExecutionStatus(tool.status, tool.statusText);
   // Auto-expand while the tool runs; collapse when it finishes.
   const { open, onSummaryClick } = useStreamingDisclosure(tool.status === "running");
+  // While the tool runs, follow the newest log lines inside the bounded output
+  // frame; scrolling up to read pauses the follow until the user returns to
+  // the bottom (see useTailFollow).
+  const [outputFrame, setOutputFrame] = useState<HTMLDivElement | null>(null);
+  useTailFollow(outputFrame, tool.status === "running");
   return (
     <details
       className="tool"
@@ -1366,7 +1416,11 @@ function Tool({ tool }: { tool: ConversationWebTool }): React.JSX.Element {
                 >Copy</ActionButton>
               ) : null}
             </div>
-            <div className="overflow-frame code-frame" data-scroll-id={`tool-output:${tool.id}`}>
+            <div
+              ref={setOutputFrame}
+              className="overflow-frame code-frame tool-output-frame"
+              data-scroll-id={`tool-output:${tool.id}`}
+            >
               <pre><code>{linkifiedActionText(tool.output, tool.outputActions)}</code></pre>
             </div>
           </section>
@@ -1511,12 +1565,11 @@ function VerifiedBlock({ block }: { block: ConversationWebBlock }): React.JSX.El
   );
 }
 
-function ThinkingBlock({ block }: { block: ConversationWebBlock }): React.JSX.Element {
+function ThinkingBlock({ block }: { block: ConversationWebBlock }): React.JSX.Element | null {
   // Auto-expand while the model is streaming; collapse when it finishes.
   const { open, onSummaryClick } = useStreamingDisclosure(block.status === "streaming");
   const streaming = block.status === "streaming";
-  const scrollRef = useRef<HTMLDivElement>(null);
-  const contentRef = useRef<HTMLDivElement>(null);
+  const [scrollPanel, setScrollPanel] = useState<HTMLDivElement | null>(null);
 
   // While streaming, keep the newest tokens visible inside the fixed-height
   // panel: follow the tail as the player reveals text, but only while the
@@ -1526,33 +1579,12 @@ function ThinkingBlock({ block }: { block: ConversationWebBlock }): React.JSX.El
   // own render clock (rAF per frame), so the parent only re-renders on
   // protocol batches — a ResizeObserver on the content catches every reveal
   // step and pins the container without re-rendering React.
-  useLayoutEffect(() => {
-    if (!streaming) return;
-    const container = scrollRef.current;
-    const content = contentRef.current;
-    if (!container || !content) return;
+  useTailFollow(scrollPanel, streaming);
 
-    const followThreshold = 8;
-    let followTail = true;
-    const pinToBottom = () => {
-      if (!followTail) return;
-      container.scrollTop = container.scrollHeight;
-    };
-    const handleScroll = () => {
-      const distanceFromBottom =
-        container.scrollHeight - container.scrollTop - container.clientHeight;
-      followTail = distanceFromBottom <= followThreshold;
-    };
-
-    pinToBottom();
-    container.addEventListener("scroll", handleScroll, { passive: true });
-    const observer = new ResizeObserver(pinToBottom);
-    observer.observe(content);
-    return () => {
-      container.removeEventListener("scroll", handleScroll);
-      observer.disconnect();
-    };
-  }, [streaming]);
+  // A streaming block can be inserted before the first token batch arrives.
+  // Until there is real content, a blank card (frame + background) is pure
+  // noise that pushes the conversation around — render nothing.
+  if (!block.text || !block.text.trim()) return null;
 
   return (
     <details
@@ -1569,8 +1601,8 @@ function ThinkingBlock({ block }: { block: ConversationWebBlock }): React.JSX.El
         <span className="disclosure-chevron" aria-hidden="true">›</span>
       </summary>
       <div className="thinking-body">
-        <div ref={scrollRef} className="thinking-scroll">
-          <div ref={contentRef} className="thinking-scroll-content">
+        <div ref={setScrollPanel} className="thinking-scroll">
+          <div className="thinking-scroll-content">
             {block.text ? <Markdown block={{ ...block, kind: "markdown" }} /> : null}
           </div>
         </div>

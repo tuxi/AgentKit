@@ -132,6 +132,13 @@ body {
   margin-bottom: 4px;
 }
 
+/* A block that renders nothing (e.g. a streaming thinking card that has not
+   received its first token yet) must not leave an empty wrapper with its
+   12px margin — collapse it so the conversation does not jump around. */
+.turn-block:empty {
+  display: none;
+}
+
 .streaming-text-tail {
   display: block;
   white-space: pre-wrap;
@@ -495,6 +502,31 @@ summary:active {
   align-items: center;
   justify-content: space-between;
   gap: 8px;
+}
+
+/* Long tool output (e.g. run_command logs) must not flatten the whole
+   conversation. The frame is capped like the thinking panel; while the tool
+   runs it auto-follows the newest lines (useTailFollow), pausing when the
+   user scrolls up and resuming on return to the bottom. Shorter output fits
+   the content exactly (overflow-y: auto only scrolls when capped). */
+.tool-output-frame {
+  max-height: var(--tool-output-max-height, 240px);
+  overflow-y: auto;
+  /* .overflow-frame sets scrollbar-color: transparent; give the log frame a
+     visible thumb for standards-mode scrollbars too (Safari 18.2+). */
+  scrollbar-color: color-mix(in srgb, var(--secondary) 35%, transparent) transparent;
+}
+
+/* .overflow-frame hides its scrollbars (width: 0); a log viewer needs a
+   visible vertical scrollbar. The horizontal one keeps the existing
+   reveal-on-scroll behavior. */
+.tool-output-frame::-webkit-scrollbar:vertical {
+  width: 10px;
+}
+
+.tool-output-frame::-webkit-scrollbar-thumb:vertical {
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--secondary) 35%, transparent);
 }
 
 .action-button {
