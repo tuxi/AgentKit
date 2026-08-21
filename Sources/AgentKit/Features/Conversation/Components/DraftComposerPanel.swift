@@ -166,7 +166,7 @@ struct DraftComposerPanel: View {
                             }
                             
                         } label: {
-                            if contentWidth <= 500 {
+                            if contentWidth <= 400 {
                                 Image(systemName: "hand.raised")
                                     .font(.system(size: 13, weight: .medium))
                                     .labelStyle(.titleAndIcon)
@@ -329,12 +329,12 @@ struct DraftComposerPanel: View {
             }
 #endif
         }
-        .modifier(DraftComposerSurfaceModifier())
         .onGeometryChange(for: CGFloat.self, of: { proxy in
             return proxy.size.width
         }, action: { oldValue, newValue in
             contentWidth = newValue
         })
+        .modifier(DraftComposerSurfaceModifier())
 #if os(iOS)
         .sheet(isPresented: $isIOSModelPickerPresented) {
             IOSModelPickerSheet(
@@ -1720,10 +1720,11 @@ struct AskUserBar: View {
                 headerRow
                 
                 // Question text
-                Text(request.question)
+                Text(request.question.trimmingCharacters(in: .whitespacesAndNewlines))
                     .font(.callout)
                     .foregroundStyle(.primary)
-                    .fixedSize(horizontal: false, vertical: true)
+                    .lineLimit(6)
+                    
                 
                 // Options list
                 if isExpanded {
@@ -1770,8 +1771,9 @@ struct AskUserBar: View {
                 .foregroundStyle(.blue)
             
             VStack(alignment: .leading, spacing: 2) {
-                Text(request.header)
+                Text(request.header.trimmingCharacters(in: .whitespacesAndNewlines))
                     .font(.subheadline.weight(.semibold))
+                    .lineLimit(5)
                 
                 Text(request.multiSelect ? AgentKitLocalized.string("composer.multi_select") : AgentKitLocalized.string("composer.please_select"))
                     .font(.caption)

@@ -30,6 +30,7 @@ struct WorkspaceChipBar: View {
     @State private var cloneError: String?
     @State private var isBranchCreatePresented = false
     @State private var newBranchName = ""
+    @State private var contentWidth: CGFloat = 0
 
     var body: some View {
         Group {
@@ -42,6 +43,11 @@ struct WorkspaceChipBar: View {
             chipRow
             #endif
         }
+        .onGeometryChange(for: CGFloat.self, of: { proxy in
+            return proxy.size.width
+        }, action: { newValue in
+            contentWidth = newValue
+        })
         .onAppear { store.projects.reload() }
         .task(id: store.draft?.workspace?.id) {
             await store.refreshDraftWorkspaceGitBranches()
@@ -532,13 +538,15 @@ struct WorkspaceChipBar: View {
     ) -> some View {
         HStack(spacing: 3) {
             Image(systemName: icon)
-            Text(text)
-                .font(.caption)
-                .lineLimit(1)
-            if showsChevron {
-                Image(systemName: "chevron.down")
-                    .font(.system(size: 8, weight: .semibold))
-                    .foregroundStyle(.secondary)
+            if contentWidth >= 380 {
+                Text(text)
+                    .font(.caption)
+                    .lineLimit(1)
+                if showsChevron {
+                    Image(systemName: "chevron.down")
+                        .font(.system(size: 8, weight: .semibold))
+                        .foregroundStyle(.secondary)
+                }
             }
         }
         .padding(.horizontal, 8)
