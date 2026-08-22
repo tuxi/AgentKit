@@ -321,3 +321,15 @@ extension RuntimeClient {
         AsyncStream { $0.finish() }
     }
 }
+
+extension Error {
+    var isRequestCancelled: Bool {
+        if let urlErr = self as? URLError, urlErr.code == .cancelled {
+            return true
+        }
+        if self is CancellationError {
+            return true
+        }
+        return false
+    }
+}

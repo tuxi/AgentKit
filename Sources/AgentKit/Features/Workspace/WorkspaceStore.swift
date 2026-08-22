@@ -956,7 +956,9 @@ public final class WorkspaceStore {
             let result = try await client.listWorkspaceGitBranches(workspacePath: workspace.url.path)
             applyWorkspaceGitBranchResult(result)
         } catch {
-            workspaceGitErrorMessage = error.localizedDescription
+            if !error.isRequestCancelled {
+                workspaceGitErrorMessage = error.localizedDescription
+            }
         }
     }
 
@@ -975,6 +977,7 @@ public final class WorkspaceStore {
             recentWorkspaces.touch(refreshed)
             persistDraftMetadata()
         } catch {
+            guard !error.isRequestCancelled else { return }
             workspaceGitErrorMessage = error.localizedDescription
         }
     }
@@ -1004,6 +1007,7 @@ public final class WorkspaceStore {
             recentWorkspaces.touch(refreshed)
             persistDraftMetadata()
         } catch {
+            guard !error.isRequestCancelled else { return }
             workspaceGitErrorMessage = error.localizedDescription
         }
     }

@@ -30,10 +30,13 @@ public enum ProviderModelSource: String, Codable, CaseIterable, Sendable {
     case gatewayRemote = "gateway_remote"
 }
 
-public enum ProviderInputModality: String, Codable, CaseIterable, Hashable, Sendable {
+public enum ProviderInputModality: String, Identifiable, Codable, CaseIterable, Hashable, Sendable {
     case text
     case image
-    case audio
+    
+    public var id: String { self.rawValue }
+    
+    public var displayName: String { self.rawValue }
 }
 
 public struct ProviderModel: Codable, Hashable, Identifiable, Sendable {
