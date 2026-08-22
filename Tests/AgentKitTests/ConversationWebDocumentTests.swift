@@ -727,6 +727,32 @@ final class ConversationWebDocumentTests: XCTestCase {
     }
 
     #if os(macOS)
+    /// The bundled shell's CSP must admit the private local-asset host, or
+    /// WebKit blocks registered history images before the scheme handler runs.
+    func testBundledShellCSPAllowsLocalAssetHost() throws {
+        let shellURL = Bundle.module.url(
+            forResource: "ConversationWeb",
+            withExtension: nil
+        )
+        let html = try String(
+            contentsOf: XCTUnwrap(shellURL?.appendingPathComponent("index.html")),
+            encoding: .utf8
+        )
+        let csp = try XCTUnwrap(
+            html.firstMatch(of: /content="([^"]*)"/)?.output.1,
+            "index.html must declare a Content-Security-Policy"
+        )
+        let imgSrc = try XCTUnwrap(
+            csp.split(separator: ";")
+                .first { $0.trimmingCharacters(in: .whitespaces).hasPrefix("img-src") },
+            "CSP must constrain img-src"
+        )
+        XCTAssertTrue(
+            imgSrc.contains("agentkit-workbench://local-asset"),
+            "local-asset thumbnails load through the private scheme; add the host to img-src"
+        )
+    }
+
     func testPrivateSchemeOnlyServesAllowlistedBundleResources() throws {
         XCTAssertEqual(
             ConversationWebSchemeHandler.allowedResourcePath(

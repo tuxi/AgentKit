@@ -53,6 +53,9 @@ struct ConversationWebWorkbenchView: NSViewRepresentable {
         webView.allowsBackForwardNavigationGestures = false
         webView.allowsLinkPreview = false
         webView.underPageBackgroundColor = .clear
+        // Expose the renderer to Safari's Develop menu for Web Inspector
+        // debugging (macOS 13.3+). Required for CSP/network diagnosis.
+        webView.isInspectable = true
 
         let hostView = ConversationWebWorkbenchHostView(webView: webView)
 
