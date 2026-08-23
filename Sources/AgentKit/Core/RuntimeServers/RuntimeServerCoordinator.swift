@@ -94,6 +94,16 @@ public final class RuntimeServerCoordinator {
     private let preflightService: RuntimeServerPreflightService
     @ObservationIgnored private var externalMonitors:
         [String: ExternalRuntimeServerStatusMonitor] = [:]
+    /// Bonjour discovery used to re-point a paired connection at the Mac's
+    /// *current* host/port after a restart (the shared listener binds an
+    /// ephemeral port; `server_id` and the TLS identity stay stable).
+    /// Resolves the current endpoint for a stable `server_id`. Injectable for
+    /// tests; defaults to a bounded Bonjour lookup.
+    @ObservationIgnored private let endpointResolver: @MainActor (String) async -> URL?
+    /// Per-connection rate limiter for endpoint rediscovery, so the settings
+    /// polling loop cannot hammer Bonjour while a server stays offline.
+    @ObservationIgnored private var lastRediscoveryAttempt: [String: Date] = [:]
+    private static let rediscoveryMinInterval: TimeInterval = 30
 
     public init(
         registry: RuntimeServerRegistry = RuntimeServerRegistry(),
@@ -101,13 +111,19 @@ public final class RuntimeServerCoordinator {
         runtimeCredentialStore: any CredentialStore = KeychainCredentialStore(
             service: "com.agentkit.runtime-server-access"
         ),
-        platform: RuntimeServerClientPlatform = .current
+        platform: RuntimeServerClientPlatform = .current,
+        endpointResolver: (@MainActor (String) async -> URL?)? = nil
     ) {
         self.registry = registry
         self.embeddedStatusMonitor = embeddedStatusMonitor
         self.runtimeCredentialStore = runtimeCredentialStore
         self.platform = platform
         self.preflightService = RuntimeServerPreflightService(platform: platform)
+        let browser = RuntimeBonjourBrowser()
+        self.endpointResolver = endpointResolver ?? { serverID in
+            let discovered = await browser.resolveOnce()
+            return discovered.first { $0.serverID == serverID }?.endpoint
+        }
     }
 
     public var activeConnection: RuntimeServerConnection {
@@ -200,7 +216,7 @@ public final class RuntimeServerCoordinator {
     /// Completes a QR/Bonjour pairing against a shared Mac Runtime. The
     /// plaintext device credential exists only in this call and is written to
     /// the Runtime Access Keychain before the connection is returned.
-    @discardableResult
+        @discardableResult
     public func pairSharedRuntime(
         invitation: RuntimePairingInvitation,
         resolvedEndpoint: URL? = nil,
@@ -238,12 +254,25 @@ public final class RuntimeServerCoordinator {
         guard preflight.info.serverID == invitation.serverID else {
             throw RuntimeSharingError.serverIdentityMismatch
         }
+        // Reuse an existing connection that already identifies this Runtime.
+        // This makes re-pairing an *update-in-place*: re-scanning the QR after
+        // the Mac restarted (or after its listener moved to a new port, or a
+        // stale device credential was revoked) refreshes the endpoint, the
+        // TLS pin and the device credential on the SAME registered connection,
+        // instead of allocating a new id and tripping the duplicate-identity
+        // guard. The preserved id is what lets `saveExternalConnection` update
+        // in place and keeps the connection's Keychain credential current.
+        let existingByServerID = registry.connections.first {
+            $0.kind != .embedded && $0.serverID == invitation.serverID
+        }
         let id = connectionID?.trimmingCharacters(
             in: .whitespacesAndNewlines
-        ).nilIfEmpty ?? Self.suggestedPairedConnectionID(
-            serverID: invitation.serverID,
-            existing: Set(registry.connections.map(\.id))
-        )
+        ).nilIfEmpty
+            ?? existingByServerID?.id
+            ?? Self.suggestedPairedConnectionID(
+                serverID: invitation.serverID,
+                existing: Set(registry.connections.map(\.id))
+            )
         return try await saveExternalConnection(
             id: id,
             displayName: displayName ?? invitation.serverDisplayName,
@@ -482,7 +511,83 @@ public final class RuntimeServerCoordinator {
 
     @discardableResult
     public func checkExternal(connectionID: String) async throws -> Bool {
-        try await externalStatusMonitor(connectionID: connectionID).check()
+        let monitor = try externalStatusMonitor(connectionID: connectionID)
+        var healthy = await monitor.check()
+        if !healthy,
+           await rediscoverPairedEndpoint(connectionID: connectionID) {
+            // The Mac restarted and its shared listener moved to a new port
+            // (or a new host/IP). The saved connection was re-pointed at the
+            // rediscovered endpoint — re-check against it once.
+            healthy = await monitor.check()
+        }
+        return healthy
+    }
+
+    // MARK: - Endpoint rediscovery (paired servers)
+
+    /// Re-resolves the *current* host/port for a paired external connection and
+    /// updates the stored connection in place.
+    ///
+    /// The Code-Agent daemon binds its shared TLS listener on an ephemeral
+    /// port, so after a Mac restart every paired iPhone is left pointing at a
+    /// dead endpoint. Because `server_id` and the TLS identity (SPKI) are
+    /// stable across restarts, the connection can be re-pointed at the
+    /// Bonjour-advertised address without re-pairing — no user action needed.
+    ///
+    /// Only pairing-established connections (`trustPolicy != nil`) are
+    /// eligible, and attempts are rate-limited per connection so the polling
+    /// loop cannot hammer Bonjour while a server stays offline.
+    ///
+    /// - Returns: `true` when the saved endpoint was updated (and the status
+    ///   monitor was re-armed against the new address).
+    @discardableResult
+    public func rediscoverPairedEndpoint(
+        connectionID: String
+    ) async -> Bool {
+        guard let connection = registry.connection(id: connectionID),
+              connection.kind != .embedded,
+              let serverID = connection.serverID,
+              let existingPolicy = connection.trustPolicy else {
+            return false
+        }
+        let now = Date()
+        if let last = lastRediscoveryAttempt[connectionID],
+           now.timeIntervalSince(last) < Self.rediscoveryMinInterval {
+            return false
+        }
+        lastRediscoveryAttempt[connectionID] = now
+
+        guard let endpoint = await endpointResolver(serverID),
+              endpoint != connection.endpoint,
+              let host = endpoint.host else {
+            return false
+        }
+        let updated: RuntimeServerConnection
+        do {
+            updated = try RuntimeServerConnection(
+                id: connection.id,
+                displayName: connection.displayName,
+                kind: connection.kind,
+                endpoint: endpoint,
+                authentication: connection.authentication,
+                trustPolicy: RuntimeServerTrustPolicy(
+                    expectedHost: host,
+                    spkiSHA256: existingPolicy.spkiSHA256
+                ),
+                serverID: serverID,
+                createdAt: connection.createdAt,
+                updatedAt: now
+            )
+        } catch {
+            return false
+        }
+        do {
+            try registry.upsert(updated)
+        } catch {
+            return false
+        }
+        externalStatusMonitor(for: updated).update(connection: updated)
+        return true
     }
 
     // MARK: - Private
@@ -534,11 +639,27 @@ public final class RuntimeServerCoordinator {
             }
 #endif
         case .local, .remote:
-            preflight = try await preflightService.test(
-                connection: connection,
-                credentialStore: runtimeCredentialStore
-            )
-            if let expected = connection.serverID,
+            var effective = connection
+            do {
+                preflight = try await preflightService.test(
+                    connection: effective,
+                    credentialStore: runtimeCredentialStore
+                )
+            } catch {
+                // The Mac may have restarted and moved its shared listener to a
+                // new port. For paired connections, re-resolve the current
+                // endpoint over Bonjour and retry once before failing.
+                guard await rediscoverPairedEndpoint(connectionID: connection.id),
+                      let refreshed = registry.connection(id: connection.id) else {
+                    throw error
+                }
+                effective = refreshed
+                preflight = try await preflightService.test(
+                    connection: effective,
+                    credentialStore: runtimeCredentialStore
+                )
+            }
+            if let expected = effective.serverID,
                expected != preflight.info.serverID {
                 throw RuntimeServerPreflightError.serverIdentityChanged(
                     expected: expected,

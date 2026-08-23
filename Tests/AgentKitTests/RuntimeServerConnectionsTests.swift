@@ -412,6 +412,166 @@ final class RuntimeServerConnectionsTests: XCTestCase {
         XCTAssertNil(monitor.diagnosticSnapshot.runtimeInfo)
     }
 
+    func testRepairingSameServerIdentityUpdatesInPlace() async throws {
+        let registry = makeRegistry()
+        let credentials = MemoryCredentialStore()
+        let coordinator = RuntimeServerCoordinator(
+            registry: registry,
+            runtimeCredentialStore: credentials,
+            platform: .macOS
+        )
+        let token = String(repeating: "z", count: 32)
+
+        _ = try await coordinator.saveExternalConnection(
+            id: "paired-srv_one",
+            displayName: "My Mac",
+            preflight: Self.pairedPreflight(
+                serverID: "srv_one",
+                host: "my-mac.local",
+                port: 19400
+            ),
+            accessToken: token
+        )
+
+        // Re-pair after the Mac restarted: same server_id, new endpoint/port.
+        // It must UPDATE the existing connection (same id), not reject it.
+        let repaired = try await coordinator.saveExternalConnection(
+            id: "paired-srv_one",
+            displayName: "My Mac",
+            preflight: Self.pairedPreflight(
+                serverID: "srv_one",
+                host: "my-mac.local",
+                port: 19500
+            ),
+            accessToken: token
+        )
+
+        XCTAssertEqual(repaired.id, "paired-srv_one")
+        XCTAssertEqual(repaired.endpoint?.absoluteString, "https://my-mac.local:19500")
+        XCTAssertEqual(registry.connections.filter {
+            $0.serverID == "srv_one"
+        }.count, 1, "Re-pairing must not create a second connection for the same Runtime")
+    }
+
+    func testRediscoverPairedEndpointUpdatesPortAndKeepsPin() async throws {
+        let registry = makeRegistry()
+        let coordinator = RuntimeServerCoordinator(
+            registry: registry,
+            runtimeCredentialStore: MemoryCredentialStore(),
+            platform: .macOS,
+            endpointResolver: { _ in
+                URL(string: "https://my-mac.local:19500")
+            }
+        )
+        _ = try await coordinator.saveExternalConnection(
+            id: "paired",
+            displayName: "My Mac",
+            preflight: Self.pairedPreflight(
+                serverID: "srv_stable",
+                host: "my-mac.local",
+                port: 19400
+            ),
+            accessToken: String(repeating: "d", count: 32)
+        )
+
+        let original = try XCTUnwrap(registry.connection(id: "paired"))
+        XCTAssertEqual(original.endpoint?.absoluteString, "https://my-mac.local:19400")
+
+        let updated = await coordinator.rediscoverPairedEndpoint(connectionID: "paired")
+        XCTAssertTrue(updated)
+
+        let refreshed = try XCTUnwrap(registry.connection(id: "paired"))
+        XCTAssertEqual(
+            refreshed.endpoint?.absoluteString,
+            "https://my-mac.local:19500"
+        )
+        XCTAssertEqual(refreshed.trustPolicy?.expectedHost, "my-mac.local")
+        XCTAssertEqual(refreshed.trustPolicy?.spkiSHA256, Self.testSPKI)
+        XCTAssertEqual(refreshed.serverID, "srv_stable")
+    }
+
+    func testRediscoverPairedEndpointIsRateLimited() async throws {
+        var resolverCalls = 0
+        let coordinator = RuntimeServerCoordinator(
+            registry: makeRegistry(),
+            runtimeCredentialStore: MemoryCredentialStore(),
+            platform: .macOS,
+            endpointResolver: { _ in
+                resolverCalls += 1
+                return URL(string: "https://my-mac.local:\(19500 + resolverCalls)")
+            }
+        )
+        _ = try await coordinator.saveExternalConnection(
+            id: "paired",
+            displayName: "My Mac",
+            preflight: Self.pairedPreflight(
+                serverID: "srv_stable",
+                host: "my-mac.local",
+                port: 19400
+            ),
+            accessToken: String(repeating: "e", count: 32)
+        )
+
+        let first = await coordinator.rediscoverPairedEndpoint(connectionID: "paired")
+        XCTAssertTrue(first)
+        XCTAssertEqual(resolverCalls, 1)
+
+        // Second attempt within the cooldown window must not touch Bonjour.
+        let second = await coordinator.rediscoverPairedEndpoint(connectionID: "paired")
+        XCTAssertFalse(second)
+        XCTAssertEqual(resolverCalls, 1)
+    }
+
+    func testRediscoverPairedEndpointSkipsNonPairedConnections() async throws {
+        var resolverCalls = 0
+        let coordinator = RuntimeServerCoordinator(
+            registry: makeRegistry(),
+            runtimeCredentialStore: MemoryCredentialStore(),
+            platform: .macOS,
+            endpointResolver: { _ in
+                resolverCalls += 1
+                return URL(string: "https://my-mac.local:19500")
+            }
+        )
+        _ = try await coordinator.saveExternalConnection(
+            id: "manual",
+            displayName: "Manual",
+            preflight: Self.preflight(serverID: "srv_manual"),
+            accessToken: String(repeating: "f", count: 32)
+        )
+
+        let updated = await coordinator.rediscoverPairedEndpoint(connectionID: "manual")
+        XCTAssertFalse(updated)
+        XCTAssertEqual(resolverCalls, 0)
+    }
+
+    func testCheckExternalRediscoveryRepointsOfflinePairedConnection() async throws {
+        let registry = makeRegistry()
+        let coordinator = RuntimeServerCoordinator(
+            registry: registry,
+            runtimeCredentialStore: MemoryCredentialStore(),
+            platform: .macOS,
+            endpointResolver: { _ in
+                URL(string: "https://127.0.0.1:65530")
+            }
+        )
+        _ = try await coordinator.saveExternalConnection(
+            id: "paired",
+            displayName: "My Mac",
+            preflight: Self.pairedPreflight(
+                serverID: "srv_stable",
+                host: "127.0.0.1",
+                port: 65529
+            ),
+            accessToken: String(repeating: "g", count: 32)
+        )
+
+        let healthy = try await coordinator.checkExternal(connectionID: "paired")
+        XCTAssertFalse(healthy)
+        let refreshed = try XCTUnwrap(registry.connection(id: "paired"))
+        XCTAssertEqual(refreshed.endpoint?.absoluteString, "https://127.0.0.1:65530")
+    }
+
     private func makeRegistry() -> RuntimeServerRegistry {
         let suite = "RuntimeServerConnectionsTests.\(UUID().uuidString)"
         return RuntimeServerRegistry(
@@ -444,6 +604,47 @@ final class RuntimeServerConnectionsTests: XCTestCase {
                 schema: "runtime-info/v1",
                 serverID: serverID,
                 displayName: "Test Runtime",
+                product: "codeagent",
+                runtimeVersion: "1.3.0",
+                agentWireProtocol: RuntimeServerProtocolVersion(
+                    major: 1,
+                    revision: "1.2"
+                ),
+                runtimeProfile: "headless"
+            ),
+            capabilities: RuntimeCapabilitySnapshot(),
+            modelCatalog: RuntimeServerModelCatalog(
+                schema: "runtime-model-catalog/v1",
+                revision: 1,
+                defaultRuntimeAlias: "",
+                connections: []
+            ),
+            checkedAt: Date()
+        )
+    }
+
+    /// 32-byte SPKI digest that `decodeRuntimeSHA256` accepts.
+    private static let testSPKI = Data(repeating: 7, count: 32)
+        .base64EncodedString()
+
+    /// A pairing-style preflight: HTTPS remote endpoint carrying an SPKI pin.
+    private static func pairedPreflight(
+        serverID: String,
+        host: String,
+        port: Int
+    ) -> RuntimeServerPreflightResult {
+        RuntimeServerPreflightResult(
+            endpoint: URL(string: "https://\(host):\(port)")!,
+            kind: .remote,
+            authentication: .bearer,
+            trustPolicy: RuntimeServerTrustPolicy(
+                expectedHost: host,
+                spkiSHA256: testSPKI
+            ),
+            info: RuntimeServerInfo(
+                schema: "runtime-info/v1",
+                serverID: serverID,
+                displayName: "My Mac",
                 product: "codeagent",
                 runtimeVersion: "1.3.0",
                 agentWireProtocol: RuntimeServerProtocolVersion(

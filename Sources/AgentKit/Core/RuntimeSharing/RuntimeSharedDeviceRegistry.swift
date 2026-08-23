@@ -44,6 +44,9 @@ public final class RuntimeSharedDeviceRegistry {
                 in: .whitespacesAndNewlines
             ).nilIfEmpty ?? "Paired Device",
             platform: enrollment.platform ?? "unknown",
+            clientDeviceID: enrollment.clientDeviceID,
+            osVersion: enrollment.osVersion,
+            appVersion: enrollment.appVersion,
             pairedAt: Date(),
             revokedAt: nil
         )

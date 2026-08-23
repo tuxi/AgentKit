@@ -152,4 +152,18 @@ public final class RuntimeBonjourBrowser {
         browser.stop()
         isBrowsing = false
     }
+
+    /// Performs one bounded discovery pass and returns the servers resolved
+    /// during the window. Browsing is stopped before returning, so this works
+    /// as a one-shot lookup — used to re-resolve a paired Mac's *current*
+    /// host/port after it restarted (the daemon's shared listener binds an
+    /// ephemeral port, while `server_id` and the TLS identity stay stable).
+    public func resolveOnce(
+        timeout: Duration = .seconds(4)
+    ) async -> [RuntimeDiscoveredSharedServer] {
+        start()
+        try? await Task.sleep(for: timeout)
+        stop()
+        return servers
+    }
 }

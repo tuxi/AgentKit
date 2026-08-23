@@ -40,6 +40,9 @@ public struct RuntimeSharedDevice: Codable, Identifiable, Sendable, Equatable {
     public let credentialSHA256: String
     public var displayName: String
     public var platform: String
+    public var clientDeviceID: String?
+    public var osVersion: String?
+    public var appVersion: String?
     public let pairedAt: Date
     public var revokedAt: Date?
 
@@ -48,6 +51,9 @@ public struct RuntimeSharedDevice: Codable, Identifiable, Sendable, Equatable {
         case credentialSHA256 = "credential_sha256"
         case displayName = "display_name"
         case platform
+        case clientDeviceID = "client_device_id"
+        case osVersion = "os_version"
+        case appVersion = "app_version"
         case pairedAt = "paired_at"
         case revokedAt = "revoked_at"
     }
@@ -59,6 +65,9 @@ struct RuntimePendingSharedEnrollment: Codable, Sendable, Equatable {
     let credentialSHA256: String
     let deviceName: String?
     let platform: String?
+    var clientDeviceID: String?
+    var osVersion: String?
+    var appVersion: String?
     let createdAt: Date
     let expiresAt: Date
 
@@ -68,6 +77,9 @@ struct RuntimePendingSharedEnrollment: Codable, Sendable, Equatable {
         case credentialSHA256 = "credential_sha256"
         case deviceName = "device_name"
         case platform
+        case clientDeviceID = "client_device_id"
+        case osVersion = "os_version"
+        case appVersion = "app_version"
         case createdAt = "created_at"
         case expiresAt = "expires_at"
     }

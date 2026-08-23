@@ -15,11 +15,17 @@ private struct RuntimePairingRequest: Encodable {
     let bootstrapSecret: String
     let deviceName: String
     let platform: String
+    let deviceID: String
+    let osVersion: String
+    let appVersion: String
 
     enum CodingKeys: String, CodingKey {
         case bootstrapSecret = "bootstrap_secret"
         case deviceName = "device_name"
         case platform
+        case deviceID = "device_id"
+        case osVersion = "os_version"
+        case appVersion = "app_version"
     }
 }
 
@@ -121,7 +127,10 @@ struct RuntimePairingClient: Sendable {
         request.httpBody = try JSONEncoder().encode(RuntimePairingRequest(
             bootstrapSecret: invitation.bootstrapSecret,
             deviceName: String(deviceName.prefix(128)),
-            platform: platform.rawValue
+            platform: platform.rawValue,
+            deviceID: DeviceContext.deviceID,
+            osVersion: DeviceContext.osVersion,
+            appVersion: DeviceContext.appVersion
         ))
         let (data, response) = try await session.data(for: request)
         guard let http = response as? HTTPURLResponse, http.statusCode == 200,
