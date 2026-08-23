@@ -83,6 +83,27 @@ export interface ConversationWebLocalAsset {
   transferPolicy: "local_only";
 }
 
+export interface ConversationWebInvocation {
+  id: string;
+  index: number;
+  model?: string;
+  provider?: string;
+  toolNames: string[];
+  messageCount?: number;
+  systemPromptChars?: number;
+  toolsPromptChars?: number;
+  temperature?: number;
+  streamed?: boolean;
+  promptTokens?: number;
+  completionTokens?: number;
+  totalTokens?: number;
+  billingUnits?: number;
+  cachedPromptTokens?: number;
+  elapsedMs?: number;
+  err?: string;
+  thinkingText?: string;
+}
+
 export interface ConversationWebTurn {
   id: string;
   userPrompt?: string;
@@ -97,12 +118,17 @@ export interface ConversationWebTurn {
     usageUnits?: string;
     elapsed: string;
     invocationCount: number;
+    cachedTokens?: string;
   };
   isLive: boolean;
   copyActionID?: string;
   shareActionID?: string;
   assetsActionID?: string;
   assetCount: number;
+  /// P8.9 — per-invocation trajectory cards (DSH-style).
+  invocations: ConversationWebInvocation[];
+  /// P8.9 — action to open the native trajectory inspector for this turn.
+  trajectoryActionID?: string;
 }
 
 export interface ConversationWebExtensionNode {

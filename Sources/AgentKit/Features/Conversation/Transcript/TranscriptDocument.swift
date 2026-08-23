@@ -29,6 +29,7 @@ enum TranscriptAction: Hashable {
     case openPath(String)
     case openChildStream(childID: String)
     case openWorkflow(workflowID: String)
+    case openTrajectory(turnID: String)
     case copyBlock(text: String)
 }
 
@@ -131,9 +132,18 @@ enum TurnTranscriptBuilder {
             builder.appendBlankLine()
             var parts = ["\(footer.formattedTotalTokens) tokens"]
             if footer.hasUsageUnits { parts.append("\(footer.formattedUsageUnits) units") }
+            if footer.hasCachedTokens { parts.append("缓存 \(footer.formattedCachedTokens)") }
             parts.append(footer.formattedElapsed)
             if footer.invocationCount > 0 { parts.append("\(footer.invocationCount)x") }
-            builder.appendMeta(parts.joined(separator: " | "))
+            // P8.9 — 该轮有调用轨迹时，footer 行变成可点入口（点击打开轨迹详情）。
+            if !turn.invocations.isEmpty {
+                builder.appendTrajectoryFooterLink(
+                    "\(parts.joined(separator: " | ")) ›",
+                    action: .openTrajectory(turnID: turn.id)
+                )
+            } else {
+                builder.appendMeta(parts.joined(separator: " | "))
+            }
             if footer.contextTokens > 0 {
                 builder.appendBlockGap()
                 builder.appendMeta("ctx \(footer.formattedContextTokens)")
@@ -434,6 +444,13 @@ private struct TranscriptAttributedBuilder {
 
     mutating func appendMeta(_ text: String) {
         append(text, attributes: metaAttributes)
+        copyParts.append(text)
+    }
+
+    /// P8.9 — 可点的 footer 入口（打开该轮调用轨迹详情）。
+    mutating func appendTrajectoryFooterLink(_ text: String, action: TranscriptAction) {
+        let id = register(action)
+        appendLinked(text, id: id, attributes: metaAttributes)
         copyParts.append(text)
     }
 

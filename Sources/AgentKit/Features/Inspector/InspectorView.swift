@@ -109,6 +109,10 @@ public struct InspectorView: View {
 
                 TimelineDocumentInspectorView(document: document)
 
+            case .conversationTrajectory(let selection):
+
+                TrajectoryInspectorView(selection: selection)
+
             default:
 
                 ContentUnavailableView(

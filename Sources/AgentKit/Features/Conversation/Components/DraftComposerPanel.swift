@@ -232,10 +232,11 @@ struct DraftComposerPanel: View {
                                 Text(modelSettings.selectionDisplayName(for: selectedModel ?? ""))
                                     .font(.system(size: 13, weight: .medium))
                                     .lineLimit(1)
+                                    .frame(maxWidth: 35)
                             }
                         }
                         .menuStyle(.borderlessButton)
-                        .fixedSize()
+//                        .fixedSize()
                         //                    .foregroundStyle(.secondary)
 #endif
                         VoiceInputButton(service: voiceService)

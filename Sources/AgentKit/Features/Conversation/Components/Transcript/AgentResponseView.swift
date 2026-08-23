@@ -32,7 +32,11 @@ struct AgentResponseView: View {
 
             // Footer stats
             if let footer = turn.footer {
-                TurnFooterView(stats: footer)
+                TurnFooterView(
+                    stats: footer,
+                    hasTrajectory: !turn.invocations.isEmpty,
+                    onOpenTrajectory: { onAction(.openTrajectory(turnID: turn.id)) }
+                )
             }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
@@ -105,11 +109,17 @@ struct AgentResponseView: View {
 
 private struct TurnFooterView: View {
     let stats: TurnStats
+    let hasTrajectory: Bool
+    let onOpenTrajectory: () -> Void
 
     var body: some View {
         HStack(spacing: 12) {
             Label(stats.formattedContextTokens, systemImage: "brain.head.profile")
             Label(stats.formattedTotalTokens, systemImage: "text.wordCount")
+            if stats.hasCachedTokens {
+                Label(stats.formattedCachedTokens, systemImage: "bolt")
+                    .foregroundStyle(.orange)
+            }
             Label(stats.formattedElapsed, systemImage: "clock")
             if stats.invocationCount > 1 {
                 Label("×\(stats.invocationCount)", systemImage: "arrow.trianglehead.clockwise")
@@ -118,6 +128,29 @@ private struct TurnFooterView: View {
         .font(.caption2)
         .foregroundStyle(.tertiary)
         .padding(.top, 4)
+        .modifier(TrajectoryFooterTap(hasTrajectory: hasTrajectory, onOpen: onOpenTrajectory))
+    }
+}
+
+/// iOS：有调用轨迹时 footer 整行可点（无轨迹则原样纯文本）。
+private struct TrajectoryFooterTap: ViewModifier {
+    let hasTrajectory: Bool
+    let onOpen: () -> Void
+
+    func body(content: Content) -> some View {
+        if hasTrajectory {
+            Button(action: onOpen) {
+                HStack(spacing: 4) {
+                    content
+                    Image(systemName: "chevron.right")
+                        .font(.system(size: 8))
+                }
+            }
+            .buttonStyle(.plain)
+            .foregroundStyle(.tertiary)
+        } else {
+            content
+        }
     }
 }
 

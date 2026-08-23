@@ -244,7 +244,7 @@ public actor RuntimeEngine {
         }
         // Track model stats from model_finished + clear thinking timer
         if case .modelFinished(_, let promptTokens, let completionTokens, let totalTokens,
-                               let billingUnits, let elapsedMs, let invocationID, _) = event {
+                               let billingUnits, let elapsedMs, let invocationID, _, _) = event {
             _modelStartedAt = nil
             if invocationID == nil || countedInvocationIDs.insert(invocationID!).inserted {
                 let invocationTokens = totalTokens ?? ((promptTokens ?? 0) + (completionTokens ?? 0))

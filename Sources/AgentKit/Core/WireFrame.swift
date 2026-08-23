@@ -81,6 +81,18 @@ struct WireFrame: Decodable {
     let turnStatus: String?         // v1.2 lifecycle status
     let pausedAt: Int64?            // v1.2 unix seconds
     let exitCode: Int?              // P8.7 §8.5（golden 已冻结）：仅失败时出现；>0 = 非零退出，-1 = 启动失败/被信号杀死
+
+    // v1.4: model_request 请求信封 + model_finished 缓存命中
+    let modelName: String?          // "model": 模型标识
+    let provider: String?           // provider 类型
+    let toolNames: [String]?        // "tool_names": 本次请求的工具列表
+    let messageCount: Int?          // "message_count": 上下文消息条数
+    let systemPromptChars: Int?     // "system_prompt_chars"
+    let toolsPromptChars: Int?      // "tools_prompt_chars"
+    let temperature: Double?        // 采样温度
+    let toolChoice: JSONValue?      // "tool_choice"：标量或对象，原样保留
+    let streamed: Bool?             // 是否流式
+    let cachedPromptTokens: Int?    // "cached_prompt_tokens"：缓存命中 token（prompt_tokens 的子集）
     
     // Plan 审批的内容
     let planPath: String?
@@ -112,6 +124,16 @@ struct WireFrame: Decodable {
         case turnStatus = "turn_status"
         case pausedAt = "paused_at"
         case exitCode = "exit_code"
+        case modelName = "model"
+        case provider
+        case toolNames = "tool_names"
+        case messageCount = "message_count"
+        case systemPromptChars = "system_prompt_chars"
+        case toolsPromptChars = "tools_prompt_chars"
+        case temperature
+        case toolChoice = "tool_choice"
+        case streamed
+        case cachedPromptTokens = "cached_prompt_tokens"
         case toolName = "tool_name"
         case toolArgs = "tool_args"
         case planId = "plan_id"

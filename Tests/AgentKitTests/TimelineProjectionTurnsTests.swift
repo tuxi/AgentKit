@@ -76,6 +76,18 @@ final class TimelineProjectionTurnsTests: XCTestCase {
         XCTAssertEqual(t.footer?.elapsedMs, 50)      // 30 + 20
         XCTAssertEqual(t.footer?.contextTokens, 1500) // last invocation context
         XCTAssertEqual(t.footer?.totalTokens, 2700)
+        XCTAssertNil(t.footer?.cachedContextTokens, "no cached_prompt_tokens → 0")
+
+        // P8.9 — 该 turn 有两条 model_finished，即使没有 model_request 也聚合出
+        // 两条 invocation（inv1 与 inv2，按到达顺序编号）。
+        XCTAssertEqual(t.invocations.count, 2)
+        XCTAssertEqual(t.invocations.map(\.id), ["inv1", "inv2"])
+        XCTAssertEqual(t.invocations.map(\.index), [1, 2])
+        XCTAssertEqual(t.invocations[0].promptTokens, 1200)
+        XCTAssertEqual(t.invocations[0].elapsedMs, 30)
+        XCTAssertEqual(t.invocations[1].promptTokens, 1500)
+        XCTAssertEqual(t.invocations[1].elapsedMs, 20)
+        XCTAssertNil(t.invocations[0].request, "no model_request → request envelope nil")
 
         // Assistant replies only (no reasoning).
         let texts: [String] = t.blocks.compactMap {
@@ -112,6 +124,85 @@ final class TimelineProjectionTurnsTests: XCTestCase {
         XCTAssertTrue(footer?.hasUsageUnits == true)
         XCTAssertEqual(footer?.invocationCount, 2)
         XCTAssertEqual(footer?.elapsedMs, 8_500)
+    }
+
+    /// P8.9 — footer 缓存是各 invocation 缓存之和（与 Inspector 一致），
+    /// 而非只取最后一条。若实现回退为「覆盖」，此用例会失败。
+    func testFooterCachedTokensAccumulateAcrossInvocations() {
+        let turn = "t1"
+        let graph = reduce([
+            .turnStarted(turnID: turn, text: "q"),
+            .modelFinished(turnID: turn, promptTokens: 24_900, completionTokens: 1_800,
+                           totalTokens: 26_700, billingUnits: 27_000, elapsedMs: 1_200,
+                           invocationID: "inv1", err: nil, cachedPromptTokens: 12_100),
+            .modelFinished(turnID: turn, promptTokens: 18_200, completionTokens: 700,
+                           totalTokens: 18_900, billingUnits: 19_000, elapsedMs: 800,
+                           invocationID: "inv2", err: nil, cachedPromptTokens: 9_400),
+        ])
+        let footer = TimelineProjection().projectTurns(graph).first?.footer
+        XCTAssertEqual(footer?.cachedContextTokens, 21_500,
+                       "footer 缓存应为两条 invocation 之和（12100 + 9400）")
+        XCTAssertTrue(footer?.hasCachedTokens == true)
+    }
+
+    /// P8.9 — model_request + thinking + model_finished(cached) 折成一张调用卡。
+    func testInvocationFoldsRequestThinkingAndUsage() {
+        let turn = "t1"
+        let graph = reduce([
+            .turnStarted(turnID: turn, text: "investigate"),
+            .modelRequest(turnID: turn, invocationID: "inv1", request: ModelRequestInfo(
+                modelName: "deepseek/deepseek-v4-flash",
+                provider: "openai_compatible",
+                toolNames: ["run_command", "read_file", "grep"],
+                messageCount: 42,
+                systemPromptChars: 18_320,
+                toolsPromptChars: 9_600,
+                temperature: 0.3,
+                toolChoice: "auto",
+                streamed: true
+            )),
+            .modelStarted(turnID: turn, invocationID: "inv1"),
+            .thinking(turnID: turn, text: "step one reasoning"),
+            .modelFinished(turnID: turn, promptTokens: 24_900, completionTokens: 1_800,
+                           totalTokens: 26_700, billingUnits: 27_000, elapsedMs: 1_200,
+                           invocationID: "inv1", err: nil, cachedPromptTokens: 12_100),
+            .turnFinished(turnID: turn, text: "done", textAnnotations: []),
+        ])
+
+        let t = TimelineProjection().projectTurns(graph).first
+        XCTAssertEqual(t?.invocations.count, 1)
+
+        let inv = t?.invocations[0]
+        XCTAssertEqual(inv?.id, "inv1")
+        XCTAssertEqual(inv?.index, 1)
+        XCTAssertEqual(inv?.request?.modelName, "deepseek/deepseek-v4-flash")
+        XCTAssertEqual(inv?.request?.provider, "openai_compatible")
+        XCTAssertEqual(inv?.request?.toolNames, ["run_command", "read_file", "grep"])
+        XCTAssertEqual(inv?.request?.messageCount, 42)
+        XCTAssertEqual(inv?.request?.systemPromptChars, 18_320)
+        XCTAssertEqual(inv?.request?.toolsPromptChars, 9_600)
+        XCTAssertEqual(inv?.request?.temperature, 0.3)
+        XCTAssertEqual(inv?.request?.streamed, true)
+        // thinking 归属到该 invocation
+        XCTAssertEqual(inv?.thinkingText, "step one reasoning")
+        // usage 回填
+        XCTAssertEqual(inv?.promptTokens, 24_900)
+        XCTAssertEqual(inv?.completionTokens, 1_800)
+        XCTAssertEqual(inv?.totalTokens, 26_700)
+        XCTAssertEqual(inv?.billingUnits, 27_000)
+        XCTAssertEqual(inv?.elapsedMs, 1_200)
+        XCTAssertEqual(inv?.cachedPromptTokens, 12_100)
+        XCTAssertTrue(inv?.isFinished == true)
+
+        // footer 同步聚合 + 缓存命中进 footer
+        XCTAssertEqual(t?.footer?.contextTokens, 24_900)
+        XCTAssertEqual(t?.footer?.cachedContextTokens, 12_100)
+        XCTAssertTrue(t?.footer?.hasCachedTokens == true)
+        XCTAssertEqual(t?.footer?.totalTokens, 26_700)
+        XCTAssertEqual(t?.footer?.elapsedMs, 1_200)
+
+        // 时间线零噪音：lifecycle 节点不进 blocks
+        XCTAssertEqual(tags(t?.blocks ?? []), [])
     }
 
     // Reasoning and assistant text are distinct content types — `thinking`

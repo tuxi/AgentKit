@@ -21,6 +21,22 @@ public enum InspectorSelection: Hashable {
     case childStream(ChildStreamSelection)
     case workflowDAG(WorkflowDAGSelection)
     case timelineDocument(TimelineWebDocument)
+    case conversationTrajectory(TrajectorySelection)
+}
+
+/// P8.9 — 调用轨迹查看器的选择载荷（DSH 式调用过程展示）。
+/// `turnID` 非 nil = 只看那一轮的调用轨迹；nil = 全会话跨 turn 汇总。
+/// 数据从 `WorkspaceStore.activeConversationViewModel.snapshot.turns` 实时读取，
+/// 载荷只携带定位信息（轻量、Hashable，live 流变化时视图自动刷新）。
+public struct TrajectorySelection: Sendable, Hashable {
+    public let turnID: String?
+    /// 面板标题：轮次摘要或会话标题。
+    public let title: String
+
+    public init(turnID: String?, title: String) {
+        self.turnID = turnID
+        self.title = title
+    }
 }
 
 /// P8.7 — 子流查看器（task 子agent / 后台 job）的选择载荷。

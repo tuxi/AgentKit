@@ -46,7 +46,11 @@ public enum AgentEvent: Sendable {
     case modelStarted(turnID: String?, invocationID: String?)
     case modelFinished(turnID: String?, promptTokens: Int?, completionTokens: Int?,
                        totalTokens: Int?, billingUnits: Int64?, elapsedMs: Int?,
-                       invocationID: String?, err: String?)
+                       invocationID: String?, err: String?, cachedPromptTokens: Int? = nil)
+    /// `model_request`（since v1.4）：一次模型调用的请求信封，在所有 context transform
+    /// 之后发出，反映真实请求。与同 `invocation_id` 的 `model_finished` 配对，
+    /// 客户端据此把「带了什么 → 想了什么 → 花了多少」折成一张调用卡片。
+    case modelRequest(turnID: String?, invocationID: String?, request: ModelRequestInfo)
 
     // ── 流式文本 ──
     case tokenDelta(turnID: String?, text: String)
@@ -148,6 +152,47 @@ public enum AgentEvent: Sendable {
     case workflowToolStream(turnID: String?, workflow: WorkflowToolStreamData)
     /// Transient tool stream end marker.
     case workflowToolStreamEnd(turnID: String?, workflowID: String, nodeName: String)
+}
+
+// MARK: - ModelRequestInfo
+
+/// `model_request`（since v1.4）的请求信封。上下文只记形状（条数/字符数），不含全文。
+/// 全部字段可选：老服务端不发此事件，新服务端字段也逐个 omitempty。
+public struct ModelRequestInfo: Sendable, Equatable {
+    /// 本次调用使用的模型标识，如 "deepseek/deepseek-v4-flash"。
+    public let modelName: String?
+    /// Provider 类型，如 "openai_compatible"。
+    public let provider: String?
+    /// 本次请求注册给模型的工具名列表。
+    public let toolNames: [String]
+    /// 请求携带的消息条数（上下文规模）。
+    public let messageCount: Int?
+    /// system prompt 字符数。
+    public let systemPromptChars: Int?
+    /// 工具定义 prompt 字符数。
+    public let toolsPromptChars: Int?
+    /// 采样温度。
+    public let temperature: Double?
+    /// tool_choice 原始 JSON（标量或对象，原样保留）。
+    public let toolChoice: JSONValue?
+    /// 是否流式调用。
+    public let streamed: Bool?
+
+    public init(modelName: String? = nil, provider: String? = nil,
+                toolNames: [String] = [], messageCount: Int? = nil,
+                systemPromptChars: Int? = nil, toolsPromptChars: Int? = nil,
+                temperature: Double? = nil, toolChoice: JSONValue? = nil,
+                streamed: Bool? = nil) {
+        self.modelName = modelName
+        self.provider = provider
+        self.toolNames = toolNames
+        self.messageCount = messageCount
+        self.systemPromptChars = systemPromptChars
+        self.toolsPromptChars = toolsPromptChars
+        self.temperature = temperature
+        self.toolChoice = toolChoice
+        self.streamed = streamed
+    }
 }
 
 // MARK: - PlanState
@@ -254,7 +299,25 @@ extension AgentEvent {
                 billingUnits: wire.billingUnits,
                 elapsedMs: wire.elapsedMs,
                 invocationID: wire.invocationId,
-                err: wire.err
+                err: wire.err,
+                cachedPromptTokens: wire.cachedPromptTokens
+            )
+
+        case "model_request":
+            return .modelRequest(
+                turnID: turnID,
+                invocationID: wire.invocationId,
+                request: ModelRequestInfo(
+                    modelName: wire.modelName,
+                    provider: wire.provider,
+                    toolNames: wire.toolNames ?? [],
+                    messageCount: wire.messageCount,
+                    systemPromptChars: wire.systemPromptChars,
+                    toolsPromptChars: wire.toolsPromptChars,
+                    temperature: wire.temperature,
+                    toolChoice: wire.toolChoice,
+                    streamed: wire.streamed
+                )
             )
 
         case "token_delta":

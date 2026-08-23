@@ -14,7 +14,7 @@ final class LifecycleProtocolTests: XCTestCase {
         let event = try decodeEvent("""
         {"kind":"model_finished","turn_id":"t1","prompt_tokens":52444,"completion_tokens":199,"total_tokens":52643,"billing_units":53112,"elapsed_ms":7500,"invocation_id":"inv_15"}
         """)
-        guard case let .modelFinished(turnID, prompt, completion, total, units, elapsed, invocationID, err) = event else {
+        guard case let .modelFinished(turnID, prompt, completion, total, units, elapsed, invocationID, err, cached) = event else {
             return XCTFail("expected model_finished")
         }
         XCTAssertEqual(turnID, "t1")
@@ -25,6 +25,37 @@ final class LifecycleProtocolTests: XCTestCase {
         XCTAssertEqual(elapsed, 7_500)
         XCTAssertEqual(invocationID, "inv_15")
         XCTAssertNil(err)
+        XCTAssertNil(cached, "cached_prompt_tokens omitted → nil")
+    }
+
+    func testModelFinishedDecodesCachedPromptTokens() throws {
+        let event = try decodeEvent("""
+        {"kind":"model_finished","turn_id":"t1","prompt_tokens":24900,"completion_tokens":1800,"total_tokens":26700,"elapsed_ms":1200,"invocation_id":"inv_1","cached_prompt_tokens":12100}
+        """)
+        guard case let .modelFinished(_, _, _, _, _, _, _, _, cached) = event else {
+            return XCTFail("expected model_finished")
+        }
+        XCTAssertEqual(cached, 12_100)
+    }
+
+    func testModelRequestDecodesEnvelope() throws {
+        let event = try decodeEvent("""
+        {"kind":"model_request","turn_id":"t1","invocation_id":"inv_1","model":"deepseek/deepseek-v4-flash","provider":"openai_compatible","tool_names":["run_command","read_file","grep"],"message_count":42,"system_prompt_chars":18320,"tools_prompt_chars":9600,"temperature":0.3,"tool_choice":{"type":"auto"},"streamed":true}
+        """)
+        guard case let .modelRequest(turnID, invocationID, request) = event else {
+            return XCTFail("expected model_request")
+        }
+        XCTAssertEqual(turnID, "t1")
+        XCTAssertEqual(invocationID, "inv_1")
+        XCTAssertEqual(request.modelName, "deepseek/deepseek-v4-flash")
+        XCTAssertEqual(request.provider, "openai_compatible")
+        XCTAssertEqual(request.toolNames, ["run_command", "read_file", "grep"])
+        XCTAssertEqual(request.messageCount, 42)
+        XCTAssertEqual(request.systemPromptChars, 18_320)
+        XCTAssertEqual(request.toolsPromptChars, 9_600)
+        XCTAssertEqual(request.temperature, 0.3)
+        XCTAssertEqual(request.streamed, true)
+        XCTAssertNotNil(request.toolChoice, "tool_choice object decodes as JSONValue")
     }
 
     func testConversationRefDecodesLifecycleFields() throws {

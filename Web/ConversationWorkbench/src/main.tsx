@@ -1991,9 +1991,23 @@ const Turn = memo(function Turn({
           <footer className="turn-footer" data-selection-id={`turn:${turn.id}:footer`}>
             <span>{footer.totalTokens} tokens</span>
             {footer.usageUnits ? <span>{footer.usageUnits} units</span> : null}
+            {footer.cachedTokens ? (
+              <span className="turn-footer-cached">缓存 {footer.cachedTokens}</span>
+            ) : null}
             <span>{footer.elapsed}</span>
             {footer.invocationCount ? <span>{footer.invocationCount}x</span> : null}
             {footer.contextTokens ? <span>ctx {footer.contextTokens}</span> : null}
+            {turn.trajectoryActionID ? (
+              <button
+                type="button"
+                className="turn-footer-trajectory"
+                data-focus-id={`turn-trajectory:${turn.id}`}
+                onClick={() => dispatchAction(turn.trajectoryActionID!)}
+                title="查看本轮调用轨迹"
+              >
+                轨迹 ›
+              </button>
+            ) : null}
           </footer>
         ) : null}
         {!turn.isLive && (turn.copyActionID || turn.shareActionID || turn.assetsActionID) ? (

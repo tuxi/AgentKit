@@ -50,9 +50,21 @@ final class TurnActionDispatcher {
             store.showInspector(.workflowDAG(WorkflowDAGSelection(
                 workflowID: workflowID, title: title, conversationID: conversationID
             )))
+        case .openTrajectory(let turnID):
+            store.showInspector(.conversationTrajectory(TrajectorySelection(
+                turnID: turnID, title: turnTitle
+            )))
         case .copyBlock(let text):
             Clipboard.copy(text)
         }
+    }
+
+    /// 该轮用户输入的首行，用作轨迹面板标题。
+    private var turnTitle: String {
+        let prompt = (turn.userPrompt?.text ?? "")
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        if prompt.isEmpty { return "调用轨迹" }
+        return prompt.count > 24 ? String(prompt.prefix(24)) + "…" : prompt
     }
 
     func showTurnAssets() {

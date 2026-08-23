@@ -129,13 +129,19 @@ public struct ExecutionReducer: Sendable {
                                       ts: ts, graph: &graph)
 
         case .modelFinished(let turnID, let promptTokens, let completionTokens, let totalTokens,
-                            let billingUnits, let elapsedMs, let invocationID, let err):
+                            let billingUnits, let elapsedMs, let invocationID, let err, let cachedPromptTokens):
             return handleModelFinished(turnID: turnID ?? internalState.currentTurnID ?? "",
                                        promptTokens: promptTokens, completionTokens: completionTokens,
                                        totalTokens: totalTokens, billingUnits: billingUnits,
                                        invocationID: invocationID ?? internalState.currentInvocationID,
                                        elapsedMs: elapsedMs,
-                                       err: err, ts: ts, graph: &graph)
+                                       err: err, cachedPromptTokens: cachedPromptTokens,
+                                       ts: ts, graph: &graph)
+
+        case .modelRequest(let turnID, let invocationID, let request):
+            return handleModelRequest(turnID: turnID ?? internalState.currentTurnID ?? "",
+                                      invocationID: invocationID ?? internalState.currentInvocationID,
+                                      request: request, ts: ts, graph: &graph)
 
         // ── Context management (previously ignored!) ──
         case .compacted(let turnID, let before, let after, let saved, _, let ratio, let ineffective):
@@ -775,7 +781,8 @@ public struct ExecutionReducer: Sendable {
 
     private mutating func handleModelFinished(turnID: String, promptTokens: Int?,
                                                completionTokens: Int?, totalTokens: Int?,
-                                               billingUnits: Int64?, invocationID: String?, elapsedMs: Int?, err: String?,
+                                               billingUnits: Int64?, invocationID: String?, elapsedMs: Int?,
+                                               err: String?, cachedPromptTokens: Int? = nil,
                                                ts: TimeInterval,
                                                graph: inout ExecutionGraph) -> [NodeID] {
         // Finalize the thinking block from this model invocation.
@@ -823,6 +830,46 @@ public struct ExecutionReducer: Sendable {
         if let units = billingUnits { metadata["billingUnits"] = String(units) }
         if let invocationID { metadata["invocationID"] = invocationID }
         if let ms = elapsedMs { metadata["elapsedMs"] = String(ms) }
+        if let tokens = cachedPromptTokens { metadata["cachedPromptTokens"] = String(tokens) }
+
+        let payload = SystemPayload(kind: .modelActivity, text: text, metadata: metadata)
+        let node = GraphNode(id: nodeID, kind: .system, payload: .system(payload),
+                             status: .completed, timestamp: ts, turnID: turnID)
+        appendNode(node, to: &graph)
+        return [nodeID]
+    }
+
+    /// v1.4 `model_request`：请求信封节点。metadata 记录全部请求形状字段（只记形状，
+    /// 不含全文），投影层按 invocationID 聚合成调用卡片。phase="request" 的节点在
+    /// 现有 buildTurn 中不渲染为 block（与 phase="started" 同样被跳过），时间线零噪音。
+    private mutating func handleModelRequest(turnID: String, invocationID: String?,
+                                              request: ModelRequestInfo,
+                                              ts: TimeInterval,
+                                              graph: inout ExecutionGraph) -> [NodeID] {
+        let nodeID = "\(turnID)_model_\(UUID().uuidString.prefix(8))"
+        var parts: [String] = []
+        if let model = request.modelName { parts.append(model) }
+        if let count = request.messageCount { parts.append("\(count) msgs") }
+        if !request.toolNames.isEmpty { parts.append("tools \(request.toolNames.count)") }
+        let text = parts.isEmpty ? "Model request" : "Model request: \(parts.joined(separator: ", "))"
+
+        var metadata: [String: String] = ["phase": "request"]
+        if let invocationID { metadata["invocationID"] = invocationID }
+        if let model = request.modelName { metadata["model"] = model }
+        if let provider = request.provider { metadata["provider"] = provider }
+        if !request.toolNames.isEmpty {
+            metadata["toolNames"] = request.toolNames.joined(separator: ",")
+        }
+        if let count = request.messageCount { metadata["messageCount"] = String(count) }
+        if let chars = request.systemPromptChars { metadata["systemPromptChars"] = String(chars) }
+        if let chars = request.toolsPromptChars { metadata["toolsPromptChars"] = String(chars) }
+        if let temp = request.temperature { metadata["temperature"] = String(temp) }
+        if let streamed = request.streamed { metadata["streamed"] = streamed ? "true" : "false" }
+        if let choice = request.toolChoice,
+           let data = try? JSONEncoder().encode(choice),
+           let json = String(data: data, encoding: .utf8) {
+            metadata["toolChoice"] = json
+        }
 
         let payload = SystemPayload(kind: .modelActivity, text: text, metadata: metadata)
         let node = GraphNode(id: nodeID, kind: .system, payload: .system(payload),

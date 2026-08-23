@@ -20,6 +20,9 @@
   --focus: light-dark(rgb(0 122 255), rgb(94 170 255));
   --danger: light-dark(rgb(174 33 33), rgb(255 122 122));
   --code-background: light-dark(rgb(246 246 246), rgb(28 28 28));
+  /* P8.9 — trajectory footer entry */
+  --warning: light-dark(rgb(174 103 0), rgb(255 196 0));
+  --accent: var(--link);
   font-family: -apple-system, BlinkMacSystemFont, "SF Pro Text", sans-serif;
   font-size: 14px;
   line-height: 1.5;
@@ -853,6 +856,25 @@ summary:active {
   color: var(--secondary);
   font-size: 11px;
   user-select: text;
+}
+
+.turn-footer-cached {
+  color: var(--warning);
+}
+
+.turn-footer-trajectory {
+  appearance: none;
+  border: none;
+  background: transparent;
+  padding: 0;
+  margin: 0;
+  color: var(--accent);
+  font: inherit;
+  cursor: pointer;
+}
+
+.turn-footer-trajectory:hover {
+  text-decoration: underline;
 }
 
 .turn-actions {

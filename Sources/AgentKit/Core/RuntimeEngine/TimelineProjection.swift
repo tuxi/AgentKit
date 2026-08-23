@@ -94,6 +94,24 @@ public struct TimelineProjection: Sendable {
         var hasUsageUnits = false
         var seenInvocationIDs: Set<String> = []
         var sawFinished = false
+        // P8.9 — per-invocation trajectory: fold model_request / thinking /
+        // model_finished on the shared invocation_id (reducer-stamped node
+        // invocationID, or the metadata copy for lifecycle nodes).
+        var invocationOrder: [String] = []
+        var invocationByID: [String: ModelInvocation] = [:]
+        var totalCachedTokens = 0
+
+        func upsertInvocation(_ id: String, mutate: (inout ModelInvocation) -> Void) {
+            if var inv = invocationByID[id] {
+                mutate(&inv)
+                invocationByID[id] = inv
+            } else {
+                var inv = ModelInvocation(id: id, index: invocationOrder.count + 1)
+                mutate(&inv)
+                invocationOrder.append(id)
+                invocationByID[id] = inv
+            }
+        }
 
         // P8.7 ①：同一次委派/启动会同时出现工具卡和 childStream 入口卡——
         //   task：`task` 工具卡（tool_started/finished） + task_started/finished bracket
@@ -129,6 +147,14 @@ public struct TimelineProjection: Sendable {
                 // NOT assistant narration. Distinct from the spoken reply (text).
                 flushTools()
                 blocks.append(.thinking(id: node.id, p))
+                // Fold the authoritative snapshot into its invocation (REPLACE:
+                // later non-empty thinking wins — matches the reducer's segment
+                // finalize semantics).
+                if let invID = node.invocationID, !invID.isEmpty {
+                    upsertInvocation(invID) { inv in
+                        if !p.text.isEmpty { inv.thinkingText = p.text }
+                    }
+                }
             case .tool(let p):
                 // `propose_plan` has a dedicated semantic Plan node. Keeping
                 // its raw tool row would show the same proposal twice.
@@ -189,6 +215,51 @@ public struct TimelineProjection: Sendable {
                             hasUsageUnits = true
                         }
                         if let e = p.metadata["elapsedMs"], let v = Int(e) { footerElapsed += v }
+                        if let cached = p.metadata["cachedPromptTokens"].flatMap(Int.init) {
+                            totalCachedTokens += cached
+                        }
+                        // Backfill the invocation record (created earlier by
+                        // model_request / thinking, or created here for legacy
+                        // streams that only have model_finished).
+                        let invID = p.metadata["invocationID"] ?? node.invocationID
+                        if let invID, !invID.isEmpty {
+                            upsertInvocation(invID) { inv in
+                                inv.promptTokens = prompt ?? inv.promptTokens
+                                inv.completionTokens = p.metadata["completionTokens"].flatMap(Int.init) ?? inv.completionTokens
+                                inv.totalTokens = p.metadata["totalTokens"].flatMap(Int.init) ?? inv.totalTokens
+                                if let units = p.metadata["billingUnits"].flatMap(Int64.init) {
+                                    inv.billingUnits = units
+                                }
+                                if let cached = p.metadata["cachedPromptTokens"].flatMap(Int.init) {
+                                    inv.cachedPromptTokens = cached
+                                }
+                                if let ms = p.metadata["elapsedMs"].flatMap(Int.init) {
+                                    inv.elapsedMs = ms
+                                }
+                            }
+                        }
+                    } else if phase == "request" {
+                        // v1.4 model_request — request-shape envelope. Fold into
+                        // the invocation record; never rendered as a block.
+                        let invID = p.metadata["invocationID"] ?? node.invocationID
+                        if let invID, !invID.isEmpty {
+                            upsertInvocation(invID) { inv in
+                                let toolChoice: JSONValue? = p.metadata["toolChoice"]
+                                    .flatMap { try? JSONDecoder().decode(JSONValue.self, from: Data($0.utf8)) }
+                                inv.request = ModelRequestInfo(
+                                    modelName: p.metadata["model"],
+                                    provider: p.metadata["provider"],
+                                    toolNames: p.metadata["toolNames"]?
+                                        .split(separator: ",").map(String.init) ?? [],
+                                    messageCount: p.metadata["messageCount"].flatMap(Int.init),
+                                    systemPromptChars: p.metadata["systemPromptChars"].flatMap(Int.init),
+                                    toolsPromptChars: p.metadata["toolsPromptChars"].flatMap(Int.init),
+                                    temperature: p.metadata["temperature"].flatMap(Double.init),
+                                    toolChoice: toolChoice,
+                                    streamed: p.metadata["streamed"].map { $0 == "true" }
+                                )
+                            }
+                        }
                     }
                 } else if p.kind == .modelActivity,
                           p.metadata["type"] == "todos" || p.metadata["type"] == "approval" {
@@ -211,11 +282,13 @@ public struct TimelineProjection: Sendable {
 
         let footer = sawFinished
             ? TurnStats(contextTokens: contextTokens, totalTokens: totalTokens, usageUnits: usageUnits,
-                        hasUsageUnits: hasUsageUnits, elapsedMs: footerElapsed, invocationCount: footerCount)
+                        hasUsageUnits: hasUsageUnits, elapsedMs: footerElapsed, invocationCount: footerCount,
+                        cachedContextTokens: totalCachedTokens)
             : nil
+        let invocations = invocationOrder.compactMap { invocationByID[$0] }
         return ConversationTurn(id: turnUID, userPrompt: userPrompt,
                                 blocks: blocks, plans: plans, todos: todos,
-                                footer: footer, isLive: isLive)
+                                footer: footer, isLive: isLive, invocations: invocations)
     }
 
     /// Collapse adjacent assistant-text blocks when one is a prefix of the other.
