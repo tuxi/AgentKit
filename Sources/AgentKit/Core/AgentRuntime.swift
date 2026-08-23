@@ -199,6 +199,12 @@ public final class AgentRuntime: @unchecked Sendable {
 
     /// iOS checkpoints active work during its background grace period. macOS
     /// deliberately keeps full-desktop turns running while the app is inactive.
+    ///
+    /// 已废弃的主动挂起路径：内嵌 runtime 与 App 同进程，进程冻结时 goroutine
+    /// 自然暂停，无需（也不应）在进后台时手动 suspend —— 那会立即暂停所有
+    /// 活跃会话并关闭回环 listener，回前台只能靠 best-effort 的 thaw/resume
+    /// 链恢复。保留空实现仅为源兼容；宿主不应再调用。
+    @available(*, deprecated, message: "Embedded runtime freezes with the app process; do not suspend on background.")
     public func suspendRuntime(timeoutMillis: Int = 2000) async {
         #if os(iOS)
         await lifecycleCoordinator.run {

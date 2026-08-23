@@ -762,14 +762,19 @@ public final class WorkspaceStore {
     }
     #endif
 
-    /// 后台进入：请求 runtime 做有界 suspend/checkpoint，不销毁 server。
+    /// 后台进入：只停宿主侧轮询并落盘本地状态。
+    ///
+    /// 内嵌 runtime 与 App 同进程同生命周期：进程冻结时 goroutine 自然暂停，
+    /// 回前台由 `handleAppBecameActive` 的 ensureHealthy 探活自愈。这里不再
+    /// 主动 suspend —— 那会立即暂停所有活跃会话并关闭回环 listener，短暂
+    /// 切走再回来也要走一遍 thaw/resume 恢复链（best-effort，失败静默），
+    /// 是「切后台回来状态怪异」问题的根源。
     public func handleAppEnteredBackground() {
         isAppActive = false
         updateConversationListPolling()
         try? localStateStore.flush()
         #if os(iOS)
         supervisor.stopActivityMonitoring()
-        Task { await AgentRuntime.shared.suspendRuntime() }
         #endif
     }
 

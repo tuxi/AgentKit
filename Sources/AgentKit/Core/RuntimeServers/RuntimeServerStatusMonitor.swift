@@ -117,7 +117,9 @@ public final class RuntimeServerStatusMonitor {
     #endif
 
     @ObservationIgnored private var inflight: Task<Bool, Never>?
-    @ObservationIgnored private var inflightRepairsIfNeeded = false
+    /// inflight 代数：只有最新一次检查可以清空 inflight，被超时弃置的旧任务
+    /// 迟到完成时不得抹掉它的替代者。
+    @ObservationIgnored private var inflightGeneration = 0
 
     // MARK: - Init
 
@@ -176,36 +178,72 @@ public final class RuntimeServerStatusMonitor {
     @discardableResult
     public func checkEmbedded(repairIfNeeded: Bool = false) async -> Bool {
         guard let lifecycle else { return false }
-        if let inflight {
-            let joinedRepair = inflightRepairsIfNeeded
-            let healthy = await inflight.value
-            if !healthy, repairIfNeeded, !joinedRepair {
-                return await runCheck(lifecycle: lifecycle, repairIfNeeded: true)
+        if let existing = inflight {
+            // 上一次检查可能钉在一个已死的 listener 上（如检查中途进程被冻结，
+            // 回环 socket 被回收，HTTP 探针迟迟不返回）。join 必须有界；超窗后
+            // 弃旧结果，针对当前 runtime 状态重新发起检查。
+            if let joined = await Self.boundedJoin(existing, limit: .seconds(10)) {
+                if joined || !repairIfNeeded { return joined }
+                return await beginCheck(lifecycle: lifecycle, repairIfNeeded: true)
             }
-            return healthy
         }
-        let task = Task { await self.runCheck(lifecycle: lifecycle, repairIfNeeded: repairIfNeeded) }
-        inflight = task
-        inflightRepairsIfNeeded = repairIfNeeded
-        let healthy = await task.value
-        inflight = nil
-        inflightRepairsIfNeeded = false
-        return healthy
+        return await beginCheck(lifecycle: lifecycle, repairIfNeeded: repairIfNeeded)
     }
 
     @discardableResult
     public func restartEmbedded() async -> Bool {
         guard let lifecycle else { return false }
-        if let inflight {
-            _ = await inflight.value
+        if let existing = inflight {
+            _ = await Self.boundedJoin(existing, limit: .seconds(10))
         }
+        return await beginRestart(lifecycle: lifecycle)
+    }
+
+    private func beginCheck(
+        lifecycle: EmbeddedRuntimeLifecycle,
+        repairIfNeeded: Bool
+    ) async -> Bool {
+        inflightGeneration += 1
+        let generation = inflightGeneration
+        let task = Task { await self.runCheck(lifecycle: lifecycle, repairIfNeeded: repairIfNeeded) }
+        inflight = task
+        let healthy = await task.value
+        // 只有最新一次检查可以清空 inflight；被超时弃置的旧任务迟到完成时
+        // 不得抹掉它的替代者。
+        if inflightGeneration == generation {
+            inflight = nil
+        }
+        return healthy
+    }
+
+    private func beginRestart(lifecycle: EmbeddedRuntimeLifecycle) async -> Bool {
+        inflightGeneration += 1
+        let generation = inflightGeneration
         let task = Task { await self.runRestart(lifecycle: lifecycle) }
         inflight = task
-        inflightRepairsIfNeeded = true
         let healthy = await task.value
-        inflight = nil
-        inflightRepairsIfNeeded = false
+        if inflightGeneration == generation {
+            inflight = nil
+        }
         return healthy
+    }
+
+    /// 等待 `task` 至多 `limit` 时间。返回其结果；超窗返回 nil（旧任务继续
+    /// 在后台跑完，但不再被视为权威结果）。
+    private static func boundedJoin(
+        _ task: Task<Bool, Never>,
+        limit: Duration
+    ) async -> Bool? {
+        await withTaskGroup(of: Bool?.self) { group in
+            group.addTask { await task.value }
+            group.addTask {
+                try? await Task.sleep(for: limit)
+                return nil
+            }
+            let first = await group.next() ?? nil
+            group.cancelAll()
+            return first
+        }
     }
 
     private func runCheck(lifecycle: EmbeddedRuntimeLifecycle, repairIfNeeded: Bool) async -> Bool {
