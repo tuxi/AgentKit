@@ -377,6 +377,15 @@ private final class StubContextTransport: AgentTransport, @unchecked Sendable {
     }
     func getMessages(conversationID: String) async throws -> [Message] { [] }
     func getEvents(conversationID: String) async throws -> [AgentEvent] { [] }
+    func listWorkspaceGitBranches(workspacePath: String) async throws -> WorkspaceGitBranchResult {
+        throw RuntimeHTTPError.unsupported
+    }
+    func createWorkspaceGitBranch(_ request: WorkspaceGitBranchCreateRequest) async throws -> WorkspaceGitBranchResult {
+        throw RuntimeHTTPError.unsupported
+    }
+    func checkoutWorkspaceGitBranch(_ request: WorkspaceGitBranchCheckoutRequest) async throws -> WorkspaceGitBranchResult {
+        throw RuntimeHTTPError.unsupported
+    }
     func registerTools(_ tools: [ClientToolInfo]) async {}
     func capabilities() async -> AgentCapabilityFlags { .default }
 }

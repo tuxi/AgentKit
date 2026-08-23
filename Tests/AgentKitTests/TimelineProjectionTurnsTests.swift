@@ -76,7 +76,8 @@ final class TimelineProjectionTurnsTests: XCTestCase {
         XCTAssertEqual(t.footer?.elapsedMs, 50)      // 30 + 20
         XCTAssertEqual(t.footer?.contextTokens, 1500) // last invocation context
         XCTAssertEqual(t.footer?.totalTokens, 2700)
-        XCTAssertNil(t.footer?.cachedContextTokens, "no cached_prompt_tokens → 0")
+        XCTAssertEqual(t.footer?.cachedContextTokens, 0, "no cached_prompt_tokens → 0")
+        XCTAssertFalse(t.footer?.hasCachedTokens == true)
 
         // P8.9 — 该 turn 有两条 model_finished，即使没有 model_request 也聚合出
         // 两条 invocation（inv1 与 inv2，按到达顺序编号）。
@@ -145,6 +146,42 @@ final class TimelineProjectionTurnsTests: XCTestCase {
         XCTAssertTrue(footer?.hasCachedTokens == true)
     }
 
+    /// P8.9 — 实际调用工具聚合：按 invocation_id 收集该调用名下的工具节点名
+    /// （去重保序），与时间线渲染决策一致（跳过 propose_plan / 入口卡）。
+    func testInvocationAggregatesExecutedTools() {
+        let turn = "t1"
+        let graph = reduce([
+            .turnStarted(turnID: turn, text: "q"),
+            .modelRequest(turnID: turn, invocationID: "inv1", request: ModelRequestInfo(
+                modelName: "deepseek/deepseek-v4-flash",
+                toolNames: ["run_command", "read_file", "grep", "propose_plan"],
+                messageCount: 5,
+                systemPromptChars: 1_000,
+                toolsPromptChars: 800,
+                temperature: 0.3,
+                toolChoice: "auto",
+                streamed: true
+            )),
+            .modelStarted(turnID: turn, invocationID: "inv1"),
+            .toolStarted(turnID: turn, callID: "c1", tool: tool("c1", "run_command")),
+            .toolFinished(turnID: turn, callID: "c1", result: result("c1", "run_command")),
+            .toolStarted(turnID: turn, callID: "c2", tool: tool("c2", "read_file")),
+            .toolFinished(turnID: turn, callID: "c2", result: result("c2", "read_file")),
+            .toolStarted(turnID: turn, callID: "c3", tool: tool("c3", "run_command")),
+            .toolFinished(turnID: turn, callID: "c3", result: result("c3", "run_command")),
+            .modelFinished(turnID: turn, promptTokens: 24_900, completionTokens: 1_800,
+                           totalTokens: 26_700, billingUnits: 27_000, elapsedMs: 1_200,
+                           invocationID: "inv1", err: nil, cachedPromptTokens: 12_100),
+            .turnFinished(turnID: turn, text: "done", textAnnotations: []),
+        ])
+
+        let inv = TimelineProjection().projectTurns(graph).first?.invocations[0]
+        XCTAssertEqual(inv?.executedTools, ["run_command", "read_file"],
+                       "同工具只出现一次（去重），保持首次到达顺序")
+        XCTAssertEqual(inv?.request?.toolNames, ["run_command", "read_file", "grep", "propose_plan"],
+                       "request 的 toolNames 仍为全量定义，不受 executedTools 影响")
+    }
+
     /// P8.9 — model_request + thinking + model_finished(cached) 折成一张调用卡。
     func testInvocationFoldsRequestThinkingAndUsage() {
         let turn = "t1"
@@ -201,8 +238,8 @@ final class TimelineProjectionTurnsTests: XCTestCase {
         XCTAssertEqual(t?.footer?.totalTokens, 26_700)
         XCTAssertEqual(t?.footer?.elapsedMs, 1_200)
 
-        // 时间线零噪音：lifecycle 节点不进 blocks
-        XCTAssertEqual(tags(t?.blocks ?? []), [])
+        // 时间线零噪音：model lifecycle 节点不进 blocks（thinking 按设计渲染成卡）
+        XCTAssertEqual(tags(t?.blocks ?? []), ["thinking", "text"])
     }
 
     // Reasoning and assistant text are distinct content types — `thinking`

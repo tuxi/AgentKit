@@ -43,6 +43,18 @@ private func makeMockSession() -> URLSession {
     return URLSession(configuration: config)
 }
 
+/// Sendable box for capturing `URLRequest` from the `@Sendable` mock handler
+/// without tripping Swift 6 strict-concurrency diagnostics on `var captured`.
+private final class LockedBox<Value>: @unchecked Sendable {
+    private let lock = NSLock()
+    private var storage: Value
+    init(_ value: Value) { storage = value }
+    var value: Value {
+        get { lock.lock(); defer { lock.unlock() }; return storage }
+        set { lock.lock(); defer { lock.unlock() }; storage = newValue }
+    }
+}
+
 private func httpResponse(statusCode: Int = 200) -> HTTPURLResponse {
     HTTPURLResponse(
         url: URL(string: "http://127.0.0.1:8797/v1/providers")!,
@@ -50,6 +62,24 @@ private func httpResponse(statusCode: Int = 200) -> HTTPURLResponse {
         httpVersion: "HTTP/1.1",
         headerFields: nil
     )!
+}
+
+/// URLSession streams the request body, so a `URLProtocol` handler sees
+/// `httpBody == nil` and must read `httpBodyStream` instead.
+private func requestBodyData(_ request: URLRequest) -> Data? {
+    if let data = request.httpBody { return data }
+    guard let stream = request.httpBodyStream else { return nil }
+    stream.open()
+    defer { stream.close() }
+    var data = Data()
+    let bufferSize = 4096
+    var buffer = [UInt8](repeating: 0, count: bufferSize)
+    while stream.hasBytesAvailable {
+        let read = stream.read(&buffer, maxLength: bufferSize)
+        if read <= 0 { break }
+        data.append(buffer, count: read)
+    }
+    return data
 }
 
 private func envelopeJSON(_ data: Any) -> Data {
@@ -104,8 +134,9 @@ final class RuntimeProviderServiceTests: XCTestCase {
                 ],
             ],
         ]
+        let payloadData = envelopeJSON(payload)
         MockURLProtocol.setHandler { _ in
-            (httpResponse(), envelopeJSON(payload))
+            (httpResponse(), payloadData)
         }
         let service = try await makeService(session: session)
 
@@ -120,9 +151,9 @@ final class RuntimeProviderServiceTests: XCTestCase {
 
     func testProvidersRequestsSendBearerAuth() async throws {
         let session = makeMockSession()
-        var captured: URLRequest?
+        let captured = LockedBox<URLRequest?>(nil)
         MockURLProtocol.setHandler { request in
-            captured = request
+            captured.value = request
             return (httpResponse(), envelopeJSON([
                 "providers": [[
                     "id": "deepseek",
@@ -136,9 +167,9 @@ final class RuntimeProviderServiceTests: XCTestCase {
         let service = try await makeService(session: session, token: "secret-token")
 
         _ = try await service.listProviders()
-        XCTAssertEqual(captured?.httpMethod, "GET")
-        XCTAssertEqual(captured?.url?.path, "/v1/providers")
-        XCTAssertEqual(captured?.value(forHTTPHeaderField: "Authorization"), "Bearer secret-token")
+        XCTAssertEqual(captured.value?.httpMethod, "GET")
+        XCTAssertEqual(captured.value?.url?.path, "/v1/providers")
+        XCTAssertEqual(captured.value?.value(forHTTPHeaderField: "Authorization"), "Bearer secret-token")
     }
 
     func testGetProviderDecodesDefinition() async throws {
@@ -154,19 +185,21 @@ final class RuntimeProviderServiceTests: XCTestCase {
                 "context_window": 128_000,
             ]],
         ]
+        let definitionData = envelopeJSON(definition)
         MockURLProtocol.setHandler { request in
             XCTAssertEqual(request.url?.path, "/v1/providers/deepseek")
-            return (httpResponse(), envelopeJSON(definition))
+            return (httpResponse(), definitionData)
         }
         let service = try await makeService(session: session)
 
-        let provider = try XCTUnwrap(try await service.getProvider(id: "deepseek"))
-        XCTAssertEqual(provider.id, "deepseek")
-        XCTAssertEqual(provider.api, "openai")
-        XCTAssertEqual(provider.baseURL, "https://api.deepseek.com")
-        XCTAssertEqual(provider.enabled, false)
-        XCTAssertEqual(provider.credential?.name, "deepseek")
-        XCTAssertEqual(provider.models.first?.id, "deepseek-chat")
+        let provider = try await service.getProvider(id: "deepseek")
+        XCTAssertNotNil(provider)
+        XCTAssertEqual(provider?.id, "deepseek")
+        XCTAssertEqual(provider?.api, "openai")
+        XCTAssertEqual(provider?.baseURL, "https://api.deepseek.com")
+        XCTAssertEqual(provider?.enabled, false)
+        XCTAssertEqual(provider?.credential?.name, "deepseek")
+        XCTAssertEqual(provider?.models.first?.id, "deepseek-chat")
     }
 
     func testGetProviderMissingReturnsNil() async throws {
@@ -182,9 +215,9 @@ final class RuntimeProviderServiceTests: XCTestCase {
 
     func testUpsertProviderSendsEnabledAndParsesApplied() async throws {
         let session = makeMockSession()
-        var captured: URLRequest?
+        let captured = LockedBox<URLRequest?>(nil)
         MockURLProtocol.setHandler { request in
-            captured = request
+            captured.value = request
             return (httpResponse(), envelopeJSON(["applied": true]))
         }
         let service = try await makeService(session: session)
@@ -202,9 +235,9 @@ final class RuntimeProviderServiceTests: XCTestCase {
         )
         let result = try await service.upsertProvider(definition)
 
-        XCTAssertEqual(captured?.httpMethod, "PUT")
-        XCTAssertEqual(captured?.url?.path, "/v1/providers/deepseek")
-        let body = try XCTUnwrap(captured?.httpBody)
+        XCTAssertEqual(captured.value?.httpMethod, "PUT")
+        XCTAssertEqual(captured.value?.url?.path, "/v1/providers/deepseek")
+        let body = try XCTUnwrap(requestBodyData(captured.value!))
         let json = try XCTUnwrap(JSONSerialization.jsonObject(with: body) as? [String: Any])
         XCTAssertEqual(json["api"] as? String, "openai")
         XCTAssertEqual(json["base_url"] as? String, "https://api.deepseek.com")
@@ -234,16 +267,16 @@ final class RuntimeProviderServiceTests: XCTestCase {
 
     func testDeleteProviderParsesApplied() async throws {
         let session = makeMockSession()
-        var captured: URLRequest?
+        let captured = LockedBox<URLRequest?>(nil)
         MockURLProtocol.setHandler { request in
-            captured = request
+            captured.value = request
             return (httpResponse(), envelopeJSON(["applied": false]))
         }
         let service = try await makeService(session: session)
 
         let result = try await service.deleteProvider(id: "deepseek")
-        XCTAssertEqual(captured?.httpMethod, "DELETE")
-        XCTAssertEqual(captured?.url?.path, "/v1/providers/deepseek")
+        XCTAssertEqual(captured.value?.httpMethod, "DELETE")
+        XCTAssertEqual(captured.value?.url?.path, "/v1/providers/deepseek")
         XCTAssertEqual(result.applied, false)
     }
 }

@@ -154,6 +154,12 @@ public final class ModelSettingsStore {
         unifiedModels?.first { $0.id == modelID }
     }
 
+    /// The runtime wire alias for a model ID (from the unified catalog).
+    /// Nil when the model is unknown (historical / removed).
+    public func runtimeAlias(for modelID: String) -> String? {
+        descriptor(for: modelID)?.runtimeAlias
+    }
+
     public func isModelAvailable(_ modelID: String?) -> Bool {
         guard let modelID, !modelID.isEmpty else { return false }
         if let unifiedModels {

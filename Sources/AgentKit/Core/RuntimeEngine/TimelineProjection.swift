@@ -173,6 +173,16 @@ public struct TimelineProjection: Sendable {
                 if let last = pendingTools.last, last.toolName != p.toolName {
                     flushTools()
                 }
+                // P8.9 — fold the executed tool into its invocation (arrival
+                // order, dedup). Skipped for propose_plan / entry cards above,
+                // matching the timeline's render decisions 1:1.
+                if let invID = node.invocationID, !invID.isEmpty {
+                    upsertInvocation(invID) { inv in
+                        if !inv.executedTools.contains(p.toolName) {
+                            inv.executedTools.append(p.toolName)
+                        }
+                    }
+                }
                 pendingTools.append(p)
             case .artifact(let p):
                 flushTools()

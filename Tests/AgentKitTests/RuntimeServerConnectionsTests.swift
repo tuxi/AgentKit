@@ -318,6 +318,12 @@ final class RuntimeServerConnectionsTests: XCTestCase {
         XCTAssertEqual(resolvedRotatedToken, rotatedToken)
     }
 
+    // Embedded-runtime monitor tests: `EmbeddedRuntimeLifecycle` and
+    // `RuntimeServerStatusMonitor(lifecycle:)` are only compiled when the
+    // CodeAgentRuntime binary target is linked (iOS). On macOS these tests
+    // are skipped entirely.
+    #if canImport(CodeAgentRuntime)
+
     func testMonitorStartsMissingEmbeddedRuntimeAndPublishesDiagnostics() async throws {
         var alive = false
         var starts = 0
@@ -411,6 +417,8 @@ final class RuntimeServerConnectionsTests: XCTestCase {
         XCTAssertEqual(monitor.status, .authenticationRequired)
         XCTAssertNil(monitor.diagnosticSnapshot.runtimeInfo)
     }
+
+    #endif // canImport(CodeAgentRuntime)
 
     func testRepairingSameServerIdentityUpdatesInPlace() async throws {
         let registry = makeRegistry()
@@ -581,6 +589,7 @@ final class RuntimeServerConnectionsTests: XCTestCase {
         )
     }
 
+    #if canImport(CodeAgentRuntime)
     private static func runtimeInfo(profile: String) -> RuntimeServerInfo {
         RuntimeServerInfo(
             schema: "runtime-info/v1",
@@ -592,6 +601,7 @@ final class RuntimeServerConnectionsTests: XCTestCase {
             runtimeProfile: profile
         )
     }
+    #endif
 
     private static func preflight(
         serverID: String

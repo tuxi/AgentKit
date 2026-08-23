@@ -193,6 +193,7 @@ final class ContextEventsTests: XCTestCase {
 
     // MARK: - Web document blocks
 
+    @MainActor
     func testWebDocumentCarriesSystemKindAndMetadata() throws {
         let turn = ConversationTurn(
             id: "turn-1",

@@ -81,6 +81,9 @@ public struct ModelInvocation: Identifiable, Sendable, Equatable {
     public let index: Int
     /// Request envelope (since v1.4). Nil for streams that predate `model_request`.
     public var request: ModelRequestInfo?
+    /// Tools this invocation actually executed, in arrival order, deduplicated.
+    /// Aggregated from `tool` nodes stamped with the same `invocation_id`.
+    public var executedTools: [String]
     public var promptTokens: Int?
     public var completionTokens: Int?
     public var totalTokens: Int?
@@ -92,6 +95,7 @@ public struct ModelInvocation: Identifiable, Sendable, Equatable {
     public var thinkingText: String?
 
     public init(id: String, index: Int, request: ModelRequestInfo? = nil,
+                executedTools: [String] = [],
                 promptTokens: Int? = nil, completionTokens: Int? = nil,
                 totalTokens: Int? = nil, billingUnits: Int64? = nil,
                 cachedPromptTokens: Int? = nil, elapsedMs: Int? = nil,
@@ -99,6 +103,7 @@ public struct ModelInvocation: Identifiable, Sendable, Equatable {
         self.id = id
         self.index = index
         self.request = request
+        self.executedTools = executedTools
         self.promptTokens = promptTokens
         self.completionTokens = completionTokens
         self.totalTokens = totalTokens

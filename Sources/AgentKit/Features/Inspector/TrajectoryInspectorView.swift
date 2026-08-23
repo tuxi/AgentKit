@@ -157,7 +157,8 @@ private struct TrajectoryTurnSection: View {
 
 /// 一次模型调用一张卡：
 ///   #N · model · 耗时          ← 头行
-///   tools 8 · msgs 42 · sys 18.3K · temp 0.3   ← 请求摘要（可展开看全量）
+///   🔧 调用 run_command, read_file   ← 实际调用工具（折叠态可见）
+///   定义 8 · msgs 42 · sys 18.3K · temp 0.3   ← 请求摘要（可展开看全量）
 ///   → 24.9K prompt (12.1K cached) · 1.8K out   ← 用量行
 ///   ▸ 思考过程                                 ← thinking 折叠
 private struct InvocationCardView: View {
@@ -169,6 +170,9 @@ private struct InvocationCardView: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 6) {
             headerRow
+            if !invocation.executedTools.isEmpty {
+                executedToolsRow
+            }
             if let request = invocation.request {
                 requestSummary(request)
                 if requestExpanded {
@@ -220,6 +224,22 @@ private struct InvocationCardView: View {
         }
     }
 
+    // MARK: 实际调用（折叠态可见）
+
+    private var executedToolsRow: some View {
+        Label(executedToolsSummaryText, systemImage: "wrench.and.screwdriver")
+            .font(.caption2)
+            .foregroundStyle(.secondary)
+    }
+
+    private var executedToolsSummaryText: String {
+        let tools = invocation.executedTools
+        if tools.count > 3 {
+            return "调用 \(tools.prefix(3).joined(separator: ", ")) 等 \(tools.count) 个"
+        }
+        return "调用 \(tools.joined(separator: ", "))"
+    }
+
     // MARK: 请求摘要
 
     @ViewBuilder
@@ -242,7 +262,7 @@ private struct InvocationCardView: View {
 
     private func requestSummaryText(_ request: ModelRequestInfo) -> String {
         var parts: [String] = []
-        if !request.toolNames.isEmpty { parts.append("tools \(request.toolNames.count)") }
+        if !request.toolNames.isEmpty { parts.append("定义 \(request.toolNames.count)") }
         if let count = request.messageCount { parts.append("msgs \(count)") }
         if let chars = request.systemPromptChars { parts.append("sys \(formatCount(chars))") }
         if let chars = request.toolsPromptChars { parts.append("tools def \(formatCount(chars))") }
@@ -256,8 +276,11 @@ private struct InvocationCardView: View {
     private func requestDetail(_ request: ModelRequestInfo) -> some View {
         VStack(alignment: .leading, spacing: 3) {
             detailRow("Provider", request.provider ?? "—")
+            if !invocation.executedTools.isEmpty {
+                detailRow("实际调用", invocation.executedTools.joined(separator: ", "))
+            }
             if !request.toolNames.isEmpty {
-                detailRow("工具", request.toolNames.joined(separator: ", "))
+                detailRow("可用工具", request.toolNames.joined(separator: ", "))
             }
             detailRow("消息条数", request.messageCount.map(String.init) ?? "—")
             detailRow("System prompt", request.systemPromptChars.map(formatCount) ?? "—")
