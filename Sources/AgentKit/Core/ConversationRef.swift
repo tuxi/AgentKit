@@ -44,6 +44,10 @@ public struct ConversationRef: Identifiable, Hashable, Sendable, Codable {
     public var isPaused: Bool {
         turnStatus == "paused"
     }
+    
+    public var isRunning: Bool {
+        turnStatus == "running"
+    }
 
     public var isArchived: Bool {
         archivedAt?.isEmpty == false

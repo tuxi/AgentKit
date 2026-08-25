@@ -945,7 +945,7 @@ private struct IOSModelPickerSheet: View {
 }
 #endif
 
-private struct DraftComposerSurfaceModifier: ViewModifier {
+struct DraftComposerSurfaceModifier: ViewModifier {
     @Environment(\.colorScheme) private var colorScheme
     func body(content: Content) -> some View {
 #if os(macOS)

@@ -39,6 +39,13 @@ public struct WorkspaceGitBranchResult: Codable, Sendable, Equatable {
     public let checkout: WorkspaceGitCheckoutState
     public let branches: [WorkspaceGitBranch]
     enum CodingKeys: String, CodingKey { case workspacePath = "workspace_path", checkout, branches }
+    
+    public init(from decoder: any Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        self.workspacePath = try container.decode(String.self, forKey: .workspacePath)
+        self.checkout = try container.decode(WorkspaceGitCheckoutState.self, forKey: .checkout)
+        self.branches = try container.decodeIfPresent([WorkspaceGitBranch].self, forKey: .branches) ?? []
+    }
 }
 
 public struct WorkspaceGitBranchListRequest: Codable, Sendable, Equatable {

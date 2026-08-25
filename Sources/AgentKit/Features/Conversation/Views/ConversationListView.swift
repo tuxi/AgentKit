@@ -114,21 +114,28 @@ public struct ConversationListView: View {
             indices[descriptor.id] = groups.count
             groups.append(ConversationWorkspaceGroup(
                descriptor: descriptor,
-                conversations: []
+                conversations: [],
+               isRunning: false
             ))
         }
 
         for conversation in filteredConversations {
             let descriptor = ConversationWorkspaceGroup.Descriptor(conversation: conversation)
             if let index = indices[descriptor.id] {
-                groups[index].conversations.append(conversation)
+                var group = groups[index]
+                group.isRunning = conversation.isRunning
+                group.conversations.append(conversation)
+                groups[index] = group
             } else {
                 indices[descriptor.id] = groups.count
-                groups.append(ConversationWorkspaceGroup(
+                var group = ConversationWorkspaceGroup(
                     descriptor: descriptor,
                     conversations: [conversation]
-                ))
+                )
+                group.isRunning = conversation.isRunning
+                groups.append(group)
             }
+            
         }
         return groups
     }
@@ -411,6 +418,10 @@ public struct ConversationListView: View {
                     .foregroundStyle(.primary)
                     .lineLimit(1)
                 Spacer(minLength: 0)
+                if group.isRunning {
+                    ProgressView()
+                        .controlSize(.mini)
+                }
                 Image(systemName: isExpanded ? "chevron.down" : "chevron.right")
                     .font(.system(size: 10, weight: .bold))
                     .foregroundStyle(.tertiary)
@@ -909,6 +920,8 @@ private struct ConversationWorkspaceGroup: Identifiable {
     var systemImage: String {
         descriptor.systemImage
     }
+    
+    var isRunning = false
 }
 
 // MARK: - ConversationRow

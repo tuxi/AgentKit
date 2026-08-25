@@ -30,8 +30,22 @@ public final class WorkspaceStore {
             dismissInspector()
         }
     }
+    
+    public var selectItem: AgentNavigationDestination = .draft {
+        didSet {
+            guard oldValue != selectItem else { return }
+            switch selectItem {
+            case .conversationDetail(let conversation):
+                selectedConversation = conversation
+            case .draft:
+                selectedConversation = nil
+            case .automation:
+                break
+            }
+        }
+    }
 
-    public var selectedConversation: ConversationRef? {
+   public private(set) var selectedConversation: ConversationRef? {
         didSet {
             guard oldValue != selectedConversation else { return }
             switchInspectorWorkspace(to: selectedConversation?.id)
@@ -833,7 +847,7 @@ public final class WorkspaceStore {
 
     /// 点击「+」：不调用任何 API，仅创建本地草稿。预选最近使用的工作区。
     public func beginDraft() {
-        selectedConversation = nil
+        selectItem = .draft
         projects.reload()
 
         if draft == nil {
