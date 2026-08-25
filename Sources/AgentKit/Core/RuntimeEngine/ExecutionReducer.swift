@@ -87,6 +87,11 @@ public struct ExecutionReducer: Sendable {
             return handleThinking(turnID: turnID ?? internalState.currentTurnID ?? "",
                                   text: text, ts: ts, graph: &graph)
 
+        // ── Intermediate assistant narration (persisted) ──
+        case .assistantText(let turnID, let text):
+            return handleAssistantText(turnID: turnID ?? internalState.currentTurnID ?? "",
+                                       text: text, ts: ts, graph: &graph)
+
         // ── Tool lifecycle ──
         case .toolStarted(let turnID, let callID, let tool):
             return handleToolStarted(turnID: turnID ?? internalState.currentTurnID ?? "",
@@ -493,6 +498,27 @@ public struct ExecutionReducer: Sendable {
     }
 
     // MARK: - Streaming handlers
+
+    /// Intermediate assistant narration (persisted `assistant_text`): the model
+    /// said something before calling tools. A completed assistant message node,
+    /// positioned before the tool group that follows. Distinct from the final
+    /// answer (turn_finished) and from streaming token deltas.
+    private mutating func handleAssistantText(turnID: String, text: String, ts: TimeInterval,
+                                              graph: inout ExecutionGraph) -> [NodeID] {
+        guard !text.isEmpty else { return [] }
+        // Finalize any in-progress streaming segment so this node lands in order.
+        finalizeStreamingAssistant(&graph)
+        let nodeID = "\(turnID)_assistant_\(internalState.nextAssistantSeq)"
+        internalState.nextAssistantSeq += 1
+        let node = GraphNode(
+            id: nodeID, kind: .assistantMessage,
+            payload: .assistantMessage(text: text, textAnnotations: []),
+            status: .completed, timestamp: ts, turnID: turnID
+        )
+        appendNode(node, to: &graph)
+        internalState.lastNodeOfKind[.assistantMessage] = nodeID
+        return [nodeID]
+    }
 
     private mutating func handleTokenDelta(turnID: String, text: String, ts: TimeInterval,
                                             graph: inout ExecutionGraph) -> [NodeID] {

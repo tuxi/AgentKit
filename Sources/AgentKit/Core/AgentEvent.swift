@@ -60,6 +60,9 @@ public enum AgentEvent: Sendable {
     /// 模型推理/思考的完整、持久化快照（REPLACE 语义，非 append）。
     /// 来自 provider 的 `ReasoningContent`，不是助理正文。
     case thinking(turnID: String?, text: String)
+    /// `assistant_text`：模型在调用工具之前说出的中间叙述（持久化）。
+    /// 与 `turn_finished` 的最终答案不同——它出现在工具调用之间。
+    case assistantText(turnID: String?, text: String)
 
     // ── 工具（call_id 是 tool identity）──
     case toolStarted(turnID: String?, callID: String, tool: ToolCall)
@@ -328,6 +331,9 @@ extension AgentEvent {
 
         case "thinking":
             return .thinking(turnID: turnID, text: wire.text ?? "")
+
+        case "assistant_text":
+            return .assistantText(turnID: turnID, text: wire.text ?? "")
 
         case "tool_started":
             let executor = ToolExecutor(rawValue: wire.executor ?? "") ?? .server
