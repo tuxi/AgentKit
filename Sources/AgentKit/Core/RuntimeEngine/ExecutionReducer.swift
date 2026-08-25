@@ -535,8 +535,15 @@ public struct ExecutionReducer: Sendable {
                                             graph: inout ExecutionGraph) -> [NodeID] {
         internalState.streamingAssistant += text
 
+        // Reuse only the ACTIVE streaming segment. A stale lastNodeOfKind
+        // pointer to a .completed node (left behind when a segment was
+        // finalized without clearing the pointer — e.g. assistant_text cold
+        // path, or a narration run interrupted only by thinking) must NOT be
+        // appended to: that would concatenate the next narration onto the old
+        // node and push later thinking/tool blocks below the merged text.
         if let prevID = internalState.lastNodeOfKind[.assistantMessage],
-           var prevNode = graph.nodes[prevID] {
+           var prevNode = graph.nodes[prevID],
+           prevNode.status == .running {
             prevNode.payload = .assistantMessage(
                 text: internalState.streamingAssistant,
                 textAnnotations: []
@@ -615,6 +622,13 @@ public struct ExecutionReducer: Sendable {
     /// text and mark the thinking node as completed.
     private mutating func handleThinking(turnID: String, text: String, ts: TimeInterval,
                                           graph: inout ExecutionGraph) -> [NodeID] {
+        // A complete reasoning snapshot ends this thinking run. If assistant
+        // narration was streaming before the model switched to reasoning (or
+        // between reasoning runs), finalize that segment so the next
+        // token_delta starts a fresh node — otherwise it reuses the still
+        // .running narration node and concatenates, pushing later thinking /
+        // tool blocks below the merged text.
+        finalizeStreamingAssistant(&graph)
         // REPLACE: thinking is the authoritative complete snapshot, not a delta.
         internalState.streamingThinking = text
 

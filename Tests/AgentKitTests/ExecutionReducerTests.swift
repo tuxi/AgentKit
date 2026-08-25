@@ -107,6 +107,52 @@ final class ExecutionReducerTests: XCTestCase {
         XCTAssertEqual(texts, ["Let me look at the code first.", "Done."])
     }
 
+    // Variant X: a new narration run resumes after a thinking block, with no
+    // tool/modelFinished in between to clear lastNodeOfKind. The stale pointer
+    // to a .completed segment must NOT be reused — the new text gets its own
+    // node, keeping the second thinking card above it.
+    func testTokenDeltaDoesNotConcatenateOntoCompletedSegment() {
+        var reducer = ExecutionReducer()
+        var graph = ExecutionGraph()
+        let turn = "t1"
+        _ = reducer.reduce(.turnStarted(turnID: turn, text: "check"), into: &graph)
+        _ = reducer.reduce(.modelStarted(turnID: turn, invocationID: "inv1"), into: &graph)
+        _ = reducer.reduce(.reasoningDelta(turnID: turn, text: "第一步思考"), into: &graph)
+        _ = reducer.reduce(.thinking(turnID: turn, text: "第一步思考"), into: &graph)
+        _ = reducer.reduce(.tokenDelta(turnID: turn, text: "开始看代码"), into: &graph)
+        _ = reducer.reduce(.assistantText(turnID: turn, text: "开始看代码"), into: &graph)
+        _ = reducer.reduce(.reasoningDelta(turnID: turn, text: "第二步思考"), into: &graph)
+        _ = reducer.reduce(.thinking(turnID: turn, text: "第二步思考"), into: &graph)
+        _ = reducer.reduce(.tokenDelta(turnID: turn, text: "继续分析"), into: &graph)
+        _ = reducer.reduce(.modelFinished(turnID: turn, promptTokens: 100, completionTokens: 0, totalTokens: nil, billingUnits: nil, elapsedMs: 10, invocationID: "inv1", err: nil), into: &graph)
+        _ = reducer.reduce(.turnFinished(turnID: turn, text: "继续分析", textAnnotations: []), into: &graph)
+
+        // Two separate narration segments, not concatenated into one.
+        XCTAssertEqual(assistantTexts(graph), ["开始看代码", "继续分析"])
+        // The thinking blocks precede the narration they belong to.
+        let nodes = graph.linearWalk()
+        let think1 = firstIndex(nodes) { node in
+            if case .thinking(let t) = node.payload { return t == "第一步思考" }
+            return false
+        }
+        let think2 = firstIndex(nodes) { node in
+            if case .thinking(let t) = node.payload { return t == "第二步思考" }
+            return false
+        }
+        let text1 = firstIndex(nodes) { node in
+            if case .assistantMessage(let t, _) = node.payload { return t == "开始看代码" }
+            return false
+        }
+        let text2 = firstIndex(nodes) { node in
+            if case .assistantMessage(let t, _) = node.payload { return t == "继续分析" }
+            return false
+        }
+        XCTAssertNotNil(think1); XCTAssertNotNil(think2)
+        XCTAssertNotNil(text1); XCTAssertNotNil(text2)
+        XCTAssertLessThan(think1!, text1!)
+        XCTAssertLessThan(think2!, text2!)
+    }
+
     func testLocalCancelFinalizesRunningNodes() {
         var reducer = ExecutionReducer()
         var graph = ExecutionGraph()
