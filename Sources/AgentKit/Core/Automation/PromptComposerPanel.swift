@@ -47,15 +47,6 @@ struct PromptComposerPanel: View {
         .onGeometryChange(for: CGFloat.self, of: { $0.size.width }) { _, newValue in
             contentWidth = newValue
         }
-        .onAppear {
-            if let ws = workspaceStore.draft?.workspace {
-                workspace = ws
-            } else {
-                if let selectedConversation = workspaceStore.selectedConversation, let url = URL(string: selectedConversation.workspacePath) {
-                    workspace = Workspace(url: url, branch: nil)
-                }
-            }
-        }
     }
 
     // MARK: - Prompt editor

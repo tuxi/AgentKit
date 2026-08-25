@@ -467,9 +467,11 @@ private struct AutomationCreateView: View {
                         }
                         .pickerStyle(.segmented)
                         if modeExec == .chat {
-                            TextField("会话 ID", text: $sessionID)
-                        } else {
-                            TextField("工作目录（可选）", text: $cwd)
+                            HStack {
+                                AutomationSessionPicker(workspace: workspace, sessionID: $sessionID)
+                                    .environment(workspaceStore)
+                                Spacer()
+                            }
                         }
                     }
                 } header: {
@@ -659,9 +661,11 @@ private struct AutomationEditView: View {
                         }
                         .pickerStyle(.segmented)
                         if modeExec == .chat {
-                            TextField("会话 ID", text: $sessionID)
-                        } else {
-                            TextField("工作目录（可选）", text: $cwd)
+                            HStack {
+                                AutomationSessionPicker(workspace: workspace, sessionID: $sessionID)
+                                    .environment(workspaceStore)
+                                Spacer()
+                            }
                         }
                     }
                 } header: {
@@ -720,6 +724,18 @@ private struct AutomationEditView: View {
 #if os(macOS)
         .frame(minWidth: 280, maxWidth: 600, alignment: .leading)
 #endif
+        .onAppear {
+            if workspace != nil {
+                return
+            }
+            if let ws = workspaceStore.draft?.workspace {
+                workspace = ws
+            } else {
+                if let selectedConversation = workspaceStore.selectedConversation, let url = URL(string: selectedConversation.workspacePath) {
+                    workspace = Workspace(url: url, branch: nil)
+                }
+            }
+        }
     }
 
     private func save() {
