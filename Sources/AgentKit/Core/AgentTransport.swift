@@ -93,6 +93,21 @@ public protocol AgentTransport: Sendable {
     func createWorkspaceGitBranch(_ request: WorkspaceGitBranchCreateRequest) async throws -> WorkspaceGitBranchResult
     func checkoutWorkspaceGitBranch(_ request: WorkspaceGitBranchCheckoutRequest) async throws -> WorkspaceGitBranchResult
 
+    // MARK: - Automation
+
+    /// 列出自定义自动化任务（`GET /v1/automations`）。
+    func listAutomations() async throws -> [Automation]
+    /// 创建自动化任务（`POST /v1/automations`，201）。
+    func createAutomation(_ request: AutomationCreateRequest) async throws -> Automation
+    /// 任务详情（`GET /v1/automations/{id}`，已删除返回 404）。
+    func getAutomation(id: String) async throws -> Automation
+    /// 部分更新（`PATCH /v1/automations/{id}`，未填字段保持不变）。
+    func updateAutomation(id: String, request: AutomationPatchRequest) async throws -> Automation
+    /// 软删除（`DELETE /v1/automations/{id}`，204）。
+    func deleteAutomation(id: String) async throws
+    /// 最近 50 条运行记录（`GET /v1/automations/{id}/runs`，**PascalCase 键**）。
+    func listAutomationRuns(id: String) async throws -> [AutomationRun]
+
     // MARK: - Session state
 
     /// 当前是否已连接到 backend session。
@@ -254,6 +269,32 @@ extension AgentTransport {
     }
 
     public func cloneRepo(url: String, ref: String?) async throws -> ClonedRepo {
+        throw RuntimeHTTPError.unsupported
+    }
+
+    // MARK: - Automation (default: unsupported)
+
+    public func listAutomations() async throws -> [Automation] {
+        throw RuntimeHTTPError.unsupported
+    }
+
+    public func createAutomation(_ request: AutomationCreateRequest) async throws -> Automation {
+        throw RuntimeHTTPError.unsupported
+    }
+
+    public func getAutomation(id: String) async throws -> Automation {
+        throw RuntimeHTTPError.unsupported
+    }
+
+    public func updateAutomation(id: String, request: AutomationPatchRequest) async throws -> Automation {
+        throw RuntimeHTTPError.unsupported
+    }
+
+    public func deleteAutomation(id: String) async throws {
+        throw RuntimeHTTPError.unsupported
+    }
+
+    public func listAutomationRuns(id: String) async throws -> [AutomationRun] {
         throw RuntimeHTTPError.unsupported
     }
 

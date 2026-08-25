@@ -187,6 +187,21 @@ public protocol RuntimeClient: Sendable {
     func listWorkspaceGitBranches(workspacePath: String) async throws -> WorkspaceGitBranchResult
     func createWorkspaceGitBranch(_ request: WorkspaceGitBranchCreateRequest) async throws -> WorkspaceGitBranchResult
     func checkoutWorkspaceGitBranch(_ request: WorkspaceGitBranchCheckoutRequest) async throws -> WorkspaceGitBranchResult
+
+    // MARK: - Automation
+
+    /// 列出自定义自动化任务。
+    func listAutomations() async throws -> [Automation]
+    /// 创建自动化任务。
+    func createAutomation(_ request: AutomationCreateRequest) async throws -> Automation
+    /// 任务详情。
+    func getAutomation(id: String) async throws -> Automation
+    /// 部分更新任务。
+    func updateAutomation(id: String, request: AutomationPatchRequest) async throws -> Automation
+    /// 软删除任务。
+    func deleteAutomation(id: String) async throws
+    /// 最近一次任务的运行记录。
+    func listAutomationRuns(id: String) async throws -> [AutomationRun]
 }
 
 // MARK: - Backward compatibility
@@ -274,6 +289,32 @@ extension RuntimeClient {
     }
 
     public func checkoutWorkspaceGitBranch(_ request: WorkspaceGitBranchCheckoutRequest) async throws -> WorkspaceGitBranchResult {
+        throw RuntimeHTTPError.unsupported
+    }
+
+    // MARK: - Automation (default: unsupported)
+
+    public func listAutomations() async throws -> [Automation] {
+        throw RuntimeHTTPError.unsupported
+    }
+
+    public func createAutomation(_ request: AutomationCreateRequest) async throws -> Automation {
+        throw RuntimeHTTPError.unsupported
+    }
+
+    public func getAutomation(id: String) async throws -> Automation {
+        throw RuntimeHTTPError.unsupported
+    }
+
+    public func updateAutomation(id: String, request: AutomationPatchRequest) async throws -> Automation {
+        throw RuntimeHTTPError.unsupported
+    }
+
+    public func deleteAutomation(id: String) async throws {
+        throw RuntimeHTTPError.unsupported
+    }
+
+    public func listAutomationRuns(id: String) async throws -> [AutomationRun] {
         throw RuntimeHTTPError.unsupported
     }
 

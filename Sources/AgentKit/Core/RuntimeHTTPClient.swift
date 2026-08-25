@@ -583,6 +583,64 @@ struct RuntimeHTTPClient: Sendable {
         return true
     }
 
+    // MARK: - Automation
+
+    /// `GET /v1/automations` — 列出自定义自动化任务（`data` 是裸数组）。
+    func listAutomations() async throws -> [Automation] {
+        let request = try await buildRequest("GET", pathComponents: "v1/automations")
+        let (data, response) = try await session.data(for: request)
+        try validateHTTP(response, data: data)
+        return try decodeEnvelope([Automation].self, from: data)
+    }
+
+    /// `POST /v1/automations` — 创建任务（201）。
+    func createAutomation(_ request: AutomationCreateRequest) async throws -> Automation {
+        let req = try await buildRequest("POST", pathComponents: "v1/automations", body: request)
+        let (data, response) = try await session.data(for: req)
+        try validateHTTP(response, data: data)
+        return try decodeEnvelope(Automation.self, from: data)
+    }
+
+    /// `GET /v1/automations/{id}` — 任务详情（已删除返回 404）。
+    func getAutomation(id: String) async throws -> Automation {
+        let request = try await buildRequest("GET", pathComponents: "v1/automations", id)
+        let (data, response) = try await session.data(for: request)
+        try validateHTTP(response, data: data)
+        return try decodeEnvelope(Automation.self, from: data)
+    }
+
+    /// `PATCH /v1/automations/{id}` — 部分更新（未填字段保持不变）。
+    func updateAutomation(id: String, request: AutomationPatchRequest) async throws -> Automation {
+        let req = try await buildRequest("PATCH", pathComponents: "v1/automations", id, body: request)
+        let (data, response) = try await session.data(for: req)
+        try validateHTTP(response, data: data)
+        return try decodeEnvelope(Automation.self, from: data)
+    }
+
+    /// `DELETE /v1/automations/{id}` — 软删除（204 无 body）。
+    func deleteAutomation(id: String) async throws {
+        let request = try await buildRequest("DELETE", pathComponents: "v1/automations", id)
+        let (data, response) = try await session.data(for: request)
+        guard let http = response as? HTTPURLResponse else {
+            throw RuntimeHTTPError.invalidResponse
+        }
+        guard http.statusCode == 204 else {
+            throw RuntimeHTTPError.unexpectedStatus(
+                http.statusCode,
+                body: String(data: data, encoding: .utf8) ?? ""
+            )
+        }
+    }
+
+    /// `GET /v1/automations/{id}/runs` — 最近 50 条运行记录（`data` 是裸数组，
+    /// **PascalCase 键**）。
+    func listAutomationRuns(id: String) async throws -> [AutomationRun] {
+        let request = try await buildRequest("GET", pathComponents: "v1/automations", id, "runs")
+        let (data, response) = try await session.data(for: request)
+        try validateHTTP(response, data: data)
+        return try decodeEnvelope([AutomationRun].self, from: data)
+    }
+
     private func validateHTTP(_ response: URLResponse, data: Data) throws {
         guard let httpResponse = response as? HTTPURLResponse else {
             throw RuntimeHTTPError.invalidResponse

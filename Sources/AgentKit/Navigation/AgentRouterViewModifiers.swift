@@ -20,6 +20,8 @@ extension View {
                 ConversationDetailView(conversation: conversation)
             case .draft:
                 ConversationDetailView(conversation: nil)
+            case .automation:
+                AutomationDashboardView()
             }
         }
     }

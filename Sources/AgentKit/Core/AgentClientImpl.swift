@@ -226,6 +226,32 @@ public final class CodeAgentTransport: AgentTransport, @unchecked Sendable {
         try await http.checkoutWorkspaceGitBranch(request)
     }
 
+    // MARK: - Automation
+
+    public func listAutomations() async throws -> [Automation] {
+        try await http.listAutomations()
+    }
+
+    public func createAutomation(_ request: AutomationCreateRequest) async throws -> Automation {
+        try await http.createAutomation(request)
+    }
+
+    public func getAutomation(id: String) async throws -> Automation {
+        try await http.getAutomation(id: id)
+    }
+
+    public func updateAutomation(id: String, request: AutomationPatchRequest) async throws -> Automation {
+        try await http.updateAutomation(id: id, request: request)
+    }
+
+    public func deleteAutomation(id: String) async throws {
+        try await http.deleteAutomation(id: id)
+    }
+
+    public func listAutomationRuns(id: String) async throws -> [AutomationRun] {
+        try await http.listAutomationRuns(id: id)
+    }
+
     public func activitySnapshot() async throws -> RuntimeActivitySnapshot {
         try await http.activitySnapshot()
     }
@@ -622,6 +648,32 @@ public final class DefaultAgentClient: RuntimeClient, @unchecked Sendable {
 
     public func checkoutWorkspaceGitBranch(_ request: WorkspaceGitBranchCheckoutRequest) async throws -> WorkspaceGitBranchResult {
         try await transport.checkoutWorkspaceGitBranch(request)
+    }
+
+    // MARK: - Automation
+
+    public func listAutomations() async throws -> [Automation] {
+        try await transport.listAutomations()
+    }
+
+    public func createAutomation(_ request: AutomationCreateRequest) async throws -> Automation {
+        try await transport.createAutomation(request)
+    }
+
+    public func getAutomation(id: String) async throws -> Automation {
+        try await transport.getAutomation(id: id)
+    }
+
+    public func updateAutomation(id: String, request: AutomationPatchRequest) async throws -> Automation {
+        try await transport.updateAutomation(id: id, request: request)
+    }
+
+    public func deleteAutomation(id: String) async throws {
+        try await transport.deleteAutomation(id: id)
+    }
+
+    public func listAutomationRuns(id: String) async throws -> [AutomationRun] {
+        try await transport.listAutomationRuns(id: id)
     }
 
     public func activitySnapshot() async throws -> RuntimeActivitySnapshot {
