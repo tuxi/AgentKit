@@ -503,11 +503,22 @@ public struct ExecutionReducer: Sendable {
     /// said something before calling tools. A completed assistant message node,
     /// positioned before the tool group that follows. Distinct from the final
     /// answer (turn_finished) and from streaming token deltas.
+    ///
+    /// Live: the same narration was already streamed via `token_delta`, so the
+    /// streaming buffer holds it. Finalize that node in place rather than
+    /// appending a duplicate — otherwise live turns render the text twice and
+    /// the duplicate lands after the tools. Cold replay (no token_delta, since
+    /// deltas are transient) has an empty buffer, so create a fresh node here.
     private mutating func handleAssistantText(turnID: String, text: String, ts: TimeInterval,
                                               graph: inout ExecutionGraph) -> [NodeID] {
         guard !text.isEmpty else { return [] }
-        // Finalize any in-progress streaming segment so this node lands in order.
-        finalizeStreamingAssistant(&graph)
+        // Live path: the buffer already carries this exact narration from
+        // token_delta. Finalize the running segment and return — no new node.
+        if !internalState.streamingAssistant.isEmpty {
+            finalizeStreamingAssistant(&graph)
+            return []
+        }
+        // Cold-replay path: no prior token_delta, create the completed node.
         let nodeID = "\(turnID)_assistant_\(internalState.nextAssistantSeq)"
         internalState.nextAssistantSeq += 1
         let node = GraphNode(

@@ -86,6 +86,27 @@ final class ExecutionReducerTests: XCTestCase {
         XCTAssertLessThan(narrationIndex!, toolIndex!)
     }
 
+    // Live path: the narration is already streamed via token_delta, so the
+    // assistant_text snapshot must NOT duplicate it. The reducer finalizes the
+    // running segment and adds no new node.
+    func testAssistantTextDoesNotDuplicateWhenStreamed() {
+        var reducer = ExecutionReducer()
+        var graph = ExecutionGraph()
+        let turn = "t1"
+        _ = reducer.reduce(.turnStarted(turnID: turn, text: "check commit"), into: &graph)
+        _ = reducer.reduce(.tokenDelta(turnID: turn, text: "Let me look at the code first."), into: &graph)
+        _ = reducer.reduce(.assistantText(turnID: turn, text: "Let me look at the code first."), into: &graph)
+        _ = reducer.reduce(.toolStarted(turnID: turn, callID: "c1",
+                                        tool: ToolCall(callID: "c1", toolName: "read_file", toolArgs: nil)), into: &graph)
+        _ = reducer.reduce(.toolFinished(turnID: turn, callID: "c1",
+                                         result: ToolResult(callID: "c1", toolName: "read_file",
+                                                            observation: "ok", error: nil)), into: &graph)
+        _ = reducer.reduce(.turnFinished(turnID: turn, text: "Done.", textAnnotations: []), into: &graph)
+
+        let texts = assistantTexts(graph)
+        XCTAssertEqual(texts, ["Let me look at the code first.", "Done."])
+    }
+
     func testLocalCancelFinalizesRunningNodes() {
         var reducer = ExecutionReducer()
         var graph = ExecutionGraph()
