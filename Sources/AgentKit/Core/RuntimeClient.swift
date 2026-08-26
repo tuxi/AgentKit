@@ -202,6 +202,17 @@ public protocol RuntimeClient: Sendable {
     func deleteAutomation(id: String) async throws
     /// 最近一次任务的运行记录。
     func listAutomationRuns(id: String) async throws -> [AutomationRun]
+
+    // MARK: - Workspace permissions
+
+    /// 查某 workspace 有效档位（含 user fallback；v1 无来源字段，无法区分自定义 vs 继承）。
+    /// `GET /v1/workspaces/permissions/{path...}` — 绝对路径按 `/` 自然分段。
+    func getWorkspacePermissions(workspacePath: String) async throws -> WorkspacePermissions
+
+    /// 设某 workspace 档位（只写顶层 `approval_mode`，不碰 allow/deny 规则）。
+    /// `PUT /v1/workspaces/permissions/{path...}` body `{"mode":"ask"|"auto"|"full"}`。
+    /// 不校验 workspace 存在性，客户端必须传真实 workspace path（从 conversation 拿）。
+    func setWorkspacePermissions(workspacePath: String, mode: String) async throws -> WorkspacePermissions
 }
 
 // MARK: - Backward compatibility
@@ -360,6 +371,16 @@ extension RuntimeClient {
     /// 兼容旧 backend：没有通用 child WS 时返回空流，由调用方显示传输失败。
     public func openChildStream(childID: String) -> AsyncStream<AgentEvent> {
         AsyncStream { $0.finish() }
+    }
+
+    // MARK: - Workspace permissions (default: unsupported)
+
+    public func getWorkspacePermissions(workspacePath: String) async throws -> WorkspacePermissions {
+        throw RuntimeHTTPError.unsupported
+    }
+
+    public func setWorkspacePermissions(workspacePath: String, mode: String) async throws -> WorkspacePermissions {
+        throw RuntimeHTTPError.unsupported
     }
 }
 

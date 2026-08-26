@@ -139,46 +139,49 @@ struct DraftComposerPanel: View {
                         )
                         
 #if os(macOS)
-                        Menu {
-                            Button {
-                                
+                        if let vm = viewModel,
+                           vm.workspacePermissionPath != nil {
+                            Menu {
+                                ForEach(vm.workspacePermissionModes, id: \.self) { mode in
+                                    Button {
+                                        Task { await vm.setWorkspacePermissionMode(mode) }
+                                    } label: {
+                                        if mode == vm.workspacePermissionMode {
+                                            Label(approvalModeTitle(mode), systemImage: "checkmark")
+                                        } else {
+                                            Text(approvalModeTitle(mode))
+                                        }
+                                    }
+                                }
+                                Divider()
+                                Text("将应用于此工作区的所有对话")
+                                    .font(.caption)
+                                    .foregroundStyle(.secondary)
+                                if let error = vm.workspacePermissionError {
+                                    Text(error)
+                                        .font(.caption)
+                                        .foregroundStyle(.red)
+                                }
                             } label: {
-                                VStack {
-                                    Text(AgentKitLocalized.string("composer.request_approval"))
-                                    Text("访问外部文件或者编辑文件时始终询问")
+                                if contentWidth <= 400 {
+                                    Image(systemName: approvalModeIcon(vm.workspacePermissionMode))
+                                        .font(.system(size: 13, weight: .medium))
+                                        .labelStyle(.titleAndIcon)
+                                } else {
+                                    Label(
+                                        approvalModeShortTitle(vm.workspacePermissionMode),
+                                        systemImage: approvalModeIcon(vm.workspacePermissionMode)
+                                    )
                                 }
                             }
-                            Button {
-                                
-                            } label: {
-                                VStack {
-                                    Text(AgentKitLocalized.string("替我批准"))
-                                    Text("仅针对检查到的风险操作请求批准")
-                                }
+                            .help("对话所属工作区的权限档位")
+                            .task(id: vm.workspacePermissionPath) {
+                                await vm.loadWorkspacePermissions()
                             }
-                            Button {
-                                
-                            } label: {
-                                VStack {
-                                    Text(AgentKitLocalized.string("完全访问权限"))
-                                    Text("可完全不受限制的访问外部文件或者编辑文件")
-                                }
-                            }
-                            
-                        } label: {
-                            if contentWidth <= 400 {
-                                Image(systemName: "hand.raised")
-                                    .font(.system(size: 13, weight: .medium))
-                                    .labelStyle(.titleAndIcon)
-                            } else {
-                                Label(AgentKitLocalized.string("composer.request_approval"), systemImage: "hand.raised")
-                                    .font(.system(size: 13, weight: .medium))
-                                    .labelStyle(.titleAndIcon)
-                            }
+                            .menuStyle(.borderlessButton)
+                            .fixedSize()
+                            .foregroundStyle(.secondary)
                         }
-                        .menuStyle(.borderlessButton)
-                        .fixedSize()
-                        .foregroundStyle(.secondary)
 #endif
                         
                         Spacer(minLength: 12)
@@ -454,6 +457,34 @@ struct DraftComposerPanel: View {
             .frame(minHeight: 44, alignment: .topLeading)
             .disabled(!isEnabled)
 #endif
+    }
+    
+    
+    // MARK: - Workspace approval mode helpers
+
+    private func approvalModeTitle(_ mode: String) -> String {
+        switch mode {
+        case "auto": return "帮我批准 (Auto)"
+        case "full": return "完全访问 (Full)"
+        default: return "请求批准 (Ask)"
+        }
+    }
+
+    private func approvalModeShortTitle(_ mode: String?) -> String {
+        guard let mode, !mode.isEmpty else { return "权限" }
+        switch mode {
+        case "auto": return "帮我批准"
+        case "full": return "完全访问"
+        default: return "请求批准"
+        }
+    }
+
+    private func approvalModeIcon(_ mode: String?) -> String {
+        switch mode {
+        case "auto": return "shield.lefthalf.filled"
+        case "full": return "shield.fill"
+        default: return "shield"
+        }
     }
     
     // MARK: - Helpers

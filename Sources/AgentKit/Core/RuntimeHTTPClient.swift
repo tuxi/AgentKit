@@ -130,7 +130,7 @@ struct RuntimeHTTPClient: Sendable {
 
     // MARK: - Helpers
 
-    /// 构建带 credential 注入的请求。
+        /// 构建带 credential 注入的请求（变参路径）。
     private func buildRequest(
         _ method: String,
         pathComponents: String...,
@@ -138,8 +138,19 @@ struct RuntimeHTTPClient: Sendable {
         body: (any Encodable)? = nil,
         timeout: TimeInterval = 60
     ) async throws -> URLRequest {
+        try await buildRequest(method, pathArray: pathComponents, queryItems: queryItems, body: body, timeout: timeout)
+    }
+
+    /// 构建带 credential 注入的请求（数组路径，支持动态分段如 workspace_path）。
+    private func buildRequest(
+        _ method: String,
+        pathArray: [String],
+        queryItems: [URLQueryItem]? = nil,
+        body: (any Encodable)? = nil,
+        timeout: TimeInterval = 60
+    ) async throws -> URLRequest {
         var url = try await resolveBaseURL()
-        for comp in pathComponents { url = url.appendingPathComponent(comp) }
+        for comp in pathArray { url = url.appendingPathComponent(comp) }
         if let items = queryItems, var components = URLComponents(url: url, resolvingAgainstBaseURL: false) {
             components.queryItems = items
             url = components.url ?? url
@@ -639,6 +650,35 @@ struct RuntimeHTTPClient: Sendable {
         let (data, response) = try await session.data(for: request)
         try validateHTTP(response, data: data)
         return try decodeEnvelope([AutomationRun].self, from: data)
+    }
+
+    // MARK: - Workspace permissions (/v1/workspaces/permissions)
+
+    /// `GET /v1/workspaces/permissions/{path...}` — 查某 workspace 有效档位（含 user fallback）。
+    /// 绝对路径按 `/` 自然分段（服务端 `{path...}` 多段通配符，剥前导 `/` 后补回）。
+    func getWorkspacePermissions(workspacePath: String) async throws -> WorkspacePermissions {
+        let request = try await buildRequest("GET", pathArray: permissionsPathArray(workspacePath))
+        let (data, response) = try await session.data(for: request)
+        try validateHTTP(response, data: data)
+        return try decodeEnvelope(WorkspacePermissions.self, from: data)
+    }
+
+    /// `PUT /v1/workspaces/permissions/{path...}` — 设某 workspace 档位（只写顶层 `approval_mode`）。
+    /// 不校验 workspace 存在性：任意路径都会自动创建 `.codeagent/settings.local.json`（返回 200）。
+    func setWorkspacePermissions(workspacePath: String, mode: String) async throws -> WorkspacePermissions {
+        let request = try await buildRequest(
+            "PUT", pathArray: permissionsPathArray(workspacePath),
+            body: WorkspacePermissionsUpdate(mode: mode)
+        )
+        let (data, response) = try await session.data(for: request)
+        try validateHTTP(response, data: data)
+        return try decodeEnvelope(WorkspacePermissions.self, from: data)
+    }
+
+    /// 将绝对路径按 `/` 拆分为 URL 路径段（去掉前导空段）。
+    private func permissionsPathArray(_ workspacePath: String) -> [String] {
+        let trimmed = workspacePath.hasPrefix("/") ? String(workspacePath.dropFirst()) : workspacePath
+        return ["v1", "workspaces", "permissions"] + trimmed.split(separator: "/").map(String.init)
     }
 
     private func validateHTTP(_ response: URLResponse, data: Data) throws {

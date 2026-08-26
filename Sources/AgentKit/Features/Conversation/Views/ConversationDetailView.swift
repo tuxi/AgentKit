@@ -561,6 +561,7 @@ public struct ConversationDetailView: View {
         let document = ConversationShareService.document(for: vm.snapshot, title: title)
         ConversationShareService.share(document, as: format)
     }
+
 }
 
 private struct ArchivedConversationBar: View {

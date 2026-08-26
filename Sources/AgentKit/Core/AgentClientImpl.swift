@@ -388,6 +388,14 @@ public final class CodeAgentTransport: AgentTransport, @unchecked Sendable {
         try await http.getConversationContext(id: id)
     }
 
+    public func getWorkspacePermissions(workspacePath: String) async throws -> WorkspacePermissions {
+        try await http.getWorkspacePermissions(workspacePath: workspacePath)
+    }
+
+    public func setWorkspacePermissions(workspacePath: String, mode: String) async throws -> WorkspacePermissions {
+        try await http.setWorkspacePermissions(workspacePath: workspacePath, mode: mode)
+    }
+
     public func getMessages(conversationID: String) async throws -> [Message] {
         try await http.getMessages(conversationID: conversationID)
     }
@@ -773,6 +781,14 @@ public final class DefaultAgentClient: RuntimeClient, @unchecked Sendable {
 
     public func getConversationContext(id: String) async throws -> ConversationContextSnapshot {
         try await transport.getConversationContext(id: id)
+    }
+
+    public func getWorkspacePermissions(workspacePath: String) async throws -> WorkspacePermissions {
+        try await transport.getWorkspacePermissions(workspacePath: workspacePath)
+    }
+
+    public func setWorkspacePermissions(workspacePath: String, mode: String) async throws -> WorkspacePermissions {
+        try await transport.setWorkspacePermissions(workspacePath: workspacePath, mode: mode)
     }
 
     public func getMessages(conversationID: String) async throws -> [Message] {

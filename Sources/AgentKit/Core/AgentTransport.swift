@@ -203,6 +203,16 @@ public protocol AgentTransport: Sendable {
     /// `async` 语义：未来可能 server-driven / dynamic feature gating。
     /// UI 据此决定渲染策略，不写死 backend 能力判断。
     func capabilities() async -> AgentCapabilityFlags
+
+    // MARK: - Workspace permissions
+
+    /// 查某 workspace 有效档位（含 user fallback）。
+    /// `GET /v1/workspaces/permissions/{path...}` — 绝对路径按 `/` 自然分段。
+    func getWorkspacePermissions(workspacePath: String) async throws -> WorkspacePermissions
+
+    /// 设某 workspace 档位（只写顶层 `approval_mode`，不碰 allow/deny 规则）。
+    /// `PUT /v1/workspaces/permissions/{path...}` body `{"mode":"ask"|"auto"|"full"}`。
+    func setWorkspacePermissions(workspacePath: String, mode: String) async throws -> WorkspacePermissions
 }
 
 // MARK: - Default impls
@@ -334,6 +344,16 @@ extension AgentTransport {
 
     public func openChildStream(childID: String) -> AsyncStream<AgentEvent> {
         AsyncStream { $0.finish() }
+    }
+
+    // MARK: - Workspace permissions (default: unsupported)
+
+    public func getWorkspacePermissions(workspacePath: String) async throws -> WorkspacePermissions {
+        throw RuntimeHTTPError.unsupported
+    }
+
+    public func setWorkspacePermissions(workspacePath: String, mode: String) async throws -> WorkspacePermissions {
+        throw RuntimeHTTPError.unsupported
     }
 }
 

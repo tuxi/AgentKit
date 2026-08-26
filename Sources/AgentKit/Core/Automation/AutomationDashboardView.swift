@@ -394,7 +394,7 @@ private struct AutomationCreateView: View {
     @State private var modeExec: AutomationRunMode = .standalone
     @State private var sessionID = ""
     @State private var cwd = ""
-    @State private var permissionMode = ""
+    @State private var permissionMode = "full"
     @State private var connectors: [String] = []
     @State private var modelID = ""
     @State private var workspace: Workspace?
@@ -480,8 +480,10 @@ private struct AutomationCreateView: View {
                 
                 Section {
                     Picker("权限级别", selection: $permissionMode) {
-                        Text("默认权限").tag("")
-                        Text("Full access").tag("full_access")
+                        Text("继承工作区档位").tag("")
+                        Text("完全访问 (Full)").tag("full")
+                        Text("帮我批准 (Auto)").tag("auto")
+                        Text("请求批准 (Ask)").tag("ask")
                     }
                     Text("连接器免确认：\(connectors.isEmpty ? "无" : connectors.joined(separator: ", "))")
                         .font(.caption)
@@ -586,7 +588,7 @@ private struct AutomationEditView: View {
         _modeExec = State(initialValue: automation.modeExec)
         _sessionID = State(initialValue: automation.sessionID ?? "")
         _cwd = State(initialValue: automation.cwds?.first ?? "")
-        _permissionMode = State(initialValue: automation.permissionMode ?? "")
+        _permissionMode = State(initialValue: Self.normalizePermissionMode(automation.permissionMode))
         _connectors = State(initialValue: automation.connectors ?? [])
         _isEnabled = State(initialValue: automation.status == .active)
         _modelID = State(initialValue: automation.modelID ?? "")
@@ -674,8 +676,10 @@ private struct AutomationEditView: View {
 
                 Section {
                     Picker("权限级别", selection: $permissionMode) {
-                        Text("默认权限").tag("")
-                        Text("Full access").tag("full_access")
+                        Text("继承工作区档位").tag("")
+                        Text("完全访问 (Full)").tag("full")
+                        Text("帮我批准 (Auto)").tag("auto")
+                        Text("请求批准 (Ask)").tag("ask")
                     }
                     Text("连接器免确认：\(connectors.isEmpty ? "无" : connectors.joined(separator: ", "))")
                         .font(.caption)
@@ -776,5 +780,14 @@ private struct AutomationEditView: View {
         guard let path = automation.cwds?.first, !path.isEmpty else { return nil }
         let url = URL(fileURLWithPath: path)
         return Workspace(url: url)
+    }
+
+    /// 把旧别名归一为 canonical 值（`full_access` → `full`），避免编辑旧任务时 Picker 无选中项。
+    private static func normalizePermissionMode(_ stored: String?) -> String {
+        switch stored {
+        case "full_access": return "full"
+        case .some(let value): return value
+        case .none: return ""
+        }
     }
 }

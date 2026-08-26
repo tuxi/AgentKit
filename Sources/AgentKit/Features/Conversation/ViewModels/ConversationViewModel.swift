@@ -475,6 +475,61 @@ public final class ConversationViewModel {
         onActivityInvalidated?()
     }
 
+    // MARK: - Workspace approval mode（入口 B：对话详情页档位）
+
+    /// 当前 workspace 生效档位（`ask` / `auto` / `full`）；未加载或不可用时为 nil。
+    /// 来源：`GET /v1/workspaces/permissions/{workspace_path}` 的合并后 `mode`。
+    public private(set) var workspacePermissionMode: String?
+
+    /// 可选档位（服务端 `available` 返回，默认 ask/auto/full）。
+    public private(set) var workspacePermissionModes: [String] = ["ask", "auto", "full"]
+
+    /// 加载/设置失败信息（供 UI 展示）。
+    public private(set) var workspacePermissionError: String?
+
+    /// 是否正在加载。
+    public private(set) var isLoadingWorkspacePermissions = false
+
+    /// 本会话 workspace 的绝对路径 — 权限端点用它定位档位。
+    /// 优先级：conversation.workspace_path → detail.workspace_path。
+    public var workspacePermissionPath: String? {
+        if let path = conversation?.workspacePath, !path.isEmpty { return path }
+        return detail?.workspacePath
+    }
+
+    /// 拉取当前 workspace 档位（进入对话详情时调用）。
+    public func loadWorkspacePermissions() async {
+        guard let path = workspacePermissionPath else { return }
+        guard !isLoadingWorkspacePermissions else { return }
+        isLoadingWorkspacePermissions = true
+        defer { isLoadingWorkspacePermissions = false }
+        do {
+            let permissions = try await client.getWorkspacePermissions(workspacePath: path)
+            workspacePermissionMode = permissions.mode
+            if !permissions.available.isEmpty {
+                workspacePermissionModes = permissions.available
+            }
+            workspacePermissionError = nil
+        } catch {
+            workspacePermissionError = error.localizedDescription
+        }
+    }
+
+    /// 设置当前 workspace 档位（只写顶层 `approval_mode`，影响该 workspace 所有对话）。
+    public func setWorkspacePermissionMode(_ mode: String) async {
+        guard let path = workspacePermissionPath else { return }
+        do {
+            let permissions = try await client.setWorkspacePermissions(workspacePath: path, mode: mode)
+            workspacePermissionMode = permissions.mode
+            if !permissions.available.isEmpty {
+                workspacePermissionModes = permissions.available
+            }
+            workspacePermissionError = nil
+        } catch {
+            workspacePermissionError = error.localizedDescription
+        }
+    }
+
     /// 取消当前 turn。
     ///
     /// turn 仍在客户端排队时直接出队；已提交到 Runtime 的 turn 发送 cancel_turn
