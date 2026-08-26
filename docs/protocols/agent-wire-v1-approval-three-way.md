@@ -195,13 +195,15 @@ Always allow all tools from "github"?   [Always allow] [Allow once] [Deny]
 
 ### iOS / macOS（Swift — AgentKit）
 
-1. ⬜ `ApprovalResponse` 模型加 `decision: String?` + `scope: String?`，omitempty
-2. ⬜ 审批卡 UI 从两个按钮改为三个：Always allow / Allow once / Deny
-3. ⬜ MCP 工具（`tool_name.hasPrefix("mcp__")`）：解析 server 名，显示 "Always allow all from X" 提示
-4. ⬜ 可选：scope 下拉（local / user），默认 local
-5. ⬜ 按 `id` 去重（重连时服务端重发同一 id）
-6. ⬜ 收到 `auto_approved` 事件时展示 "✓ Auto-approved" 低调度量行
-7. ⬜ `plan_approval_response` 保持两态，不引入 decision
+> 状态：**7/7 已完成**（2026-08-26 代码核实）。
+
+1. ✅ `ApprovalResponse` 模型加 `decision: String?` + `scope: String?`，omitempty — `WireFrame.swift` `OutgoingApprovalResponse`（encode 时仅写非 nil 字段）
+2. ✅ 审批卡 UI 从两个按钮改为三个：Always allow / Allow once / Deny — `DraftComposerPanel.swift` `ApprovalBar`
+3. ✅ MCP 工具（`tool_name.hasPrefix("mcp__")`）：解析 server 名，显示 "Always allow all from X" 提示 — `ApprovalRequest.swift` `mcpServer`/`alwaysAllowPrompt` + `ApprovalBar` overlay
+4. ✅ 可选：scope 下拉（local / user），默认 local — `ApprovalScope` + `ApprovalBar` Menu
+5. ✅ 按 `id` 去重（重连时服务端重发同一 id） — `RuntimeEngine.swift` `resolvedApprovalIDs`
+6. ✅ 收到 `auto_approved` 事件时展示 "✓ Auto-approved" 低调度量行 — `ExecutionReducer.handleAutoApproved` → `ToolCard` bolt 图标 + `ToolInspectorView` "已批准"
+7. ✅ `plan_approval_response` 保持两态，不引入 decision — `WireFrame.swift` `OutgoingPlanApprovalResponse`
 
 ### Web（JS/TS — WebSocket）
 
