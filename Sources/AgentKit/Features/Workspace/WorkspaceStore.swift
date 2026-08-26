@@ -45,7 +45,7 @@ public final class WorkspaceStore {
         }
     }
 
-   public private(set) var selectedConversation: ConversationRef? {
+   public internal(set) var selectedConversation: ConversationRef? {
         didSet {
             guard oldValue != selectedConversation else { return }
             switchInspectorWorkspace(to: selectedConversation?.id)
