@@ -922,3 +922,78 @@ public struct WorkflowResumeRequest: Encodable, Sendable, Equatable {
         case resumeFrom = "resume_from"
     }
 }
+
+// MARK: - Output presentation (snapshot task.output)
+
+/// 把 snapshot 的 `task.output` 解析为可读展示。按模板类型分派，降级为整段 JSON。
+///
+/// - tool_sequence：`{"result": "<最后一步工具输出>"}`
+/// - cross_workspace（v1/v2）：`{"final": {"result_type": ..., "extras": {"results":
+///   [{"last_turn": ..., "role": ..., "session_id": ..., "status": ...}]}}}`
+public enum WorkflowOutputPresentation: Sendable, Equatable {
+    /// 空输出（null / 空对象 / 空数组 / 空字符串）→ 不展示区块。
+    case empty
+    /// 可读文本条目（每条一张卡片，带 title/status 标签）。
+    case items([WorkflowOutputItem])
+    /// 降级：整段格式化 JSON。
+    case json(JSONValue)
+
+    public struct WorkflowOutputItem: Sendable, Equatable, Identifiable {
+        public let id: Int
+        public let title: String?
+        public let text: String
+        public let status: String?
+
+        public init(id: Int, title: String?, text: String, status: String? = nil) {
+            self.id = id
+            self.title = title
+            self.text = text
+            self.status = status
+        }
+    }
+
+    public static func parse(_ output: JSONValue?) -> WorkflowOutputPresentation {
+        guard let output, !Self.isEffectivelyEmpty(output) else { return .empty }
+
+        // tool_sequence：output.result 为最后一步工具输出文本
+        if let result = output["result"].string, !result.isEmpty {
+            return .items([WorkflowOutputItem(id: 0, title: "Result", text: result)])
+        }
+
+        // cross_workspace：output.final.extras.results[] → 每条 agent 回报一张卡
+        if let final = output["final"].object {
+            var results: [JSONValue] = []
+            if let extras = final["extras"], let arr = extras["results"].array {
+                results = arr
+            }
+            var items: [WorkflowOutputItem] = []
+            for (index, entry) in results.enumerated() {
+                guard let text = entry["last_turn"].string, !text.isEmpty else { continue }
+                let role = entry["role"].string
+                let session = entry["session_id"].string
+                let status = entry["status"].string
+                let title = [role, session].compactMap { $0 }.joined(separator: " · ")
+                items.append(WorkflowOutputItem(
+                    id: index,
+                    title: title.isEmpty ? nil : title,
+                    text: text,
+                    status: status
+                ))
+            }
+            if !items.isEmpty { return .items(items) }
+        }
+
+        // 其他：整段 JSON
+        return .json(output)
+    }
+
+    private static func isEffectivelyEmpty(_ value: JSONValue) -> Bool {
+        switch value {
+        case .null: return true
+        case .object(let dict): return dict.isEmpty
+        case .array(let arr): return arr.isEmpty
+        case .string(let s): return s.isEmpty
+        default: return false
+        }
+    }
+}

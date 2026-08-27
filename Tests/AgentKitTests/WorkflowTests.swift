@@ -879,6 +879,62 @@ final class WorkflowTests: XCTestCase {
         XCTAssertEqual(empty?.agents, nil)
     }
 
+    // MARK: - P2: task.output 执行结果解析
+
+    func testOutputPresentationToolSequence() throws {
+        let output: JSONValue = ["result": "收集到 42 条记录，耗时 3.2s"]
+        let presentation = WorkflowOutputPresentation.parse(output)
+        guard case .items(let items) = presentation else {
+            return XCTFail("tool_sequence output 应解析为 items")
+        }
+        XCTAssertEqual(items.count, 1)
+        XCTAssertEqual(items[0].title, "Result")
+        XCTAssertEqual(items[0].text, "收集到 42 条记录，耗时 3.2s")
+        XCTAssertNil(items[0].status)
+    }
+
+    func testOutputPresentationCrossWorkspace() throws {
+        let output: JSONValue = [
+            "final": [
+                "result_type": "session_agent_result",
+                "extras": [
+                    "results": [
+                        ["last_turn": "研究员产出：行情已汇总", "role": "researcher", "session_id": "s1", "status": "success"],
+                        ["last_turn": "写手产出：报告已生成", "role": "writer", "session_id": "s2"],
+                    ]
+                ],
+            ]
+        ]
+        let presentation = WorkflowOutputPresentation.parse(output)
+        guard case .items(let items) = presentation else {
+            return XCTFail("cross_workspace output 应解析为 items")
+        }
+        XCTAssertEqual(items.count, 2)
+        XCTAssertEqual(items[0].text, "研究员产出：行情已汇总")
+        XCTAssertEqual(items[0].title, "researcher · s1")
+        XCTAssertEqual(items[0].status, "success")
+        XCTAssertEqual(items[1].text, "写手产出：报告已生成")
+        XCTAssertEqual(items[1].title, "writer · s2")
+        XCTAssertNil(items[1].status)
+    }
+
+    func testOutputPresentationFallbackJSON() throws {
+        let output: JSONValue = ["custom": ["nested": 42]]
+        let presentation = WorkflowOutputPresentation.parse(output)
+        guard case .json(let value) = presentation else {
+            return XCTFail("无法提取结构化字段时应降级为 json")
+        }
+        XCTAssertEqual(value["custom"]["nested"].int, 42)
+    }
+
+    func testOutputPresentationEmpty() throws {
+        XCTAssertEqual(WorkflowOutputPresentation.parse(nil), .empty)
+        XCTAssertEqual(WorkflowOutputPresentation.parse(.null), .empty)
+        XCTAssertEqual(WorkflowOutputPresentation.parse(.object([:])), .empty)
+        XCTAssertEqual(WorkflowOutputPresentation.parse(.array([])), .empty)
+        XCTAssertEqual(WorkflowOutputPresentation.parse(.string("")), .empty)
+    }
+
     // MARK: - Phase 4: applySnapshot builds complete DAG with correct states
 
     func testApplySnapshotBuildsCompleteDAG() {

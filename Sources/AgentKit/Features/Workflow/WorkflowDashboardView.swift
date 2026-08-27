@@ -815,6 +815,8 @@ private struct WorkflowSnapshotPage: View {
                     Divider()
                 }
 
+                outputSection(snapshot.task?.output)
+
                 if let error = snapshot.task?.error ?? liveRun?.error {
                     errorSection(error)
                 }
@@ -909,6 +911,85 @@ private struct WorkflowSnapshotPage: View {
         Label(text, systemImage: systemImage)
             .font(.subheadline.weight(.semibold))
             .foregroundStyle(.primary)
+    }
+
+    /// 执行结果区块：按模板类型分派（tool_sequence / cross_workspace），
+    /// 提取不到结构化字段时降级为整段格式化 JSON；空输出不展示。
+    @ViewBuilder
+    private func outputSection(_ output: JSONValue?) -> some View {
+        switch WorkflowOutputPresentation.parse(output) {
+        case .empty:
+            EmptyView()
+        case .items(let items):
+            Divider()
+            sectionLabel("执行结果", systemImage: "doc.text.magnifyingglass")
+            ForEach(items) { item in
+                WorkflowResultCard(item: item)
+            }
+        case .json(let value):
+            if let pretty = value.prettyJSONString {
+                Divider()
+                sectionLabel("执行结果", systemImage: "doc.text.magnifyingglass")
+                ScrollView(.vertical) {
+                    Text(pretty)
+                        .font(.caption.monospaced())
+                        .foregroundStyle(.primary)
+                        .fixedSize(horizontal: false, vertical: true)
+                        .textSelection(.enabled)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                }
+                .frame(maxHeight: 200)
+                .padding(10)
+                .background(.ultraThinMaterial)
+                .clipShape(RoundedRectangle(cornerRadius: 6))
+                .overlay {
+                    RoundedRectangle(cornerRadius: 6)
+                        .stroke(Color.primary.opacity(0.08), lineWidth: 1)
+                }
+            }
+        }
+    }
+}
+
+// MARK: - Result Card
+
+/// 执行结果里的单条可读文本卡片（role 标签 + 内容，可选 status 徽标）。
+private struct WorkflowResultCard: View {
+    let item: WorkflowOutputPresentation.WorkflowOutputItem
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 4) {
+            HStack(spacing: 8) {
+                if let title = item.title {
+                    Text(title)
+                        .font(.caption.weight(.medium))
+                        .foregroundStyle(.secondary)
+                        .lineLimit(1)
+                }
+                if let status = item.status, !status.isEmpty {
+                    Text(status)
+                        .font(.caption2)
+                        .foregroundStyle(.secondary)
+                        .padding(.horizontal, 6)
+                        .padding(.vertical, 2)
+                        .background(Color.secondary.opacity(0.12))
+                        .clipShape(Capsule())
+                }
+            }
+            Text(item.text)
+                .font(.caption)
+                .foregroundStyle(.primary)
+                .fixedSize(horizontal: false, vertical: true)
+                .textSelection(.enabled)
+        }
+        .padding(10)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(Color.primary.opacity(0.03))
+        .clipShape(RoundedRectangle(cornerRadius: 6))
+        .overlay {
+            RoundedRectangle(cornerRadius: 6)
+                .stroke(Color.primary.opacity(0.08), lineWidth: 1)
+        }
     }
 }
 
