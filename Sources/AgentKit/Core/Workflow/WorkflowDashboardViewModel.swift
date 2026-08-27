@@ -196,6 +196,18 @@ public final class WorkflowDashboardViewModel {
         return try await client.triggerWorkflowRun(workspacePath: workspacePath, name: name, request: request)
     }
 
+    /// 恢复 suspended/failed/canceled 的 run（R3 手工逃生口），后台异步执行。
+    /// resume_from 不传 → 服务端自动收集失败根节点。
+    @discardableResult
+    public func resumeRun(workspacePath: String, workflowName: String, taskID: Int64) async throws -> Int64 {
+        try await client.resumeWorkflowRun(
+            workspacePath: workspacePath,
+            workflowName: workflowName,
+            taskID: taskID,
+            request: WorkflowResumeRequest()
+        )
+    }
+
     // MARK: - Error
 
     private static func message(for error: Error) -> String? {

@@ -121,6 +121,8 @@ public protocol AgentTransport: Sendable {
     func saveWorkflowTemplate(workspacePath: String, name: String, request: WorkflowTemplateSaveRequest) async throws -> String
     /// 按名触发模板，headless 异步执行，返回 task_id（P2 R5）。
     func triggerWorkflowRun(workspacePath: String, name: String, request: WorkflowTriggerRequest) async throws -> Int64
+    /// 恢复 suspended/failed/canceled 的 run，后台异步执行（P2 R3 手工逃生口）。
+    func resumeWorkflowRun(workspacePath: String, workflowName: String, taskID: Int64, request: WorkflowResumeRequest) async throws -> Int64
 
     // MARK: - Session state
 
@@ -346,6 +348,12 @@ extension AgentTransport {
 
     public func triggerWorkflowRun(
         workspacePath: String, name: String, request: WorkflowTriggerRequest
+    ) async throws -> Int64 {
+        throw RuntimeHTTPError.unsupported
+    }
+
+    public func resumeWorkflowRun(
+        workspacePath: String, workflowName: String, taskID: Int64, request: WorkflowResumeRequest
     ) async throws -> Int64 {
         throw RuntimeHTTPError.unsupported
     }

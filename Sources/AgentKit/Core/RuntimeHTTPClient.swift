@@ -572,6 +572,21 @@ struct RuntimeHTTPClient: Sendable {
         return try decodeEnvelope(WorkflowTriggeredResponse.self, from: data).taskID
     }
 
+    /// `POST /v1/workflows/{name}/runs/{task_id}/resume?workspace=<abs_path>` —
+    /// 恢复 suspended/failed/canceled 的 run（202，返回 task_id）。
+    func resumeWorkflowRun(
+        workspacePath: String, workflowName: String, taskID: Int64, request: WorkflowResumeRequest
+    ) async throws -> Int64 {
+        let req = try await buildWorkspaceWorkflowRequest(
+            "POST", workspacePath: workspacePath,
+            suffix: [workflowName, "runs", String(taskID), "resume"],
+            body: request
+        )
+        let (data, response) = try await session.data(for: req)
+        try validateHTTP(response, data: data)
+        return try decodeEnvelope(WorkflowTriggeredResponse.self, from: data).taskID
+    }
+
     /// 构建 workspace-scoped workflow 面板请求。路径段走 `appendingPathComponent`
     /// （对 {name} 正确编码），workspace 绝对路径以 `%2F` 编码为单个 query 值
     /// （`percentEncodedQuery` 保留既有编码，不被二次转义）。

@@ -908,3 +908,17 @@ public struct WorkflowTriggeredResponse: Decodable, Sendable, Equatable {
         case taskID = "task_id"
     }
 }
+
+/// `POST /v1/workflows/{name}/runs/{task_id}/resume?workspace=<abs_path>` body。
+/// `resumeFrom` 为空 = 服务端自动收集失败根节点；202 返回 `{"task_id": <int>}`。
+public struct WorkflowResumeRequest: Encodable, Sendable, Equatable {
+    public var resumeFrom: String?
+
+    public init(resumeFrom: String? = nil) {
+        self.resumeFrom = resumeFrom
+    }
+
+    enum CodingKeys: String, CodingKey {
+        case resumeFrom = "resume_from"
+    }
+}

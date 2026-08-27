@@ -299,4 +299,72 @@ final class WorkflowEndpointHTTPTests: XCTestCase {
         XCTAssertEqual(agents[1]["workspace_path"] as? String, "/Users/me/reports")
         XCTAssertEqual(taskID, 123)
     }
+
+    /// 恢复：`POST /v1/workflows/{name}/runs/{task_id}/resume?workspace=<abs_path>`，
+    /// body `{"resume_from":...}`（缺省不传），202 返回 task_id。
+    func testResumeRunPostsBodyAndDecodesTaskID() async throws {
+        let session = makeWorkflowMockSession()
+        let captured = LockedBox<(method: String, url: String?, body: String)?>(nil)
+        WorkflowMockURLProtocol.setHandler { request in
+            let body = requestBodyData(request).flatMap { String(data: $0, encoding: .utf8) } ?? ""
+            captured.value = (request.httpMethod ?? "", request.url?.absoluteString, body)
+            return (
+                HTTPURLResponse(
+                    url: try XCTUnwrap(request.url),
+                    statusCode: 202,
+                    httpVersion: "HTTP/1.1",
+                    headerFields: nil
+                )!,
+                workflowEnvelopeJSON(["task_id": 88])
+            )
+        }
+
+        let client = makeClient(session: session)
+        // resume_from 不传 → 空 body（{}）
+        let taskID = try await client.resumeWorkflowRun(
+            workspacePath: "/Users/me/code-agent",
+            workflowName: "daily-report",
+            taskID: 88,
+            request: WorkflowResumeRequest()
+        )
+
+        let value = try XCTUnwrap(captured.value)
+        XCTAssertEqual(value.method, "POST")
+        XCTAssertEqual(
+            value.url,
+            "http://127.0.0.1:8797/v1/workflows/daily-report/runs/88/resume?workspace=%2FUsers%2Fme%2Fcode-agent"
+        )
+        let body = try XCTUnwrap(
+            JSONSerialization.jsonObject(with: Data(value.body.utf8)) as? [String: Any]
+        )
+        XCTAssertNil(body["resume_from"], "缺省 resume_from 不应编码进请求")
+        XCTAssertEqual(taskID, 88)
+
+        // resume_from 指定节点 → 出现在 body
+        captured.value = nil
+        WorkflowMockURLProtocol.setHandler { request in
+            let body = requestBodyData(request).flatMap { String(data: $0, encoding: .utf8) } ?? ""
+            captured.value = (request.httpMethod ?? "", request.url?.absoluteString, body)
+            return (
+                HTTPURLResponse(
+                    url: try XCTUnwrap(request.url),
+                    statusCode: 202,
+                    httpVersion: "HTTP/1.1",
+                    headerFields: nil
+                )!,
+                workflowEnvelopeJSON(["task_id": 88])
+            )
+        }
+        _ = try await client.resumeWorkflowRun(
+            workspacePath: "/Users/me/code-agent",
+            workflowName: "daily-report",
+            taskID: 88,
+            request: WorkflowResumeRequest(resumeFrom: "wait")
+        )
+        let second = try XCTUnwrap(captured.value)
+        let secondBody = try XCTUnwrap(
+            JSONSerialization.jsonObject(with: Data(second.body.utf8)) as? [String: Any]
+        )
+        XCTAssertEqual(secondBody["resume_from"] as? String, "wait")
+    }
 }

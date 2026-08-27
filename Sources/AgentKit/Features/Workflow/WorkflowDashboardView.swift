@@ -634,6 +634,9 @@ private struct WorkflowSnapshotPage: View {
     @Environment(WorkspaceStore.self) private var store
     @State private var snapshot: WorkflowSnapshot?
     @State private var loadError: String?
+    @State private var observeID = 0
+    @State private var isResuming = false
+    @State private var resumeErrorMessage: String?
 
     /// 实时状态来自 WorkflowStore（WS workflow_* 事件叠加在 snapshot 基线之上）。
     /// 快照已 apply 后 liveRun 即非空，作为节点/拓扑的权威渲染源。
@@ -699,7 +702,61 @@ private struct WorkflowSnapshotPage: View {
 #if os(iOS)
         .navigationBarTitleDisplayMode(.inline)
 #endif
-        .task { await observe() }
+        .toolbar {
+            ToolbarItem(placement: .primaryAction) {
+                if isResumable {
+                    Button {
+                        resume()
+                    } label: {
+                        if isResuming {
+                            ProgressView()
+                                .controlSize(.small)
+                        } else {
+                            Label("恢复", systemImage: "arrow.clockwise")
+                        }
+                    }
+                    .disabled(isResuming)
+                }
+            }
+        }
+        .alert("恢复失败", isPresented: Binding(
+            get: { resumeErrorMessage != nil },
+            set: { if !$0 { resumeErrorMessage = nil } }
+        )) {
+            Button("好", role: .cancel) {}
+        } message: {
+            Text(resumeErrorMessage ?? "")
+        }
+        .task(id: observeID) { await observe() }
+    }
+
+    /// 可恢复状态：suspended / failed / canceled。
+    private var isResumable: Bool {
+        guard let status = snapshot?.task?.status else { return false }
+        switch WorkflowTaskStatus(rawValue: status) {
+        case .suspended, .failed, .canceled: return true
+        default: return false
+        }
+    }
+
+    private func resume() {
+        isResuming = true
+        resumeErrorMessage = nil
+        Task {
+            defer { isResuming = false }
+            do {
+                try await viewModel.resumeRun(
+                    workspacePath: workspacePath,
+                    workflowName: workflowName,
+                    taskID: taskID
+                )
+                // 重启观测循环：旧 task 取消，新循环从最新 snapshot 开始，
+                // run 状态转为 running 后持续轮询到下一个终态/挂起点。
+                observeID += 1
+            } catch {
+                resumeErrorMessage = (error as? LocalizedError)?.errorDescription ?? "恢复失败"
+            }
+        }
     }
 
     /// 观测循环：拉 snapshot → apply 到 WorkflowStore（WS 事件在其上增量叠加），
@@ -801,6 +858,21 @@ private struct WorkflowSnapshotPage: View {
                         .foregroundStyle(.orange)
                         .labelStyle(.titleAndIcon)
                 }
+            }
+
+            if isResumable {
+                HStack(spacing: 6) {
+                    Image(systemName: "arrow.clockwise.circle.fill")
+                        .foregroundStyle(.orange)
+                    Text("任务挂起或失败，可手动恢复")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                    Spacer()
+                }
+                .padding(.horizontal, 10)
+                .padding(.vertical, 6)
+                .background(Color.orange.opacity(0.08))
+                .clipShape(RoundedRectangle(cornerRadius: 6))
             }
         }
         .padding(12)
