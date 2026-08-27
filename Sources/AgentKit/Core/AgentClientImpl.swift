@@ -270,6 +270,18 @@ public final class CodeAgentTransport: AgentTransport, @unchecked Sendable {
         )
     }
 
+    public func saveWorkflowTemplate(
+        workspacePath: String, name: String, request: WorkflowTemplateSaveRequest
+    ) async throws -> String {
+        try await http.saveWorkflowTemplate(workspacePath: workspacePath, name: name, request: request)
+    }
+
+    public func triggerWorkflowRun(
+        workspacePath: String, name: String, request: WorkflowTriggerRequest
+    ) async throws -> Int64 {
+        try await http.triggerWorkflowRun(workspacePath: workspacePath, name: name, request: request)
+    }
+
     public func activitySnapshot() async throws -> RuntimeActivitySnapshot {
         try await http.activitySnapshot()
     }
@@ -718,6 +730,18 @@ public final class DefaultAgentClient: RuntimeClient, @unchecked Sendable {
         try await transport.getWorkspaceWorkflowSnapshot(
             workspacePath: workspacePath, workflowName: workflowName, taskID: taskID
         )
+    }
+
+    public func saveWorkflowTemplate(
+        workspacePath: String, name: String, request: WorkflowTemplateSaveRequest
+    ) async throws -> String {
+        try await transport.saveWorkflowTemplate(workspacePath: workspacePath, name: name, request: request)
+    }
+
+    public func triggerWorkflowRun(
+        workspacePath: String, name: String, request: WorkflowTriggerRequest
+    ) async throws -> Int64 {
+        try await transport.triggerWorkflowRun(workspacePath: workspacePath, name: name, request: request)
     }
 
     public func activitySnapshot() async throws -> RuntimeActivitySnapshot {

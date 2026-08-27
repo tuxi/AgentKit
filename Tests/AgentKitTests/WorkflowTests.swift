@@ -837,6 +837,46 @@ final class WorkflowTests: XCTestCase {
         XCTAssertEqual(detail.runs.count, 1)
         XCTAssertEqual(detail.runs[0].id, 10)
         XCTAssertEqual(detail.runs[0].status, "success")
+        XCTAssertFalse(detail.isTemplate, "缺省 is_template 应为 false")
+        XCTAssertNil(detail.manifest, "缺省 manifest 应为 nil")
+    }
+
+    // MARK: - P2: is_template + manifest decode
+
+    func testDecodeWorkflowDetailWithTemplateManifest() throws {
+        let json = """
+        {"id": 1, "name": "daily-report", "description": "每日行情", "is_template": true,
+         "manifest": {"goal": "整理科技股行情", "template": "cross_workspace_collaboration_v1",
+                      "agents": [{"role": "researcher", "session_id": "sess-1", "message": "收集数据", "intent": "request", "correlation_id": "c-1"}],
+                      "parallelism": 2, "timeout_ms": 600000},
+         "versions": [], "runs": []}
+        """
+        let detail = try JSONDecoder().decode(WorkflowDetail.self, from: Data(json.utf8))
+        XCTAssertTrue(detail.isTemplate)
+        XCTAssertNotNil(detail.manifest)
+
+        let manifest = WorkflowManifest.fromJSONValue(detail.manifest)
+        XCTAssertEqual(manifest?.goal, "整理科技股行情")
+        XCTAssertEqual(manifest?.template, "cross_workspace_collaboration_v1")
+        XCTAssertEqual(manifest?.parallelism, 2)
+        XCTAssertEqual(manifest?.timeoutMs, 600000)
+        XCTAssertEqual(manifest?.agents?.count, 1)
+        XCTAssertEqual(manifest?.agents?[0].role, "researcher")
+        XCTAssertEqual(manifest?.agents?[0].sessionID, "sess-1")
+        XCTAssertEqual(manifest?.agents?[0].message, "收集数据")
+        XCTAssertEqual(manifest?.agents?[0].intent, "request")
+        XCTAssertEqual(manifest?.agents?[0].correlationID, "c-1")
+        XCTAssertNil(manifest?.agents?[0].workspacePath)
+    }
+
+    func testManifestFromNonObjectReturnsNil() throws {
+        XCTAssertNil(WorkflowManifest.fromJSONValue(nil))
+        XCTAssertNil(WorkflowManifest.fromJSONValue(.string("not-an-object")))
+        XCTAssertNil(WorkflowManifest.fromJSONValue(.array([])))
+        // 空 object → agents 缺失 → manifest 仍可解析但 agents 为 nil
+        let empty = WorkflowManifest.fromJSONValue(.object([:]))
+        XCTAssertEqual(empty?.goal, nil)
+        XCTAssertEqual(empty?.agents, nil)
     }
 
     // MARK: - Phase 4: applySnapshot builds complete DAG with correct states

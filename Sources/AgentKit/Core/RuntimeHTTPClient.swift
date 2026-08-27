@@ -546,6 +546,32 @@ struct RuntimeHTTPClient: Sendable {
         return try decodeEnvelope(WorkflowSnapshot.self, from: data)
     }
 
+    /// `POST /v1/workflows/{name}/template?workspace=<abs_path>` — 把某次 run 保存为
+    /// 用户命名的可复用模板（201，返回模板名）。
+    func saveWorkflowTemplate(
+        workspacePath: String, name: String, request: WorkflowTemplateSaveRequest
+    ) async throws -> String {
+        let req = try await buildWorkspaceWorkflowRequest(
+            "POST", workspacePath: workspacePath, suffix: [name, "template"], body: request
+        )
+        let (data, response) = try await session.data(for: req)
+        try validateHTTP(response, data: data)
+        return try decodeEnvelope(WorkflowTemplateNameResponse.self, from: data).name
+    }
+
+    /// `POST /v1/workflows/{name}/runs?workspace=<abs_path>` — 按名触发模板，
+    /// headless 异步执行（202，返回 task_id）。
+    func triggerWorkflowRun(
+        workspacePath: String, name: String, request: WorkflowTriggerRequest
+    ) async throws -> Int64 {
+        let req = try await buildWorkspaceWorkflowRequest(
+            "POST", workspacePath: workspacePath, suffix: [name, "runs"], body: request
+        )
+        let (data, response) = try await session.data(for: req)
+        try validateHTTP(response, data: data)
+        return try decodeEnvelope(WorkflowTriggeredResponse.self, from: data).taskID
+    }
+
     /// 构建 workspace-scoped workflow 面板请求。路径段走 `appendingPathComponent`
     /// （对 {name} 正确编码），workspace 绝对路径以 `%2F` 编码为单个 query 值
     /// （`percentEncodedQuery` 保留既有编码，不被二次转义）。
@@ -553,6 +579,7 @@ struct RuntimeHTTPClient: Sendable {
         _ method: String,
         workspacePath: String,
         suffix: [String],
+        body: (any Encodable)? = nil,
         timeout: TimeInterval = 60
     ) async throws -> URLRequest {
         var url = try await resolveBaseURL()
@@ -569,6 +596,9 @@ struct RuntimeHTTPClient: Sendable {
         request.httpMethod = method
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
         request.timeoutInterval = timeout
+        if let body {
+            request.httpBody = try JSONEncoder().encode(body)
+        }
         await applyAuth(to: &request)
         DeviceContext.apply(to: &request)
         return request
@@ -762,7 +792,7 @@ struct RuntimeHTTPClient: Sendable {
             throw RuntimeHTTPError.invalidResponse
         }
         switch httpResponse.statusCode {
-        case 200, 201:
+        case 200, 201, 202:
             return
         case 404:
             throw RuntimeHTTPError.notFound

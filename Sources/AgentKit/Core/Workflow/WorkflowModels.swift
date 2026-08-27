@@ -569,6 +569,8 @@ public struct WorkflowSummary: Decodable, Sendable, Identifiable, Equatable {
     public let latestTaskID: Int64?
     public let latestStatus: String?
     public let latestError: String?
+    /// 是否为用户命名的可复用模板（R4 保存后置 1）。
+    public let isTemplate: Bool
 
     public init(
         id: Int64,
@@ -577,7 +579,8 @@ public struct WorkflowSummary: Decodable, Sendable, Identifiable, Equatable {
         latestHash: String? = nil,
         latestTaskID: Int64? = nil,
         latestStatus: String? = nil,
-        latestError: String? = nil
+        latestError: String? = nil,
+        isTemplate: Bool = false
     ) {
         self.id = id
         self.name = name
@@ -586,6 +589,7 @@ public struct WorkflowSummary: Decodable, Sendable, Identifiable, Equatable {
         self.latestTaskID = latestTaskID
         self.latestStatus = latestStatus
         self.latestError = latestError
+        self.isTemplate = isTemplate
     }
 
     enum CodingKeys: String, CodingKey {
@@ -594,6 +598,20 @@ public struct WorkflowSummary: Decodable, Sendable, Identifiable, Equatable {
         case latestTaskID = "latest_task_id"
         case latestStatus = "latest_status"
         case latestError = "latest_error"
+        case isTemplate = "is_template"
+    }
+
+    /// 容忍缺省：老 daemon / 一次性 run 的摘要可能没有 `is_template`，缺省为 false。
+    public init(from decoder: any Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        self.id = try container.decode(Int64.self, forKey: .id)
+        self.name = try container.decode(String.self, forKey: .name)
+        self.description = try container.decode(String.self, forKey: .description)
+        self.latestHash = try container.decodeIfPresent(String.self, forKey: .latestHash)
+        self.latestTaskID = try container.decodeIfPresent(Int64.self, forKey: .latestTaskID)
+        self.latestStatus = try container.decodeIfPresent(String.self, forKey: .latestStatus)
+        self.latestError = try container.decodeIfPresent(String.self, forKey: .latestError)
+        self.isTemplate = try container.decodeIfPresent(Bool.self, forKey: .isTemplate) ?? false
     }
 }
 
@@ -646,18 +664,247 @@ public struct WorkflowDetail: Decodable, Sendable, Equatable {
     public let description: String
     public let versions: [WorkflowVersionSummary]
     public let runs: [WorkflowRunSummary]
+    /// 是否为用户命名的可复用模板。
+    public let isTemplate: Bool
+    /// 模板的源 manifest JSON（goal/template/agents[]/parallelism/timeout_ms），
+    /// 保存模板时从 run 固化；一次性 run 为空。
+    public let manifest: JSONValue?
 
     public init(
         id: Int64,
         name: String,
         description: String = "",
         versions: [WorkflowVersionSummary] = [],
-        runs: [WorkflowRunSummary] = []
+        runs: [WorkflowRunSummary] = [],
+        isTemplate: Bool = false,
+        manifest: JSONValue? = nil
     ) {
         self.id = id
         self.name = name
         self.description = description
         self.versions = versions
         self.runs = runs
+        self.isTemplate = isTemplate
+        self.manifest = manifest
+    }
+
+        enum CodingKeys: String, CodingKey {
+        case id, name, description, versions, runs, manifest
+        case isTemplate = "is_template"
+    }
+
+    public init(from decoder: any Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        self.id = try container.decode(Int64.self, forKey: .id)
+        self.name = try container.decode(String.self, forKey: .name)
+        self.description = try container.decode(String.self, forKey: .description)
+        self.versions = try container.decode([WorkflowVersionSummary].self, forKey: .versions)
+        self.runs = try container.decodeIfPresent([WorkflowRunSummary].self, forKey: .runs) ?? []
+        self.isTemplate = try container.decodeIfPresent(Bool.self, forKey: .isTemplate) ?? false
+        self.manifest = try container.decodeIfPresent(JSONValue.self, forKey: .manifest)
+    }
+}
+
+// MARK: - Manifest parsing (trigger form prefill)
+
+/// 模板源 manifest 的轻量解析视图。字段全部可选：缺失/类型不符时降级为 nil。
+public struct WorkflowManifest: Decodable, Sendable, Equatable {
+    public let goal: String?
+    public let template: String?
+    public let agents: [WorkflowManifestAgent]?
+    public let parallelism: Int?
+    public let timeoutMs: Int64?
+
+    public init(
+        goal: String? = nil,
+        template: String? = nil,
+        agents: [WorkflowManifestAgent]? = nil,
+        parallelism: Int? = nil,
+        timeoutMs: Int64? = nil
+    ) {
+        self.goal = goal
+        self.template = template
+        self.agents = agents
+        self.parallelism = parallelism
+        self.timeoutMs = timeoutMs
+    }
+
+    enum CodingKeys: String, CodingKey {
+        case goal, template, agents, parallelism
+        case timeoutMs = "timeout_ms"
+    }
+
+    /// 从 detail.manifest（JSONValue）解析；非 object 或字段缺失返回 nil。
+    public static func fromJSONValue(_ value: JSONValue?) -> WorkflowManifest? {
+        guard let object = value?.object else { return nil }
+        let agents: [WorkflowManifestAgent]? = object["agents"]?.array?.compactMap {
+            WorkflowManifestAgent.fromJSONValue($0)
+        }
+        return WorkflowManifest(
+            goal: object["goal"]?.string,
+            template: object["template"]?.string,
+            agents: (agents?.isEmpty == false) ? agents : nil,
+            parallelism: Self.readInt(object["parallelism"]),
+            timeoutMs: Self.readInt(object["timeout_ms"]).map(Int64.init)
+        )
+    }
+
+    private static func readInt(_ value: JSONValue?) -> Int? {
+        if let i = value?.int { return i }
+        if let d = value?.number { return Int(d) }
+        return nil
+    }
+}
+
+/// manifest 里的单个 agent 摘要。
+public struct WorkflowManifestAgent: Decodable, Sendable, Equatable {
+    public let role: String?
+    public let sessionID: String?
+    public let message: String?
+    public let intent: String?
+    public let correlationID: String?
+    public let workspacePath: String?
+
+    public init(
+        role: String? = nil,
+        sessionID: String? = nil,
+        message: String? = nil,
+        intent: String? = nil,
+        correlationID: String? = nil,
+        workspacePath: String? = nil
+    ) {
+        self.role = role
+        self.sessionID = sessionID
+        self.message = message
+        self.intent = intent
+        self.correlationID = correlationID
+        self.workspacePath = workspacePath
+    }
+
+    enum CodingKeys: String, CodingKey {
+        case role, message, intent
+        case sessionID = "session_id"
+        case correlationID = "correlation_id"
+        case workspacePath = "workspace_path"
+    }
+
+    public static func fromJSONValue(_ value: JSONValue?) -> WorkflowManifestAgent? {
+        guard let object = value?.object else { return nil }
+        return WorkflowManifestAgent(
+            role: object["role"]?.string,
+            sessionID: object["session_id"]?.string,
+            message: object["message"]?.string,
+            intent: object["intent"]?.string,
+            correlationID: object["correlation_id"]?.string,
+            workspacePath: object["workspace_path"]?.string
+        )
+    }
+}
+
+// MARK: - P2: save-as-template / parameterized trigger
+
+/// `POST /v1/workflows/{name}/template?workspace=<abs_path>` body。
+/// 把某次 run 保存为用户命名的可复用模板（manifest 从 source run 恢复）。
+public struct WorkflowTemplateSaveRequest: Encodable, Sendable, Equatable {
+    public var sourceTaskID: Int64
+    public var description: String?
+
+    public init(sourceTaskID: Int64, description: String? = nil) {
+        self.sourceTaskID = sourceTaskID
+        self.description = description
+    }
+
+    enum CodingKeys: String, CodingKey {
+        case sourceTaskID = "source_task_id"
+        case description
+    }
+}
+
+/// `POST .../template` 的 201 响应 data：`{"name": "<模板名>"}`。
+public struct WorkflowTemplateNameResponse: Decodable, Sendable, Equatable {
+    public let name: String
+
+    public init(name: String) {
+        self.name = name
+    }
+}
+
+/// 触发请求里的单个 agent 花名册行（对齐 plan_workflow manifest 的 agents[]）。
+public struct WorkflowAgentSpec: Encodable, Sendable, Equatable, Identifiable {
+    public var role: String
+    public var sessionID: String
+    public var message: String
+    /// "request" | "notification"
+    public var intent: String
+    public var correlationID: String
+    /// 可选：worker 会话的目标 workspace（缺省用触发时的 workspace）。
+    public var workspacePath: String?
+
+    public var id: String { "\(role)#\(sessionID)#\(correlationID)" }
+
+    public init(
+        role: String,
+        sessionID: String,
+        message: String,
+        intent: String = "request",
+        correlationID: String,
+        workspacePath: String? = nil
+    ) {
+        self.role = role
+        self.sessionID = sessionID
+        self.message = message
+        self.intent = intent
+        self.correlationID = correlationID
+        self.workspacePath = workspacePath
+    }
+
+    enum CodingKeys: String, CodingKey {
+        case role, message, intent
+        case sessionID = "session_id"
+        case correlationID = "correlation_id"
+        case workspacePath = "workspace_path"
+    }
+}
+
+/// `POST /v1/workflows/{name}/runs?workspace=<abs_path>` body（run input manifest）。
+/// 服务端原样透传给引擎 Submit；202 返回 `{"task_id": <int>}`。
+public struct WorkflowTriggerRequest: Encodable, Sendable, Equatable {
+    public var goal: String
+    /// 模板类型："cross_workspace_collaboration_v1" | "..._v2"
+    public var template: String
+    public var agents: [WorkflowAgentSpec]
+    public var parallelism: Int?
+    public var timeoutMs: Int64?
+
+    public init(
+        goal: String,
+        template: String,
+        agents: [WorkflowAgentSpec],
+        parallelism: Int? = nil,
+        timeoutMs: Int64? = nil
+    ) {
+        self.goal = goal
+        self.template = template
+        self.agents = agents
+        self.parallelism = parallelism
+        self.timeoutMs = timeoutMs
+    }
+
+    enum CodingKeys: String, CodingKey {
+        case goal, template, agents, parallelism
+        case timeoutMs = "timeout_ms"
+    }
+}
+
+/// `POST .../runs` 的 202 响应 data：`{"task_id": <int>}`。
+public struct WorkflowTriggeredResponse: Decodable, Sendable, Equatable {
+    public let taskID: Int64
+
+    public init(taskID: Int64) {
+        self.taskID = taskID
+    }
+
+    enum CodingKeys: String, CodingKey {
+        case taskID = "task_id"
     }
 }

@@ -48,6 +48,24 @@ private func workflowEnvelopeJSON(_ data: Any) -> Data {
     return try! JSONSerialization.data(withJSONObject: obj)
 }
 
+/// URLSession streams the request body, so a `URLProtocol` handler sees
+/// `httpBody == nil` and must read `httpBodyStream` instead.
+private func requestBodyData(_ request: URLRequest) -> Data? {
+    if let data = request.httpBody { return data }
+    guard let stream = request.httpBodyStream else { return nil }
+    stream.open()
+    defer { stream.close() }
+    var data = Data()
+    let bufferSize = 4096
+    var buffer = [UInt8](repeating: 0, count: bufferSize)
+    while stream.hasBytesAvailable {
+        let read = stream.read(&buffer, maxLength: bufferSize)
+        if read <= 0 { break }
+        data.append(buffer, count: read)
+    }
+    return data
+}
+
 // MARK: - LockedBox (thread-safe capture)
 
 private final class LockedBox<Value>: @unchecked Sendable {
@@ -181,5 +199,104 @@ final class WorkflowEndpointHTTPTests: XCTestCase {
         XCTAssertEqual(snapshot.workflowId, "wf-a")
         XCTAssertEqual(snapshot.task?.id, 42)
         XCTAssertEqual(snapshot.snapshotSequence, 7)
+    }
+
+    /// 保存模板：`POST /v1/workflows/{name}/template?workspace=<abs_path>`，
+    /// body `{"source_task_id":...,"description":...}`，201 返回模板名。
+    func testSaveTemplatePostsBodyAndDecodesName() async throws {
+        let session = makeWorkflowMockSession()
+        let captured = LockedBox<(method: String, url: String?, body: String)?>(nil)
+        WorkflowMockURLProtocol.setHandler { request in
+            let body = requestBodyData(request).flatMap { String(data: $0, encoding: .utf8) } ?? ""
+            captured.value = (request.httpMethod ?? "", request.url?.absoluteString, body)
+            return (
+                HTTPURLResponse(
+                    url: try XCTUnwrap(request.url),
+                    statusCode: 201,
+                    httpVersion: "HTTP/1.1",
+                    headerFields: nil
+                )!,
+                workflowEnvelopeJSON(["name": "daily-report"])
+            )
+        }
+
+        let client = makeClient(session: session)
+        let savedName = try await client.saveWorkflowTemplate(
+            workspacePath: "/Users/me/code-agent",
+            name: "daily-report",
+            request: WorkflowTemplateSaveRequest(sourceTaskID: 88, description: "每日行情")
+        )
+
+        let value = try XCTUnwrap(captured.value)
+        XCTAssertEqual(value.method, "POST")
+        XCTAssertEqual(value.url, "http://127.0.0.1:8797/v1/workflows/daily-report/template?workspace=%2FUsers%2Fme%2Fcode-agent")
+        let body = try XCTUnwrap(
+            JSONSerialization.jsonObject(with: Data(value.body.utf8)) as? [String: Any]
+        )
+        XCTAssertEqual(body["source_task_id"] as? Int64, 88)
+        XCTAssertEqual(body["description"] as? String, "每日行情")
+        XCTAssertEqual(savedName, "daily-report")
+    }
+
+    /// 触发：`POST /v1/workflows/{name}/runs?workspace=<abs_path>`，
+    /// body 为 manifest（goal/template/agents/parallelism/timeout_ms），202 返回 task_id。
+    func testTriggerRunPostsManifestAndDecodesTaskID() async throws {
+        let session = makeWorkflowMockSession()
+        let captured = LockedBox<(method: String, url: String?, body: String)?>(nil)
+        WorkflowMockURLProtocol.setHandler { request in
+            let body = requestBodyData(request).flatMap { String(data: $0, encoding: .utf8) } ?? ""
+            captured.value = (request.httpMethod ?? "", request.url?.absoluteString, body)
+            return (
+                HTTPURLResponse(
+                    url: try XCTUnwrap(request.url),
+                    statusCode: 202,
+                    httpVersion: "HTTP/1.1",
+                    headerFields: nil
+                )!,
+                workflowEnvelopeJSON(["task_id": 123])
+            )
+        }
+
+        let client = makeClient(session: session)
+        let request = WorkflowTriggerRequest(
+            goal: "整理科技股行情",
+            template: "cross_workspace_collaboration_v1",
+            agents: [
+                WorkflowAgentSpec(
+                    role: "researcher", sessionID: "sess-1", message: "收集数据",
+                    intent: "request", correlationID: "corr-1"
+                ),
+                WorkflowAgentSpec(
+                    role: "writer", sessionID: "sess-2", message: "写报告",
+                    intent: "notification", correlationID: "corr-2",
+                    workspacePath: "/Users/me/reports"
+                ),
+            ],
+            parallelism: 2,
+            timeoutMs: 600_000
+        )
+        let taskID = try await client.triggerWorkflowRun(
+            workspacePath: "/Users/me/code-agent", name: "daily-report", request: request
+        )
+
+        let value = try XCTUnwrap(captured.value)
+        XCTAssertEqual(value.method, "POST")
+        XCTAssertEqual(value.url, "http://127.0.0.1:8797/v1/workflows/daily-report/runs?workspace=%2FUsers%2Fme%2Fcode-agent")
+        let body = try XCTUnwrap(
+            JSONSerialization.jsonObject(with: Data(value.body.utf8)) as? [String: Any]
+        )
+        XCTAssertEqual(body["goal"] as? String, "整理科技股行情")
+        XCTAssertEqual(body["template"] as? String, "cross_workspace_collaboration_v1")
+        XCTAssertEqual(body["parallelism"] as? Int, 2)
+        XCTAssertEqual(body["timeout_ms"] as? Int64, 600_000)
+        let agents = try XCTUnwrap(body["agents"] as? [[String: Any]])
+        XCTAssertEqual(agents.count, 2)
+        XCTAssertEqual(agents[0]["role"] as? String, "researcher")
+        XCTAssertEqual(agents[0]["session_id"] as? String, "sess-1")
+        XCTAssertEqual(agents[0]["intent"] as? String, "request")
+        XCTAssertNil(agents[0]["workspace_path"], "空 workspace_path 不应编码进请求")
+        XCTAssertEqual(agents[1]["correlation_id"] as? String, "corr-2")
+        XCTAssertEqual(agents[1]["workspace_path"] as? String, "/Users/me/reports")
+        XCTAssertEqual(taskID, 123)
     }
 }

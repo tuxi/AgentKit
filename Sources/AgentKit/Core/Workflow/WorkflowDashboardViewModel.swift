@@ -22,17 +22,20 @@ public final class WorkflowDashboardViewModel {
 
     // MARK: - State
 
-    /// 跨 workspace 的目录条目（每个已知 workspace 一次 list 调用）。
+    /// 当前选中 workspace 的目录条目（只加载选中的 workspace，按需请求）。
     public private(set) var catalog: [WorkflowCatalogEntry] = []
     public private(set) var isLoading = false
     public private(set) var hasLoaded = false
     public private(set) var errorMessage: String?
     /// workspace path → 该 workspace 查询失败的原因（如无 workflow DB，404）。
-    /// 单 workspace 失败不阻塞整个面板，仅在对应分组头部提示。
+    /// 切换 workspace 时按当前选中项展示。
     public private(set) var workspaceErrors: [String: String] = [:]
 
     /// 待枚举的 workspace 绝对路径列表（App 已知 workspace，不去服务端枚举）。
     public let workspacePaths: [String]
+
+    /// 当前选中的 workspace（nil = 尚无可用 workspace）。
+    public private(set) var selectedWorkspacePath: String?
 
     @ObservationIgnored private let client: RuntimeClient
     @ObservationIgnored private var loadTask: Task<Void, Never>?
@@ -66,7 +69,35 @@ public final class WorkflowDashboardViewModel {
         }
     }
 
-    // MARK: - Load
+    /// workspace 目录显示名（最后一段路径）。
+    public static func workspaceDisplayName(_ path: String) -> String {
+        URL(fileURLWithPath: path).lastPathComponent
+    }
+
+    // MARK: - Selection & Load
+
+    /// 初始加载：自动选中第一个 workspace；无可用 workspace 时设置空状态。
+    public func loadInitialIfNeeded() async {
+        if let first = workspacePaths.first {
+            if selectedWorkspacePath == nil {
+                await selectWorkspace(first)
+            }
+        } else {
+            selectedWorkspacePath = nil
+            catalog = []
+            errorMessage = "暂无可用的工作区。请先在 Code 侧打开或新建一个工作区，再发起 plan_workflow。"
+            hasLoaded = true
+        }
+    }
+
+    /// 切换到指定 workspace 并加载其目录。显式点击 → 总是重新请求（force）。
+    public func selectWorkspace(_ path: String) async {
+        guard path != selectedWorkspacePath else { return }
+        selectedWorkspacePath = path
+        catalog = []
+        errorMessage = nil
+        await load(force: true)
+    }
 
     public func load(force: Bool = false) async {
         if loadTask != nil && !force { return }
@@ -80,53 +111,31 @@ public final class WorkflowDashboardViewModel {
     }
 
     private func performLoad() async {
-        isLoading = true
-        errorMessage = nil
-        defer { isLoading = false }
-
-        guard !workspacePaths.isEmpty else {
+        guard let path = selectedWorkspacePath else {
             hasLoaded = true
             catalog = []
             errorMessage = "暂无可用的工作区。请先在 Code 侧打开或新建一个工作区，再发起 plan_workflow。"
             return
         }
 
-        var entries: [WorkflowCatalogEntry] = []
-        var errors: [String: String] = [:]
-
-        await withTaskGroup(of: (String, Result<[WorkflowSummary], Error>).self) { group in
-            for path in workspacePaths {
-                group.addTask { [client] in
-                    do {
-                        let items = try await client.listWorkspaceWorkflows(workspacePath: path)
-                        return (path, .success(items))
-                    } catch {
-                        return (path, .failure(error))
-                    }
-                }
-            }
-            for await (path, result) in group {
-                let name = URL(fileURLWithPath: path).lastPathComponent
-                switch result {
-                case .success(let items):
-                    entries.append(contentsOf: items.map {
-                        WorkflowCatalogEntry(workspacePath: path, workspaceName: name, summary: $0)
-                    })
-                case .failure(let error):
-                    errors[path] = Self.message(for: error) ?? "查询失败"
-                }
-            }
+        isLoading = true
+        errorMessage = nil
+        defer { isLoading = false }
+        do {
+            let items = try await client.listWorkspaceWorkflows(workspacePath: path)
+            let name = Self.workspaceDisplayName(path)
+            catalog = items
+                .map { WorkflowCatalogEntry(workspacePath: path, workspaceName: name, summary: $0) }
+                .sorted { $0.summary.id < $1.summary.id }
+            workspaceErrors[path] = nil
+            hasLoaded = true
+        } catch {
+            catalog = []
+            let message = Self.message(for: error) ?? "查询失败"
+            workspaceErrors[path] = message
+            errorMessage = message
+            hasLoaded = true
         }
-
-        // 稳定排序：workspace 名 → workflow id
-        entries.sort { a, b in
-            if a.workspaceName != b.workspaceName { return a.workspaceName < b.workspaceName }
-            return a.summary.id < b.summary.id
-        }
-
-        catalog = entries
-        workspaceErrors = errors
-        hasLoaded = true
     }
 
     // MARK: - Detail / Snapshot
@@ -141,9 +150,69 @@ public final class WorkflowDashboardViewModel {
         )
     }
 
+    // MARK: - P2: save-as-template / trigger
+
+    /// 把某次 run 保存为命名模板（R4）。成功返回服务端确认的模板名。
+    @discardableResult
+    public func saveTemplate(
+        workspacePath: String,
+        sourceTaskID: Int64,
+        name: String,
+        description: String?
+    ) async throws -> String {
+        let trimmedName = name.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmedName.isEmpty else {
+            throw WorkflowPanelError.invalidInput("模板名不能为空")
+        }
+        let trimmedDescription = description?.trimmingCharacters(in: .whitespacesAndNewlines)
+        return try await client.saveWorkflowTemplate(
+            workspacePath: workspacePath,
+            name: trimmedName,
+            request: WorkflowTemplateSaveRequest(
+                sourceTaskID: sourceTaskID,
+                description: (trimmedDescription?.isEmpty == false) ? trimmedDescription : nil
+            )
+        )
+    }
+
+    /// 按名触发模板（R5），headless 异步执行。成功返回 task_id，调用方跳转 snapshot 观测页。
+    @discardableResult
+    public func triggerRun(
+        workspacePath: String, name: String, request: WorkflowTriggerRequest
+    ) async throws -> Int64 {
+        guard !request.goal.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+            throw WorkflowPanelError.invalidInput("goal 不能为空")
+        }
+        guard !request.agents.isEmpty else {
+            throw WorkflowPanelError.invalidInput("至少需要一个 agent")
+        }
+        for agent in request.agents {
+            if agent.role.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+                || agent.sessionID.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+                || agent.message.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                throw WorkflowPanelError.invalidInput("每个 agent 的 role / session_id / message 均为必填")
+            }
+        }
+        return try await client.triggerWorkflowRun(workspacePath: workspacePath, name: name, request: request)
+    }
+
     // MARK: - Error
 
     private static func message(for error: Error) -> String? {
         (error as? LocalizedError)?.errorDescription
+    }
+}
+
+// MARK: - WorkflowPanelError
+
+/// 面板操作（保存模板 / 触发）的客户端校验错误。
+public enum WorkflowPanelError: LocalizedError {
+    case invalidInput(String)
+
+    public var errorDescription: String? {
+        switch self {
+        case .invalidInput(let message):
+            return message
+        }
     }
 }
