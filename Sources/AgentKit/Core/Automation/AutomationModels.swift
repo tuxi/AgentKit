@@ -30,6 +30,7 @@ public enum AutomationScheduleType: String, Codable, Sendable {
 public enum AutomationRunMode: String, Codable, Sendable {
     case standalone
     case chat
+    case reuse
 }
 
 public enum AutomationRunStatus: String, Codable, Sendable {
@@ -51,7 +52,7 @@ public struct Automation: Codable, Sendable, Equatable, Identifiable {
     public var rrule: String?
     public var scheduledAt: String?
     public var timezone: String
-    public var modeExec: AutomationRunMode
+    public var modeExec: AutomationRunMode?
     public var sessionID: String?
     public var cwds: [String]?
     public var modelID: String?

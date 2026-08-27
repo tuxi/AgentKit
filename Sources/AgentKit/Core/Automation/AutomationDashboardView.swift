@@ -464,6 +464,7 @@ private struct AutomationCreateView: View {
                         Picker("", selection: $modeExec) {
                             Text("独立对话").tag(AutomationRunMode.standalone)
                             Text("回到会话").tag(AutomationRunMode.chat)
+                            Text("恢复会话").tag(AutomationRunMode.reuse)
                         }
                         .pickerStyle(.segmented)
                         if modeExec == .chat {
@@ -585,7 +586,7 @@ private struct AutomationEditView: View {
         _rrule = State(initialValue: automation.rrule ?? "")
         _scheduledAt = State(initialValue: AutomationScheduleFormatter.parseRFC3339(automation.scheduledAt ?? "") ?? Date())
         _timezone = State(initialValue: automation.timezone)
-        _modeExec = State(initialValue: automation.modeExec)
+        _modeExec = State(initialValue: automation.modeExec ?? .chat)
         _sessionID = State(initialValue: automation.sessionID ?? "")
         _cwd = State(initialValue: automation.cwds?.first ?? "")
         _permissionMode = State(initialValue: Self.normalizePermissionMode(automation.permissionMode))
@@ -660,6 +661,7 @@ private struct AutomationEditView: View {
                         Picker("", selection: $modeExec) {
                             Text("独立对话").tag(AutomationRunMode.standalone)
                             Text("回到会话").tag(AutomationRunMode.chat)
+                            Text("恢复会话").tag(AutomationRunMode.reuse)
                         }
                         .pickerStyle(.segmented)
                         if modeExec == .chat {

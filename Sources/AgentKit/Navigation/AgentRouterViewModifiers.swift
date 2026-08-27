@@ -22,6 +22,8 @@ extension View {
                 ConversationDetailView(conversation: nil)
             case .automation:
                 AutomationDashboardView()
+            case .workflow:
+                WorkflowDashboardView()
             }
         }
     }

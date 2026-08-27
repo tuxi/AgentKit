@@ -775,10 +775,11 @@ final class WorkflowTests: XCTestCase {
         {
             "workflow_id": "wf_test",
             "goal": "Snapshot test",
-            "task": {"id": 100, "status": "success", "progress": 1.0, "output": {"result": "ok"}},
+            "task": {"id": 100, "status": "success", "progress": 1.0, "error": null, "output": {"result": "ok"}, "workflow_version_id": 5},
             "nodes": [
-                {"name": "a", "state": "success", "terminal": true, "active": false},
-                {"name": "b", "state": "failed", "terminal": true, "active": false, "error": "boom", "progress": 0.3}
+                {"name": "a", "state": "success", "terminal": true, "active": false, "suspended": false},
+                {"name": "b", "state": "failed", "terminal": true, "active": false, "error": "boom", "progress": 0.3, "suspended": false},
+                {"name": "c", "state": "awaiting", "terminal": false, "active": true, "suspended": true}
             ],
             "edges": [{"from": "a", "to": "b"}],
             "snapshot_sequence": 42
@@ -790,16 +791,52 @@ final class WorkflowTests: XCTestCase {
         XCTAssertEqual(snapshot.snapshotSequence, 42)
         XCTAssertEqual(snapshot.task?.id, 100)
         XCTAssertEqual(snapshot.task?.status, "success")
-        XCTAssertEqual(snapshot.nodes.count, 2)
+        XCTAssertNil(snapshot.task?.error)
+        XCTAssertEqual(snapshot.task?.workflowVersionID, 5)
+        XCTAssertEqual(snapshot.nodes.count, 3)
         XCTAssertEqual(snapshot.nodes[0].name, "a")
         XCTAssertEqual(snapshot.nodes[0].state, "success")
         XCTAssertTrue(snapshot.nodes[0].terminal)
+        XCTAssertFalse(snapshot.nodes[0].suspended)
         XCTAssertEqual(snapshot.nodes[1].state, "failed")
         XCTAssertEqual(snapshot.nodes[1].error, "boom")
         XCTAssertEqual(snapshot.nodes[1].progress, 0.3)
+        XCTAssertFalse(snapshot.nodes[1].suspended)
+        XCTAssertEqual(snapshot.nodes[2].state, "awaiting")
+        XCTAssertTrue(snapshot.nodes[2].suspended)
         XCTAssertEqual(snapshot.edges.count, 1)
         XCTAssertEqual(snapshot.edges[0].from, "a")
         XCTAssertEqual(snapshot.edges[0].to, "b")
+    }
+
+    // MARK: - P18 R1: catalog / detail decode
+
+    func testDecodeWorkflowSummary() throws {
+        let json = """
+        [{"id": 1, "name": "wf-a", "description": "Test workflow", "latest_hash": "abc123def456", "latest_task_id": 10, "latest_status": "success", "latest_error": ""}]
+        """
+        let items = try JSONDecoder().decode([WorkflowSummary].self, from: Data(json.utf8))
+        XCTAssertEqual(items.count, 1)
+        XCTAssertEqual(items[0].id, 1)
+        XCTAssertEqual(items[0].name, "wf-a")
+        XCTAssertEqual(items[0].description, "Test workflow")
+        XCTAssertEqual(items[0].latestHash, "abc123def456")
+        XCTAssertEqual(items[0].latestTaskID, 10)
+        XCTAssertEqual(items[0].latestStatus, "success")
+    }
+
+    func testDecodeWorkflowDetail() throws {
+        let json = """
+        {"id": 1, "name": "wf-a", "description": "Detail", "versions": [{"id": 1, "version": 1, "hash": "abc", "created_at": "2026-01-01T00:00:00Z"}], "runs": [{"id": 10, "status": "success", "progress": 1, "error": "", "created_at": "2026-01-01T00:00:00Z"}]}
+        """
+        let detail = try JSONDecoder().decode(WorkflowDetail.self, from: Data(json.utf8))
+        XCTAssertEqual(detail.name, "wf-a")
+        XCTAssertEqual(detail.versions.count, 1)
+        XCTAssertEqual(detail.versions[0].version, 1)
+        XCTAssertEqual(detail.versions[0].hash, "abc")
+        XCTAssertEqual(detail.runs.count, 1)
+        XCTAssertEqual(detail.runs[0].id, 10)
+        XCTAssertEqual(detail.runs[0].status, "success")
     }
 
     // MARK: - Phase 4: applySnapshot builds complete DAG with correct states

@@ -41,6 +41,8 @@ public final class WorkspaceStore {
                 selectedConversation = nil
             case .automation:
                 break
+            case .workflow:
+                break
             }
         }
     }

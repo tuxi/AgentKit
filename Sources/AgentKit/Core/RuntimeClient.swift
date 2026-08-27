@@ -203,6 +203,15 @@ public protocol RuntimeClient: Sendable {
     /// 最近一次任务的运行记录。
     func listAutomationRuns(id: String) async throws -> [AutomationRun]
 
+    // MARK: - Workspace-scoped workflows (P18 R1/R2)
+
+    /// 列出 workspace 内全部 workflow（含 latest run 摘要）。
+    func listWorkspaceWorkflows(workspacePath: String) async throws -> [WorkflowSummary]
+    /// 单个 workflow 的版本历史 + run 历史。
+    func getWorkspaceWorkflowDetail(workspacePath: String, name: String) async throws -> WorkflowDetail
+    /// headless 观测面：按 task id 取 run 快照。
+    func getWorkspaceWorkflowSnapshot(workspacePath: String, workflowName: String, taskID: Int64) async throws -> WorkflowSnapshot
+
     // MARK: - Workspace permissions
 
     /// 查某 workspace 有效档位（含 user fallback；v1 无来源字段，无法区分自定义 vs 继承）。
@@ -326,6 +335,22 @@ extension RuntimeClient {
     }
 
     public func listAutomationRuns(id: String) async throws -> [AutomationRun] {
+        throw RuntimeHTTPError.unsupported
+    }
+
+    // MARK: - Workspace-scoped workflows (default: unsupported)
+
+    public func listWorkspaceWorkflows(workspacePath: String) async throws -> [WorkflowSummary] {
+        throw RuntimeHTTPError.unsupported
+    }
+
+    public func getWorkspaceWorkflowDetail(workspacePath: String, name: String) async throws -> WorkflowDetail {
+        throw RuntimeHTTPError.unsupported
+    }
+
+    public func getWorkspaceWorkflowSnapshot(
+        workspacePath: String, workflowName: String, taskID: Int64
+    ) async throws -> WorkflowSnapshot {
         throw RuntimeHTTPError.unsupported
     }
 

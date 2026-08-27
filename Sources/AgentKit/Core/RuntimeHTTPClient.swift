@@ -509,6 +509,82 @@ struct RuntimeHTTPClient: Sendable {
         return try decodeEnvelope(WorkflowSnapshot.self, from: data)
     }
 
+    // MARK: - Workspace-scoped workflow panel (P18 R1/R2)
+
+    /// `GET /v1/workflows?workspace=<abs_path>` — workspace 内全部 workflow 目录（含 latest run 摘要）。
+    /// workspace 走 query 参数（绝对路径按 `/` 分段 %2F 编码，避免与
+    /// `/v1/workspaces/permissions/{path...}` 的 ServeMux 路由冲突）。
+    func listWorkspaceWorkflows(workspacePath: String) async throws -> [WorkflowSummary] {
+        let request = try await buildWorkspaceWorkflowRequest(
+            "GET", workspacePath: workspacePath, suffix: []
+        )
+        let (data, response) = try await session.data(for: request)
+        try validateHTTP(response, data: data)
+        return try decodeEnvelope([WorkflowSummary].self, from: data)
+    }
+
+    /// `GET /v1/workflows/{name}?workspace=<abs_path>` — 定义元数据 + 版本历史 + run 历史。
+    func getWorkspaceWorkflowDetail(workspacePath: String, name: String) async throws -> WorkflowDetail {
+        let request = try await buildWorkspaceWorkflowRequest(
+            "GET", workspacePath: workspacePath, suffix: [name]
+        )
+        let (data, response) = try await session.data(for: request)
+        try validateHTTP(response, data: data)
+        return try decodeEnvelope(WorkflowDetail.self, from: data)
+    }
+
+    /// `GET /v1/workflows/{name}/runs/{task_id}/snapshot?workspace=<abs_path>` — headless 观测面（R2）。
+    func getWorkspaceWorkflowSnapshot(
+        workspacePath: String, workflowName: String, taskID: Int64
+    ) async throws -> WorkflowSnapshot {
+        let request = try await buildWorkspaceWorkflowRequest(
+            "GET", workspacePath: workspacePath,
+            suffix: [workflowName, "runs", String(taskID), "snapshot"]
+        )
+        let (data, response) = try await session.data(for: request)
+        try validateHTTP(response, data: data)
+        return try decodeEnvelope(WorkflowSnapshot.self, from: data)
+    }
+
+    /// 构建 workspace-scoped workflow 面板请求。路径段走 `appendingPathComponent`
+    /// （对 {name} 正确编码），workspace 绝对路径以 `%2F` 编码为单个 query 值
+    /// （`percentEncodedQuery` 保留既有编码，不被二次转义）。
+    private func buildWorkspaceWorkflowRequest(
+        _ method: String,
+        workspacePath: String,
+        suffix: [String],
+        timeout: TimeInterval = 60
+    ) async throws -> URLRequest {
+        var url = try await resolveBaseURL()
+        url = url.appendingPathComponent("v1").appendingPathComponent("workflows")
+        for comp in suffix {
+            url = url.appendingPathComponent(comp)
+        }
+        let encoded = Self.percentEncodedWorkspacePath(workspacePath)
+        if var components = URLComponents(url: url, resolvingAgainstBaseURL: false) {
+            components.percentEncodedQuery = "workspace=\(encoded)"
+            if let q = components.url { url = q }
+        }
+        var request = URLRequest(url: url)
+        request.httpMethod = method
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        request.timeoutInterval = timeout
+        await applyAuth(to: &request)
+        DeviceContext.apply(to: &request)
+        return request
+    }
+
+    /// 把绝对 workspace 路径编码为 query 值：按 "/" 分段 percent-encode 后以 `%2F` 拼接，
+    /// 前导 "/" 也编码为 `%2F`。例：`/Users/a/b` → `%2FUsers%2Fa%2Fb`。
+    private static func percentEncodedWorkspacePath(_ workspacePath: String) -> String {
+        var componentAllowed = CharacterSet.urlPathAllowed
+        componentAllowed.remove(charactersIn: "/")
+        let parts = workspacePath.split(separator: "/", omittingEmptySubsequences: true).map { part in
+            part.addingPercentEncoding(withAllowedCharacters: componentAllowed) ?? String(part)
+        }
+        return "%2F" + parts.joined(separator: "%2F")
+    }
+
     /// `GET /v1/conversations/{id}/assets/{asset_id}/preview`.
     func getAssetPreview(conversationID: String, assetID: String) async throws -> AgentAssetPreviewResponse {
         let request = try await buildRequest("GET", pathComponents: "v1/conversations", conversationID, "assets", assetID, "preview")

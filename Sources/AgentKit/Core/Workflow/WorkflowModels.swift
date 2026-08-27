@@ -468,7 +468,31 @@ public struct WorkflowSnapshotTask: Decodable, Sendable {
     public let id: Int64
     public let status: String
     public let progress: Double?
+    public let error: String?
     public let output: JSONValue?
+    /// 该 run 关联的 workflow version id（无版本链接时为空）。
+    public let workflowVersionID: Int64?
+
+    public init(
+        id: Int64,
+        status: String,
+        progress: Double? = nil,
+        error: String? = nil,
+        output: JSONValue? = nil,
+        workflowVersionID: Int64? = nil
+    ) {
+        self.id = id
+        self.status = status
+        self.progress = progress
+        self.error = error
+        self.output = output
+        self.workflowVersionID = workflowVersionID
+    }
+
+    enum CodingKeys: String, CodingKey {
+        case id, status, progress, error, output
+        case workflowVersionID = "workflow_version_id"
+    }
 }
 
 /// Snapshot 中的单个节点状态。
@@ -480,10 +504,160 @@ public struct WorkflowSnapshotNode: Decodable, Sendable {
     public let error: String?
     public let progress: Double?
     public let output: JSONValue?
+    /// 是否处于挂起等待（task 挂起且该节点 awaiting）。
+    public let suspended: Bool
+
+    public init(
+        name: String,
+        state: String,
+        terminal: Bool,
+        active: Bool,
+        error: String? = nil,
+        progress: Double? = nil,
+        output: JSONValue? = nil,
+        suspended: Bool = false
+    ) {
+        self.name = name
+        self.state = state
+        self.terminal = terminal
+        self.active = active
+        self.error = error
+        self.progress = progress
+        self.output = output
+        self.suspended = suspended
+    }
+    
+    enum CodingKeys: CodingKey {
+        case name
+        case state
+        case terminal
+        case active
+        case error
+        case progress
+        case output
+        case suspended
+    }
+    
+    public init(from decoder: any Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        self.name = try container.decode(String.self, forKey: .name)
+        self.state = try container.decode(String.self, forKey: .state)
+        self.terminal = try container.decode(Bool.self, forKey: .terminal)
+        self.active = try container.decode(Bool.self, forKey: .active)
+        self.error = try container.decodeIfPresent(String.self, forKey: .error)
+        self.progress = try container.decodeIfPresent(Double.self, forKey: .progress)
+        self.output = try container.decodeIfPresent(JSONValue.self, forKey: .output)
+        self.suspended = try container.decodeIfPresent(Bool.self, forKey: .suspended) ?? false
+    }
 }
 
 /// Snapshot 中的边。
 public struct WorkflowSnapshotEdge: Decodable, Sendable {
     public let from: String
     public let to: String
+}
+
+// MARK: - Workspace-scoped catalog / detail DTOs (P18 R1)
+
+/// `GET /v1/workspaces/{path}/workflows` 的一行目录项。
+/// 对照 code-agent `internal/runtime/workflow_list.go` 的 `WorkflowSummary`。
+public struct WorkflowSummary: Decodable, Sendable, Identifiable, Equatable {
+    public let id: Int64
+    public let name: String
+    public let description: String
+    public let latestHash: String?
+    public let latestTaskID: Int64?
+    public let latestStatus: String?
+    public let latestError: String?
+
+    public init(
+        id: Int64,
+        name: String,
+        description: String = "",
+        latestHash: String? = nil,
+        latestTaskID: Int64? = nil,
+        latestStatus: String? = nil,
+        latestError: String? = nil
+    ) {
+        self.id = id
+        self.name = name
+        self.description = description
+        self.latestHash = latestHash
+        self.latestTaskID = latestTaskID
+        self.latestStatus = latestStatus
+        self.latestError = latestError
+    }
+
+    enum CodingKeys: String, CodingKey {
+        case id, name, description
+        case latestHash = "latest_hash"
+        case latestTaskID = "latest_task_id"
+        case latestStatus = "latest_status"
+        case latestError = "latest_error"
+    }
+}
+
+/// 一个不可变定义版本。
+public struct WorkflowVersionSummary: Decodable, Sendable, Identifiable, Equatable {
+    public let id: Int64
+    public let version: Int64
+    public let hash: String
+    public let createdAt: String
+
+    public init(id: Int64, version: Int64, hash: String, createdAt: String) {
+        self.id = id
+        self.version = version
+        self.hash = hash
+        self.createdAt = createdAt
+    }
+
+    enum CodingKeys: String, CodingKey {
+        case id, version, hash
+        case createdAt = "created_at"
+    }
+}
+
+/// 一次 run 的记录（task id = `id`）。
+public struct WorkflowRunSummary: Decodable, Sendable, Identifiable, Equatable {
+    public let id: Int64
+    public let status: String
+    public let progress: Double
+    public let error: String?
+    public let createdAt: String
+
+    public init(id: Int64, status: String, progress: Double = 0, error: String? = nil, createdAt: String = "") {
+        self.id = id
+        self.status = status
+        self.progress = progress
+        self.error = error
+        self.createdAt = createdAt
+    }
+
+    enum CodingKeys: String, CodingKey {
+        case id, status, progress, error
+        case createdAt = "created_at"
+    }
+}
+
+/// `GET /v1/workspaces/{path}/workflows/{name}` — 定义元数据 + 版本历史 + run 历史。
+public struct WorkflowDetail: Decodable, Sendable, Equatable {
+    public let id: Int64
+    public let name: String
+    public let description: String
+    public let versions: [WorkflowVersionSummary]
+    public let runs: [WorkflowRunSummary]
+
+    public init(
+        id: Int64,
+        name: String,
+        description: String = "",
+        versions: [WorkflowVersionSummary] = [],
+        runs: [WorkflowRunSummary] = []
+    ) {
+        self.id = id
+        self.name = name
+        self.description = description
+        self.versions = versions
+        self.runs = runs
+    }
 }

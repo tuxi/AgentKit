@@ -252,6 +252,24 @@ public final class CodeAgentTransport: AgentTransport, @unchecked Sendable {
         try await http.listAutomationRuns(id: id)
     }
 
+    // MARK: - Workspace-scoped workflows (P18 R1/R2)
+
+    public func listWorkspaceWorkflows(workspacePath: String) async throws -> [WorkflowSummary] {
+        try await http.listWorkspaceWorkflows(workspacePath: workspacePath)
+    }
+
+    public func getWorkspaceWorkflowDetail(workspacePath: String, name: String) async throws -> WorkflowDetail {
+        try await http.getWorkspaceWorkflowDetail(workspacePath: workspacePath, name: name)
+    }
+
+    public func getWorkspaceWorkflowSnapshot(
+        workspacePath: String, workflowName: String, taskID: Int64
+    ) async throws -> WorkflowSnapshot {
+        try await http.getWorkspaceWorkflowSnapshot(
+            workspacePath: workspacePath, workflowName: workflowName, taskID: taskID
+        )
+    }
+
     public func activitySnapshot() async throws -> RuntimeActivitySnapshot {
         try await http.activitySnapshot()
     }
@@ -682,6 +700,24 @@ public final class DefaultAgentClient: RuntimeClient, @unchecked Sendable {
 
     public func listAutomationRuns(id: String) async throws -> [AutomationRun] {
         try await transport.listAutomationRuns(id: id)
+    }
+
+    // MARK: - Workspace-scoped workflows (P18 R1/R2)
+
+    public func listWorkspaceWorkflows(workspacePath: String) async throws -> [WorkflowSummary] {
+        try await transport.listWorkspaceWorkflows(workspacePath: workspacePath)
+    }
+
+    public func getWorkspaceWorkflowDetail(workspacePath: String, name: String) async throws -> WorkflowDetail {
+        try await transport.getWorkspaceWorkflowDetail(workspacePath: workspacePath, name: name)
+    }
+
+    public func getWorkspaceWorkflowSnapshot(
+        workspacePath: String, workflowName: String, taskID: Int64
+    ) async throws -> WorkflowSnapshot {
+        try await transport.getWorkspaceWorkflowSnapshot(
+            workspacePath: workspacePath, workflowName: workflowName, taskID: taskID
+        )
     }
 
     public func activitySnapshot() async throws -> RuntimeActivitySnapshot {

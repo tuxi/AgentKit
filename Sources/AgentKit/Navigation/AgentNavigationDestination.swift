@@ -14,6 +14,8 @@ public enum AgentNavigationDestination: Hashable, Equatable {
     case draft
     ///  自动化仪表盘
     case automation
+    ///  Workflow 控制面板（P18 R1/R2 只读观测）
+    case workflow
 
     public var id: String {
         switch self {
@@ -23,6 +25,8 @@ public enum AgentNavigationDestination: Hashable, Equatable {
             return "draft"
         case .automation:
             return "automation"
+        case .workflow:
+            return "workflow"
         }
     }
     
@@ -31,6 +35,8 @@ public enum AgentNavigationDestination: Hashable, Equatable {
         case (.draft, .draft):
             return true
         case (.automation, .automation):
+            return true
+        case (.workflow, .workflow):
             return true
         case (.conversationDetail(let conversation1), .conversationDetail(let conversation2)):
             return conversation1.id == conversation2.id

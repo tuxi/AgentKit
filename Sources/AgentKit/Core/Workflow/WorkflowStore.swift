@@ -203,7 +203,11 @@ public final class WorkflowStore: ObservableObject {
 
     /// 应用 snapshot（初始化或刷新 DAG 状态）。
     /// 覆盖现有 run 的 nodes/edges/task status，并设置 `snapshotSequence` 用于增量过滤。
+    /// 更旧或同 seq 的快照会被跳过（幂等），避免轮询/重连把已由更新事件驱动的状态回滚。
     public func applySnapshot(_ snapshot: WorkflowSnapshot) {
+        if let existing = runs[snapshot.workflowId], existing.lastSequence >= snapshot.snapshotSequence {
+            return
+        }
         var run = runs[snapshot.workflowId] ?? WorkflowRun(
             workflowID: snapshot.workflowId,
             parentCallID: ""
@@ -212,6 +216,7 @@ public final class WorkflowStore: ObservableObject {
         run.taskID = snapshot.task?.id ?? run.taskID
         run.status = WorkflowTaskStatus(rawValue: snapshot.task?.status ?? "pending")
         run.output = snapshot.task?.output ?? run.output
+        run.error = snapshot.task?.error ?? run.error
 
         // 从 snapshot 构建 nodes（带正确 state）
         var nodes: [String: WorkflowNode] = [:]
