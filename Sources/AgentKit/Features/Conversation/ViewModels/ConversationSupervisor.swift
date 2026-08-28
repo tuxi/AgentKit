@@ -127,6 +127,15 @@ public final class ConversationSupervisor {
             workflowStore: workflowStore
         )
         controllers[conversation.id] = controller
+        // Seed a fresh controller with the latest sampled runtime activity BEFORE
+        // the host calls connect(). A completed session's terminal state is a
+        // durable fact from the daemon's activity snapshot, so it must win over
+        // the (possibly stale) ConversationRef.turnStatus list cache when the
+        // controller is created after the turn already finished — e.g. clicking a
+        // completion notification for a session that was evicted from retention.
+        if let remote = runtimeActivities[conversation.id] {
+            controller.applyRuntimeActivity(remote)
+        }
         touchController(sessionID: conversation.id)
         scheduleControllerLimitEnforcement()
         return controller

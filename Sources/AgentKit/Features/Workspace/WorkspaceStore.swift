@@ -555,7 +555,7 @@ public final class WorkspaceStore {
     public func selectConversation(sessionID: String) {
         if let ref = listViewModel.conversations.first(where: { $0.id == sessionID })
             ?? supervisor.controller(sessionID: sessionID)?.conversation {
-            selectedConversation = ref
+            selectItem = .conversationDetail(conversation: ref)
         }
     }
 
@@ -1131,7 +1131,8 @@ public final class WorkspaceStore {
             }
             // 草稿 → 真实会话
             listViewModel.prepend(ref)
-            selectedConversation = ref  // supervisor reuses the connected controller
+            selectItem = .conversationDetail(conversation: ref)
+            // supervisor reuses the connected controller
             draft = nil
             await refreshConversationList()
         } catch {

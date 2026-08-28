@@ -650,15 +650,21 @@ public final class ConversationViewModel {
     }
 
     /// Activity is sampled before the history request. Prefer persisted history
-    /// when it contains a later sequence or already reports a terminal lifecycle.
+    /// when it contains a later sequence or already reports a terminal lifecycle,
+    /// EXCEPT when the sampled activity itself is terminal — terminal facts are
+    /// durable and authoritative, so they project even when history already covers
+    /// the sequence (history import replays into the engine and never updates
+    /// lifecycleStatus, so it cannot correct a stale seed from
+    /// ConversationRef.turnStatus).
     private func reconcileRuntimeActivityBaseline(historyCursor: Int) {
         guard let activity = runtimeActivityBaseline,
               activity.sessionID == conversation?.id
         else { return }
 
         let historyIsTerminal = ["done", "failed", "cancelled"].contains(lifecycleStatus)
+        let activityIsTerminal = ["done", "failed", "cancelled"].contains(activity.state)
         let historyIsNewer = activity.lastSequence.map { Int64(historyCursor) > $0 } ?? false
-        guard !historyIsTerminal, !historyIsNewer else { return }
+        guard !historyIsTerminal, !historyIsNewer || activityIsTerminal else { return }
         projectRuntimeActivity(activity)
     }
 
