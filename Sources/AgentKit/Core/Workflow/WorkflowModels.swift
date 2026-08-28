@@ -714,24 +714,29 @@ public struct WorkflowManifest: Decodable, Sendable, Equatable {
     public let agents: [WorkflowManifestAgent]?
     public let parallelism: Int?
     public let timeoutMs: Int64?
+    /// tool_sequence 模板声明的输入参数（Windmill 式表单 schema）。
+    public let inputs: [WorkflowManifestInput]?
 
     public init(
         goal: String? = nil,
         template: String? = nil,
         agents: [WorkflowManifestAgent]? = nil,
         parallelism: Int? = nil,
-        timeoutMs: Int64? = nil
+        timeoutMs: Int64? = nil,
+        inputs: [WorkflowManifestInput]? = nil
     ) {
         self.goal = goal
         self.template = template
         self.agents = agents
         self.parallelism = parallelism
         self.timeoutMs = timeoutMs
+        self.inputs = inputs
     }
 
     enum CodingKeys: String, CodingKey {
         case goal, template, agents, parallelism
         case timeoutMs = "timeout_ms"
+        case inputs
     }
 
     /// 从 detail.manifest（JSONValue）解析；非 object 或字段缺失返回 nil。
@@ -740,12 +745,16 @@ public struct WorkflowManifest: Decodable, Sendable, Equatable {
         let agents: [WorkflowManifestAgent]? = object["agents"]?.array?.compactMap {
             WorkflowManifestAgent.fromJSONValue($0)
         }
+        let inputs: [WorkflowManifestInput]? = object["inputs"]?.array?.compactMap {
+            WorkflowManifestInput.fromJSONValue($0)
+        }
         return WorkflowManifest(
             goal: object["goal"]?.string,
             template: object["template"]?.string,
             agents: (agents?.isEmpty == false) ? agents : nil,
             parallelism: Self.readInt(object["parallelism"]),
-            timeoutMs: Self.readInt(object["timeout_ms"]).map(Int64.init)
+            timeoutMs: Self.readInt(object["timeout_ms"]).map(Int64.init),
+            inputs: (inputs?.isEmpty == false) ? inputs : nil
         )
     }
 
@@ -753,6 +762,35 @@ public struct WorkflowManifest: Decodable, Sendable, Equatable {
         if let i = value?.int { return i }
         if let d = value?.number { return Int(d) }
         return nil
+    }
+}
+
+/// manifest 里声明的单个输入参数（tool_sequence 模板）。
+public struct WorkflowManifestInput: Decodable, Sendable, Equatable, Identifiable {
+    public let name: String
+    public let type: String?
+    public let required: Bool?
+    public let description: String?
+
+    public var id: String { name }
+
+    public init(name: String, type: String? = nil, required: Bool? = nil, description: String? = nil) {
+        self.name = name
+        self.type = type
+        self.required = required
+        self.description = description
+    }
+
+    public static func fromJSONValue(_ value: JSONValue?) -> WorkflowManifestInput? {
+        guard let object = value?.object, let name = object["name"]?.string, !name.isEmpty else {
+            return nil
+        }
+        return WorkflowManifestInput(
+            name: name,
+            type: object["type"]?.string,
+            required: object["required"]?.bool,
+            description: object["description"]?.string
+        )
     }
 }
 

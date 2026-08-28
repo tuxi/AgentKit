@@ -6,6 +6,7 @@
 //
 
 import SwiftUI
+import ClientToolProtocol
 
 public struct AutomationDashboardView: View {
 
@@ -56,7 +57,10 @@ public struct AutomationDashboardView: View {
                                 modelID: updated.modelID,
                                 skills: updated.skills,
                                 connectors: updated.connectors,
-                                permissionMode: updated.permissionMode
+                                permissionMode: updated.permissionMode,
+                                workflowRef: updated.workflowRef,
+                                workflowInput: updated.workflowInput,
+                                overlapPolicy: updated.overlapPolicy
                             )
                         )
                     }
@@ -398,6 +402,10 @@ private struct AutomationCreateView: View {
     @State private var connectors: [String] = []
     @State private var modelID = ""
     @State private var workspace: Workspace?
+    @State private var executionMode: AutomationExecutionMode = .conversation
+    @State private var workflowRef = ""
+    @State private var workflowInput: JSONValue?
+    @State private var overlapPolicy = "skip"
 
     var body: some View {
         NavigationStack {
@@ -408,6 +416,15 @@ private struct AutomationCreateView: View {
                             .frame(maxWidth: .infinity, alignment: .leading)
                         TextField("", text: $name)
                     }
+
+                    Picker("执行目标", selection: $executionMode) {
+                        ForEach(AutomationExecutionMode.allCases) { mode in
+                            Text(mode.rawValue).tag(mode)
+                        }
+                    }
+                    .pickerStyle(.segmented)
+
+                    if executionMode == .conversation {
                     VStack {
                         Text("Prompt")
                             .frame(maxWidth: .infinity, alignment: .leading)
@@ -419,6 +436,15 @@ private struct AutomationCreateView: View {
                         )
                         .environment(modelSettings)
                         .environment(workspaceStore)
+                    }
+                    } else {
+                        AutomationWorkflowTargetView(
+                            workspace: workspace,
+                            workspaceStore: workspaceStore,
+                            workflowRef: $workflowRef,
+                            workflowInput: $workflowInput,
+                            overlapPolicy: $overlapPolicy
+                        )
                     }
                 } header: {
                     Text("基本信息")
@@ -504,9 +530,11 @@ private struct AutomationCreateView: View {
                         }
                         // 模型：把 App 侧 modelID 映射为 runtime wire model id。
                         let wireModelID = modelID.isEmpty ? nil : (modelSettings.getWireModelID(for: modelID) ?? modelID)
+                        // 执行目标：workflow 模式时 prompt 被忽略（服务端二选一），传 workflow 三字段。
+                        let isWorkflow = executionMode == .workflow
                         let request = AutomationCreateRequest(
                             name: name,
-                            prompt: prompt,
+                            prompt: isWorkflow ? "" : prompt,
                             scheduleType: scheduleType,
                             rrule: scheduleType == .recurring ? rrule : nil,
                             scheduledAt: scheduleType == .once ? AutomationScheduleFormatter.rfc3339(scheduledAt) : nil,
@@ -514,11 +542,14 @@ private struct AutomationCreateView: View {
                             modeExec: modeExec,
                             sessionID: modeExec == .chat ? sessionID : nil,
                             cwds: cwds,
-                            modelID: wireModelID,
+                            modelID: isWorkflow ? nil : wireModelID,
                             skills: [],
                             connectors: connectors,
                             permissionMode: permissionMode.isEmpty ? nil : permissionMode,
-                            enabled: true
+                            enabled: true,
+                            workflowRef: isWorkflow && !workflowRef.isEmpty ? workflowRef : nil,
+                            workflowInput: isWorkflow ? workflowInput : nil,
+                            overlapPolicy: isWorkflow ? overlapPolicy : nil
                         )
                         onCreate(request)
                     } label: {
@@ -566,6 +597,10 @@ private struct AutomationEditView: View {
     @State private var isEnabled: Bool
     @State private var modelID: String
     @State private var workspace: Workspace?
+    @State private var executionMode: AutomationExecutionMode
+    @State private var workflowRef: String
+    @State private var workflowInput: JSONValue?
+    @State private var overlapPolicy: String
     @State private var confirmDelete = false
 
     init(
@@ -594,6 +629,11 @@ private struct AutomationEditView: View {
         _isEnabled = State(initialValue: automation.status == .active)
         _modelID = State(initialValue: automation.modelID ?? "")
         _workspace = State(initialValue: Self.resolveWorkspace(automation: automation, store: workspaceStore))
+        let hasWorkflowRef = automation.workflowRef?.isEmpty == false
+        _executionMode = State(initialValue: hasWorkflowRef ? .workflow : .conversation)
+        _workflowRef = State(initialValue: automation.workflowRef ?? "")
+        _workflowInput = State(initialValue: automation.workflowInput)
+        _overlapPolicy = State(initialValue: automation.overlapPolicy ?? "skip")
     }
 
     var body: some View {
@@ -605,6 +645,15 @@ private struct AutomationEditView: View {
                             .frame(maxWidth: .infinity, alignment: .leading)
                         TextField("", text: $name)
                     }
+
+                    Picker("执行目标", selection: $executionMode) {
+                        ForEach(AutomationExecutionMode.allCases) { mode in
+                            Text(mode.rawValue).tag(mode)
+                        }
+                    }
+                    .pickerStyle(.segmented)
+
+                    if executionMode == .conversation {
                     VStack {
                         Text("Prompt")
                             .frame(maxWidth: .infinity, alignment: .leading)
@@ -616,6 +665,15 @@ private struct AutomationEditView: View {
                         )
                         .environment(modelSettings)
                         .environment(workspaceStore)
+                    }
+                    } else {
+                        AutomationWorkflowTargetView(
+                            workspace: workspace,
+                            workspaceStore: workspaceStore,
+                            workflowRef: $workflowRef,
+                            workflowInput: $workflowInput,
+                            overlapPolicy: $overlapPolicy
+                        )
                     }
                 } header: {
                     Text("基本信息")
@@ -747,13 +805,19 @@ private struct AutomationEditView: View {
     private func save() {
         var updated = automation
         updated.name = name
-        updated.prompt = prompt
+        let isWorkflow = executionMode == .workflow
+        updated.prompt = isWorkflow ? "" : prompt
         updated.scheduleType = scheduleType
         updated.rrule = scheduleType == .recurring ? rrule : nil
         updated.scheduledAt = scheduleType == .once ? AutomationScheduleFormatter.rfc3339(scheduledAt) : nil
         updated.timezone = timezone
         updated.modeExec = modeExec
         updated.sessionID = modeExec == .chat ? sessionID : nil
+
+        // 执行目标：workflow 模式写三字段（prompt 置空被忽略），对话模式清空 workflow 字段。
+        updated.workflowRef = isWorkflow && !workflowRef.isEmpty ? workflowRef : nil
+        updated.workflowInput = isWorkflow ? workflowInput : nil
+        updated.overlapPolicy = isWorkflow ? overlapPolicy : nil
 
         // 工作区：优先用面板选中的 workspace；否则保留已保存的 cwds。
         var cwds: [String] = []
@@ -768,7 +832,7 @@ private struct AutomationEditView: View {
 
         // 模型：把 App 侧 modelID 映射为 runtime wire model id。
         let wireModelID = modelID.isEmpty ? nil : (modelSettings.getWireModelID(for: modelID) ?? modelID)
-        updated.modelID = wireModelID
+        updated.modelID = isWorkflow ? nil : wireModelID
 
         updated.permissionMode = permissionMode.isEmpty ? nil : permissionMode
         updated.connectors = connectors

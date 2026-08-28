@@ -13,6 +13,7 @@
 //
 
 import Foundation
+import ClientToolProtocol
 
 // MARK: - Automation Status / Type
 
@@ -66,6 +67,13 @@ public struct Automation: Codable, Sendable, Equatable, Identifiable {
     public var lastStatus: String?
     public var createdAt: String
     public var updatedAt: String
+    /// 工作流模板执行目标（P3）："workspace_path#workflow_name"。非空时定时触发
+    /// 直接跑该模板（0 LLM token），此时 prompt 被忽略。
+    public var workflowRef: String?
+    /// 触发参数 JSON（如 {"instId":"BTC-USDT-SWAP"}），每次触发传给模板。
+    public var workflowInput: JSONValue?
+    /// 重叠策略：skip（有活跃 run 就跳过本次，默认）| allow_all（无条件触发）。
+    public var overlapPolicy: String?
 
     public init(
         id: String,
@@ -89,7 +97,10 @@ public struct Automation: Codable, Sendable, Equatable, Identifiable {
         runCount: Int64 = 0,
         lastStatus: String? = nil,
         createdAt: String,
-        updatedAt: String
+        updatedAt: String,
+        workflowRef: String? = nil,
+        workflowInput: JSONValue? = nil,
+        overlapPolicy: String? = nil
     ) {
         self.id = id
         self.name = name
@@ -113,6 +124,9 @@ public struct Automation: Codable, Sendable, Equatable, Identifiable {
         self.lastStatus = lastStatus
         self.createdAt = createdAt
         self.updatedAt = updatedAt
+        self.workflowRef = workflowRef
+        self.workflowInput = workflowInput
+        self.overlapPolicy = overlapPolicy
     }
 
     enum CodingKeys: String, CodingKey {
@@ -138,6 +152,9 @@ public struct Automation: Codable, Sendable, Equatable, Identifiable {
         case lastStatus = "last_status"
         case createdAt = "created_at"
         case updatedAt = "updated_at"
+        case workflowRef = "workflow_ref"
+        case workflowInput = "workflow_input"
+        case overlapPolicy = "overlap_policy"
     }
 }
 
@@ -224,6 +241,12 @@ public struct AutomationCreateRequest: Codable, Sendable, Equatable {
     public var connectors: [String]
     public var permissionMode: String?
     public var enabled: Bool?
+    /// 工作流模板执行目标（P3）。非空时 prompt 被忽略。
+    public var workflowRef: String?
+    /// 触发参数 JSON（如 {"instId":"BTC-USDT-SWAP"}）。
+    public var workflowInput: JSONValue?
+    /// 重叠策略：skip（默认）| allow_all。
+    public var overlapPolicy: String?
 
     public init(
         name: String,
@@ -239,7 +262,10 @@ public struct AutomationCreateRequest: Codable, Sendable, Equatable {
         skills: [String] = [],
         connectors: [String] = [],
         permissionMode: String? = nil,
-        enabled: Bool? = nil
+        enabled: Bool? = nil,
+        workflowRef: String? = nil,
+        workflowInput: JSONValue? = nil,
+        overlapPolicy: String? = nil
     ) {
         self.name = name
         self.prompt = prompt
@@ -255,6 +281,9 @@ public struct AutomationCreateRequest: Codable, Sendable, Equatable {
         self.connectors = connectors
         self.permissionMode = permissionMode
         self.enabled = enabled
+        self.workflowRef = workflowRef
+        self.workflowInput = workflowInput
+        self.overlapPolicy = overlapPolicy
     }
 
     enum CodingKeys: String, CodingKey {
@@ -272,6 +301,9 @@ public struct AutomationCreateRequest: Codable, Sendable, Equatable {
         case connectors
         case permissionMode = "permission_mode"
         case enabled
+        case workflowRef = "workflow_ref"
+        case workflowInput = "workflow_input"
+        case overlapPolicy = "overlap_policy"
     }
 }
 
@@ -292,6 +324,12 @@ public struct AutomationPatchRequest: Codable, Sendable, Equatable {
     public var connectors: [String]?
     public var permissionMode: String?
     public var enabled: Bool?
+    /// 工作流模板执行目标（P3）。非空时 prompt 被忽略。
+    public var workflowRef: String?
+    /// 触发参数 JSON。
+    public var workflowInput: JSONValue?
+    /// 重叠策略：skip（默认）| allow_all。
+    public var overlapPolicy: String?
 
     public init(
         name: String? = nil,
@@ -307,7 +345,10 @@ public struct AutomationPatchRequest: Codable, Sendable, Equatable {
         skills: [String]? = nil,
         connectors: [String]? = nil,
         permissionMode: String? = nil,
-        enabled: Bool? = nil
+        enabled: Bool? = nil,
+        workflowRef: String? = nil,
+        workflowInput: JSONValue? = nil,
+        overlapPolicy: String? = nil
     ) {
         self.name = name
         self.prompt = prompt
@@ -323,6 +364,9 @@ public struct AutomationPatchRequest: Codable, Sendable, Equatable {
         self.connectors = connectors
         self.permissionMode = permissionMode
         self.enabled = enabled
+        self.workflowRef = workflowRef
+        self.workflowInput = workflowInput
+        self.overlapPolicy = overlapPolicy
     }
 
     enum CodingKeys: String, CodingKey {
@@ -340,6 +384,9 @@ public struct AutomationPatchRequest: Codable, Sendable, Equatable {
         case connectors
         case permissionMode = "permission_mode"
         case enabled
+        case workflowRef = "workflow_ref"
+        case workflowInput = "workflow_input"
+        case overlapPolicy = "overlap_policy"
     }
 }
 
