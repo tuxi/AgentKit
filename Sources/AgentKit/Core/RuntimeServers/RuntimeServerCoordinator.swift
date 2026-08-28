@@ -126,7 +126,7 @@ public final class RuntimeServerCoordinator {
         }
     }
 
-    public var activeConnection: RuntimeServerConnection {
+    public var activeConnection: RuntimeServerConnection? {
         registry.activeConnection
     }
 
@@ -138,8 +138,19 @@ public final class RuntimeServerCoordinator {
         "\(activeConnectionID):\(activeRevision)"
     }
 
+    /// Bump activeRevision so hosts using `.id(activeIdentityRevision)`
+    /// rebuild their Server-scoped Workspace root. Used by the daemon boot
+    /// path after it registers a new connection and sets it active — the
+    /// change bypasses `activate()` so the revision must be bumped manually.
+    public func signalActiveConnectionChanged() {
+        activeRevision &+= 1
+    }
+
     public func makeActiveClient() throws -> any RuntimeClient {
-        try makeClient(connection: activeConnection)
+        guard let connection = activeConnection else {
+            throw RuntimeServerRegistryError.noActiveConnection
+        }
+        return try makeClient(connection: connection)
     }
 
     public func makeClient(
@@ -441,7 +452,10 @@ public final class RuntimeServerCoordinator {
 
     @discardableResult
     public func refreshActiveContext() async throws -> RuntimeServerActiveContext {
-        let context = try await loadContext(connection: activeConnection)
+        guard let connection = activeConnection else {
+            throw RuntimeServerRegistryError.noActiveConnection
+        }
+        let context = try await loadContext(connection: connection)
         activeContext = context
         return context
     }
@@ -464,10 +478,13 @@ public final class RuntimeServerCoordinator {
     /// touch the store directly. Embedded connections throw
     /// `invalidEmbeddedConnection` — on iOS provider config stays host-injected.
     public func makeProviderStore() throws -> any ProviderStore {
-        try ProviderStoreFactory.http(
-            for: activeConnection,
+        guard let connection = activeConnection else {
+            throw RuntimeServerRegistryError.noActiveConnection
+        }
+        return try ProviderStoreFactory.http(
+            for: connection,
             credentialStore: runtimeCredentialStore,
-            trustPolicy: activeConnection.trustPolicy
+            trustPolicy: connection.trustPolicy
         )
     }
 

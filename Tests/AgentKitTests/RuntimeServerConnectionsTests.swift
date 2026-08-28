@@ -13,11 +13,12 @@ final class RuntimeServerConnectionsTests: XCTestCase {
             storageKey: "servers",
             activeStorageKey: "active"
         )
+        #if canImport(CodeAgentRuntime)
         XCTAssertEqual(registry.connections.map(\.id), [
             RuntimeServerConnection.embeddedID
         ])
         XCTAssertEqual(registry.activeConnectionID, RuntimeServerConnection.embeddedID)
-        XCTAssertEqual(registry.activeConnection.kind, .embedded)
+        XCTAssertEqual(registry.activeConnection?.kind, .embedded)
 
         let restored = RuntimeServerRegistry(
             defaults: defaults,
@@ -26,6 +27,20 @@ final class RuntimeServerConnectionsTests: XCTestCase {
         )
         XCTAssertEqual(restored.connections, registry.connections)
         XCTAssertEqual(restored.activeConnectionID, RuntimeServerConnection.embeddedID)
+        #else
+        // macOS without CodeAgentRuntime: no connections seeded, no embedded fallback.
+        XCTAssertTrue(registry.connections.isEmpty)
+        XCTAssertEqual(registry.activeConnectionID, "")
+        XCTAssertNil(registry.activeConnection)
+
+        let restored = RuntimeServerRegistry(
+            defaults: defaults,
+            storageKey: "servers",
+            activeStorageKey: "active"
+        )
+        XCTAssertEqual(restored.connections, registry.connections)
+        XCTAssertEqual(restored.activeConnectionID, "")
+        #endif
     }
 
     func testRegistryDoesNotRemoveEmbeddedOrActiveConnection() throws {

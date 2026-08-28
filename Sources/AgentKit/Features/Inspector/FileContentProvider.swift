@@ -8,7 +8,7 @@
 import Foundation
 
 /// Diff 内容
-public struct DiffContent {
+public struct DiffContent: Sendable {
     public let original: String
     public let modified: String
     public let hunks: [DiffHunk]

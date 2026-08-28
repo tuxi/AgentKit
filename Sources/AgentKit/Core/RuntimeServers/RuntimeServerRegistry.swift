@@ -51,13 +51,13 @@ public final class RuntimeServerRegistry {
         
         let requestedActive = defaults.string(forKey: activeStorageKey)
         self.activeConnectionID = restored.contains(where: { $0.id == requestedActive })
-        ? requestedActive!
-        : RuntimeServerConnection.embeddedID
+            ? requestedActive!
+            : restored.first?.id ?? ""
         persist()
     }
     
-    public var activeConnection: RuntimeServerConnection {
-        connections.first { $0.id == activeConnectionID } ?? .embedded()
+    public var activeConnection: RuntimeServerConnection? {
+        connections.first { $0.id == activeConnectionID }
     }
     
     public func connection(id: String) -> RuntimeServerConnection? {
@@ -118,7 +118,7 @@ public final class RuntimeServerRegistry {
         }
         connections = newConnections
         if !connections.contains(where: { $0.id == activeConnectionID }) {
-            activeConnectionID = RuntimeServerConnection.embeddedID
+            activeConnectionID = connections.first?.id ?? ""
         }
         persist()
     }

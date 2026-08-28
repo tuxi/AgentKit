@@ -310,6 +310,7 @@ public enum RuntimeServerRegistryError: Error, LocalizedError, Equatable {
     case connectionNotFound(String)
     case cannotRemoveEmbedded
     case cannotRemoveActive
+    case noActiveConnection
 
     public var errorDescription: String? {
         switch self {
@@ -335,6 +336,8 @@ public enum RuntimeServerRegistryError: Error, LocalizedError, Equatable {
             "The embedded Runtime Server cannot be removed."
         case .cannotRemoveActive:
             "Select another Runtime Server before removing the active one."
+        case .noActiveConnection:
+            "No active Runtime Server is available."
         }
     }
 }

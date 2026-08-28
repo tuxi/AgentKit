@@ -90,239 +90,7 @@ struct DraftComposerPanel: View {
             }
 #endif
             
-            VStack(spacing: 8) {
-                if voiceService.state == .recording || voiceService.state == .transcribing
-                // *voiceService.state == .preparing*/
-                {
-                    // 录音浮层占据整个底部区域（隐藏附件、模型选择器、工具栏）
-                    VoiceRecordingOverlay(
-                        service: voiceService,
-                        onStop: { voiceService.stopRecordingAndTranscribe() },
-                        onSend: { send() }
-                    )
-                    .padding(.horizontal, 2)
-                    .padding(.top, attachments.isEmpty ? 8 : 2)
-                } else {
-                    if !attachments.isEmpty {
-                        VStack(alignment: .leading, spacing: 5) {
-                            attachmentStrip
-                            Text("🔒 本地处理 · 文件不会自动上传")
-                                .font(.caption2)
-                                .foregroundStyle(.secondary)
-                        }
-                        .padding(.horizontal, 16)
-                        .padding(.top, 12)
-                    }
-                    inputField
-                        .padding(.horizontal, 16)
-                        .padding(.top, attachments.isEmpty ? 14 : 2)
-                }
-                
-                if voiceService.state != .recording && voiceService.state != .transcribing && voiceService.state != .preparing {
-                    HStack(spacing: composerControlSpacing) {
-                        Button {
-                            if let onAddAttachment {
-                                onAddAttachment()
-                            } else {
-                                pickAttachments()
-                            }
-                        } label: {
-                            Image(systemName: "plus")
-                                .font(.system(size: 17, weight: .medium))
-                        }
-                        .buttonStyle(.plain)
-                        .foregroundStyle(.secondary)
-                        .accessibilityLabel(AgentKitLocalized.string("composer.add_attachment"))
-                        .disabled(
-                            attachments.count >= 4
-                            || (onAddAttachment == nil && !workspaceStore.canSelectUserAssets)
-                        )
-                        
-#if os(macOS)
-                        if let vm = viewModel,
-                           vm.workspacePermissionPath != nil {
-                            Menu {
-                                ForEach(vm.workspacePermissionModes, id: \.self) { mode in
-                                    Button {
-                                        Task { await vm.setWorkspacePermissionMode(mode) }
-                                    } label: {
-                                        if mode == vm.workspacePermissionMode {
-                                            Label(approvalModeTitle(mode), systemImage: "checkmark")
-                                        } else {
-                                            Text(approvalModeTitle(mode))
-                                        }
-                                    }
-                                }
-                                Divider()
-                                Text("将应用于此工作区的所有对话")
-                                    .font(.caption)
-                                    .foregroundStyle(.secondary)
-                                if let error = vm.workspacePermissionError {
-                                    Text(error)
-                                        .font(.caption)
-                                        .foregroundStyle(.red)
-                                }
-                            } label: {
-                                if contentWidth <= 400 {
-                                    Image(systemName: approvalModeIcon(vm.workspacePermissionMode))
-                                        .font(.system(size: 13, weight: .medium))
-                                        .labelStyle(.titleAndIcon)
-                                } else {
-                                    Label(
-                                        approvalModeShortTitle(vm.workspacePermissionMode),
-                                        systemImage: approvalModeIcon(vm.workspacePermissionMode)
-                                    )
-                                }
-                            }
-                            .help("对话所属工作区的权限档位")
-                            .task(id: vm.workspacePermissionPath) {
-                                await vm.loadWorkspacePermissions()
-                            }
-                            .menuStyle(.borderlessButton)
-                            .fixedSize()
-                            .foregroundStyle(.secondary)
-                        }
-#endif
-                        
-                        Spacer(minLength: 12)
-                        
-                        // ── Model Selector ──
-#if os(iOS)
-                        Button {
-                            isIOSModelPickerPresented = true
-                        } label: {
-                            HStack(spacing: 5) {
-                                Text(modelSettings.selectionDisplayName(for: selectedModel ?? ""))
-                                    .font(.system(size: 13, weight: .semibold))
-                                    .lineLimit(1)
-                                Image(systemName: "chevron.up")
-                                    .font(.system(size: 8, weight: .bold))
-                            }
-                            .foregroundStyle(Color.accentColor)
-                            .padding(.horizontal, 9)
-                            .frame(height: 32)
-                            .background(
-                                Color.accentColor.opacity(0.12),
-                                in: RoundedRectangle(cornerRadius: 10, style: .continuous)
-                            )
-                        }
-                        .buttonStyle(.plain)
-                        .frame(maxWidth: 132)
-                        .disabled(modelSettings.availableModelIDs.isEmpty)
-                        .accessibilityLabel(AgentKitLocalized.string("composer.select_model"))
-#else
-                        Menu {
-                            if modelGroups.isEmpty {
-                                ForEach(modelSettings.availableModelIDs, id: \.self) { modelID in
-                                    modelMenuButton(modelID)
-                                }
-                            } else {
-                                ForEach(modelGroups) { group in
-                                    Section {
-                                        ForEach(group.modelIDs, id: \.self) { modelID in
-                                            modelMenuButton(modelID)
-                                        }
-                                    } header: {
-                                        Text(group.name)
-                                    }
-                                }
-                            }
-                        } label: {
-                            if contentWidth <= 500 {
-                                Image(systemName: "brain.head.profile")
-                                    .font(.system(size: 9, weight: .semibold))
-                            } else {
-                                Text(modelSettings.selectionDisplayName(for: selectedModel ?? ""))
-                                    .font(.system(size: 13, weight: .medium))
-                                    .lineLimit(1)
-                                    .frame(maxWidth: 35)
-                            }
-                        }
-                        .menuStyle(.borderlessButton)
-//                        .fixedSize()
-                        //                    .foregroundStyle(.secondary)
-#endif
-                        VoiceInputButton(service: voiceService)
-                        
-                        // ── Send / Stop button ──
-                        if isTurnRunning {
-                            Button {
-                                onStop?()
-                            } label: {
-                                Image(systemName: "stop.fill")
-                                    .font(.system(size: 12, weight: .bold))
-                                    .frame(width: sendButtonSize, height: sendButtonSize)
-                            }
-                            .buttonStyle(.plain)
-                            .foregroundStyle(.white)
-                            .background(Color.red, in: Circle())
-                            .accessibilityLabel(AgentKitLocalized.string("composer.stop"))
-                        } else {
-                            Button {
-                                send()
-                            } label: {
-                                if isSending {
-                                    ProgressView()
-                                        .controlSize(.small)
-                                        .frame(width: sendButtonSize, height: sendButtonSize)
-                                } else {
-                                    Image(systemName: "arrow.up")
-                                        .font(.system(size: 16, weight: .bold))
-                                        .frame(width: sendButtonSize, height: sendButtonSize)
-                                }
-                            }
-                            .buttonStyle(.plain)
-                            .foregroundStyle(canSend ? Color.draftSendForeground : Color.draftDisabledSendForeground)
-                            .background(canSend ? Color.draftSendBackground : Color.draftDisabledSendBackground, in: Circle())
-                            .disabled(!canSend)
-                            .accessibilityLabel(AgentKitLocalized.string("composer.send"))
-                        }
-                        
-                        if sessionID != nil {
-                            Button {
-                                isContextPresented = true
-                                refreshContext()
-                            } label: {
-                                contextUsageRing
-                            }
-                            .buttonStyle(.plain)
-                            .accessibilityLabel(contextButtonAccessibilityLabel)
-#if os(macOS)
-                            .help(AgentKitLocalized.string("composer.context_window"))
-                            .popover(isPresented: $isContextPresented, arrowEdge: .bottom) {
-                                ContextWindowDetailView(
-                                    snapshot: contextSnapshot,
-                                    isLoading: isContextLoading,
-                                    errorMessage: contextError,
-                                    onRefresh: refreshContext
-                                )
-                            }
-#else
-                            .sheet(isPresented: $isContextPresented) {
-                                NavigationStack {
-                                    ContextWindowDetailView(
-                                        snapshot: contextSnapshot,
-                                        isLoading: isContextLoading,
-                                        errorMessage: contextError,
-                                        onRefresh: refreshContext
-                                    )
-                                    .toolbar {
-                                        ToolbarItem(placement: .topBarTrailing) {
-                                            Button(AgentKitLocalized.string("composer.done")) {
-                                                isContextPresented = false
-                                            }
-                                        }
-                                    }
-                                }
-                                .presentationDetents([.medium, .large])
-                            }
-#endif
-                        }
-                    }
-                    .padding(.horizontal, 14)
-                    .padding(.bottom, 10)
-                } // end: if not recording
-            }
+            content
             
 #if os(macOS)
             if isDraft {
@@ -333,30 +101,8 @@ struct DraftComposerPanel: View {
             }
 #endif
         }
-        .onGeometryChange(for: CGFloat.self, of: { proxy in
-            return proxy.size.width
-        }, action: { oldValue, newValue in
-            contentWidth = newValue
-        })
-        .modifier(DraftComposerSurfaceModifier())
-#if os(iOS)
-        .sheet(isPresented: $isIOSModelPickerPresented) {
-            IOSModelPickerSheet(
-                groups: modelGroups,
-                ungroupedModelIDs: modelGroups.isEmpty ? modelSettings.availableModelIDs : [],
-                selectedModel: selectedModel,
-                displayName: { modelSettings.displayName(for: $0) },
-                onSelect: { modelID in
-                    selectModel(modelID)
-                    isIOSModelPickerPresented = false
-                }
-            )
-            .presentationDetents([.medium, .height(260)])
-            .presentationDragIndicator(.visible)
-        }
-#endif
-        .onChange(of: voiceService.state) { _, newState in
-            handleVoiceStateChange(newState)
+        .onDisappear {
+            handleDisappear()
         }
         .onAppear {
             setupVoiceCallbacks()
@@ -364,12 +110,257 @@ struct DraftComposerPanel: View {
         .task(id: sessionID ?? "draft-context") {
             refreshContext()
         }
+        .task(id: persistenceKey?.storageKey ?? "none-\(draftRevision)") {
+            restoreLocalState()
+        }
+        .onGeometryChange(for: CGFloat.self, of: { proxy in
+            return proxy.size.width
+        }, action: { oldValue, newValue in
+            contentWidth = newValue
+        })
+        .modifier(DraftComposerSurfaceModifier())
+    }
+    
+    var content: some View {
+        VStack(spacing: 8) {
+            if voiceService.state == .recording || voiceService.state == .transcribing
+            // *voiceService.state == .preparing*/
+            {
+                // 录音浮层占据整个底部区域（隐藏附件、模型选择器、工具栏）
+                VoiceRecordingOverlay(
+                    service: voiceService,
+                    onStop: { voiceService.stopRecordingAndTranscribe() },
+                    onSend: { send() }
+                )
+                .padding(.horizontal, 2)
+                .padding(.top, attachments.isEmpty ? 8 : 2)
+            } else {
+                if !attachments.isEmpty {
+                    VStack(alignment: .leading, spacing: 5) {
+                        attachmentStrip
+                        Text("🔒 本地处理 · 文件不会自动上传")
+                            .font(.caption2)
+                            .foregroundStyle(.secondary)
+                    }
+                    .padding(.horizontal, 16)
+                    .padding(.top, 12)
+                }
+                inputField
+                    .padding(.horizontal, 16)
+                    .padding(.top, attachments.isEmpty ? 14 : 2)
+            }
+            
+            if voiceService.state != .recording && voiceService.state != .transcribing && voiceService.state != .preparing {
+                HStack(spacing: composerControlSpacing) {
+                    Button {
+                        if let onAddAttachment {
+                            onAddAttachment()
+                        } else {
+                            pickAttachments()
+                        }
+                    } label: {
+                        Image(systemName: "plus")
+                            .font(.system(size: 17, weight: .medium))
+                    }
+                    .buttonStyle(.plain)
+                    .foregroundStyle(.secondary)
+                    .accessibilityLabel(AgentKitLocalized.string("composer.add_attachment"))
+                    .disabled(
+                        attachments.count >= 4
+                        || (onAddAttachment == nil && !workspaceStore.canSelectUserAssets)
+                    )
+                    
+#if os(macOS)
+                    if let vm = viewModel,
+                       vm.workspacePermissionPath != nil {
+                        Menu {
+                            ForEach(vm.workspacePermissionModes, id: \.self) { mode in
+                                Button {
+                                    Task { await vm.setWorkspacePermissionMode(mode) }
+                                } label: {
+                                    if mode == vm.workspacePermissionMode {
+                                        Label(approvalModeTitle(mode), systemImage: "checkmark")
+                                    } else {
+                                        Text(approvalModeTitle(mode))
+                                    }
+                                }
+                            }
+                            Divider()
+                            Text("将应用于此工作区的所有对话")
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                            if let error = vm.workspacePermissionError {
+                                Text(error)
+                                    .font(.caption)
+                                    .foregroundStyle(.red)
+                            }
+                        } label: {
+                            if contentWidth <= 400 {
+                                Image(systemName: approvalModeIcon(vm.workspacePermissionMode))
+                                    .font(.system(size: 13, weight: .medium))
+                                    .labelStyle(.titleAndIcon)
+                            } else {
+                                Label(
+                                    approvalModeShortTitle(vm.workspacePermissionMode),
+                                    systemImage: approvalModeIcon(vm.workspacePermissionMode)
+                                )
+                            }
+                        }
+                        .help("对话所属工作区的权限档位")
+                        .task(id: vm.workspacePermissionPath) {
+                            await vm.loadWorkspacePermissions()
+                        }
+                        .menuStyle(.borderlessButton)
+                        .fixedSize()
+                        .foregroundStyle(.secondary)
+                    }
+#endif
+                    
+                    Spacer(minLength: 12)
+                    
+                    // ── Model Selector ──
+#if os(iOS)
+                    Button {
+                        isIOSModelPickerPresented = true
+                    } label: {
+                        HStack(spacing: 5) {
+                            Text(modelSettings.selectionDisplayName(for: selectedModel ?? ""))
+                                .font(.system(size: 13, weight: .semibold))
+                                .lineLimit(1)
+                            Image(systemName: "chevron.up")
+                                .font(.system(size: 8, weight: .bold))
+                        }
+                        .foregroundStyle(Color.accentColor)
+                        .padding(.horizontal, 9)
+                        .frame(height: 32)
+                        .background(
+                            Color.accentColor.opacity(0.12),
+                            in: RoundedRectangle(cornerRadius: 10, style: .continuous)
+                        )
+                    }
+                    .buttonStyle(.plain)
+                    .frame(maxWidth: 132)
+                    .disabled(modelSettings.availableModelIDs.isEmpty)
+                    .accessibilityLabel(AgentKitLocalized.string("composer.select_model"))
+#else
+                    Menu {
+                        if modelGroups.isEmpty {
+                            ForEach(modelSettings.availableModelIDs, id: \.self) { modelID in
+                                modelMenuButton(modelID)
+                            }
+                        } else {
+                            ForEach(modelGroups) { group in
+                                Section {
+                                    ForEach(group.modelIDs, id: \.self) { modelID in
+                                        modelMenuButton(modelID)
+                                    }
+                                } header: {
+                                    Text(group.name)
+                                }
+                            }
+                        }
+                    } label: {
+                        if contentWidth <= 500 {
+                            Image(systemName: "brain.head.profile")
+                                .font(.system(size: 9, weight: .semibold))
+                        } else {
+                            Text(modelSettings.selectionDisplayName(for: selectedModel ?? ""))
+                                .font(.system(size: 13, weight: .medium))
+                                .lineLimit(1)
+                                .frame(maxWidth: 35)
+                        }
+                    }
+                    .menuStyle(.borderlessButton)
+                        .fixedSize()
+                    //                    .foregroundStyle(.secondary)
+#endif
+                    VoiceInputButton(service: voiceService)
+                    
+                    // ── Send / Stop button ──
+                    if isTurnRunning {
+                        Button {
+                            onStop?()
+                        } label: {
+                            Image(systemName: "stop.fill")
+                                .font(.system(size: 12, weight: .bold))
+                                .frame(width: sendButtonSize, height: sendButtonSize)
+                        }
+                        .buttonStyle(.plain)
+                        .foregroundStyle(.white)
+                        .background(Color.red, in: Circle())
+                        .accessibilityLabel(AgentKitLocalized.string("composer.stop"))
+                    } else {
+                        Button {
+                            send()
+                        } label: {
+                            if isSending {
+                                ProgressView()
+                                    .controlSize(.small)
+                                    .frame(width: sendButtonSize, height: sendButtonSize)
+                            } else {
+                                Image(systemName: "arrow.up")
+                                    .font(.system(size: 16, weight: .bold))
+                                    .frame(width: sendButtonSize, height: sendButtonSize)
+                            }
+                        }
+                        .buttonStyle(.plain)
+                        .foregroundStyle(canSend ? Color.draftSendForeground : Color.draftDisabledSendForeground)
+                        .background(canSend ? Color.draftSendBackground : Color.draftDisabledSendBackground, in: Circle())
+                        .disabled(!canSend)
+                        .accessibilityLabel(AgentKitLocalized.string("composer.send"))
+                    }
+                    
+                    if sessionID != nil {
+                        Button {
+                            isContextPresented = true
+                            refreshContext()
+                        } label: {
+                            contextUsageRing
+                        }
+                        .buttonStyle(.plain)
+                        .accessibilityLabel(contextButtonAccessibilityLabel)
+#if os(macOS)
+                        .help(AgentKitLocalized.string("composer.context_window"))
+                        .popover(isPresented: $isContextPresented, arrowEdge: .bottom) {
+                            ContextWindowDetailView(
+                                snapshot: contextSnapshot,
+                                isLoading: isContextLoading,
+                                errorMessage: contextError,
+                                onRefresh: refreshContext
+                            )
+                        }
+#else
+                        .sheet(isPresented: $isContextPresented) {
+                            NavigationStack {
+                                ContextWindowDetailView(
+                                    snapshot: contextSnapshot,
+                                    isLoading: isContextLoading,
+                                    errorMessage: contextError,
+                                    onRefresh: refreshContext
+                                )
+                                .toolbar {
+                                    ToolbarItem(placement: .topBarTrailing) {
+                                        Button(AgentKitLocalized.string("composer.done")) {
+                                            isContextPresented = false
+                                        }
+                                    }
+                                }
+                            }
+                            .presentationDetents([.medium, .large])
+                        }
+#endif
+                    }
+                }
+                .padding(.horizontal, 14)
+                .padding(.bottom, 10)
+            } // end: if not recording
+        }
+        .onChange(of: voiceService.state) { _, newState in
+            handleVoiceStateChange(newState)
+        }
         .onChange(of: isTurnRunning) { _, newValue in
             // turn 结束时刷新上下文占用（压缩可能刚刚发生）。
             if !newValue { refreshContext() }
-        }
-        .task(id: persistenceKey?.storageKey ?? "none-\(draftRevision)") {
-            restoreLocalState()
         }
         .onChange(of: text) { _, newValue in
             guard !isRestoringLocalState, let key = loadedStateKey else { return }
@@ -385,9 +376,6 @@ struct DraftComposerPanel: View {
         .onChange(of: scenePhase) { _, phase in
             handleScenePhaseChange(phase)
         }
-        .onDisappear {
-            handleDisappear()
-        }
         .onChange(of: modelSettings.availableModelIDs) { _, newIDs in
             // 模型列表延迟到达时自动恢复 selectedModel（Bug 2）。
             // 若 UI 先于网络渲染，.task(id:) 恢复时 gatewayModels 尚为 nil，
@@ -396,6 +384,11 @@ struct DraftComposerPanel: View {
             let resolved = modelSettings.getModel(with: viewModel?.conversation?.id)
             if let resolved, !resolved.isEmpty {
                 selectedModel = resolved
+            }
+        }
+        .onChange(of: voiceService.state) { _, newState in
+            if case .error = newState {
+                showPermissionAlert = true
             }
         }
         .confirmationDialog(
@@ -421,11 +414,22 @@ struct DraftComposerPanel: View {
         } message: {
             Text(AgentKitLocalized.string("composer.voice_input.no_permission"))
         }
-        .onChange(of: voiceService.state) { _, newState in
-            if case .error = newState {
-                showPermissionAlert = true
-            }
+#if os(iOS)
+        .sheet(isPresented: $isIOSModelPickerPresented) {
+            IOSModelPickerSheet(
+                groups: modelGroups,
+                ungroupedModelIDs: modelGroups.isEmpty ? modelSettings.availableModelIDs : [],
+                selectedModel: selectedModel,
+                displayName: { modelSettings.displayName(for: $0) },
+                onSelect: { modelID in
+                    selectModel(modelID)
+                    isIOSModelPickerPresented = false
+                }
+            )
+            .presentationDetents([.medium, .height(260)])
+            .presentationDragIndicator(.visible)
         }
+#endif
     }
     
     // MARK: - Input Field
