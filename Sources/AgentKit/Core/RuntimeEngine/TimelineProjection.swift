@@ -259,6 +259,7 @@ public struct TimelineProjection: Sendable {
                                 inv.request = ModelRequestInfo(
                                     modelName: p.metadata["model"],
                                     provider: p.metadata["provider"],
+                                    baseURL: p.metadata["base_url"],
                                     toolNames: p.metadata["toolNames"]?
                                         .split(separator: ",").map(String.init) ?? [],
                                     messageCount: p.metadata["messageCount"].flatMap(Int.init),

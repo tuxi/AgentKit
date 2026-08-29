@@ -166,6 +166,8 @@ public struct ModelRequestInfo: Sendable, Equatable {
     public let modelName: String?
     /// Provider 类型，如 "openai_compatible"。
     public let provider: String?
+    /// Provider  url
+    public let baseURL: String?
     /// 本次请求注册给模型的工具名列表。
     public let toolNames: [String]
     /// 请求携带的消息条数（上下文规模）。
@@ -181,13 +183,19 @@ public struct ModelRequestInfo: Sendable, Equatable {
     /// 是否流式调用。
     public let streamed: Bool?
 
-    public init(modelName: String? = nil, provider: String? = nil,
-                toolNames: [String] = [], messageCount: Int? = nil,
-                systemPromptChars: Int? = nil, toolsPromptChars: Int? = nil,
-                temperature: Double? = nil, toolChoice: JSONValue? = nil,
+    public init(modelName: String? = nil,
+                provider: String? = nil,
+                baseURL: String? = nil,
+                toolNames: [String] = [],
+                messageCount: Int? = nil,
+                systemPromptChars: Int? = nil,
+                toolsPromptChars: Int? = nil,
+                temperature: Double? = nil,
+                toolChoice: JSONValue? = nil,
                 streamed: Bool? = nil) {
         self.modelName = modelName
         self.provider = provider
+        self.baseURL = baseURL
         self.toolNames = toolNames
         self.messageCount = messageCount
         self.systemPromptChars = systemPromptChars
@@ -313,6 +321,7 @@ extension AgentEvent {
                 request: ModelRequestInfo(
                     modelName: wire.modelName,
                     provider: wire.provider,
+                    baseURL: wire.baseURL,
                     toolNames: wire.toolNames ?? [],
                     messageCount: wire.messageCount,
                     systemPromptChars: wire.systemPromptChars,

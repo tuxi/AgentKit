@@ -905,9 +905,18 @@ public struct ExecutionReducer: Sendable {
         let text = parts.isEmpty ? "Model request" : "Model request: \(parts.joined(separator: ", "))"
 
         var metadata: [String: String] = ["phase": "request"]
-        if let invocationID { metadata["invocationID"] = invocationID }
-        if let model = request.modelName { metadata["model"] = model }
-        if let provider = request.provider { metadata["provider"] = provider }
+        if let invocationID {
+            metadata["invocationID"] = invocationID
+        }
+        if let model = request.modelName {
+            metadata["model"] = model
+        }
+        if let provider = request.provider {
+            metadata["provider"] = provider
+        }
+        if let baseURL = request.baseURL {
+            metadata["base_url"] = baseURL
+        }
         if !request.toolNames.isEmpty {
             metadata["toolNames"] = request.toolNames.joined(separator: ",")
         }

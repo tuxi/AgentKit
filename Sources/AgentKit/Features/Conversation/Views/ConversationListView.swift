@@ -418,10 +418,10 @@ public struct ConversationListView: View {
                     .foregroundStyle(.primary)
                     .lineLimit(1)
                 Spacer(minLength: 0)
-                if group.isRunning {
-                    ProgressView()
-                        .controlSize(.mini)
-                }
+//                if group.isRunning {
+//                    ProgressView()
+//                        .controlSize(.mini)
+//                }
                 Image(systemName: isExpanded ? "chevron.down" : "chevron.right")
                     .font(.system(size: 10, weight: .bold))
                     .foregroundStyle(.tertiary)

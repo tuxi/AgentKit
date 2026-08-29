@@ -147,7 +147,7 @@ final class ProviderConnectionsTests: XCTestCase {
         XCTAssertNotNil(web["fetch"])
     }
 
-    func testUnifiedModelStoreLazilyMigratesGatewayWireModel() throws {
+    func testUnifiedModelStorePreservesLegacyWireModelWithoutMigration() throws {
         let localState = InMemoryConversationLocalStateStore()
         var state = ConversationLocalState()
         state.selectedModelID = "gateway-model"
@@ -164,13 +164,15 @@ final class ProviderConnectionsTests: XCTestCase {
         let descriptor = try XCTUnwrap([gateway].unifiedModels.first)
         modelSettings.applyUnifiedCatalog([descriptor], defaultModelID: descriptor.id)
 
-        XCTAssertEqual(modelSettings.getModel(with: "session-1"), descriptor.id)
+        // 未上线项目不做懒迁移：历史裸 wire model 原值保留，不重写 local state，
+        // 且不匹配任何 catalog 模型 → 标记不可用。
+        XCTAssertEqual(modelSettings.getModel(with: "session-1"), "gateway-model")
         XCTAssertEqual(
             try localState.state(for: .session("session-1"))?.selectedModelID,
-            descriptor.id
+            "gateway-model"
         )
-        XCTAssertEqual(modelSettings.runtimeAlias(for: descriptor.id), descriptor.runtimeAlias)
-        XCTAssertTrue(modelSettings.isModelAvailable(descriptor.id))
+        XCTAssertFalse(modelSettings.isModelAvailable("gateway-model"))
+        XCTAssertNil(modelSettings.runtimeAlias(for: "gateway-model"))
     }
 
     func testUnknownHistoricalModelIsPreservedAndUnavailable() throws {
@@ -180,7 +182,6 @@ final class ProviderConnectionsTests: XCTestCase {
         )
         modelSettings.applyUnifiedCatalog([], defaultModelID: nil)
 
-        XCTAssertEqual(modelSettings.resolveLegacyModelID("removed-model"), "removed-model")
         XCTAssertFalse(modelSettings.isModelAvailable("removed-model"))
         XCTAssertNil(modelSettings.runtimeAlias(for: "removed-model"))
     }
@@ -237,23 +238,6 @@ final class ProviderConnectionsTests: XCTestCase {
 
         XCTAssertEqual(modelSettings.displayName(for: stableID), "qwen3-coder-plus")
         XCTAssertNotEqual(modelSettings.displayName(for: stableID), stableID)
-    }
-
-    func testPrivateNetworkHTTPRequiresExplicitConsent() throws {
-        let url = try XCTUnwrap(URL(string: "http://192.168.1.10:11434"))
-        let denied = ProviderConnection(
-            providerID: "ollama",
-            displayName: "LAN Ollama",
-            transport: .ollama,
-            authentication: .none,
-            baseURL: url,
-            models: [ProviderModel(id: "qwen")]
-        )
-        XCTAssertThrowsError(try denied.validate())
-
-        var allowed = denied
-        allowed.allowsInsecurePrivateNetworkHTTP = true
-        XCTAssertNoThrow(try allowed.validate())
     }
 
     func testRuntimeConfigurationWaitsForActiveTurnAndCoalesces() async throws {

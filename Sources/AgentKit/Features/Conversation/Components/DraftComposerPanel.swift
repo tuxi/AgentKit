@@ -386,6 +386,15 @@ struct DraftComposerPanel: View {
                 selectedModel = resolved
             }
         }
+        .onChange(of: viewModel?.selectedModel ?? "", { oldModel, newModel in
+            if oldModel == newModel {
+                return
+            }
+            if newModel == selectedModel {
+                return
+            }
+            self.selectModel(newModel)
+        })
         .onChange(of: voiceService.state) { _, newState in
             if case .error = newState {
                 showPermissionAlert = true
@@ -518,7 +527,9 @@ struct DraftComposerPanel: View {
             ComposerModelGroup(
                 id: group.connectionID,
                 name: group.name,
-                modelIDs: group.models.map(\.id)
+                modelIDs: group.models.map({
+                    $0.model
+                })
             )
         }
     }

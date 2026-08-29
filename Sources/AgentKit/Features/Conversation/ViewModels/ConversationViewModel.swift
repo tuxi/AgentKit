@@ -692,6 +692,14 @@ public final class ConversationViewModel {
             inFlightClientToolCallIDs.remove(callID)
             completedClientToolCallIDs.insert(callID)
         }
+        
+        if case .modelRequest(let turnID, let invocationID, let request) = event {
+            if let provider = request.provider, !provider.isEmpty {
+                self.selectedModel = "\(provider)/\(request.modelName ?? "")"
+            } else {
+                self.selectedModel = request.modelName ?? ""
+            }
+        }
     }
 
     private func observeSubmission(_ ticket: AgentInputSubmissionTicket) async {

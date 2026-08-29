@@ -84,7 +84,8 @@ struct WireFrame: Decodable {
 
     // v1.4: model_request 请求信封 + model_finished 缓存命中
     let modelName: String?          // "model": 模型标识
-    let provider: String?           // provider 类型
+    let provider: String?           // provider 提供商，比如deepseek、qwen
+    let baseURL: String?            // provider 的url
     let toolNames: [String]?        // "tool_names": 本次请求的工具列表
     let messageCount: Int?          // "message_count": 上下文消息条数
     let systemPromptChars: Int?     // "system_prompt_chars"
@@ -126,6 +127,7 @@ struct WireFrame: Decodable {
         case exitCode = "exit_code"
         case modelName = "model"
         case provider
+        case baseURL = "base_url"
         case toolNames = "tool_names"
         case messageCount = "message_count"
         case systemPromptChars = "system_prompt_chars"

@@ -39,14 +39,11 @@ public final class ModelSettingsStore {
     // MARK: - Private
 
     private static let lastModelKey = "code_agent.model.last_selected"
-    private static let usedModelsKey = "code_agent.model.used_models"
     private static let knownModelDisplayNamesKey = "code_agent.model.known_display_names.v1"
 
     private let defaults: UserDefaults
     private let localStateStore: any ConversationLocalStateStore
 
-    /// 每一个对话选择的模型：[conversationID: modelID]
-    private var usedModels: [String: String] = [:]
     /// Secret-free tombstones for models referenced by historical sessions.
     /// A removed connection must not turn its stable ID into user-facing text.
     private var knownModelDisplayNames: [String: String] = [:]
@@ -68,10 +65,8 @@ public final class ModelSettingsStore {
         self.service = service
         // 从本地缓存恢复
         self.lastSelectedModel = defaults.string(forKey: Self.lastModelKey)
-        self.usedModels = defaults.dictionary(forKey: Self.usedModelsKey) as? [String: String] ?? [:]
         self.knownModelDisplayNames =
             defaults.dictionary(forKey: Self.knownModelDisplayNamesKey) as? [String: String] ?? [:]
-        migrateLegacyConversationModels()
     }
 
     /// Creates a model store that is driven exclusively by Provider Connections.
@@ -83,11 +78,9 @@ public final class ModelSettingsStore {
         self.localStateStore = localStateStore
         self.service = nil
         self.lastSelectedModel = defaults.string(forKey: Self.lastModelKey)
-        self.usedModels = defaults.dictionary(forKey: Self.usedModelsKey) as? [String: String] ?? [:]
         self.knownModelDisplayNames =
             defaults.dictionary(forKey: Self.knownModelDisplayNamesKey) as? [String: String] ?? [:]
         self.unifiedModels = []
-        migrateLegacyConversationModels()
     }
 
     // MARK: - Persistence
@@ -96,12 +89,6 @@ public final class ModelSettingsStore {
         if let model = lastSelectedModel {
             defaults.set(model, forKey: Self.lastModelKey)
         }
-    }
-
-    private func persistUsedModels() {
-        // Per-session values moved to ConversationLocalStateStore. Removing the
-        // legacy dictionary prevents two writable sources of truth.
-        defaults.removeObject(forKey: Self.usedModelsKey)
     }
 
     // MARK: - Model List (via GatewayService)
@@ -209,8 +196,6 @@ public final class ModelSettingsStore {
     public func setUserModel(_ modelID: String, for conversation: String) {
         guard !conversation.isEmpty else { return }
         guard !modelID.isEmpty else { return }
-        self.usedModels[conversation] = modelID
-        persistUsedModels()
         try? localStateStore.updateState(for: .session(conversation)) { state in
             state.selectedModelID = modelID
             state.recentModelIDs.removeAll { $0 == modelID }
@@ -227,24 +212,19 @@ public final class ModelSettingsStore {
         }
         if let persisted = try? localStateStore.state(for: .session(conversation))?.selectedModelID,
            !persisted.isEmpty {
-            let resolved = resolveLegacyModelID(persisted)
-            usedModels[conversation] = resolved
-            if resolved != persisted {
-                persistMigratedModel(resolved, conversation: conversation)
-            }
-            return resolved
+            return persisted
         }
         // An existing conversation without an explicit choice must not inherit
         // another conversation's latest selection. `lastSelectedModel` is only
         // the convenience default for a brand-new local draft.
-        return usedModels[conversation] ?? defaultModelForExistingConversation
+        return defaultModelForExistingConversation
     }
 
     /// 模型的 display name（用于 UI）。
     public func displayName(for modelID: String) -> String {
         if let unifiedModels {
-            if let displayName = unifiedModels.first(where: { $0.id == modelID })?.displayName {
-                return displayName
+            if let model = unifiedModels.first(where: { $0.id == modelID }) {
+               return model.model
             }
             if let displayName = knownModelDisplayNames[modelID] {
                 return displayName
@@ -253,7 +233,10 @@ public final class ModelSettingsStore {
                 return identity.wireModelID
             }
         }
-        return gatewayModels?.first(where: { $0.id == modelID })?.displayName ?? modelID
+        if let model = gatewayModels?.first(where: { $0.id == modelID }) {
+            return model.model
+        }
+        return modelID
     }
 
     /// Display text for the current Composer selection. Historical choices stay
@@ -271,9 +254,15 @@ public final class ModelSettingsStore {
     /// 可用模型 ID 列表。
     public var availableModelIDs: [String] {
         if let unifiedModels {
-            return unifiedModels.map(\.id)
+            let models = unifiedModels.map {
+                $0.model
+            }
+            return models
         }
-        return gatewayModels?.filter { $0.available != false }.map(\.id) ?? []
+        let models = gatewayModels?.filter { $0.available != false }.map {
+            $0.model
+        }
+        return models ?? []
     }
 
     /// 新对话时使用的模型 ID。
@@ -285,20 +274,24 @@ public final class ModelSettingsStore {
                unifiedModels.contains(where: { $0.id == unifiedDefaultModelID }) {
                 return unifiedDefaultModelID
             }
-            if let stored = lastSelectedModel {
-                let resolved = resolveLegacyModelID(stored)
-                if unifiedModels.contains(where: { $0.id == resolved }) {
-                    return resolved
-                }
+            if let stored = lastSelectedModel,
+               unifiedModels.contains(where: {
+                   $0.model == stored
+               }) {
+                return stored
             }
-            return unifiedModels.first?.id ?? ""
+            return unifiedModels.first?.model ?? ""
         }
         if let def = gatewayDefaultModel, let models = gatewayModels,
-           models.contains(where: { $0.id == def && $0.available != false }) {
+           models.contains(where: {
+               $0.model == def && $0.available != false
+           }) {
             return def
         }
         if let stored = lastSelectedModel,
-           let models = gatewayModels, models.contains(where: { $0.id == stored && $0.available != false }) {
+           let models = gatewayModels, models.contains(where: {
+               $0.model == stored && $0.available != false
+           }) {
             return stored
         }
         if let first = gatewayModels?.first(where: { $0.available != false }) {
@@ -330,69 +323,4 @@ public final class ModelSettingsStore {
         return (try? localStateStore.state(for: .session(conversation))?.recentModelIDs) ?? []
     }
 
-    private func migrateLegacyConversationModels() {
-        guard !usedModels.isEmpty else { return }
-        var migrationSucceeded = true
-        for (sessionID, modelID) in usedModels {
-            do {
-                try localStateStore.updateState(for: .session(sessionID)) { state in
-                    if state.selectedModelID == nil {
-                        state.selectedModelID = modelID
-                    }
-                    if !state.recentModelIDs.contains(modelID) {
-                        state.recentModelIDs.append(modelID)
-                    }
-                }
-            } catch {
-                migrationSucceeded = false
-            }
-        }
-        if migrationSucceeded {
-            defaults.removeObject(forKey: Self.usedModelsKey)
-        }
-    }
-
-    /// Resolves old Gateway wire IDs lazily when a session is loaded. Unknown
-    /// values are preserved so the UI can show an unavailable historical model
-    /// instead of silently changing Provider or billing route.
-    public func resolveLegacyModelID(_ storedID: String) -> String {
-        guard let unifiedModels else { return storedID }
-        if unifiedModels.contains(where: { $0.id == storedID }) {
-            return storedID
-        }
-        let gatewayMatches = unifiedModels.filter {
-            $0.connectionID == ProviderConnection.talkifyGatewayID
-                && $0.wireModelID == storedID
-        }
-        return gatewayMatches.count == 1 ? gatewayMatches[0].id : storedID
-    }
-
-    /// Resolves and persists one loaded session's legacy model selection.
-    /// Returns the preserved old value when no unambiguous migration exists.
-    @discardableResult
-    public func migrateModelSelectionIfNeeded(
-        _ storedID: String,
-        conversation: String
-    ) -> String {
-        let resolved = resolveLegacyModelID(storedID)
-        guard resolved != storedID else { return storedID }
-        persistMigratedModel(resolved, conversation: conversation)
-        return resolved
-    }
-
-    private func persistMigratedModel(_ modelID: String, conversation: String) {
-        usedModels[conversation] = modelID
-        var legacyMapping: [String: String] = [:]
-        for descriptor in unifiedModels ?? []
-        where descriptor.connectionID == ProviderConnection.talkifyGatewayID {
-            legacyMapping[descriptor.wireModelID] = descriptor.id
-        }
-        let migrationSnapshot = legacyMapping
-        try? localStateStore.updateState(for: .session(conversation)) { state in
-            state.selectedModelID = modelID
-            state.recentModelIDs = state.recentModelIDs.map {
-                migrationSnapshot[$0] ?? $0
-            }
-        }
-    }
 }

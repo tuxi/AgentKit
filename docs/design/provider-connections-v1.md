@@ -161,8 +161,8 @@ Runtime 配置只引用 Credential Target。真实 secret 由宿主通过 `secre
 - `ModelSettingsStore.applyUnifiedCatalog` 是现有 Composer 的迁移注入点；Composer
   持久化 Stable ID，发送和 Runtime reconfigure 前通过
   `runtimeAlias(for:)` 显式解析。
-- 找不到的历史模型 ID 保持原值并标记不可用；Gateway wire model 在会话加载时
-  通过 `migrateModelSelectionIfNeeded` 懒迁移并回写 local state。
+- 找不到的历史模型 ID 保持原值并标记不可用；历史格式（裸 wire model）不做迁移，
+  未上线项目直接以新格式为准。
 
 ### 5.3 Credential
 

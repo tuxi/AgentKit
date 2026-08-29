@@ -106,12 +106,11 @@ final class ConversationLocalStateTests: XCTestCase {
     }
 
     @MainActor
-    func testModelSettingsMigratesLegacyPerConversationSelection() throws {
+    func testModelSettingsPersistsPerConversationSelection() throws {
         let suite = "ConversationLocalStateTests.\(UUID().uuidString)"
         let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
         defer { defaults.removePersistentDomain(forName: suite) }
         defaults.set("model-last", forKey: "code_agent.model.last_selected")
-        defaults.set(["session-a": "model-a"], forKey: "code_agent.model.used_models")
         let store = InMemoryConversationLocalStateStore()
 
         let settings = ModelSettingsStore(
@@ -120,12 +119,13 @@ final class ConversationLocalStateTests: XCTestCase {
             localStateStore: store
         )
         XCTAssertEqual(settings.lastSelectedModel, "model-last")
-        XCTAssertEqual(settings.getModel(with: "session-a"), "model-a")
-        XCTAssertNil(defaults.dictionary(forKey: "code_agent.model.used_models"))
-        XCTAssertEqual(try store.state(for: .session("session-a"))?.selectedModelID, "model-a")
+        // 无显式选择的会话回退到默认（模型列表未加载 → 空串），不继承 lastSelectedModel。
+        XCTAssertEqual(settings.getModel(with: "session-a"), "")
+        XCTAssertNil(try store.state(for: .session("session-a"))?.selectedModelID)
 
         settings.didUseModel("model-b", conversation: "session-a")
         XCTAssertEqual(settings.getModel(with: "session-a"), "model-b")
+        XCTAssertEqual(try store.state(for: .session("session-a"))?.selectedModelID, "model-b")
         XCTAssertEqual(settings.recentModels(for: "session-a").first, "model-b")
     }
 

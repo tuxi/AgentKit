@@ -28,6 +28,10 @@ public struct UnifiedModelDescriptor: Codable, Hashable, Identifiable, Sendable 
     public let authentication: ProviderAuthentication
     public let billingSource: String?
 
+    public var model: String {
+        return "\(providerID)/\(wireModelID)"
+    }
+    
     public init(connection: ProviderConnection, model: ProviderModel) {
         let alias = Self.makeRuntimeAlias(connectionID: connection.id, wireModelID: model.id)
         self.id = alias

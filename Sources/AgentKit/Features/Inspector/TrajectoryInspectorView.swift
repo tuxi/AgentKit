@@ -166,6 +166,7 @@ private struct InvocationCardView: View {
 
     @State private var requestExpanded = false
     @State private var thinkingExpanded = false
+    @State private var toolNamesExpanded = false
 
     var body: some View {
         VStack(alignment: .leading, spacing: 6) {
@@ -200,13 +201,22 @@ private struct InvocationCardView: View {
     }
 
     // MARK: 头行
+    
+   private var modelName: String {
+        if let request = invocation.request,
+            let modelName = request.modelName,
+            let provider = request.provider {
+            return "\(provider)/\(modelName)"
+        }
+        return invocation.request?.modelName ?? "model"
+    }
 
     private var headerRow: some View {
         HStack(spacing: 6) {
             Text("#\(invocation.index)")
                 .font(.caption.weight(.bold))
                 .foregroundStyle(.secondary)
-            Text(invocation.request?.modelName ?? "model")
+            Text(modelName)
                 .font(.caption.weight(.semibold))
                 .lineLimit(1)
             if invocation.request?.streamed == true {
@@ -276,11 +286,28 @@ private struct InvocationCardView: View {
     private func requestDetail(_ request: ModelRequestInfo) -> some View {
         VStack(alignment: .leading, spacing: 3) {
             detailRow("Provider", request.provider ?? "—")
+            detailRow("Base URL", request.baseURL ?? "—")
             if !invocation.executedTools.isEmpty {
                 detailRow("实际调用", invocation.executedTools.joined(separator: ", "))
             }
-            if !request.toolNames.isEmpty {
-                detailRow("可用工具", request.toolNames.joined(separator: ", "))
+            Button {
+                toolNamesExpanded.toggle()
+            } label: {
+                HStack(spacing: 4) {
+                    Image(systemName: toolNamesExpanded ? "chevron.down" : "chevron.right")
+                        .font(.system(size: 9))
+                    Text("可用工具")
+                        .font(.caption2)
+                        .lineLimit(1)
+                    Spacer()
+                }
+            }
+            .buttonStyle(.plain)
+            .foregroundStyle(.secondary)
+            if toolNamesExpanded {
+                if !request.toolNames.isEmpty {
+                    detailRow("", request.toolNames.joined(separator: ", "))
+                }
             }
             detailRow("消息条数", request.messageCount.map(String.init) ?? "—")
             detailRow("System prompt", request.systemPromptChars.map(formatCount) ?? "—")

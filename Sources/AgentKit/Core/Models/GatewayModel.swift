@@ -28,6 +28,10 @@ public struct GatewayModel: Codable, Sendable, Identifiable {
     /// 当前用户是否可用
     public let available: Bool?
     
+    public var model: String {
+        return "\(provider)/\(id)"
+    }
+    
     enum CodingKeys: String, CodingKey {
         case id
         case displayName = "display_name"
