@@ -323,6 +323,8 @@ public enum RuntimeProviderConfigurationBuilder {
                 // Gateway is a connection/credential kind, not a runtime wire
                 // protocol. Its endpoint is OpenAI Chat Completions compatible.
                 api = "openai"
+            case .openAIResponses:
+                api = "responses"
             }
 
             let credential: RuntimeConnectionCredentialDeclaration?

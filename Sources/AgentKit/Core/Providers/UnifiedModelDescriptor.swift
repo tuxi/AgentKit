@@ -38,7 +38,7 @@ public struct UnifiedModelDescriptor: Codable, Hashable, Identifiable, Sendable 
         self.runtimeAlias = alias
         self.serverConnectionID = nil
         self.connectionID = connection.id
-        self.providerID = connection.providerID
+        self.providerID = connection.id
         self.providerDisplayName = connection.displayName
         self.wireModelID = model.id
         self.displayName = model.displayName ?? model.id

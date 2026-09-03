@@ -39,6 +39,10 @@ public struct RuntimeProviderModelDefinition: Codable, Sendable, Equatable, Iden
     public let supportsReasoning: Bool?
     public let inputModalities: [String]?
     public let webSearch: Bool?
+    public let supportedReasoningEfforts: [String]?
+    public let canDisableReasoning: Bool?
+    public let reasoningEffort: String?
+    
 
     enum CodingKeys: String, CodingKey {
         case id
@@ -54,6 +58,10 @@ public struct RuntimeProviderModelDefinition: Codable, Sendable, Equatable, Iden
         case supportsReasoning = "supports_reasoning"
         case inputModalities = "input_modalities"
         case webSearch = "web_search"
+        case supportedReasoningEfforts = "supported_reasoning_efforts"
+        case canDisableReasoning = "can_disable_reasoning"
+        case reasoningEffort = "reasoning_effort"
+        
     }
 
     public init(
@@ -69,7 +77,10 @@ public struct RuntimeProviderModelDefinition: Codable, Sendable, Equatable, Iden
         supportsTools: Bool? = nil,
         supportsReasoning: Bool? = nil,
         inputModalities: [String]? = nil,
-        webSearch: Bool? = nil
+        webSearch: Bool? = nil,
+        supportedReasoningEfforts: [String]? = nil,
+        canDisableReasoning: Bool? = nil,
+        reasoningEffort: String? = nil
     ) {
         self.id = id
         self.runtimeAlias = runtimeAlias
@@ -84,6 +95,9 @@ public struct RuntimeProviderModelDefinition: Codable, Sendable, Equatable, Iden
         self.supportsReasoning = supportsReasoning
         self.inputModalities = inputModalities
         self.webSearch = webSearch
+        self.supportedReasoningEfforts = supportedReasoningEfforts
+        self.canDisableReasoning = canDisableReasoning
+        self.reasoningEffort = reasoningEffort
     }
 }
 
@@ -209,6 +223,9 @@ public struct RuntimeProviderTemplateModel: Codable, Sendable, Equatable, Identi
     public let webSearch: Bool?
     public let inputPricePerMillion: Double?
     public let outputPricePerMillion: Double?
+    public let supportedReasoningEfforts: [ModelReasoningEffort]?
+    public let canDisableReasoning: Bool?
+    public let reasoningEffort: ModelReasoningEffort?
 
     enum CodingKeys: String, CodingKey {
         case id
@@ -221,6 +238,9 @@ public struct RuntimeProviderTemplateModel: Codable, Sendable, Equatable, Identi
         case webSearch = "web_search"
         case inputPricePerMillion = "input_price_per_million"
         case outputPricePerMillion = "output_price_per_million"
+        case supportedReasoningEfforts = "supported_reasoning_efforts"
+        case canDisableReasoning = "can_disable_reasoning"
+        case reasoningEffort = "reasoning_effort"
     }
 
     public init(
@@ -233,7 +253,10 @@ public struct RuntimeProviderTemplateModel: Codable, Sendable, Equatable, Identi
         inputModalities: [String]? = nil,
         webSearch: Bool? = nil,
         inputPricePerMillion: Double? = nil,
-        outputPricePerMillion: Double? = nil
+        outputPricePerMillion: Double? = nil,
+        supportedReasoningEfforts: [ModelReasoningEffort]? = nil,
+        canDisableReasoning: Bool? = nil,
+        reasoningEffort: ModelReasoningEffort? = nil
     ) {
         self.id = id
         self.runtimeAlias = runtimeAlias
@@ -245,6 +268,9 @@ public struct RuntimeProviderTemplateModel: Codable, Sendable, Equatable, Identi
         self.webSearch = webSearch
         self.inputPricePerMillion = inputPricePerMillion
         self.outputPricePerMillion = outputPricePerMillion
+        self.supportedReasoningEfforts = supportedReasoningEfforts
+        self.canDisableReasoning = canDisableReasoning
+        self.reasoningEffort = reasoningEffort
     }
 }
 
@@ -264,6 +290,8 @@ public extension ProviderConnection {
             // Gateway is a connection/credential kind. The runtime talks to
             // it through the OpenAI-compatible Chat Completions protocol.
             api = "openai"
+        case .openAIResponses:
+            api = "responses"
         }
 
         let credential: RuntimeConnectionCredentialDeclaration?
@@ -313,7 +341,18 @@ public extension RuntimeProviderDefinition {
     /// to false. Models map `id` → ProviderModel.id (capability flags carried
     /// when present).
     func asProviderConnection() -> ProviderConnection {
-        let transport: ProviderTransport = api == "ollama" ? .ollama : .openAIChatCompletions
+        let transport: ProviderTransport
+        switch api {
+        case "openai":
+            transport = .openAIChatCompletions
+        case "ollama":
+            transport = .ollama
+        case "responses":
+            transport = .openAIChatCompletions
+        default:
+            transport = .openAIChatCompletions
+        }
+
         let authentication: ProviderAuthentication
         if api == "gateway" || credential?.namespace == "gateway" {
             authentication = .gatewayAccount
@@ -344,7 +383,6 @@ public extension RuntimeProviderDefinition {
         }
         return ProviderConnection(
             id: id,
-            providerID: "openai-compatible",
             displayName: id,
             transport: transport,
             authentication: authentication,
@@ -496,7 +534,7 @@ public struct RuntimeProviderService: ProviderStore, Sendable {
     #endif
 
     public func listProviders() async throws -> [RuntimeProviderDefinition] {
-        try await client.listProviders()
+        try await client.listConnectedProviders()
     }
 
     public func getProvider(id: String) async throws -> RuntimeProviderDefinition? {

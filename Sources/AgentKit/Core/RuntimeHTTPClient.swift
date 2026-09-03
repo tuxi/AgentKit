@@ -225,7 +225,7 @@ struct RuntimeHTTPClient: Sendable {
     /// `{"data":{"providers":[{id, enabled, base_url, api, credential, models}, ...]}}` —
     /// each entry is a complete `RuntimeProviderDefinition`, identical in shape
     /// to `GET /v1/providers/{id}`. Single shape; no fallback.
-    func listProviders() async throws -> [RuntimeProviderDefinition] {
+    func listConnectedProviders() async throws -> [RuntimeProviderDefinition] {
         let request = try await buildRequest("GET", pathComponents: "v1/providers")
         let (data, response) = try await session.data(for: request)
         try validateHTTP(response, data: data)

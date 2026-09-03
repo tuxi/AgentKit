@@ -172,6 +172,9 @@ public struct RuntimeServerModelDescriptor: Codable, Sendable, Equatable {
     /// v2 addition (optional for interop): why the model is unavailable, e.g.
     /// "quota exhausted" / "provider error". Present only when available == false.
     public let unavailableReason: String?
+    public let supportedReasoningEfforts: [String]?
+    public let canDisableReasoning: Bool?
+    public let reasoningEffort: String?
 
     enum CodingKeys: String, CodingKey {
         case available
@@ -183,6 +186,9 @@ public struct RuntimeServerModelDescriptor: Codable, Sendable, Equatable {
         case supportsReasoning = "supports_reasoning"
         case inputModalities = "input_modalities"
         case unavailableReason = "unavailable_reason"
+        case supportedReasoningEfforts = "supported_reasoning_efforts"
+        case canDisableReasoning = "can_disable_reasoning"
+        case reasoningEffort = "reasoning_effort"
     }
 
     public init(
@@ -194,7 +200,10 @@ public struct RuntimeServerModelDescriptor: Codable, Sendable, Equatable {
         supportsReasoning: Bool,
         inputModalities: [String],
         available: Bool,
-        unavailableReason: String? = nil
+        unavailableReason: String? = nil,
+        supportedReasoningEfforts: [String]? = nil,
+        canDisableReasoning: Bool? = nil,
+        reasoningEffort: String? = nil
     ) {
         self.runtimeAlias = runtimeAlias
         self.wireModelID = wireModelID
@@ -205,5 +214,8 @@ public struct RuntimeServerModelDescriptor: Codable, Sendable, Equatable {
         self.inputModalities = inputModalities
         self.available = available
         self.unavailableReason = unavailableReason
+        self.supportedReasoningEfforts = supportedReasoningEfforts
+        self.canDisableReasoning = canDisableReasoning
+        self.reasoningEffort = reasoningEffort
     }
 }

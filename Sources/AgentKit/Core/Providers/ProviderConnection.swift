@@ -10,8 +10,33 @@ import Foundation
 public enum ProviderTransport: String, Codable, CaseIterable, Sendable {
     /// OpenAI-compatible `/chat/completions`.
     case openAIChatCompletions = "openai_chat_completions"
-    /// Ollama native `/api/chat`.
+    /// openai `/responses`.
+    case openAIResponses = "openai_responses"
     case ollama
+    
+    public init(api: String?) {
+        switch api {
+        case "openai":
+            self = .openAIChatCompletions
+        case "responses":
+            self = .openAIResponses
+        case "ollama":
+            self = .ollama
+        default:
+            self = .openAIChatCompletions
+        }
+    }
+    
+   public var api: String {
+        switch self {
+        case .openAIChatCompletions:
+            return "openai"
+        case .openAIResponses:
+            return "responses"
+        case .ollama:
+            return "ollama"
+        }
+    }
 }
 
 public enum ProviderAuthentication: String, Codable, CaseIterable, Sendable {
@@ -39,6 +64,22 @@ public enum ProviderInputModality: String, Identifiable, Codable, CaseIterable, 
     public var displayName: String { self.rawValue }
 }
 
+public enum ModelReasoningEffort: String, Identifiable, CaseIterable, Codable, Sendable {
+    case low
+    case medium
+    case high
+    case xHigh = "x-high"
+    case max
+    
+    public var id: String {
+        rawValue
+    }
+    
+    public var name: String {
+        rawValue.capitalized
+    }
+}
+
 public struct ProviderModel: Codable, Hashable, Identifiable, Sendable {
     /// Wire model ID sent to the provider.
     public var id: String
@@ -57,6 +98,9 @@ public struct ProviderModel: Codable, Hashable, Identifiable, Sendable {
     public var cacheInputPricePerMillion: Double?
     /// Whether this model supports web search tool use.
     public var webSearch: Bool
+    public let supportedReasoningEfforts: [ModelReasoningEffort]?
+    public let canDisableReasoning: Bool?
+    public let reasoningEffort: ModelReasoningEffort?
 
     public init(
         id: String,
@@ -71,7 +115,10 @@ public struct ProviderModel: Codable, Hashable, Identifiable, Sendable {
         inputPricePerMillion: Double? = nil,
         outputPricePerMillion: Double? = nil,
         cacheInputPricePerMillion: Double? = nil,
-        webSearch: Bool = false
+        webSearch: Bool = false,
+        supportedReasoningEfforts: [ModelReasoningEffort]? = nil,
+        canDisableReasoning: Bool = false,
+        reasoningEffort: ModelReasoningEffort? = nil
     ) {
         self.id = id
         self.runtimeAlias = runtimeAlias
@@ -86,6 +133,10 @@ public struct ProviderModel: Codable, Hashable, Identifiable, Sendable {
         self.outputPricePerMillion = outputPricePerMillion
         self.cacheInputPricePerMillion = cacheInputPricePerMillion
         self.webSearch = webSearch
+        self.supportedReasoningEfforts = supportedReasoningEfforts
+        self.canDisableReasoning = canDisableReasoning
+        self.reasoningEffort = reasoningEffort
+        
     }
 }
 
@@ -94,9 +145,8 @@ public struct ProviderConnection: Codable, Hashable, Identifiable, Sendable {
 
     /// Stable connection ID. Multiple connections may share the same providerID.
     public var id: String
-    /// Template/category ID such as `deepseek` or `openai-compatible`.
-    public var providerID: String
     public var displayName: String
+    /// openai、responses、ollama
     public var transport: ProviderTransport
     public var authentication: ProviderAuthentication
     public var baseURL: URL
@@ -109,7 +159,6 @@ public struct ProviderConnection: Codable, Hashable, Identifiable, Sendable {
 
     public init(
         id: String = UUID().uuidString.lowercased(),
-        providerID: String,
         displayName: String,
         transport: ProviderTransport,
         authentication: ProviderAuthentication,
@@ -120,7 +169,6 @@ public struct ProviderConnection: Codable, Hashable, Identifiable, Sendable {
         allowsInsecurePrivateNetworkHTTP: Bool = false
     ) {
         self.id = id
-        self.providerID = providerID
         self.displayName = displayName
         self.transport = transport
         self.authentication = authentication
@@ -153,7 +201,6 @@ public struct ProviderConnection: Codable, Hashable, Identifiable, Sendable {
     ) -> ProviderConnection {
         ProviderConnection(
             id: talkifyGatewayID,
-            providerID: talkifyGatewayID,
             displayName: "Talkify Gateway",
             transport: .openAIChatCompletions,
             authentication: .gatewayAccount,
@@ -194,9 +241,6 @@ public extension ProviderConnection {
     func validate() throws {
         guard !id.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
             throw ProviderConnectionValidationError.emptyConnectionID
-        }
-        guard !providerID.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
-            throw ProviderConnectionValidationError.emptyProviderID
         }
         guard !displayName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
             throw ProviderConnectionValidationError.emptyDisplayName
