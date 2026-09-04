@@ -545,7 +545,12 @@ struct DraftComposerPanel: View {
     private func modelMenuEntry(_ modelID: String) -> some View {
         if let supported = self.modelSettings.descriptor(for: modelID)?.supportedReasoningEfforts,
            !supported.isEmpty {
-            reasoningEffortMenu(modelID: modelID, supported: supported)
+            Button {
+                let selected = effectiveReasoningEffort(for: modelID, supported: supported)
+                applyReasoningEffort(selected, for: modelID)
+            } label: {
+                reasoningEffortMenu(modelID: modelID, supported: supported)
+            }
         } else {
             modelMenuButton(modelID)
         }
@@ -602,7 +607,7 @@ struct DraftComposerPanel: View {
     /// Picks a reasoning effort for `modelID`, storing it against the current
     /// conversation. Selecting an effort also selects the model (the submenu row
     /// the user hovered), mirroring `modelMenuButton`'s select-on-click.
-    private func applyReasoningEffort(_ effort: ModelReasoningEffort, for modelID: String) {
+    private func applyReasoningEffort(_ effort: ModelReasoningEffort?, for modelID: String) {
         selectModel(modelID, reasoningEffort: effort)
     }
 
