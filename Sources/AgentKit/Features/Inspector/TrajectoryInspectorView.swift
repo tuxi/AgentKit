@@ -287,6 +287,8 @@ private struct InvocationCardView: View {
         VStack(alignment: .leading, spacing: 3) {
             detailRow("Provider", request.provider ?? "—")
             detailRow("Base URL", request.baseURL ?? "—")
+            detailRow("Model", request.modelName ?? "-")
+            detailRow("Reasoning Effort", request.reasoningEffort ?? "—")
             if !invocation.executedTools.isEmpty {
                 detailRow("实际调用", invocation.executedTools.joined(separator: ", "))
             }

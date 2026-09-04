@@ -347,7 +347,8 @@ public struct ConversationDetailView: View {
                     let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
                     return await store.sendUserMessage(
                         trimmed,
-                        model: model,
+                        model: model.name,
+                        reasoningEffort: model.reasoningEffort,
                         through: vm
                     )
                 },

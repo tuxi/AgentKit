@@ -48,6 +48,7 @@ public struct AgentInput: Sendable {
     public var toolResult: ToolResultContent?
     /// 当前轮使用的模型（Gateway 模型 ID 或 config alias）。为空时 Runtime 使用 default_model。
     public var model: String?
+    public var reasoningEffort: ModelReasoningEffort?
     /// 扩展元数据。P1 收敛 schema，P0 仅保留扩展点。
     public var metadata: [String: String]?
     /// Stable client identity for accepted/queued acknowledgement and idempotent retry.
@@ -65,6 +66,7 @@ public struct AgentInput: Sendable {
     public static func text(
         _ text: String,
         model: String? = nil,
+        reasoningEffort: ModelReasoningEffort? = nil,
         assets: [UserAssetRef] = [],
         localAssets: [LocalUserAssetRef] = [],
         requestID: String = UUID().uuidString
@@ -73,6 +75,7 @@ public struct AgentInput: Sendable {
             kind: .text,
             text: text,
             model: model,
+            reasoningEffort: reasoningEffort,
             requestID: requestID,
             assets: assets,
             localAssets: localAssets
@@ -98,6 +101,7 @@ public struct AgentInput: Sendable {
         text: String? = nil,
         toolResult: ToolResultContent? = nil,
         model: String? = nil,
+        reasoningEffort: ModelReasoningEffort? = nil,
         metadata: [String: String]? = nil,
         requestID: String? = nil,
         assets: [UserAssetRef] = [],
@@ -107,6 +111,7 @@ public struct AgentInput: Sendable {
         self.text = text
         self.toolResult = toolResult
         self.model = model
+        self.reasoningEffort = reasoningEffort
         self.metadata = metadata
         self.requestID = requestID
         self.assets = assets

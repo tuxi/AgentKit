@@ -12,6 +12,7 @@ final class ConversationLocalStateTests: XCTestCase {
             state.composerDraft.workspacePath = "/tmp/project"
             state.composerDraft.wantsManagedWorktree = true
             state.selectedModelID = "provider/model-a"
+            state.reasoningEffort = "high"
             state.recentModelIDs = ["provider/model-a", "provider/model-b"]
         }
         try first.updateState(for: .session("session-a")) { state in
@@ -29,6 +30,7 @@ final class ConversationLocalStateTests: XCTestCase {
         XCTAssertEqual(draft.composerDraft.workspacePath, "/tmp/project")
         XCTAssertTrue(draft.composerDraft.wantsManagedWorktree)
         XCTAssertEqual(draft.selectedModelID, "provider/model-a")
+        XCTAssertEqual(draft.reasoningEffort, "high")
         XCTAssertEqual(draft.recentModelIDs, ["provider/model-a", "provider/model-b"])
 
         let session = try XCTUnwrap(reopened.state(for: .session("session-a")))
@@ -46,6 +48,7 @@ final class ConversationLocalStateTests: XCTestCase {
             state.composerDraft.text = "send me"
             state.composerDraft.clientRequestID = "create-1"
             state.selectedModelID = "model-a"
+            state.reasoningEffort = "x-high"
         }
 
         try store.migrateDraft(draftID, to: "session-1")
@@ -57,6 +60,7 @@ final class ConversationLocalStateTests: XCTestCase {
         let session = try XCTUnwrap(store.state(for: .session("session-1")))
         XCTAssertEqual(session.composerDraft.text, "send me")
         XCTAssertEqual(session.selectedModelID, "model-a")
+        XCTAssertEqual(session.reasoningEffort, "x-high")
         XCTAssertNil(try store.latestDraft())
     }
 

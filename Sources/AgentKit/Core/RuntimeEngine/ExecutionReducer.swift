@@ -917,6 +917,9 @@ public struct ExecutionReducer: Sendable {
         if let baseURL = request.baseURL {
             metadata["base_url"] = baseURL
         }
+        if let reasoningEffort = request.reasoningEffort {
+            metadata["reasoning_effort"] = reasoningEffort
+        }
         if !request.toolNames.isEmpty {
             metadata["toolNames"] = request.toolNames.joined(separator: ",")
         }

@@ -41,14 +41,20 @@ public struct ConversationContextSnapshot: Sendable, Codable, Hashable {
 }
 
 /// 当前模型及其上下文窗口配置。
-public struct ConversationContextModel: Sendable, Codable, Hashable {
+public struct ConversationContextModel: Sendable, Codable, Hashable, Identifiable, Equatable {
     public let name: String
     public let contextWindow: Int
+    public let reasoningEffort: ModelReasoningEffort?
     public let compactThreshold: Int
     public let compactRatio: Double
+    
+    public var id: String {
+        name + "_" + (reasoningEffort?.rawValue ?? "")
+    }
 
-    public init(name: String, contextWindow: Int, compactThreshold: Int, compactRatio: Double) {
+    public init(name: String, reasoningEffort: ModelReasoningEffort?, contextWindow: Int, compactThreshold: Int, compactRatio: Double) {
         self.name = name
+        self.reasoningEffort = reasoningEffort
         self.contextWindow = contextWindow
         self.compactThreshold = compactThreshold
         self.compactRatio = compactRatio
@@ -56,6 +62,7 @@ public struct ConversationContextModel: Sendable, Codable, Hashable {
 
     enum CodingKeys: String, CodingKey {
         case name
+        case reasoningEffort = "reasoning_effort"
         case contextWindow = "context_window"
         case compactThreshold = "compact_threshold"
         case compactRatio = "compact_ratio"
@@ -64,9 +71,15 @@ public struct ConversationContextModel: Sendable, Codable, Hashable {
     public init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
         name = try c.decode(String.self, forKey: .name)
-        contextWindow = try c.decode(Int.self, forKey: .contextWindow)
-        compactThreshold = try c.decode(Int.self, forKey: .compactThreshold)
-        compactRatio = try c.decode(Double.self, forKey: .compactRatio)
+        reasoningEffort = try c.decode(ModelReasoningEffort.self, forKey: .reasoningEffort)
+        contextWindow = try c.decodeIfPresent(Int.self, forKey: .contextWindow) ?? 0
+        compactThreshold = try c.decodeIfPresent(Int.self, forKey: .compactThreshold) ?? 0
+        compactRatio = try c.decodeIfPresent(Double.self, forKey: .compactRatio) ?? 0
+    }
+    
+    
+    public static func == (lhs: Self, rhs: Self) -> Bool {
+        return lhs.id == rhs.id
     }
 }
 

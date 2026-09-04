@@ -35,7 +35,7 @@ struct DraftComposerPanel: View {
     let isDraft: Bool
     var isTurnRunning: Bool = false
     var onStop: (() -> Void)? = nil
-    let onSend: (_ text: String, _ model: String, _ assets: [UserAssetRef]) async -> Bool
+    let onSend: (_ text: String, _ model: ConversationContextModel, _ assets: [UserAssetRef]) async -> Bool
     var onAddAttachment: (() -> Void)? = nil
     
     let viewModel: ConversationViewModel?
@@ -44,7 +44,7 @@ struct DraftComposerPanel: View {
     /// selectedModel 残留上一次的选择。活跃会话场景不需要传。
     var draftRevision: Int = 0
     /// 当前对话的模型 ID（binding，每个对话独立）。
-    @State var selectedModel: String?
+    @State var selectedModel: ConversationContextModel?
     /// 模型切换回调。
     var onModelChange: ((String) -> Void)? = nil
     
@@ -119,6 +119,45 @@ struct DraftComposerPanel: View {
             contentWidth = newValue
         })
         .modifier(DraftComposerSurfaceModifier())
+        .confirmationDialog(
+            "这会将文件上传到云端进行视觉识别。",
+            isPresented: $isGatewayUploadConfirmationPresented,
+            titleVisibility: .visible
+        ) {
+            Button("上传并使用云端视觉") {
+                confirmGatewayUpload()
+            }
+            Button("取消", role: .cancel) {
+                pendingGatewayUploadID = nil
+            }
+        }
+        .alert(AgentKitLocalized.string("composer.voice_input.no_permission_title"),
+               isPresented: $showPermissionAlert) {
+            Button(AgentKitLocalized.string("composer.voice_input.open_settings")) {
+                VoiceInputService.openSystemSettings()
+            }
+            Button(AgentKitLocalized.string("composer.voice_input.cancel"), role: .cancel) {
+                voiceService.reset()
+            }
+        } message: {
+            Text(AgentKitLocalized.string("composer.voice_input.no_permission"))
+        }
+#if os(iOS)
+        .sheet(isPresented: $isIOSModelPickerPresented) {
+            IOSModelPickerSheet(
+                groups: modelGroups,
+                ungroupedModelIDs: modelGroups.isEmpty ? modelSettings.availableModelIDs : [],
+                selectedModel: selectedModel,
+                displayName: { modelSettings.displayName(for: $0) },
+                onSelect: { modelID in
+                    selectModel(modelID)
+                    isIOSModelPickerPresented = false
+                }
+            )
+            .presentationDetents([.medium, .height(260)])
+            .presentationDragIndicator(.visible)
+        }
+#endif
     }
     
     var content: some View {
@@ -224,7 +263,7 @@ struct DraftComposerPanel: View {
                         isIOSModelPickerPresented = true
                     } label: {
                         HStack(spacing: 5) {
-                            Text(modelSettings.selectionDisplayName(for: selectedModel ?? ""))
+                            Text(modelSettings.selectionDisplayName(for: selectedModel?.name ?? ""))
                                 .font(.system(size: 13, weight: .semibold))
                                 .lineLimit(1)
                             Image(systemName: "chevron.up")
@@ -246,25 +285,26 @@ struct DraftComposerPanel: View {
                     Menu {
                         if modelGroups.isEmpty {
                             ForEach(modelSettings.availableModelIDs, id: \.self) { modelID in
-                                modelMenuButton(modelID)
+                                modelMenuEntry(modelID)
                             }
                         } else {
                             ForEach(modelGroups) { group in
                                 Section {
                                     ForEach(group.modelIDs, id: \.self) { modelID in
-                                        modelMenuButton(modelID)
+                                        modelMenuEntry(modelID)
                                     }
                                 } header: {
                                     Text(group.name)
                                 }
                             }
                         }
+
                     } label: {
                         if contentWidth <= 500 {
                             Image(systemName: "brain.head.profile")
                                 .font(.system(size: 9, weight: .semibold))
                         } else {
-                            Text(modelSettings.selectionDisplayName(for: selectedModel ?? ""))
+                            Text(modelSettings.selectionDisplayName(for: selectedModel?.name ?? ""))
                                 .font(.system(size: 13, weight: .medium))
                                 .lineLimit(1)
                                 .frame(maxWidth: 35)
@@ -380,65 +420,26 @@ struct DraftComposerPanel: View {
             // 模型列表延迟到达时自动恢复 selectedModel（Bug 2）。
             // 若 UI 先于网络渲染，.task(id:) 恢复时 gatewayModels 尚为 nil，
             // selectedModel 被设为空串。列表到达后此处重新解析并回填。
-            guard !newIDs.isEmpty, let current = selectedModel, current.isEmpty else { return }
+            guard !newIDs.isEmpty, let current = selectedModel, current.name.isEmpty else { return }
             let resolved = modelSettings.getModel(with: viewModel?.conversation?.id)
-            if let resolved, !resolved.isEmpty {
-                selectedModel = resolved
+            if let resolved, !resolved.0.isEmpty {
+                selectedModel = ConversationContextModel(name: resolved.0, reasoningEffort: resolved.1, contextWindow: 0, compactThreshold: 0, compactRatio: 0)
             }
         }
-        .onChange(of: viewModel?.selectedModel ?? "", { oldModel, newModel in
+        .onChange(of: voiceService.state) { _, newState in
+            if case .error = newState {
+                showPermissionAlert = true
+            }
+        }
+        .onChange(of: viewModel?.selectedModel ?? ConversationContextModel(name: "", reasoningEffort: nil, contextWindow: 0, compactThreshold: 0, compactRatio: 0)) { oldModel, newModel in
             if oldModel == newModel {
                 return
             }
             if newModel == selectedModel {
                 return
             }
-            self.selectModel(newModel)
-        })
-        .onChange(of: voiceService.state) { _, newState in
-            if case .error = newState {
-                showPermissionAlert = true
-            }
+            self.selectModel(newModel.name, reasoningEffort: newModel.reasoningEffort)
         }
-        .confirmationDialog(
-            "这会将文件上传到云端进行视觉识别。",
-            isPresented: $isGatewayUploadConfirmationPresented,
-            titleVisibility: .visible
-        ) {
-            Button("上传并使用云端视觉") {
-                confirmGatewayUpload()
-            }
-            Button("取消", role: .cancel) {
-                pendingGatewayUploadID = nil
-            }
-        }
-        .alert(AgentKitLocalized.string("composer.voice_input.no_permission_title"),
-               isPresented: $showPermissionAlert) {
-            Button(AgentKitLocalized.string("composer.voice_input.open_settings")) {
-                VoiceInputService.openSystemSettings()
-            }
-            Button(AgentKitLocalized.string("composer.voice_input.cancel"), role: .cancel) {
-                voiceService.reset()
-            }
-        } message: {
-            Text(AgentKitLocalized.string("composer.voice_input.no_permission"))
-        }
-#if os(iOS)
-        .sheet(isPresented: $isIOSModelPickerPresented) {
-            IOSModelPickerSheet(
-                groups: modelGroups,
-                ungroupedModelIDs: modelGroups.isEmpty ? modelSettings.availableModelIDs : [],
-                selectedModel: selectedModel,
-                displayName: { modelSettings.displayName(for: $0) },
-                onSelect: { modelID in
-                    selectModel(modelID)
-                    isIOSModelPickerPresented = false
-                }
-            )
-            .presentationDetents([.medium, .height(260)])
-            .presentationDragIndicator(.visible)
-        }
-#endif
     }
     
     // MARK: - Input Field
@@ -535,14 +536,84 @@ struct DraftComposerPanel: View {
     }
     
 #if os(macOS)
+    /// Renders one model row inside the model picker Menu. When the model
+    /// advertises `supportedReasoningEfforts`, the row becomes a hover-revealed
+    /// submenu listing those efforts (default check = the model's own
+    /// `reasoningEffort` / the user's per-conversation override). Otherwise it is
+    /// a plain click-to-select button.
     @ViewBuilder
-    private func modelMenuButton(_ modelID: String) -> some View {
-        Button {
-            selectModel(modelID)
+    private func modelMenuEntry(_ modelID: String) -> some View {
+        if let supported = self.modelSettings.descriptor(for: modelID)?.supportedReasoningEfforts,
+           !supported.isEmpty {
+            reasoningEffortMenu(modelID: modelID, supported: supported)
+        } else {
+            modelMenuButton(modelID)
+        }
+    }
+
+    /// A nested Menu (macOS submenu, revealed on hover of the parent row) that
+    /// lets the user pick a `supportedReasoningEfforts` value for this model.
+    private func reasoningEffortMenu(modelID: String, supported: [ModelReasoningEffort]) -> some View {
+        let selected = effectiveReasoningEffort(for: modelID, supported: supported)
+        return Menu {
+            ForEach(supported) { effort in
+                Button {
+                    applyReasoningEffort(effort, for: modelID)
+                } label: {
+                    HStack {
+                        Text(effort.name)
+                        if effort == selected {
+                            Image(systemName: "checkmark")
+                        }
+                    }
+                }
+            }
         } label: {
             HStack {
                 Text(modelSettings.displayName(for: modelID))
-                if modelID == selectedModel {
+                if modelID == selectedModel?.name {
+                    Image(systemName: "checkmark")
+                }
+            }
+        }
+    }
+
+    /// The effort that should be shown as checked for a given model row: the
+    /// user's stored override when it targets the currently selected model and is
+    /// in the supported list; otherwise the model's own default.
+    private func effectiveReasoningEffort(for modelID: String, supported: [ModelReasoningEffort]) -> ModelReasoningEffort? {
+        if modelID == selectedModel?.name,
+           let override = storedReasoningEffortOverride,
+           supported.contains(override) {
+            return override
+        }
+        return self.modelSettings.descriptor(for: modelID)?.reasoningEffort
+    }
+
+    /// The user's per-conversation reasoning-effort override persisted in local
+    /// state (nil when the user has not overridden it).
+    private var storedReasoningEffortOverride: ModelReasoningEffort? {
+        guard let key = loadedStateKey,
+              let raw = try? workspaceStore.localStateStore.state(for: key)?.reasoningEffort,
+              !raw.isEmpty else { return nil }
+        return ModelReasoningEffort(rawValue: raw)
+    }
+
+    /// Picks a reasoning effort for `modelID`, storing it against the current
+    /// conversation. Selecting an effort also selects the model (the submenu row
+    /// the user hovered), mirroring `modelMenuButton`'s select-on-click.
+    private func applyReasoningEffort(_ effort: ModelReasoningEffort, for modelID: String) {
+        selectModel(modelID, reasoningEffort: effort)
+    }
+
+    @ViewBuilder
+    private func modelMenuButton(_ modelID: String) -> some View {
+        Button {
+            selectModel(modelID, reasoningEffort: nil)
+        } label: {
+            HStack {
+                Text(modelSettings.displayName(for: modelID))
+                if modelID == selectedModel?.name {
                     Image(systemName: "checkmark")
                 }
             }
@@ -566,13 +637,18 @@ struct DraftComposerPanel: View {
 #endif
     }
     
-    private func selectModel(_ modelID: String) {
-        selectedModel = modelID
-        viewModel?.selectedModel = modelID
-        modelSettings.didUseModel(modelID, conversation: viewModel?.conversation?.id ?? "")
-        persistModel(modelID)
-        if let runtimeAlias = modelSettings.getWireModelID(for: modelID) {
-            onModelChange?(runtimeAlias)
+    private func selectModel(_ modelID: String, reasoningEffort: ModelReasoningEffort?) {
+        let model = ConversationContextModel(name: modelID, reasoningEffort: reasoningEffort, contextWindow: 0, compactThreshold: 0, compactRatio: 0)
+        selectedModel = model
+        viewModel?.selectedModel = model
+        modelSettings.didUseModel(
+            modelID,
+            reasoningEffort: reasoningEffort,
+            conversation: viewModel?.conversation?.id ?? ""
+        )
+        persistModel(modelID, reasoningEffort: reasoningEffort)
+        if let wireModel = modelSettings.getWireModelID(for: modelID) {
+            onModelChange?(wireModel)
         }
     }
     
@@ -595,7 +671,7 @@ struct DraftComposerPanel: View {
             return attachment.state == .ready
         }
         return isEnabled && hasContent && attachmentsReady && !isSending
-        && !isTurnRunning && modelSettings.isModelAvailable(selectedModel)
+        && !isTurnRunning && modelSettings.isModelAvailable(selectedModel?.name)
     }
     
     private func send() {
@@ -605,14 +681,17 @@ struct DraftComposerPanel: View {
         }
         
         guard canSend,
-              let selectedModel,
-              let wireModelId = modelSettings.getWireModelID(for: selectedModel) else { return }
+              let selectedModel
+//              let wireModelId = modelSettings.getWireModelID(for: selectedModel.name)
+        else {
+            return
+        }
         let toSend = trimmed
         submittedTextSnapshot = toSend
         persistCurrentDraft()
         isSending = true
         Task {
-            _ = await onSend(toSend, wireModelId, readyAssets)
+            _ = await onSend(toSend, selectedModel, readyAssets)
             refreshAttachmentsFromLocalState()
             isSending = false
         }
@@ -715,8 +794,13 @@ struct DraftComposerPanel: View {
         text = state?.composerDraft.text ?? ""
         attachments = state?.composerDraft.attachments ?? []
         submittedTextSnapshot = state?.composerDraft.pendingSubmission?.text
-        selectedModel = state?.selectedModelID
-        ?? modelSettings.getModel(with: viewModel?.conversation?.id)
+        
+        if let selectedModelID = state?.selectedModelID {
+            selectedModel = ConversationContextModel(name: selectedModelID, reasoningEffort: ModelReasoningEffort(rawValue: state?.reasoningEffort ?? ""), contextWindow: 0, compactThreshold: 0, compactRatio: 0)
+        } else {
+            let mo = modelSettings.getModel(with: viewModel?.conversation?.id)
+            selectedModel = ConversationContextModel(name: mo?.0 ?? "", reasoningEffort: mo?.1, contextWindow: 0, compactThreshold: 0, compactRatio: 0)
+        }
     }
     
     private func scheduleTextSave(_ value: String, for key: ConversationLocalStateKey) {
@@ -820,10 +904,11 @@ struct DraftComposerPanel: View {
     /// 持久化当前对话/草稿的模型选择到 local state。
     /// 与 ModelSettingsStore.setUserModel() 互补：setUserModel 只写 .session(id)，
     /// 草稿（无 session）依赖此方法写 .draft(uuid)，保证多草稿间模型选择隔离。
-    private func persistModel(_ modelID: String) {
+    private func persistModel(_ modelID: String, reasoningEffort: ModelReasoningEffort?) {
         guard let key = loadedStateKey, !modelID.isEmpty else { return }
         try? workspaceStore.localStateStore.updateState(for: key) { state in
             state.selectedModelID = modelID
+            state.reasoningEffort = reasoningEffort?.rawValue
             state.recentModelIDs.removeAll { $0 == modelID }
             state.recentModelIDs.insert(modelID, at: 0)
             if state.recentModelIDs.count > 8 {

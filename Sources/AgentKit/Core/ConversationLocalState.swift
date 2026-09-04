@@ -243,6 +243,10 @@ public struct ComposerDraft: Codable, Sendable, Equatable {
 public struct ConversationLocalState: Codable, Sendable, Equatable {
     public var composerDraft: ComposerDraft
     public var selectedModelID: String?
+    /// User-picked reasoning effort override (raw value of `ModelReasoningEffort`)
+    /// for the currently selected model. Nil = use the model's own default
+    /// (`UnifiedModelDescriptor.reasoningEffort`).
+    public var reasoningEffort: String?
     public var recentModelIDs: [String]
     public var lastReadSequence: Int64
     public var lastSeenTerminalSequence: Int64
@@ -253,6 +257,7 @@ public struct ConversationLocalState: Codable, Sendable, Equatable {
     public init(
         composerDraft: ComposerDraft = ComposerDraft(),
         selectedModelID: String? = nil,
+        reasoningEffort: String? = nil,
         recentModelIDs: [String] = [],
         lastReadSequence: Int64 = 0,
         lastSeenTerminalSequence: Int64 = 0,
@@ -262,6 +267,7 @@ public struct ConversationLocalState: Codable, Sendable, Equatable {
     ) {
         self.composerDraft = composerDraft
         self.selectedModelID = selectedModelID
+        self.reasoningEffort = reasoningEffort
         self.recentModelIDs = recentModelIDs
         self.lastReadSequence = lastReadSequence
         self.lastSeenTerminalSequence = lastSeenTerminalSequence
@@ -271,7 +277,7 @@ public struct ConversationLocalState: Codable, Sendable, Equatable {
     }
 
     private enum CodingKeys: String, CodingKey {
-        case composerDraft, selectedModelID, recentModelIDs, lastReadSequence
+        case composerDraft, selectedModelID, reasoningEffort, recentModelIDs, lastReadSequence
         case lastSeenTerminalSequence, lastNotifiedTerminalSequence
         case lastNotifiedApprovalSequence, updatedAt
     }
@@ -280,6 +286,7 @@ public struct ConversationLocalState: Codable, Sendable, Equatable {
         let values = try decoder.container(keyedBy: CodingKeys.self)
         composerDraft = try values.decodeIfPresent(ComposerDraft.self, forKey: .composerDraft) ?? ComposerDraft()
         selectedModelID = try values.decodeIfPresent(String.self, forKey: .selectedModelID)
+        reasoningEffort = try values.decodeIfPresent(String.self, forKey: .reasoningEffort)
         recentModelIDs = try values.decodeIfPresent([String].self, forKey: .recentModelIDs) ?? []
         lastReadSequence = try values.decodeIfPresent(Int64.self, forKey: .lastReadSequence) ?? 0
         lastSeenTerminalSequence = try values.decodeIfPresent(Int64.self, forKey: .lastSeenTerminalSequence) ?? 0
@@ -585,6 +592,7 @@ public final class SQLiteConversationLocalStateStore: ConversationLocalStateStor
         guard var session else { return draft }
         session.composerDraft = draft.composerDraft
         session.selectedModelID = draft.selectedModelID ?? session.selectedModelID
+        session.reasoningEffort = draft.reasoningEffort ?? session.reasoningEffort
         session.recentModelIDs = unique(draft.recentModelIDs + session.recentModelIDs)
         session.lastReadSequence = max(session.lastReadSequence, draft.lastReadSequence)
         session.lastSeenTerminalSequence = max(session.lastSeenTerminalSequence, draft.lastSeenTerminalSequence)
@@ -656,6 +664,7 @@ public final class InMemoryConversationLocalStateStore: ConversationLocalStateSt
                 var session = values[.session(sessionID)] ?? ConversationLocalState()
                 session.composerDraft = draft.composerDraft
                 session.selectedModelID = draft.selectedModelID ?? session.selectedModelID
+                session.reasoningEffort = draft.reasoningEffort ?? session.reasoningEffort
                 var seen = Set<String>()
                 session.recentModelIDs = (draft.recentModelIDs + session.recentModelIDs).filter {
                     seen.insert($0).inserted

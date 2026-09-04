@@ -39,16 +39,12 @@ public final class ModelSettingsStore {
     // MARK: - Private
 
     private static let lastModelKey = "code_agent.model.last_selected"
-    private static let knownModelDisplayNamesKey = "code_agent.model.known_display_names.v1"
 
     private let defaults: UserDefaults
     private let localStateStore: any ConversationLocalStateStore
 
-    /// Secret-free tombstones for models referenced by historical sessions.
-    /// A removed connection must not turn its stable ID into user-facing text.
-    private var knownModelDisplayNames: [String: String] = [:]
     /// 最后一次选择模型（跨对话，用于新对话默认值）
-    public private(set) var lastSelectedModel: String?
+    public private(set) var lastSelectedModel: (String, ModelReasoningEffort?)?
     
     private let service: (any GatewayService)?
     private var refreshTask: Task<Void, Error>?
@@ -64,9 +60,7 @@ public final class ModelSettingsStore {
         self.localStateStore = localStateStore
         self.service = service
         // 从本地缓存恢复
-        self.lastSelectedModel = defaults.string(forKey: Self.lastModelKey)
-        self.knownModelDisplayNames =
-            defaults.dictionary(forKey: Self.knownModelDisplayNamesKey) as? [String: String] ?? [:]
+        self.loadLastSelected()
     }
 
     /// Creates a model store that is driven exclusively by Provider Connections.
@@ -77,17 +71,24 @@ public final class ModelSettingsStore {
         self.defaults = defaults
         self.localStateStore = localStateStore
         self.service = nil
-        self.lastSelectedModel = defaults.string(forKey: Self.lastModelKey)
-        self.knownModelDisplayNames =
-            defaults.dictionary(forKey: Self.knownModelDisplayNamesKey) as? [String: String] ?? [:]
+        self.loadLastSelected()
         self.unifiedModels = []
     }
 
     // MARK: - Persistence
+    
+    private func loadLastSelected() {
+        let lastSelectedModelDict = defaults.dictionary(forKey: Self.lastModelKey) ?? [:]
+        if let model = lastSelectedModelDict["model"] as? String {
+            let reasoningEffort = lastSelectedModelDict["reasoning_effort"] as? String
+            self.lastSelectedModel = (model, ModelReasoningEffort(rawValue: reasoningEffort ?? ""))
+        }
+    }
 
     private func persistLastSelected() {
         if let model = lastSelectedModel {
-            defaults.set(model, forKey: Self.lastModelKey)
+            let dict: [String: String] = ["model": model.0, "reasoning_effort": ( model.1?.rawValue ?? "")]
+            defaults.set(dict, forKey: Self.lastModelKey)
         }
     }
 
@@ -123,10 +124,6 @@ public final class ModelSettingsStore {
         _ models: [UnifiedModelDescriptor],
         defaultModelID: String?
     ) {
-        for model in models {
-            knownModelDisplayNames[model.id] = model.displayName
-        }
-        defaults.set(knownModelDisplayNames, forKey: Self.knownModelDisplayNamesKey)
         unifiedModels = models
         unifiedDefaultModelID = defaultModelID.flatMap { requested in
             models.contains(where: { $0.id == requested }) ? requested : nil
@@ -138,7 +135,17 @@ public final class ModelSettingsStore {
     }
 
     public func descriptor(for modelID: String) -> UnifiedModelDescriptor? {
-        unifiedModels?.first { $0.id == modelID }
+        unifiedModels?.first {
+            if $0.id == modelID {
+                return true
+            }
+            let items = modelID.components(separatedBy: "/")
+            if items.count >= 1 {
+                return $0.providerID == items.first && $0.wireModelID == items.last
+            }
+            
+            return false
+        }
     }
 
     /// The runtime wire alias for a model ID (from the unified catalog).
@@ -187,17 +194,18 @@ public final class ModelSettingsStore {
     // MARK: - User Preferences
 
     /// 用户选择模型时调用。持久化到本地缓存。
-    public func didUseModel(_ modelID: String, conversation: String) {
-        setUserModel(modelID, for: conversation)
-        self.lastSelectedModel = modelID
+    public func didUseModel(_ modelID: String, reasoningEffort: ModelReasoningEffort?, conversation: String) {
+        setUserModel(modelID, reasoningEffort: reasoningEffort, for: conversation)
+        self.lastSelectedModel = (modelID, reasoningEffort)
         persistLastSelected()
     }
 
-    public func setUserModel(_ modelID: String, for conversation: String) {
+    public func setUserModel(_ modelID: String, reasoningEffort: ModelReasoningEffort?, for conversation: String) {
         guard !conversation.isEmpty else { return }
         guard !modelID.isEmpty else { return }
         try? localStateStore.updateState(for: .session(conversation)) { state in
             state.selectedModelID = modelID
+            state.reasoningEffort = reasoningEffort?.rawValue
             state.recentModelIDs.removeAll { $0 == modelID }
             state.recentModelIDs.insert(modelID, at: 0)
             if state.recentModelIDs.count > 8 {
@@ -206,18 +214,17 @@ public final class ModelSettingsStore {
         }
     }
 
-    public func getModel(with conversation: String?) -> String? {
+    public func getModel(with conversation: String?) -> (String, ModelReasoningEffort?)? {
         guard let conversation, !conversation.isEmpty else {
             return modelForNewConversation
         }
-        if let persisted = try? localStateStore.state(for: .session(conversation))?.selectedModelID,
-           !persisted.isEmpty {
-            return persisted
+        if let persisted = try? localStateStore.state(for: .session(conversation)), let model = persisted.selectedModelID, !model.isEmpty {
+            return (model, ModelReasoningEffort(rawValue: persisted.reasoningEffort ?? ""))
         }
         // An existing conversation without an explicit choice must not inherit
         // another conversation's latest selection. `lastSelectedModel` is only
         // the convenience default for a brand-new local draft.
-        return defaultModelForExistingConversation
+        return (defaultModelForExistingConversation, nil)
     }
 
     /// 模型的 display name（用于 UI）。
@@ -225,9 +232,6 @@ public final class ModelSettingsStore {
         if let unifiedModels {
             if let model = unifiedModels.first(where: { $0.id == modelID }) {
                return model.model
-            }
-            if let displayName = knownModelDisplayNames[modelID] {
-                return displayName
             }
             if let identity = UnifiedModelDescriptor.parseRuntimeAlias(modelID) {
                 return identity.wireModelID
@@ -268,36 +272,36 @@ public final class ModelSettingsStore {
     /// 新对话时使用的模型 ID。
     /// 优先 Gateway 默认模型 → 回退上次选择的模型 → 回退列表第一个。
     /// 设计意图：新建对话应使用服务端指定的默认模型，而非继承其他对话的选择。
-    public var modelForNewConversation: String {
+    public var modelForNewConversation: (String, ModelReasoningEffort?) {
         if let unifiedModels {
             if let unifiedDefaultModelID,
                unifiedModels.contains(where: { $0.id == unifiedDefaultModelID }) {
-                return unifiedDefaultModelID
+                return (unifiedDefaultModelID, nil)
             }
             if let stored = lastSelectedModel,
                unifiedModels.contains(where: {
-                   $0.model == stored
+                   $0.model == stored.0
                }) {
                 return stored
             }
-            return unifiedModels.first?.model ?? ""
+            return (unifiedModels.first?.model ?? "", nil)
         }
         if let def = gatewayDefaultModel, let models = gatewayModels,
            models.contains(where: {
                $0.model == def && $0.available != false
            }) {
-            return def
+            return (def, nil)
         }
         if let stored = lastSelectedModel,
            let models = gatewayModels, models.contains(where: {
-               $0.model == stored && $0.available != false
+               $0.model == stored.0 && $0.available != false
            }) {
             return stored
         }
         if let first = gatewayModels?.first(where: { $0.available != false }) {
-            return first.id
+            return (first.id, nil)
         }
-        return ""
+        return ("", nil)
     }
 
     /// Existing sessions that have never selected a model use the Gateway

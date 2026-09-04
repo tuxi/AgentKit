@@ -134,7 +134,7 @@ public final class ConversationViewModel {
 
     /// 本会话选择的模型 ID（Gateway 原生 ID，如 `"deepseek-v4-pro"`）。
     /// 每个对话独立跟踪自己的模型，不是全局设置。
-    public var selectedModel: String
+    public var selectedModel: ConversationContextModel
 
     private let client: RuntimeClient
     private var channel: (any RuntimeSessionChannel)?
@@ -176,7 +176,7 @@ public final class ConversationViewModel {
         client: RuntimeClient,
         toolRegistry: ToolRegistry = ToolRegistry(),
         workspace: Workspace? = nil,
-        model: String = "",
+        model: ConversationContextModel,
         timelineExtensions: [any TimelineExtension] = [],
         turnCoordinator: ConversationTurnCoordinator? = nil,
         capabilityRegistry: RuntimeCapabilityRegistry? = nil,
@@ -695,9 +695,10 @@ public final class ConversationViewModel {
         
         if case .modelRequest(let turnID, let invocationID, let request) = event {
             if let provider = request.provider, !provider.isEmpty {
-                self.selectedModel = "\(provider)/\(request.modelName ?? "")"
+                let modelID = "\(provider)/\(request.modelName ?? "")"
+                self.selectedModel = ConversationContextModel(name: modelID, reasoningEffort: ModelReasoningEffort(rawValue: request.reasoningEffort ?? ""), contextWindow: 0, compactThreshold: 0, compactRatio: 0)
             } else {
-                self.selectedModel = request.modelName ?? ""
+                self.selectedModel = ConversationContextModel(name: request.modelName ?? "", reasoningEffort: nil, contextWindow: 0, compactThreshold: 0, compactRatio: 0)
             }
         }
     }

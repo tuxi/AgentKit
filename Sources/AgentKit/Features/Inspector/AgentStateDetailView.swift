@@ -80,7 +80,7 @@ struct AgentStateDetailView: View {
             }
 
             rowView("模型", icon: "cpu") {
-                Text(vm.selectedModel.isEmpty ? "—" : vm.selectedModel)
+                Text(vm.selectedModel.name.isEmpty ? "—" : vm.selectedModel.name)
             }
         }
     }

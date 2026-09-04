@@ -61,6 +61,7 @@ struct WireFrame: Decodable {
     let text: String?
     let promptTokens: Int?
     let completionTokens: Int?
+    let reasoningEffort: String?
     let totalTokens: Int?
     let billingUnits: Int64?
     let elapsedMs: Int?
@@ -146,6 +147,7 @@ struct WireFrame: Decodable {
         case completionTokens = "completion_tokens"
         case totalTokens = "total_tokens"
         case billingUnits = "billing_units"
+        case reasoningEffort = "reasoning_effort"
         case elapsedMs = "elapsed_ms"
         case beforeTokens = "before_tokens"
         case afterTokens = "after_tokens"
@@ -295,6 +297,7 @@ struct OutgoingAgentInput: Encodable {
     let text: String?
     let toolResult: OutgoingToolResult?
     let model: String?              // per-message model selection (v1.4)
+    let reasoningEffort: ModelReasoningEffort?
     let metadata: [String: String]?
     let requestID: String?
     let assets: [UserAssetRef]?
@@ -311,6 +314,7 @@ struct OutgoingAgentInput: Encodable {
         case toolResult = "tool_result"
         case commandKey = "command_key"
         case commandValue = "command_value"
+        case reasoningEffort = "reasoning_effort"
     }
 
     /// 从 `AgentInput` 编码。
@@ -319,6 +323,7 @@ struct OutgoingAgentInput: Encodable {
         case .text:
             return OutgoingAgentInput(
                 kind: "text", text: input.text, toolResult: nil, model: input.model,
+                reasoningEffort: input.reasoningEffort,
                 metadata: input.metadata, requestID: input.requestID,
                 assets: input.assets.isEmpty ? nil : input.assets,
                 localAssets: input.localAssets.isEmpty ? nil : input.localAssets,
@@ -336,12 +341,14 @@ struct OutgoingAgentInput: Encodable {
             }
             return OutgoingAgentInput(
                 kind: "tool_result", text: nil, toolResult: tr, model: input.model,
+                reasoningEffort: input.reasoningEffort,
                 metadata: input.metadata, requestID: input.requestID, assets: nil, localAssets: nil,
                 command: nil, commandKey: nil, commandValue: nil
             )
         case .command:
             return OutgoingAgentInput(
                 kind: "command", text: input.text, toolResult: nil, model: input.model,
+                reasoningEffort: input.reasoningEffort,
                 metadata: input.metadata, requestID: input.requestID, assets: nil, localAssets: nil,
                 command: nil, commandKey: nil, commandValue: nil
             )
@@ -350,18 +357,21 @@ struct OutgoingAgentInput: Encodable {
             case .patchContext(let key, let value):
                 return OutgoingAgentInput(
                     kind: "system", text: nil, toolResult: nil, model: input.model,
+                    reasoningEffort: input.reasoningEffort,
                     metadata: input.metadata, requestID: input.requestID, assets: nil, localAssets: nil,
                     command: "patch_context", commandKey: key, commandValue: value
                 )
             case .updateMemory(let key, let value):
                 return OutgoingAgentInput(
                     kind: "system", text: nil, toolResult: nil, model: input.model,
+                    reasoningEffort: input.reasoningEffort,
                     metadata: input.metadata, requestID: input.requestID, assets: nil, localAssets: nil,
                     command: "update_memory", commandKey: key, commandValue: value
                 )
             case .overridePlan(let planID):
                 return OutgoingAgentInput(
                     kind: "system", text: nil, toolResult: nil, model: input.model,
+                    reasoningEffort: input.reasoningEffort,
                     metadata: input.metadata, requestID: input.requestID, assets: nil, localAssets: nil,
                     command: "override_plan", commandKey: nil, commandValue: planID
                 )

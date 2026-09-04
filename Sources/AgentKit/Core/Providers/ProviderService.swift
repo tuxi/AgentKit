@@ -41,7 +41,7 @@ public struct RuntimeProviderModelDefinition: Codable, Sendable, Equatable, Iden
     public let webSearch: Bool?
     public let supportedReasoningEfforts: [String]?
     public let canDisableReasoning: Bool?
-    public let reasoningEffort: String?
+    public var reasoningEffort: String?
     
 
     enum CodingKeys: String, CodingKey {

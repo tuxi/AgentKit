@@ -260,6 +260,7 @@ public struct TimelineProjection: Sendable {
                                     modelName: p.metadata["model"],
                                     provider: p.metadata["provider"],
                                     baseURL: p.metadata["base_url"],
+                                    reasoningEffort: p.metadata["reasoning_effort"],
                                     toolNames: p.metadata["toolNames"]?
                                         .split(separator: ",").map(String.init) ?? [],
                                     messageCount: p.metadata["messageCount"].flatMap(Int.init),

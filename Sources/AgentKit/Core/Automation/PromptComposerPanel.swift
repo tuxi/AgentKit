@@ -253,8 +253,8 @@ struct PromptComposerPanel: View {
     private func prefillModelIfNeeded() {
         guard modelID.isEmpty else { return }
         let fallback = modelSettings.modelForNewConversation
-        if !fallback.isEmpty, modelSettings.isModelAvailable(fallback) {
-            modelID = fallback
+        if !fallback.0.isEmpty, modelSettings.isModelAvailable(fallback.0) {
+            modelID = fallback.0
         }
     }
 }

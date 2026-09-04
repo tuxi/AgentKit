@@ -83,7 +83,10 @@ public struct RuntimeServerModelCatalog: Codable, Sendable, Equatable {
                     supportsTools: model.supportsTools,
                     supportsReasoning: model.supportsReasoning,
                     inputModalities: modalities.isEmpty ? [.text] : modalities,
-                    billingSource: connection.billingSource
+                    billingSource: connection.billingSource,
+                    supportedReasoningEfforts: model.supportedReasoningEfforts,
+                    canDisableReasoning: model.canDisableReasoning ?? false,
+                    reasoningEffort: model.reasoningEffort,
                 )
             }
         }
@@ -172,9 +175,9 @@ public struct RuntimeServerModelDescriptor: Codable, Sendable, Equatable {
     /// v2 addition (optional for interop): why the model is unavailable, e.g.
     /// "quota exhausted" / "provider error". Present only when available == false.
     public let unavailableReason: String?
-    public let supportedReasoningEfforts: [String]?
+    public let supportedReasoningEfforts: [ModelReasoningEffort]?
     public let canDisableReasoning: Bool?
-    public let reasoningEffort: String?
+    public let reasoningEffort: ModelReasoningEffort?
 
     enum CodingKeys: String, CodingKey {
         case available
@@ -201,9 +204,9 @@ public struct RuntimeServerModelDescriptor: Codable, Sendable, Equatable {
         inputModalities: [String],
         available: Bool,
         unavailableReason: String? = nil,
-        supportedReasoningEfforts: [String]? = nil,
+        supportedReasoningEfforts: [ModelReasoningEffort]? = nil,
         canDisableReasoning: Bool? = nil,
-        reasoningEffort: String? = nil
+        reasoningEffort: ModelReasoningEffort? = nil
     ) {
         self.runtimeAlias = runtimeAlias
         self.wireModelID = wireModelID

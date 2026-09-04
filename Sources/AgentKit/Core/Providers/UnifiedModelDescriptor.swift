@@ -27,6 +27,9 @@ public struct UnifiedModelDescriptor: Codable, Hashable, Identifiable, Sendable 
     public let cacheInputPricePerMillion: Double?
     public let authentication: ProviderAuthentication
     public let billingSource: String?
+    public let reasoningEffort: ModelReasoningEffort?
+    public let supportedReasoningEfforts: [ModelReasoningEffort]?
+    public let canDisableReasoning: Bool?
 
     public var model: String {
         return "\(providerID)/\(wireModelID)"
@@ -51,6 +54,9 @@ public struct UnifiedModelDescriptor: Codable, Hashable, Identifiable, Sendable 
         self.cacheInputPricePerMillion = model.cacheInputPricePerMillion
         self.authentication = connection.authentication
         self.billingSource = nil
+        self.reasoningEffort = model.reasoningEffort
+        self.supportedReasoningEfforts = model.supportedReasoningEfforts
+        self.canDisableReasoning = model.canDisableReasoning
     }
 
     public init(
@@ -65,7 +71,10 @@ public struct UnifiedModelDescriptor: Codable, Hashable, Identifiable, Sendable 
         supportsTools: Bool,
         supportsReasoning: Bool,
         inputModalities: Set<ProviderInputModality>,
-        billingSource: String
+        billingSource: String,
+        supportedReasoningEfforts: [ModelReasoningEffort]? = nil,
+        canDisableReasoning: Bool = false,
+        reasoningEffort: ModelReasoningEffort? = nil
     ) {
         self.id = serverConnectionID.map {
             RuntimeServerModelIdentity(
@@ -89,6 +98,9 @@ public struct UnifiedModelDescriptor: Codable, Hashable, Identifiable, Sendable 
         self.cacheInputPricePerMillion = nil
         self.authentication = .none
         self.billingSource = billingSource
+        self.supportedReasoningEfforts = supportedReasoningEfforts
+        self.canDisableReasoning = canDisableReasoning
+        self.reasoningEffort = reasoningEffort
     }
 
     public static func makeRuntimeAlias(connectionID: String, wireModelID: String) -> String {

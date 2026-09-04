@@ -166,6 +166,7 @@ public struct ModelRequestInfo: Sendable, Equatable {
     public let modelName: String?
     /// Provider 类型，如 "openai_compatible"。
     public let provider: String?
+    public let reasoningEffort: String?
     /// Provider  url
     public let baseURL: String?
     /// 本次请求注册给模型的工具名列表。
@@ -186,6 +187,7 @@ public struct ModelRequestInfo: Sendable, Equatable {
     public init(modelName: String? = nil,
                 provider: String? = nil,
                 baseURL: String? = nil,
+                reasoningEffort: String?,
                 toolNames: [String] = [],
                 messageCount: Int? = nil,
                 systemPromptChars: Int? = nil,
@@ -196,6 +198,7 @@ public struct ModelRequestInfo: Sendable, Equatable {
         self.modelName = modelName
         self.provider = provider
         self.baseURL = baseURL
+        self.reasoningEffort = reasoningEffort
         self.toolNames = toolNames
         self.messageCount = messageCount
         self.systemPromptChars = systemPromptChars
@@ -322,6 +325,7 @@ extension AgentEvent {
                     modelName: wire.modelName,
                     provider: wire.provider,
                     baseURL: wire.baseURL,
+                    reasoningEffort: wire.reasoningEffort,
                     toolNames: wire.toolNames ?? [],
                     messageCount: wire.messageCount,
                     systemPromptChars: wire.systemPromptChars,

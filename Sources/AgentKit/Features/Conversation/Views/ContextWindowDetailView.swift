@@ -106,6 +106,12 @@ struct ContextWindowDetailView: View {
                 AgentKitLocalized.string("context_window.context_window"),
                 value: ContextFormat.tokens(model.contextWindow)
             )
+            if let reasoningEffort = model.reasoningEffort {
+                LabeledContent(
+                    AgentKitLocalized.string("context_window.reasoning_effort"),
+                    value: reasoningEffort.name
+                )
+            }
             LabeledContent(
                 AgentKitLocalized.string("context_window.compact_threshold"),
                 value: ContextFormat.tokens(model.compactThreshold)
