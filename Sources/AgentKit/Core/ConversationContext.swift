@@ -71,7 +71,7 @@ public struct ConversationContextModel: Sendable, Codable, Hashable, Identifiabl
     public init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
         name = try c.decode(String.self, forKey: .name)
-        reasoningEffort = try c.decode(ModelReasoningEffort.self, forKey: .reasoningEffort)
+        reasoningEffort = try? c.decodeIfPresent(ModelReasoningEffort.self, forKey: .reasoningEffort)
         contextWindow = try c.decodeIfPresent(Int.self, forKey: .contextWindow) ?? 0
         compactThreshold = try c.decodeIfPresent(Int.self, forKey: .compactThreshold) ?? 0
         compactRatio = try c.decodeIfPresent(Double.self, forKey: .compactRatio) ?? 0
