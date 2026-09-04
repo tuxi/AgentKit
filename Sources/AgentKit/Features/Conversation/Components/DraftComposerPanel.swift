@@ -150,7 +150,11 @@ struct DraftComposerPanel: View {
                 selectedModel: selectedModel,
                 displayName: { modelSettings.displayName(for: $0) },
                 onSelect: { modelID in
-                    selectModel(modelID)
+                    let resolved = modelSettings.getModel(with: viewModel?.conversation?.id)
+                    if let resolved, !resolved.0.isEmpty {
+                        let model = ConversationContextModel(name: resolved.0, reasoningEffort: resolved.1, contextWindow: 0, compactThreshold: 0, compactRatio: 0)
+                        selectModel(modelID, reasoningEffort: model.reasoningEffort)
+                    }
                     isIOSModelPickerPresented = false
                 }
             )
@@ -1002,7 +1006,7 @@ private struct IOSModelPickerSheet: View {
     
     let groups: [ComposerModelGroup]
     let ungroupedModelIDs: [String]
-    let selectedModel: String?
+    let selectedModel: ConversationContextModel?
     let displayName: (String) -> String
     let onSelect: (String) -> Void
     
@@ -1068,7 +1072,7 @@ private struct IOSModelPickerSheet: View {
                     .foregroundStyle(.primary)
                     .lineLimit(1)
                 Spacer()
-                if modelID == selectedModel {
+                if modelID == selectedModel?.name {
                     Image(systemName: "checkmark")
                         .font(.system(size: 13, weight: .bold))
                         .foregroundStyle(Color.accentColor)
