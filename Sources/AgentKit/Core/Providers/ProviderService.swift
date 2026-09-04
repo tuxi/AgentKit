@@ -144,6 +144,18 @@ public struct RuntimeProviderDefinition: Codable, Sendable, Equatable, Identifia
         self.enabled = enabled
         self.models = models
     }
+    
+    public init(from decoder: any Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        self.id = try container.decode(String.self, forKey: .id)
+        self.api = try container.decode(String.self, forKey: .api)
+        let models = (try? container.decodeIfPresent([RuntimeProviderModelDefinition].self, forKey: .models)) ?? []
+        self.models = models
+        self.credential = try container.decodeIfPresent(RuntimeConnectionCredentialDeclaration.self, forKey: .credential)
+        self.headers = try container.decodeIfPresent([String : String].self, forKey: .headers)
+        self.enabled = try container.decodeIfPresent(Bool.self, forKey: .enabled)
+        self.baseURL = try container.decode(String.self, forKey: .baseURL)
+    }
 }
 
 /// Lightweight provider reference returned by list operations.
