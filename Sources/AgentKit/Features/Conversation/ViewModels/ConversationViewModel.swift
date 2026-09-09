@@ -134,7 +134,7 @@ public final class ConversationViewModel {
 
     /// 本会话选择的模型 ID（Gateway 原生 ID，如 `"deepseek-v4-pro"`）。
     /// 每个对话独立跟踪自己的模型，不是全局设置。
-    public var selectedModel: ConversationContextModel
+    public var selectedModel: UnifiedModel
 
     private let client: RuntimeClient
     private var channel: (any RuntimeSessionChannel)?
@@ -176,7 +176,7 @@ public final class ConversationViewModel {
         client: RuntimeClient,
         toolRegistry: ToolRegistry = ToolRegistry(),
         workspace: Workspace? = nil,
-        model: ConversationContextModel,
+        model: UnifiedModel,
         timelineExtensions: [any TimelineExtension] = [],
         turnCoordinator: ConversationTurnCoordinator? = nil,
         capabilityRegistry: RuntimeCapabilityRegistry? = nil,
@@ -696,9 +696,9 @@ public final class ConversationViewModel {
         if case .modelRequest(let turnID, let invocationID, let request) = event {
             if let provider = request.provider, !provider.isEmpty {
                 let modelID = "\(provider)/\(request.modelName ?? "")"
-                self.selectedModel = ConversationContextModel(name: modelID, reasoningEffort: ModelReasoningEffort(rawValue: request.reasoningEffort ?? ""), contextWindow: 0, compactThreshold: 0, compactRatio: 0)
+                self.selectedModel = UnifiedModel(providerID: provider, wireModelID: request.modelName ?? "", reasoningEffort: ModelReasoningEffort(rawValue: request.reasoningEffort ?? ""))
             } else {
-                self.selectedModel = ConversationContextModel(name: request.modelName ?? "", reasoningEffort: nil, contextWindow: 0, compactThreshold: 0, compactRatio: 0)
+                self.selectedModel = UnifiedModel(model: request.modelName ?? "", reasoningEffort: nil)
             }
         }
     }

@@ -35,7 +35,7 @@ struct DraftComposerPanel: View {
     let isDraft: Bool
     var isTurnRunning: Bool = false
     var onStop: (() -> Void)? = nil
-    let onSend: (_ text: String, _ model: ConversationContextModel, _ assets: [UserAssetRef]) async -> Bool
+    let onSend: (_ text: String, _ model: UnifiedModel, _ assets: [UserAssetRef]) async -> Bool
     var onAddAttachment: (() -> Void)? = nil
     
     let viewModel: ConversationViewModel?
@@ -44,7 +44,7 @@ struct DraftComposerPanel: View {
     /// selectedModel 残留上一次的选择。活跃会话场景不需要传。
     var draftRevision: Int = 0
     /// 当前对话的模型 ID（binding，每个对话独立）。
-    @State var selectedModel: ConversationContextModel?
+    @State var selectedModel: UnifiedModel?
     /// 模型切换回调。
     var onModelChange: ((String) -> Void)? = nil
     
@@ -308,7 +308,7 @@ struct DraftComposerPanel: View {
                             Image(systemName: "brain.head.profile")
                                 .font(.system(size: 9, weight: .semibold))
                         } else {
-                            Text(modelSettings.selectionDisplayName(for: selectedModel?.name ?? ""))
+                            Text(modelSettings.selectionDisplayName(for: selectedModel?.model ?? ""))
                                 .font(.system(size: 13, weight: .medium))
                                 .lineLimit(1)
                                 .frame(maxWidth: 35)
@@ -424,10 +424,10 @@ struct DraftComposerPanel: View {
             // 模型列表延迟到达时自动恢复 selectedModel（Bug 2）。
             // 若 UI 先于网络渲染，.task(id:) 恢复时 gatewayModels 尚为 nil，
             // selectedModel 被设为空串。列表到达后此处重新解析并回填。
-            guard !newIDs.isEmpty, let current = selectedModel, current.name.isEmpty else { return }
+            guard !newIDs.isEmpty, let current = selectedModel, current.model.isEmpty else { return }
             let resolved = modelSettings.getModel(with: viewModel?.conversation?.id)
-            if let resolved, !resolved.0.isEmpty {
-                selectedModel = ConversationContextModel(name: resolved.0, reasoningEffort: resolved.1, contextWindow: 0, compactThreshold: 0, compactRatio: 0)
+            if let resolved, !resolved.model.isEmpty {
+                selectedModel = resolved
             }
         }
         .onChange(of: voiceService.state) { _, newState in
@@ -435,14 +435,14 @@ struct DraftComposerPanel: View {
                 showPermissionAlert = true
             }
         }
-        .onChange(of: viewModel?.selectedModel ?? ConversationContextModel(name: "", reasoningEffort: nil, contextWindow: 0, compactThreshold: 0, compactRatio: 0)) { oldModel, newModel in
+        .onChange(of: viewModel?.selectedModel ?? UnifiedModel(model: "", reasoningEffort: nil)) { oldModel, newModel in
             if oldModel == newModel {
                 return
             }
             if newModel == selectedModel {
                 return
             }
-            self.selectModel(newModel.name, reasoningEffort: newModel.reasoningEffort)
+            self.selectModel(newModel.model, reasoningEffort: newModel.reasoningEffort)
         }
     }
     
@@ -547,13 +547,18 @@ struct DraftComposerPanel: View {
     /// a plain click-to-select button.
     @ViewBuilder
     private func modelMenuEntry(_ modelID: String) -> some View {
-        if let supported = self.modelSettings.descriptor(for: modelID)?.supportedReasoningEfforts,
-           !supported.isEmpty {
-            Button {
-                let selected = effectiveReasoningEffort(for: modelID, supported: supported)
-                applyReasoningEffort(selected, for: modelID)
-            } label: {
-                reasoningEffortMenu(modelID: modelID, supported: supported)
+        if let model = self.modelSettings.descriptor(for: modelID) {
+            let supported = model.supportedReasoningEfforts ?? []
+            let items = model.canDisableReasoning == true ? [.off] + supported : supported
+            if items.isEmpty {
+                modelMenuButton(modelID)
+            } else {
+                Button {
+                    let selected = effectiveReasoningEffort(for: modelID, supported: items)
+                    applyReasoningEffort(selected, for: modelID)
+                } label: {
+                    reasoningEffortMenu(modelID: modelID, supported: items)
+                }
             }
         } else {
             modelMenuButton(modelID)
@@ -564,15 +569,22 @@ struct DraftComposerPanel: View {
     /// lets the user pick a `supportedReasoningEfforts` value for this model.
     private func reasoningEffortMenu(modelID: String, supported: [ModelReasoningEffort]) -> some View {
         let selected = effectiveReasoningEffort(for: modelID, supported: supported)
+        
         return Menu {
-            ForEach(supported) { effort in
-                Button {
-                    applyReasoningEffort(effort, for: modelID)
-                } label: {
-                    HStack {
-                        Text(effort.name)
-                        if effort == selected {
-                            Image(systemName: "checkmark")
+            
+            Divider()
+            
+            // 选项部分
+            Section("Reasoning Effort") {
+                ForEach(supported) { effort in
+                    Button {
+                        applyReasoningEffort(effort, for: modelID)
+                    } label: {
+                        HStack {
+                            Text(effort.name)
+                            if effort == selected {
+                                Image(systemName: "checkmark")
+                            }
                         }
                     }
                 }
@@ -580,18 +592,19 @@ struct DraftComposerPanel: View {
         } label: {
             HStack {
                 Text(modelSettings.displayName(for: modelID))
-                if modelID == selectedModel?.name {
+                if modelID == selectedModel?.model {
                     Image(systemName: "checkmark")
                 }
             }
         }
+        .menuStyle(.borderlessButton)
     }
 
     /// The effort that should be shown as checked for a given model row: the
     /// user's stored override when it targets the currently selected model and is
     /// in the supported list; otherwise the model's own default.
     private func effectiveReasoningEffort(for modelID: String, supported: [ModelReasoningEffort]) -> ModelReasoningEffort? {
-        if modelID == selectedModel?.name,
+        if modelID == selectedModel?.model,
            let override = storedReasoningEffortOverride,
            supported.contains(override) {
             return override
@@ -622,7 +635,7 @@ struct DraftComposerPanel: View {
         } label: {
             HStack {
                 Text(modelSettings.displayName(for: modelID))
-                if modelID == selectedModel?.name {
+                if modelID == selectedModel?.model {
                     Image(systemName: "checkmark")
                 }
             }
@@ -647,7 +660,7 @@ struct DraftComposerPanel: View {
     }
     
     private func selectModel(_ modelID: String, reasoningEffort: ModelReasoningEffort?) {
-        let model = ConversationContextModel(name: modelID, reasoningEffort: reasoningEffort, contextWindow: 0, compactThreshold: 0, compactRatio: 0)
+        let model = UnifiedModel(model: modelID, reasoningEffort: reasoningEffort)
         selectedModel = model
         viewModel?.selectedModel = model
         modelSettings.didUseModel(
@@ -680,7 +693,7 @@ struct DraftComposerPanel: View {
             return attachment.state == .ready
         }
         return isEnabled && hasContent && attachmentsReady && !isSending
-        && !isTurnRunning && modelSettings.isModelAvailable(selectedModel?.name)
+        && !isTurnRunning && modelSettings.isModelAvailable(selectedModel?.model)
     }
     
     private func send() {
@@ -805,10 +818,10 @@ struct DraftComposerPanel: View {
         submittedTextSnapshot = state?.composerDraft.pendingSubmission?.text
         
         if let selectedModelID = state?.selectedModelID {
-            selectedModel = ConversationContextModel(name: selectedModelID, reasoningEffort: ModelReasoningEffort(rawValue: state?.reasoningEffort ?? ""), contextWindow: 0, compactThreshold: 0, compactRatio: 0)
+            selectedModel = UnifiedModel(model: selectedModelID, reasoningEffort: ModelReasoningEffort(rawValue: state?.reasoningEffort ?? ""))
         } else {
             let mo = modelSettings.getModel(with: viewModel?.conversation?.id)
-            selectedModel = ConversationContextModel(name: mo?.0 ?? "", reasoningEffort: mo?.1, contextWindow: 0, compactThreshold: 0, compactRatio: 0)
+            selectedModel = mo
         }
     }
     

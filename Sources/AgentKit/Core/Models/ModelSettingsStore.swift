@@ -44,7 +44,7 @@ public final class ModelSettingsStore {
     private let localStateStore: any ConversationLocalStateStore
 
     /// 最后一次选择模型（跨对话，用于新对话默认值）
-    public private(set) var lastSelectedModel: (String, ModelReasoningEffort?)?
+    public private(set) var lastSelectedModel: UnifiedModel?
     
     private let service: (any GatewayService)?
     private var refreshTask: Task<Void, Error>?
@@ -78,17 +78,27 @@ public final class ModelSettingsStore {
     // MARK: - Persistence
     
     private func loadLastSelected() {
-        let lastSelectedModelDict = defaults.dictionary(forKey: Self.lastModelKey) ?? [:]
-        if let model = lastSelectedModelDict["model"] as? String {
-            let reasoningEffort = lastSelectedModelDict["reasoning_effort"] as? String
-            self.lastSelectedModel = (model, ModelReasoningEffort(rawValue: reasoningEffort ?? ""))
+        if let data = defaults.data(forKey: Self.lastModelKey) {
+            let decoder = JSONDecoder()
+
+            do {
+                let item = try? decoder.decode(UnifiedModel.self, from: data)
+                self.lastSelectedModel = item
+            } catch {
+                DLLog(error)
+            }
         }
     }
 
     private func persistLastSelected() {
         if let model = lastSelectedModel {
-            let dict: [String: String] = ["model": model.0, "reasoning_effort": ( model.1?.rawValue ?? "")]
-            defaults.set(dict, forKey: Self.lastModelKey)
+           let encoder = JSONEncoder()
+            do {
+                let data = try encoder.encode(model)
+                defaults.set(data, forKey: Self.lastModelKey)
+            } catch {
+                DLLog(error)
+            }
         }
     }
 
@@ -140,8 +150,10 @@ public final class ModelSettingsStore {
                 return true
             }
             let items = modelID.components(separatedBy: "/")
-            if items.count >= 1 {
-                return $0.providerID == items.first && $0.wireModelID == items.last
+            if items.count >= 2 {
+                let providerID = items[0]
+                let wireModelID = items[1...].joined(separator: "/")
+                return $0.providerID == providerID && $0.wireModelID == wireModelID
             }
             
             return false
@@ -196,7 +208,7 @@ public final class ModelSettingsStore {
     /// 用户选择模型时调用。持久化到本地缓存。
     public func didUseModel(_ modelID: String, reasoningEffort: ModelReasoningEffort?, conversation: String) {
         setUserModel(modelID, reasoningEffort: reasoningEffort, for: conversation)
-        self.lastSelectedModel = (modelID, reasoningEffort)
+        self.lastSelectedModel = UnifiedModel(model: modelID, reasoningEffort: reasoningEffort)
         persistLastSelected()
     }
 
@@ -214,17 +226,17 @@ public final class ModelSettingsStore {
         }
     }
 
-    public func getModel(with conversation: String?) -> (String, ModelReasoningEffort?)? {
+    public func getModel(with conversation: String?) -> UnifiedModel? {
         guard let conversation, !conversation.isEmpty else {
             return modelForNewConversation
         }
         if let persisted = try? localStateStore.state(for: .session(conversation)), let model = persisted.selectedModelID, !model.isEmpty {
-            return (model, ModelReasoningEffort(rawValue: persisted.reasoningEffort ?? ""))
+            return UnifiedModel(model: model, reasoningEffort: ModelReasoningEffort(rawValue: persisted.reasoningEffort ?? ""))
         }
         // An existing conversation without an explicit choice must not inherit
         // another conversation's latest selection. `lastSelectedModel` is only
         // the convenience default for a brand-new local draft.
-        return (defaultModelForExistingConversation, nil)
+        return UnifiedModel(model: defaultModelForExistingConversation, reasoningEffort: nil)
     }
 
     /// 模型的 display name（用于 UI）。
@@ -272,36 +284,39 @@ public final class ModelSettingsStore {
     /// 新对话时使用的模型 ID。
     /// 优先 Gateway 默认模型 → 回退上次选择的模型 → 回退列表第一个。
     /// 设计意图：新建对话应使用服务端指定的默认模型，而非继承其他对话的选择。
-    public var modelForNewConversation: (String, ModelReasoningEffort?) {
+    public var modelForNewConversation: UnifiedModel? {
         if let unifiedModels {
             if let unifiedDefaultModelID,
                unifiedModels.contains(where: { $0.id == unifiedDefaultModelID }) {
-                return (unifiedDefaultModelID, nil)
+                return UnifiedModel(model: unifiedDefaultModelID, reasoningEffort: nil)
             }
             if let stored = lastSelectedModel,
                unifiedModels.contains(where: {
-                   $0.model == stored.0
+                   $0.model == stored.model
                }) {
                 return stored
             }
-            return (unifiedModels.first?.model ?? "", nil)
+            if let model = unifiedModels.first?.model, !model.isEmpty {
+                return UnifiedModel(model: model, reasoningEffort: unifiedModels.first?.reasoningEffort)
+            }
+            return nil
         }
         if let def = gatewayDefaultModel, let models = gatewayModels,
            models.contains(where: {
                $0.model == def && $0.available != false
            }) {
-            return (def, nil)
+            return UnifiedModel(model: def, reasoningEffort: nil)
         }
         if let stored = lastSelectedModel,
            let models = gatewayModels, models.contains(where: {
-               $0.model == stored.0 && $0.available != false
+               $0.model == stored.model && $0.available != false
            }) {
             return stored
         }
         if let first = gatewayModels?.first(where: { $0.available != false }) {
-            return (first.id, nil)
+            return UnifiedModel(model: first.id, reasoningEffort: nil)
         }
-        return ("", nil)
+        return nil
     }
 
     /// Existing sessions that have never selected a model use the Gateway

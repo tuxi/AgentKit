@@ -65,6 +65,7 @@ public enum ProviderInputModality: String, Identifiable, Codable, CaseIterable, 
 }
 
 public enum ModelReasoningEffort: String, Identifiable, CaseIterable, Codable, Sendable {
+    case off
     case low
     case medium
     case high
@@ -76,7 +77,12 @@ public enum ModelReasoningEffort: String, Identifiable, CaseIterable, Codable, S
     }
     
     public var name: String {
-        rawValue.capitalized
+        switch self {
+        case .xHigh:
+            return "Extra-High"
+        default:
+            return rawValue.capitalized
+        }
     }
 }
 

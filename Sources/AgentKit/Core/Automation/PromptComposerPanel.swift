@@ -252,9 +252,9 @@ struct PromptComposerPanel: View {
     /// 初次加载 / 模型目录刷新时，把默认模型回填进绑定（便于用户直接创建）。
     private func prefillModelIfNeeded() {
         guard modelID.isEmpty else { return }
-        let fallback = modelSettings.modelForNewConversation
-        if !fallback.0.isEmpty, modelSettings.isModelAvailable(fallback.0) {
-            modelID = fallback.0
+        guard let fallback = modelSettings.modelForNewConversation else { return }
+        if !fallback.model.isEmpty, modelSettings.isModelAvailable(fallback.model) {
+            modelID = fallback.model
         }
     }
 }

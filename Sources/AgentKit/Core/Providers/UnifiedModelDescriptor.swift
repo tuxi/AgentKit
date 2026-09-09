@@ -5,6 +5,41 @@
 
 import Foundation
 
+public struct UnifiedModel: Codable, Hashable, Identifiable, Sendable {
+    public let providerID: String
+    public let wireModelID: String
+    public let reasoningEffort: ModelReasoningEffort?
+    
+    public var id: String {
+        model
+    }
+    
+    public var model: String {
+        if providerID.isEmpty {
+            return wireModelID
+        }
+        return "\(providerID)/\(wireModelID)"
+    }
+    
+    public init(providerID: String, wireModelID: String, reasoningEffort: ModelReasoningEffort?) {
+        self.providerID = providerID
+        self.wireModelID = wireModelID
+        self.reasoningEffort = reasoningEffort
+    }
+    
+    public init(model: String, reasoningEffort: ModelReasoningEffort?) {
+        let strings = model.components(separatedBy: "/")
+        if strings.count >= 2 {
+            self.providerID = strings[0]
+            self.wireModelID = strings[1...].joined(separator: "/")
+        } else {
+            self.providerID = ""
+            self.wireModelID = model
+        }
+        self.reasoningEffort = reasoningEffort
+    }
+}
+
 public struct UnifiedModelDescriptor: Codable, Hashable, Identifiable, Sendable {
     /// Stable App-facing ID, scoped by provider connection.
     public let id: String

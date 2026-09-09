@@ -1069,7 +1069,7 @@ public final class WorkspaceStore {
     /// 这是唯一的 Session 创建点。失败时草稿进入 `.failed`，保留用户输入以便重试。
     public func commitDraft(
         firstMessage: String,
-        model: ConversationContextModel,
+        model: UnifiedModel,
         assets: [UserAssetRef] = []
     ) async {
         guard let current = draft, let workspace = current.workspace else { return }
@@ -1112,16 +1112,16 @@ public final class WorkspaceStore {
             // 加固：显式写入 selectedModelID 到 session state。
             // migrateDraft 已从 draft state merge，此处提供第二条恢复路径，
             // 防止因 WAL 时序或状态覆盖导致 active view 显示回退到默认模型（Bug 1）。
-            if !model.name.isEmpty {
+            if !model.model.isEmpty {
                 try? localStateStore.updateState(for: .session(ref.id)) { state in
-                    state.selectedModelID = model.name
+                    state.selectedModelID = model.model
                     state.reasoningEffort = model.reasoningEffort?.rawValue
                 }
             }
             await vm.connect(to: ref)
             let firstInput = AgentInput.text(
                 firstMessage,
-                model: model.name,
+                model: model.model,
                 reasoningEffort: model.reasoningEffort,
                 assets: preparedAssets.assets.isEmpty ? assets : preparedAssets.assets,
                 localAssets: preparedAssets.localAssets

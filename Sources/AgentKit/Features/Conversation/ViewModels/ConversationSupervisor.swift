@@ -104,7 +104,7 @@ public final class ConversationSupervisor {
     public func controller(
         for conversation: ConversationRef,
         workspace: Workspace? = nil,
-        model: ConversationContextModel? = nil,
+        model: UnifiedModel? = nil,
     ) -> ConversationViewModel {
         if let existing = controllers[conversation.id] {
             touchController(sessionID: conversation.id)
@@ -115,7 +115,7 @@ public final class ConversationSupervisor {
             client: client,
             toolRegistry: toolRegistry,
             workspace: workspace,
-            model: model ?? ConversationContextModel(name: "", reasoningEffort: nil, contextWindow: 0, compactThreshold: 0, compactRatio: 0),
+            model: model ?? UnifiedModel(model: "", reasoningEffort: nil),
             timelineExtensions: timelineExtensions,
             turnCoordinator: turnCoordinator,
             capabilityRegistry: capabilityRegistry,
@@ -348,7 +348,7 @@ public final class ConversationSupervisor {
         // Reattach every live session, not only the selected one, so background
         // approvals and terminal events continue to flow after app restoration.
         for conversation in knownConversations.values where shouldRetainLiveChannel(sessionID: conversation.id) {
-            let controller = controller(for: conversation, model: ConversationContextModel(name: "", reasoningEffort: nil, contextWindow: 0, compactThreshold: 0, compactRatio: 0))
+            let controller = controller(for: conversation, model: UnifiedModel(model: "", reasoningEffort: nil))
             if let remote = runtimeActivities[conversation.id] {
                 controller.applyRuntimeActivity(remote)
             }
