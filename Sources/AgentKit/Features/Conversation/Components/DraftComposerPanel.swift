@@ -151,9 +151,8 @@ struct DraftComposerPanel: View {
                 displayName: { modelSettings.displayName(for: $0) },
                 onSelect: { modelID in
                     let resolved = modelSettings.getModel(with: viewModel?.conversation?.id)
-                    if let resolved, !resolved.0.isEmpty {
-                        let model = ConversationContextModel(name: resolved.0, reasoningEffort: resolved.1, contextWindow: 0, compactThreshold: 0, compactRatio: 0)
-                        selectModel(modelID, reasoningEffort: model.reasoningEffort)
+                    if let resolved, !resolved.model.isEmpty {
+                        selectModel(modelID, reasoningEffort: resolved.reasoningEffort)
                     }
                     isIOSModelPickerPresented = false
                 }
@@ -267,7 +266,7 @@ struct DraftComposerPanel: View {
                         isIOSModelPickerPresented = true
                     } label: {
                         HStack(spacing: 5) {
-                            Text(modelSettings.selectionDisplayName(for: selectedModel?.name ?? ""))
+                            Text(modelSettings.selectionDisplayName(for: selectedModel?.model ?? ""))
                                 .font(.system(size: 13, weight: .semibold))
                                 .lineLimit(1)
                             Image(systemName: "chevron.up")
@@ -413,8 +412,20 @@ struct DraftComposerPanel: View {
         .onChange(of: viewModel?.lastAcceptedSubmissionRequestID) { _, _ in
             reconcileAcceptedSubmission()
         }
-        .onChange(of: viewModel?.lastInputRejection) { _, _ in
-            submittedTextSnapshot = nil
+        .onChange(of: viewModel?.lastInputRejection) { _, newValue in
+            // 提交被 Runtime 拒绝：还原乐观清空的文本供修改后重发。
+            // blocked 状态下 pendingSubmission 仍在（随后仍可能被接受），不还原；
+            // handleSubmissionRejected 先执行 rejectSubmission 清掉 pendingSubmission
+            // 再置 lastInputRejection，因此此处读到 nil 即代表最终拒绝。
+            if newValue != nil,
+               let snapshot = submittedTextSnapshot, !snapshot.isEmpty,
+               let key = loadedStateKey,
+               (try? workspaceStore.localStateStore.state(for: key))?
+                   .composerDraft.pendingSubmission == nil {
+                restoreSubmittedText(snapshot)
+            } else {
+                submittedTextSnapshot = nil
+            }
             refreshAttachmentsFromLocalState()
         }
         .onChange(of: scenePhase) { _, phase in
@@ -710,13 +721,46 @@ struct DraftComposerPanel: View {
         }
         let toSend = trimmed
         submittedTextSnapshot = toSend
-        persistCurrentDraft()
+        // 乐观清空（对标主流聊天客户端）：清空与用户回车/点击在同一事件周期内完成，
+        // 不依赖 acceptance 回包。旧方案在 ack 到达后才经 updateNSView 同步清空，
+        // 一旦用户已开始输入下一条（IME 组字中），hasMarkedText 守卫会跳过同步，
+        // 随后 textDidChange 把旧文本写回 state，导致输入框永远清不掉。
+        // 带本地附件时 prepareUserAssets 拉长 ack 窗口，该问题几乎必现。
+        text = ""
+        // 附件同样乐观清空。durable 附件必须保留：staging 与 markSubmissionPending
+        // 依赖它计算 attachmentIDs，acceptSubmission 再按该名单删除。
+        // 在途期间由 refreshAttachmentsFromLocalState 的 pendingSubmission 过滤
+        // 保证它们不会回流到输入框，因此这里只持久化文本，不能走 persistCurrentDraft
+        // （那会把已清空的面板附件写回 durable，抹掉待 staging 的附件）。
+        let sendingAssets = readyAssets
+        attachments = []
+        if let key = loadedStateKey {
+            persist(text: "", for: key)
+        }
         isSending = true
         Task {
-            _ = await onSend(toSend, selectedModel, readyAssets)
-            refreshAttachmentsFromLocalState()
+            let accepted = await onSend(toSend, selectedModel, sendingAssets)
+            if !accepted {
+                // 提交失败：文本与附件都还原（pendingSubmission 尚未写入或被清，
+                // refresh 的过滤不再生效，附件从 durable 回到输入框）。
+                restoreSubmittedText(toSend)
+                refreshAttachmentsFromLocalState()
+            }
             isSending = false
         }
+    }
+
+    /// 乐观清空的回滚路径：提交失败/被拒绝时把快照文本还原回输入框。
+    /// 用户在等待期间已输入的新内容保留在快照之后，不丢失。
+    private func restoreSubmittedText(_ snapshot: String) {
+        submittedTextSnapshot = nil
+        guard !snapshot.isEmpty else { return }
+        if text.isEmpty {
+            text = snapshot
+        } else if !text.hasPrefix(snapshot) {
+            text = snapshot + "\n" + text
+        }
+        persistCurrentText()
     }
     
     private var persistenceKey: ConversationLocalStateKey? {
@@ -814,7 +858,7 @@ struct DraftComposerPanel: View {
         
         let state = key.flatMap { try? workspaceStore.localStateStore.state(for: $0) }
         text = state?.composerDraft.text ?? ""
-        attachments = state?.composerDraft.attachments ?? []
+        attachments = state.map { visibleAttachments(from: $0) } ?? []
         submittedTextSnapshot = state?.composerDraft.pendingSubmission?.text
         
         if let selectedModelID = state?.selectedModelID {
@@ -875,27 +919,43 @@ struct DraftComposerPanel: View {
     /// acknowledgement was pending remains in the composer.
     private func reconcileAcceptedSubmission() {
         pendingSaveTask?.cancel()
-        if let submittedTextSnapshot, !submittedTextSnapshot.isEmpty {
-            if text == submittedTextSnapshot {
-                text = ""
-            } else if text.hasPrefix(submittedTextSnapshot) {
-                text.removeFirst(submittedTextSnapshot.count)
-                text = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        DispatchQueue.main.async {
+            if let submittedTextSnapshot, !submittedTextSnapshot.isEmpty {
+                if text == submittedTextSnapshot {
+                    text = ""
+                } else if text.hasPrefix(submittedTextSnapshot) {
+                    text.removeFirst(submittedTextSnapshot.count)
+                    text = text.trimmingCharacters(in: .whitespacesAndNewlines)
+                }
+                self.submittedTextSnapshot = nil
+                refreshAttachmentsFromLocalState()
+                persistCurrentText()
+            } else {
+                // Covers process-restart recovery where the UI did not originate the
+                // submission but the persisted pending snapshot has now been accepted.
+                restoreLocalState(persistOutgoingText: false)
             }
-            self.submittedTextSnapshot = nil
-            refreshAttachmentsFromLocalState()
-            persistCurrentText()
-        } else {
-            // Covers process-restart recovery where the UI did not originate the
-            // submission but the persisted pending snapshot has now been accepted.
-            restoreLocalState(persistOutgoingText: false)
         }
     }
     
     private func refreshAttachmentsFromLocalState() {
         guard let key = loadedStateKey,
               let state = try? workspaceStore.localStateStore.state(for: key) else { return }
-        attachments = state.composerDraft.attachments
+        attachments = visibleAttachments(from: state)
+    }
+    
+    /// durable 附件中剔除已被 pendingSubmission 认领（在途、等待 acceptance）的部分。
+    /// 这是面板附件的显示不变量：无论本函数在提交前、staging 中还是 acceptance 后
+    /// 被调用，在途附件都不会回流输入框；rejectSubmission 清掉 pendingSubmission
+    /// 后，下一次 refresh 自然把它们放回输入框供重发。
+    private func visibleAttachments(
+        from state: ConversationLocalState
+    ) -> [DraftAttachmentReference] {
+        guard let pending = state.composerDraft.pendingSubmission else {
+            return state.composerDraft.attachments
+        }
+        let pendingIDs = Set(pending.attachmentIDs)
+        return state.composerDraft.attachments.filter { !pendingIDs.contains($0.id) }
     }
     
     private var attachmentStrip: some View {
@@ -1019,7 +1079,7 @@ private struct IOSModelPickerSheet: View {
     
     let groups: [ComposerModelGroup]
     let ungroupedModelIDs: [String]
-    let selectedModel: ConversationContextModel?
+    let selectedModel: UnifiedModel?
     let displayName: (String) -> String
     let onSelect: (String) -> Void
     
@@ -1085,7 +1145,7 @@ private struct IOSModelPickerSheet: View {
                     .foregroundStyle(.primary)
                     .lineLimit(1)
                 Spacer()
-                if modelID == selectedModel?.name {
+                if modelID == selectedModel?.id {
                     Image(systemName: "checkmark")
                         .font(.system(size: 13, weight: .bold))
                         .foregroundStyle(Color.accentColor)
