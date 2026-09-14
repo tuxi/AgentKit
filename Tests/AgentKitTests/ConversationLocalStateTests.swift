@@ -114,7 +114,9 @@ final class ConversationLocalStateTests: XCTestCase {
         let suite = "ConversationLocalStateTests.\(UUID().uuidString)"
         let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
         defer { defaults.removePersistentDomain(forName: suite) }
-        defaults.set("model-last", forKey: "code_agent.model.last_selected")
+        // lastSelectedModel 现在以 JSON 编码的 UnifiedModel 持久化（不再是裸字符串）。
+        let lastSelected = UnifiedModel(model: "model-last", reasoningEffort: nil)
+        defaults.set(try JSONEncoder().encode(lastSelected), forKey: "code_agent.model.last_selected")
         let store = InMemoryConversationLocalStateStore()
 
         let settings = ModelSettingsStore(
@@ -122,13 +124,13 @@ final class ConversationLocalStateTests: XCTestCase {
             service: StubGatewayService(),
             localStateStore: store
         )
-        XCTAssertEqual(settings.lastSelectedModel, "model-last")
+        XCTAssertEqual(settings.lastSelectedModel?.model, "model-last")
         // 无显式选择的会话回退到默认（模型列表未加载 → 空串），不继承 lastSelectedModel。
-        XCTAssertEqual(settings.getModel(with: "session-a"), "")
+        XCTAssertEqual(settings.getModel(with: "session-a")?.model, "")
         XCTAssertNil(try store.state(for: .session("session-a"))?.selectedModelID)
 
-        settings.didUseModel("model-b", conversation: "session-a")
-        XCTAssertEqual(settings.getModel(with: "session-a"), "model-b")
+        settings.didUseModel("model-b", reasoningEffort: nil, conversation: "session-a")
+        XCTAssertEqual(settings.getModel(with: "session-a")?.model, "model-b")
         XCTAssertEqual(try store.state(for: .session("session-a"))?.selectedModelID, "model-b")
         XCTAssertEqual(settings.recentModels(for: "session-a").first, "model-b")
     }
@@ -155,15 +157,19 @@ final class ConversationLocalStateTests: XCTestCase {
         await settings.refreshModels()
         await waitForModels(settings)
 
-        settings.didUseModel("model-1", conversation: "conversation-a")
+        settings.didUseModel("model-1", reasoningEffort: nil, conversation: "conversation-a")
 
-        XCTAssertEqual(settings.getModel(with: "conversation-a"), "model-1")
-        XCTAssertEqual(settings.getModel(with: "conversation-b"), "model-default")
+        XCTAssertEqual(settings.getModel(with: "conversation-a")?.model, "model-1")
+        XCTAssertEqual(settings.getModel(with: "conversation-b")?.model, "model-default")
 
-        settings.didUseModel("model-2", conversation: "conversation-b")
-        XCTAssertEqual(settings.getModel(with: "conversation-a"), "model-1")
-        XCTAssertEqual(settings.getModel(with: "conversation-b"), "model-2")
-        XCTAssertEqual(settings.getModel(with: nil), "model-default", "new drafts use the Gateway default")
+        settings.didUseModel("model-2", reasoningEffort: nil, conversation: "conversation-b")
+        XCTAssertEqual(settings.getModel(with: "conversation-a")?.model, "model-1")
+        XCTAssertEqual(settings.getModel(with: "conversation-b")?.model, "model-2")
+        XCTAssertEqual(
+            settings.getModel(with: nil)?.model,
+            "model-default",
+            "new drafts use the Gateway default"
+        )
 
         let reopened = ModelSettingsStore(
             defaults: defaults,
@@ -172,8 +178,8 @@ final class ConversationLocalStateTests: XCTestCase {
         )
         await reopened.refreshModels()
         await waitForModels(reopened)
-        XCTAssertEqual(reopened.getModel(with: "conversation-a"), "model-1")
-        XCTAssertEqual(reopened.getModel(with: "conversation-b"), "model-2")
+        XCTAssertEqual(reopened.getModel(with: "conversation-a")?.model, "model-1")
+        XCTAssertEqual(reopened.getModel(with: "conversation-b")?.model, "model-2")
     }
 
     private func temporaryDatabaseURL() -> URL {

@@ -30,7 +30,7 @@ final class ProviderConnectionsTests: XCTestCase {
 
         let restored = ProviderConnectionRegistry(defaults: defaults, storageKey: storageKey)
         XCTAssertEqual(restored.connections.count, 2)
-        XCTAssertEqual(Set(restored.connections.map(\.providerID)), ["openai-compatible"])
+        XCTAssertEqual(Set(restored.connections.map(\.id)), ["company-production", "company-staging"])
     }
 
     func testUnifiedModelGroupsRemainScopedByConnection() throws {
@@ -166,7 +166,7 @@ final class ProviderConnectionsTests: XCTestCase {
 
         // 未上线项目不做懒迁移：历史裸 wire model 原值保留，不重写 local state，
         // 且不匹配任何 catalog 模型 → 标记不可用。
-        XCTAssertEqual(modelSettings.getModel(with: "session-1"), "gateway-model")
+        XCTAssertEqual(modelSettings.getModel(with: "session-1")?.model, "gateway-model")
         XCTAssertEqual(
             try localState.state(for: .session("session-1"))?.selectedModelID,
             "gateway-model"
@@ -321,7 +321,6 @@ final class ProviderConnectionsTests: XCTestCase {
     ) throws -> ProviderConnection {
         let connection = ProviderConnection(
             id: id,
-            providerID: "openai-compatible",
             displayName: id,
             transport: .openAIChatCompletions,
             authentication: .apiKey,

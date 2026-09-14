@@ -222,7 +222,6 @@ final class ConnectionFlatteningTests: XCTestCase {
         )
         let deepseek = ProviderConnection(
             id: "deepseek",
-            providerID: "deepseek",
             displayName: "DeepSeek",
             transport: .openAIChatCompletions,
             authentication: .apiKey,
@@ -232,7 +231,6 @@ final class ConnectionFlatteningTests: XCTestCase {
         )
         let disabled = ProviderConnection(
             id: "disabled",
-            providerID: "openai-compatible",
             displayName: "Disabled",
             transport: .openAIChatCompletions,
             authentication: .apiKey,

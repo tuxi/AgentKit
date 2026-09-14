@@ -277,6 +277,7 @@ final class ConversationContextForwardingTests: XCTestCase {
         ConversationContextSnapshot(
             model: ConversationContextModel(
                 name: "deepseek-v4-pro",
+                reasoningEffort: nil,
                 contextWindow: 1_000_000,
                 compactThreshold: 750_000,
                 compactRatio: 0.75

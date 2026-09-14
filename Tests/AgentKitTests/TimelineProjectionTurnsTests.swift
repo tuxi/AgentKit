@@ -154,6 +154,7 @@ final class TimelineProjectionTurnsTests: XCTestCase {
             .turnStarted(turnID: turn, text: "q"),
             .modelRequest(turnID: turn, invocationID: "inv1", request: ModelRequestInfo(
                 modelName: "deepseek/deepseek-v4-flash",
+                reasoningEffort: nil,
                 toolNames: ["run_command", "read_file", "grep", "propose_plan"],
                 messageCount: 5,
                 systemPromptChars: 1_000,
@@ -190,6 +191,7 @@ final class TimelineProjectionTurnsTests: XCTestCase {
             .modelRequest(turnID: turn, invocationID: "inv1", request: ModelRequestInfo(
                 modelName: "deepseek/deepseek-v4-flash",
                 provider: "openai_compatible",
+                reasoningEffort: nil,
                 toolNames: ["run_command", "read_file", "grep"],
                 messageCount: 42,
                 systemPromptChars: 18_320,

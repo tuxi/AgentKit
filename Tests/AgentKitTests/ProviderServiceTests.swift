@@ -303,7 +303,6 @@ final class ProviderMappingTests: XCTestCase {
     func testApiKeyConnectionMapsToOpenAIProvider() throws {
         let connection = ProviderConnection(
             id: "deepseek",
-            providerID: "deepseek",
             displayName: "DeepSeek",
             transport: .openAIChatCompletions,
             authentication: .apiKey,
@@ -322,7 +321,6 @@ final class ProviderMappingTests: XCTestCase {
     func testOllamaConnectionMapsToOllamaProvider() throws {
         let connection = ProviderConnection(
             id: "local-ollama",
-            providerID: "ollama",
             displayName: "Ollama",
             transport: .ollama,
             authentication: .none,

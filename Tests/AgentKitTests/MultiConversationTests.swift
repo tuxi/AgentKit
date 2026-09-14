@@ -7,6 +7,7 @@ final class MultiConversationTests: XCTestCase {
         let client = MultiSessionRuntimeClient()
         let viewModel = ConversationViewModel(
             client: client,
+            model: UnifiedModel(model: "", reasoningEffort: nil),
             localStateStore: InMemoryConversationLocalStateStore()
         )
         let conversation = ConversationRef(
@@ -230,7 +231,10 @@ final class MultiConversationTests: XCTestCase {
         let clientRequestID = try XCTUnwrap(store.draft?.clientRequestID)
         let suggestedName = try XCTUnwrap(store.draft?.managedWorktreeSuggestedName)
 
-        await store.commitDraft(firstMessage: "Fix authentication", model: "test-model")
+        await store.commitDraft(
+            firstMessage: "Fix authentication",
+            model: UnifiedModel(model: "test-model", reasoningEffort: nil)
+        )
 
         let request = try XCTUnwrap(client.createRequests.first)
         XCTAssertEqual(request.clientRequestID, clientRequestID)
@@ -286,7 +290,10 @@ final class MultiConversationTests: XCTestCase {
             )]
         }
 
-        await store.commitDraft(firstMessage: "read the document", model: "test-model")
+        await store.commitDraft(
+            firstMessage: "read the document",
+            model: UnifiedModel(model: "test-model", reasoningEffort: nil)
+        )
         try await Task.sleep(for: .milliseconds(100))
 
         let conversation = try XCTUnwrap(store.selectedConversation)
@@ -502,7 +509,10 @@ final class MultiConversationTests: XCTestCase {
             state.selectedModelID = "model-a"
         }
 
-        await store.commitDraft(firstMessage: "persist while sending", model: "model-a")
+        await store.commitDraft(
+            firstMessage: "persist while sending",
+            model: UnifiedModel(model: "model-a", reasoningEffort: nil)
+        )
 
         let sessionID = try XCTUnwrap(store.selectedConversation?.id)
         XCTAssertNil(store.draft)
