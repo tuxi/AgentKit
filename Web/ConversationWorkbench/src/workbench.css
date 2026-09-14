@@ -1187,12 +1187,27 @@ summary:active {
   gap: 8px;
   overflow-x: auto;
   padding: 4px 0 8px;
-  justify-content: flex-end;
+  /* `safe` keeps the start edge reachable: with plain flex-end the
+     overflow spills left into a scroll-unreachable zone in LTR. */
+  justify-content: safe flex-end;
   scrollbar-width: none;
+  /* Inside `.local-asset-group` (column flex, align-items: flex-end) the
+     cross-size resolves to fit-content, whose min-content floor is the full
+     non-shrinkable row width — the strip would grow past the shell and get
+     clipped by an ancestor instead of scrolling itself. Clamp it. */
+  max-width: 100%;
 }
 
 .user-asset-strip::-webkit-scrollbar {
   display: none;
+}
+
+button.user-asset-thumbnail {
+  appearance: none;
+  margin: 0;
+  padding: 0;
+  font: inherit;
+  cursor: zoom-in;
 }
 
 .local-asset-group {

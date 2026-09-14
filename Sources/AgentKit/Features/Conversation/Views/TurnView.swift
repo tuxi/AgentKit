@@ -421,6 +421,7 @@ private struct UserAssetPreviewStrip: View {
     let localResolver: (any LocalUserAssetPreviewResolving)?
     let conversationID: String?
     let workspaceRoot: URL?
+    @State private var previewPresentation: AssetPreviewPresentation?
 
     var body: some View {
         VStack(alignment: .trailing, spacing: 5) {
@@ -432,7 +433,9 @@ private struct UserAssetPreviewStrip: View {
             ScrollView(.horizontal, showsIndicators: false) {
                 HStack(spacing: 8) {
                     ForEach(assets) { asset in
-                        UserAssetThumbnail(asset: asset, resolver: resolver)
+                        UserAssetThumbnail(asset: asset, resolver: resolver) {
+                            requestPreview(of: .userAsset(asset.assetID))
+                        }
                     }
                     ForEach(localAssets) { asset in
                         LocalUserAssetThumbnail(
@@ -440,7 +443,9 @@ private struct UserAssetPreviewStrip: View {
                             resolver: localResolver,
                             conversationID: conversationID,
                             workspaceRoot: workspaceRoot
-                        )
+                        ) {
+                            requestPreview(of: .localAsset(asset.id))
+                        }
                     }
                 }
             }
@@ -448,6 +453,42 @@ private struct UserAssetPreviewStrip: View {
             .frame(maxWidth: .infinity, alignment: .trailing)
         }
         .frame(maxWidth: .infinity, alignment: .trailing)
+        #if os(iOS)
+        .fullScreenCover(item: $previewPresentation) { presentation in
+            AssetPreviewViewer(
+                items: presentation.items,
+                initialIndex: presentation.initialIndex,
+                onClose: { previewPresentation = nil }
+            )
+        }
+        #else
+        .sheet(item: $previewPresentation) { presentation in
+            AssetPreviewViewer(
+                items: presentation.items,
+                initialIndex: presentation.initialIndex,
+                onClose: { previewPresentation = nil }
+            )
+            .frame(minWidth: 640, minHeight: 480)
+        }
+        #endif
+    }
+
+    /// Resolves the turn's mixed image list and opens the shared viewer at
+    /// the clicked slot. Resolution failures keep placeholder slots so the
+    /// clicked index stays aligned with the strip order.
+    private func requestPreview(of clicked: AssetPreviewItem.Source) {
+        Task {
+            let items = await UserAssetPreviewCollection.resolveItems(
+                userAssets: assets,
+                localAssets: localAssets,
+                userResolver: resolver,
+                localResolver: localResolver,
+                conversationID: conversationID,
+                workspaceRoot: workspaceRoot
+            )
+            guard let index = items.firstIndex(where: { $0.id == clicked }) else { return }
+            previewPresentation = AssetPreviewPresentation(items: items, initialIndex: index)
+        }
     }
 }
 
@@ -456,9 +497,19 @@ private struct LocalUserAssetThumbnail: View {
     let resolver: (any LocalUserAssetPreviewResolving)?
     let conversationID: String?
     let workspaceRoot: URL?
+    var onImageTap: (() -> Void)? = nil
     @State private var previewURL: URL?
 
     var body: some View {
+        thumbnail
+            .modifier(LocalThumbnailTap(
+                enabled: asset.mimeType.hasPrefix("image/"),
+                action: onImageTap
+            ))
+    }
+
+    @ViewBuilder
+    private var thumbnail: some View {
         Group {
             if asset.mimeType.hasPrefix("image/"), let previewURL {
                 AsyncImage(url: previewURL) { image in
@@ -501,12 +552,35 @@ private struct LocalUserAssetThumbnail: View {
     }
 }
 
+/// Wraps a thumbnail in a plain Button only when it is a previewable image
+/// and the strip provided a tap action; documents stay inert.
+private struct LocalThumbnailTap: ViewModifier {
+    let enabled: Bool
+    let action: (() -> Void)?
+
+    func body(content: Content) -> some View {
+        if enabled, let action {
+            Button(action: action) { content }
+                .buttonStyle(.plain)
+        } else {
+            content
+        }
+    }
+}
+
 private struct UserAssetThumbnail: View {
     let asset: UserAssetRef
     let resolver: (any UserAssetPreviewResolving)?
+    var onImageTap: (() -> Void)? = nil
     @State private var previewURL: URL?
 
     var body: some View {
+        thumbnail
+            .modifier(LocalThumbnailTap(enabled: true, action: onImageTap))
+    }
+
+    @ViewBuilder
+    private var thumbnail: some View {
         Group {
             if let previewURL {
                 AsyncImage(url: previewURL) { image in

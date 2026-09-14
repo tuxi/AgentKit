@@ -158,6 +158,27 @@ function postToNative(message: NativeBridgeMessage): void {
   window.webkit?.messageHandlers?.agentkitWorkbench?.postMessage(message);
 }
 
+/**
+ * Ask the host to open the shared native image previewer for one thumbnail.
+ * Only identities travel across the bridge; the host rebuilds the turn's
+ * mixed image list (remote first, then local) and resolves display URLs
+ * natively, so the pager order matches the strip layout.
+ */
+function requestAssetPreview(
+  conversationID: string,
+  turnID: string,
+  assetKind: "user" | "local",
+  assetID: string,
+): void {
+  postToNative({
+    type: "previewTurnAssets",
+    conversationID,
+    turnID,
+    assetKind,
+    assetID,
+  });
+}
+
 function dispatchAction(actionID: string): void {
   if (!currentConversationID) return;
   postToNative({
@@ -1905,10 +1926,20 @@ const Turn = memo(function Turn({
             const resolvedURL = pendingAssetURLs.get(asset.assetID);
             const src = asset.previewURL || (resolvedURL || undefined);
             return (
-              <div
+              <button
+                type="button"
                 className="user-asset-thumbnail"
                 key={asset.assetID}
                 title={asset.filename}
+                aria-label={`预览图片 ${asset.filename}`}
+                onClick={() =>
+                  requestAssetPreview(
+                    conversationID,
+                    turn.id,
+                    "user",
+                    String(asset.assetID),
+                  )
+                }
               >
                 {src ? (
                   <img
@@ -1925,7 +1956,7 @@ const Turn = memo(function Turn({
                     loading="lazy"
                   />
                 )}
-              </div>
+              </button>
             );
           })}
         </div>
@@ -1943,27 +1974,42 @@ const Turn = memo(function Turn({
               );
               const src = asset.previewURL || resolved?.url;
               const isImage = asset.mimeType.startsWith("image/");
-              return (
+              const title = `${asset.filename} · 本地处理，文件不会自动上传`;
+              const content = isImage && src ? (
+                <img
+                  src={src}
+                  data-local-asset-id={asset.id}
+                  alt={asset.filename}
+                  loading="lazy"
+                />
+              ) : (
+                <div className="user-asset-placeholder">
+                  <span className="local-asset-kind" aria-hidden="true">
+                    {localAssetIcon(asset.mimeType, asset.kind)}
+                  </span>
+                  <span className="user-asset-filename">{asset.filename}</span>
+                </div>
+              );
+              return isImage ? (
+                <button
+                  type="button"
+                  className="user-asset-thumbnail local-asset-thumbnail"
+                  key={asset.id}
+                  title={title}
+                  aria-label={`预览图片 ${asset.filename}`}
+                  onClick={() =>
+                    requestAssetPreview(conversationID, turn.id, "local", asset.id)
+                  }
+                >
+                  {content}
+                </button>
+              ) : (
                 <div
                   className="user-asset-thumbnail local-asset-thumbnail"
                   key={asset.id}
-                  title={`${asset.filename} · 本地处理，文件不会自动上传`}
+                  title={title}
                 >
-                  {isImage && src ? (
-                    <img
-                      src={src}
-                      data-local-asset-id={asset.id}
-                      alt={asset.filename}
-                      loading="lazy"
-                    />
-                  ) : (
-                    <div className="user-asset-placeholder">
-                      <span className="local-asset-kind" aria-hidden="true">
-                        {localAssetIcon(asset.mimeType, asset.kind)}
-                      </span>
-                      <span className="user-asset-filename">{asset.filename}</span>
-                    </div>
-                  )}
+                  {content}
                 </div>
               );
             })}

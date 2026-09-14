@@ -24,6 +24,11 @@ struct ConversationWebWorkbenchView: NSViewRepresentable {
     /// scroll range still extends behind it.
     let bottomInset: CGFloat
     let onFatalFailure: @MainActor () -> Void
+    /// Presents the shared native image previewer when the Web renderer
+    /// reports a thumbnail click. Only asset identities cross the bridge;
+    /// the host rebuilds the turn's mixed image list and resolves display
+    /// URLs natively (signed https / staged file URLs).
+    var onPreviewAssets: (@MainActor (AssetPreviewPresentation) -> Void)? = nil
 
     @Environment(WorkspaceStore.self) private var workspaceStore
     @Environment(\.openURL) private var openURL
@@ -64,7 +69,8 @@ struct ConversationWebWorkbenchView: NSViewRepresentable {
             webView: webView,
             messageProxy: messageProxy,
             schemeHandler: schemeHandler,
-            onFatalFailure: onFatalFailure
+            onFatalFailure: onFatalFailure,
+            onPreviewAssets: onPreviewAssets
         )
         context.coordinator.replaceSnapshot(
             snapshot,
@@ -141,6 +147,7 @@ struct ConversationWebWorkbenchView: NSViewRepresentable {
         private weak var workspaceStore: WorkspaceStore?
         private var openURL: OpenURLAction?
         private var onFatalFailure: (@MainActor () -> Void)?
+        private var onPreviewAssets: (@MainActor (AssetPreviewPresentation) -> Void)?
         private var rendererFailureDates: [Date] = []
         private var recoveryViewport: ConversationWebUpdate.RecoveryViewport?
         private var shouldRestoreViewportAfterReload = false
@@ -162,13 +169,15 @@ struct ConversationWebWorkbenchView: NSViewRepresentable {
             webView: WKWebView,
             messageProxy: WeakScriptMessageHandler,
             schemeHandler: ConversationWebSchemeHandler,
-            onFatalFailure: @escaping @MainActor () -> Void
+            onFatalFailure: @escaping @MainActor () -> Void,
+            onPreviewAssets: (@MainActor (AssetPreviewPresentation) -> Void)?
         ) {
             self.hostView = hostView
             self.webView = webView
             self.messageProxy = messageProxy
             self.schemeHandler = schemeHandler
             self.onFatalFailure = onFatalFailure
+            self.onPreviewAssets = onPreviewAssets
             hostView.onEffectiveAppearanceChange = { [weak self] in
                 self?.applyHostBackgroundToPage()
             }
@@ -187,6 +196,7 @@ struct ConversationWebWorkbenchView: NSViewRepresentable {
             actionRegistry.removeAll()
             schemeHandler?.removeAllLocalAssets()
             onFatalFailure = nil
+            onPreviewAssets = nil
         }
 
         func replaceSnapshot(
@@ -412,6 +422,8 @@ struct ConversationWebWorkbenchView: NSViewRepresentable {
                 handleResolveUserAssetURL(body)
             case "resolveLocalAssetURL":
                 handleResolveLocalAssetURL(body)
+            case "previewTurnAssets":
+                handlePreviewTurnAssets(body)
             default:
                 break
             }
@@ -813,6 +825,56 @@ struct ConversationWebWorkbenchView: NSViewRepresentable {
                       let json = String(data: jsonData, encoding: .utf8) else { return }
                 let script = "window.dispatchEvent(new CustomEvent('localAssetURLResolved', {detail: \(json)}))"
                 _ = try? await webView.evaluateJavaScript(script)
+            }
+        }
+
+        /// Web thumbnail click → open the shared native previewer for the
+        /// turn's mixed image list. Only identities cross the bridge; display
+        /// URLs are resolved natively because the private workbench scheme is
+        /// loadable only inside this WebView.
+        private func handlePreviewTurnAssets(_ body: [String: Any]) {
+            guard let conversationID = body["conversationID"] as? String,
+                  conversationID == sourceConversationID,
+                  let turnID = body["turnID"] as? String,
+                  turnID.utf8.count <= 256,
+                  let assetKind = body["assetKind"] as? String,
+                  let assetID = body["assetID"] as? String,
+                  assetID.utf8.count <= 64,
+                  let workspaceStore,
+                  let workspaceRoot = sourceWorkspaceRoot,
+                  let prompt = latestTurns.first(where: { $0.id == turnID })?.userPrompt
+            else { return }
+
+            let clicked: AssetPreviewItem.Source?
+            switch assetKind {
+            case "user":
+                clicked = Int64(assetID).map { .userAsset($0) }
+            case "local":
+                clicked = UUID(uuidString: assetID) != nil ? .localAsset(assetID) : nil
+            default:
+                clicked = nil
+            }
+            guard let clicked else { return }
+
+            let userAssets = prompt.userAssets
+            let localAssets = prompt.localAssets
+            let userResolver = workspaceStore.userAssetPreviewResolver
+            let localResolver = workspaceStore.localUserAssetPreviewResolver
+            Task { @MainActor [weak self] in
+                guard let self else { return }
+                let items = await UserAssetPreviewCollection.resolveItems(
+                    userAssets: userAssets,
+                    localAssets: localAssets,
+                    userResolver: userResolver,
+                    localResolver: localResolver,
+                    conversationID: conversationID,
+                    workspaceRoot: workspaceRoot
+                )
+                guard self.sourceConversationID == conversationID,
+                      let index = items.firstIndex(where: { $0.id == clicked }),
+                      let onPreviewAssets
+                else { return }
+                onPreviewAssets(AssetPreviewPresentation(items: items, initialIndex: index))
             }
         }
 

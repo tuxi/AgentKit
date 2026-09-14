@@ -27,6 +27,7 @@ public struct TurnTimelineView: View {
     /// behind it so the user can scroll content underneath the bar.
     let bottomInset: CGFloat
     @State private var didWebRendererFail = false
+    @State private var assetPreviewPresentation: AssetPreviewPresentation?
 
     public init(
         snapshot: RuntimeSnapshot,
@@ -68,8 +69,17 @@ public struct TurnTimelineView: View {
                 timelineExtensions: timelineExtensions,
                 isVisible: isVisible,
                 bottomInset: bottomInset,
-                onFatalFailure: { didWebRendererFail = true }
+                onFatalFailure: { didWebRendererFail = true },
+                onPreviewAssets: { assetPreviewPresentation = $0 }
             )
+            .sheet(item: $assetPreviewPresentation) { presentation in
+                AssetPreviewViewer(
+                    items: presentation.items,
+                    initialIndex: presentation.initialIndex,
+                    onClose: { assetPreviewPresentation = nil }
+                )
+                .frame(minWidth: 640, minHeight: 480)
+            }
         case .native, .auto:
             // AppKit owns the native scroll container. TurnView itself remains
             // unchanged, preserving the TextKit behavior reference and rollback.

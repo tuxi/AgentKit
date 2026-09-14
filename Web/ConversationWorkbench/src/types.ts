@@ -254,6 +254,13 @@ export type NativeBridgeMessage =
       localAssetID: string;
       conversationID: string;
       requestID: string;
+    }
+  | {
+      type: "previewTurnAssets";
+      conversationID: string;
+      turnID: string;
+      assetKind: "user" | "local";
+      assetID: string;
     };
 
 declare global {

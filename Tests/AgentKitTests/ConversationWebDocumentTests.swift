@@ -726,6 +726,88 @@ final class ConversationWebDocumentTests: XCTestCase {
         XCTAssertEqual(patch.patch?.operations.first?.index, 499)
     }
 
+    /// The shared previewer's mixed list must be remote-first, then image
+    /// local assets (matching the strip layout on both renderers), and a
+    /// failing resolution must keep its slot so paging indices stay stable.
+    func testAssetPreviewCollectionOrdersRemoteFirstAndKeepsFailedSlots() async throws {
+        struct StubUserResolver: UserAssetPreviewResolving {
+            func previewURL(for asset: UserAssetRef) async throws -> URL {
+                URL(string: "https://gateway.invalid/assets/\(asset.assetID)")!
+            }
+        }
+        struct StubLocalResolver: LocalUserAssetPreviewResolving {
+            func previewURL(
+                for asset: LocalUserAssetRef,
+                conversationID: String,
+                workspaceRoot: URL
+            ) async throws -> URL {
+                if asset.filename == "missing.png" {
+                    throw CocoaError(.fileNoSuchFile)
+                }
+                return workspaceRoot.appendingPathComponent(asset.relativePath)
+            }
+        }
+        let remote = UserAssetRef(
+            assetID: 4242,
+            mimeType: "image/jpeg",
+            filename: "shot.jpg"
+        )
+        let localImage = LocalUserAssetRef(
+            id: "6f1f2c3a-0f0a-4a1e-9c2b-1d2e3f4a5b6c",
+            relativePath: "user-assets/6f1f2c3a-0f0a-4a1e-9c2b-1d2e3f4a5b6c/photo.png",
+            filename: "photo.png",
+            mimeType: "image/png",
+            kind: "image",
+            sizeBytes: 10,
+            sha256: String(repeating: "a", count: 64)
+        )
+        let missingImage = LocalUserAssetRef(
+            id: "7a2a3b4c-1a1b-4c2d-8e3f-4a5b6c7d8e9f",
+            relativePath: "user-assets/7a2a3b4c-1a1b-4c2d-8e3f-4a5b6c7d8e9f/missing.png",
+            filename: "missing.png",
+            mimeType: "image/png",
+            kind: "image",
+            sizeBytes: 10,
+            sha256: String(repeating: "b", count: 64)
+        )
+        let pdf = LocalUserAssetRef(
+            id: "8b3b4c5d-2a2b-4d3e-9f4a-5b6c7d8e9f0a",
+            relativePath: "user-assets/8b3b4c5d-2a2b-4d3e-9f4a-5b6c7d8e9f0a/spec.pdf",
+            filename: "spec.pdf",
+            mimeType: "application/pdf",
+            kind: "document",
+            sizeBytes: 10,
+            sha256: String(repeating: "c", count: 64)
+        )
+
+        let sources = UserAssetPreviewCollection.imageSources(
+            userAssets: [remote],
+            localAssets: [pdf, localImage, missingImage]
+        )
+        XCTAssertEqual(sources, [
+            .userAsset(4242),
+            .localAsset(localImage.id),
+            .localAsset(missingImage.id),
+        ])
+
+        let items = await UserAssetPreviewCollection.resolveItems(
+            userAssets: [remote],
+            localAssets: [pdf, localImage, missingImage],
+            userResolver: StubUserResolver(),
+            localResolver: StubLocalResolver(),
+            conversationID: "conv-1",
+            workspaceRoot: URL(fileURLWithPath: "/tmp/workspace")
+        )
+        XCTAssertEqual(items.map(\.id), sources)
+        XCTAssertEqual(items[0].url?.absoluteString, "https://gateway.invalid/assets/4242")
+        XCTAssertEqual(
+            items[1].url,
+            URL(fileURLWithPath: "/tmp/workspace").appendingPathComponent(localImage.relativePath)
+        )
+        XCTAssertNil(items[2].url)
+        XCTAssertEqual(items[2].filename, "missing.png")
+    }
+
     #if os(macOS)
     /// The bundled shell's CSP must admit the private local-asset host, or
     /// WebKit blocks registered history images before the scheme handler runs.
@@ -911,6 +993,180 @@ final class ConversationWebDocumentTests: XCTestCase {
         XCTAssertEqual(resolved?["tag"] as? String, "IMG")
         XCTAssertEqual(resolved?["src"] as? String, transparentPixel)
         XCTAssertEqual(resolved?["placeholder"] as? Bool, false)
+
+        configuration.userContentController.removeScriptMessageHandler(
+            forName: "agentkitWorkbench"
+        )
+        _ = webView
+    }
+
+    /// Clicking a thumbnail in the bundled shell must post a
+    /// `previewTurnAssets` bridge message carrying the turn and the clicked
+    /// asset identity, so the host can open the shared native previewer.
+    func testBundledShellPostsPreviewRequestWhenThumbnailClicked() async throws {
+        let ready = expectation(description: "Web renderer handshake")
+        let acknowledged = expectation(description: "Document acknowledgement")
+        let previewRequested = expectation(description: "Preview request")
+        let probe = ConversationWebBridgeProbe(ready: ready)
+        probe.expectAcknowledgement(revision: 1, expectation: acknowledged)
+        probe.expectPreviewRequest(previewRequested)
+
+        let configuration = WKWebViewConfiguration()
+        configuration.websiteDataStore = .nonPersistent()
+        configuration.setURLSchemeHandler(
+            ConversationWebSchemeHandler(),
+            forURLScheme: ConversationWebSchemeHandler.scheme
+        )
+        configuration.userContentController.add(probe, name: "agentkitWorkbench")
+        let webView = WKWebView(
+            frame: .init(x: 0, y: 0, width: 320, height: 480),
+            configuration: configuration
+        )
+        webView.load(URLRequest(url: ConversationWebSchemeHandler.indexURL))
+        await fulfillment(of: [ready], timeout: 5)
+
+        let localAsset = LocalUserAssetRef(
+            id: "6f1f2c3a-0f0a-4a1e-9c2b-1d2e3f4a5b6c",
+            relativePath: "user-assets/6f1f2c3a-0f0a-4a1e-9c2b-1d2e3f4a5b6c/photo.png",
+            filename: "photo.png",
+            mimeType: "image/png",
+            kind: "image",
+            sizeBytes: 68,
+            sha256: String(repeating: "e", count: 64)
+        )
+        let remoteAsset = UserAssetRef(
+            assetID: 4242,
+            mimeType: "image/png",
+            filename: "remote.png"
+        )
+        let document = ConversationWebDocumentBuilder.build(
+            snapshot: RuntimeSnapshot(
+                timeline: [],
+                turns: [ConversationTurn(
+                    id: "turn-preview",
+                    userPrompt: MessageNodePayload(
+                        role: .user,
+                        text: "look",
+                        userAssets: [remoteAsset],
+                        localAssets: [localAsset]
+                    ),
+                    blocks: [],
+                    footer: nil,
+                    isLive: false
+                )]
+            ),
+            conversationID: "preview-bridge",
+            revision: 1
+        )
+        let payload = try JSONEncoder().encode(
+            ConversationWebDocumentDiffer.reset(document)
+        ).base64EncodedString()
+        _ = try await webView.evaluateJavaScript(
+            "window.AgentKitWorkbench.applyUpdateBase64('\(payload)')"
+        )
+        await fulfillment(of: [acknowledged], timeout: 5)
+
+        // The remote strip renders before the local group; its first button
+        // is the clicked one.
+        _ = try await webView.evaluateJavaScript(
+            "document.querySelector('.user-asset-strip button.user-asset-thumbnail').click()"
+        )
+        await fulfillment(of: [previewRequested], timeout: 5)
+        XCTAssertEqual(probe.previewConversationID, "preview-bridge")
+        XCTAssertEqual(probe.previewTurnID, "turn-preview")
+        XCTAssertEqual(probe.previewAssetKind, "user")
+        XCTAssertEqual(probe.previewAssetID, "4242")
+
+        configuration.userContentController.removeScriptMessageHandler(
+            forName: "agentkitWorkbench"
+        )
+        _ = webView
+    }
+
+    /// The asset strip must scroll to every thumbnail: with plain
+    /// `justify-content: flex-end` the overflow spills into a scroll-
+    /// unreachable zone in LTR and programmatic scrollLeft snaps back to 0.
+    func testBundledShellAssetStripScrollsToOverflowedThumbnails() async throws {
+        let ready = expectation(description: "Web renderer handshake")
+        let acknowledged = expectation(description: "Document acknowledgement")
+        let probe = ConversationWebBridgeProbe(ready: ready)
+        probe.expectAcknowledgement(revision: 1, expectation: acknowledged)
+
+        let configuration = WKWebViewConfiguration()
+        configuration.websiteDataStore = .nonPersistent()
+        configuration.setURLSchemeHandler(
+            ConversationWebSchemeHandler(),
+            forURLScheme: ConversationWebSchemeHandler.scheme
+        )
+        configuration.userContentController.add(probe, name: "agentkitWorkbench")
+        let webView = WKWebView(
+            frame: .init(x: 0, y: 0, width: 320, height: 480),
+            configuration: configuration
+        )
+        webView.load(URLRequest(url: ConversationWebSchemeHandler.indexURL))
+        await fulfillment(of: [ready], timeout: 5)
+
+        let assets = (1...8).map { index -> LocalUserAssetRef in
+            let id = String(format: "00000000-0000-0000-0000-%012d", index)
+            return LocalUserAssetRef(
+                id: id,
+                relativePath: "user-assets/\(id)/photo.png",
+                filename: "photo-\(index).png",
+                mimeType: "image/png",
+                kind: "image",
+                sizeBytes: 68,
+                sha256: String(repeating: "f", count: 64)
+            )
+        }
+        let document = ConversationWebDocumentBuilder.build(
+            snapshot: RuntimeSnapshot(
+                timeline: [],
+                turns: [ConversationTurn(
+                    id: "turn-strip",
+                    userPrompt: MessageNodePayload(
+                        role: .user,
+                        text: "eight photos",
+                        localAssets: assets
+                    ),
+                    blocks: [],
+                    footer: nil,
+                    isLive: false
+                )]
+            ),
+            conversationID: "strip-scroll",
+            revision: 1
+        )
+        let payload = try JSONEncoder().encode(
+            ConversationWebDocumentDiffer.reset(document)
+        ).base64EncodedString()
+        _ = try await webView.evaluateJavaScript(
+            "window.AgentKitWorkbench.applyUpdateBase64('\(payload)')"
+        )
+        await fulfillment(of: [acknowledged], timeout: 5)
+
+        let scroll = try await webView.evaluateJavaScript(
+            """
+            (() => {
+              const strip = document.querySelector('.local-asset-group .user-asset-strip');
+              if (!strip) return null;
+              const overflow = strip.scrollWidth - strip.clientWidth;
+              strip.scrollLeft = 200;
+              const after = strip.scrollLeft;
+              strip.scrollLeft = 0;
+              return {overflow: overflow, after: after,
+                      justify: getComputedStyle(strip).justifyContent};
+            })()
+            """
+        ) as? [String: Any]
+        let justify = scroll?["justify"] as? String
+        XCTAssertGreaterThan(
+            scroll?["overflow"] as? Int ?? 0, 0,
+            "eight thumbnails must overflow the 320pt shell"
+        )
+        XCTAssertGreaterThan(
+            scroll?["after"] as? Int ?? 0, 0,
+            "programmatic scrollLeft snapped back — start overflow is unreachable (justify: \(justify ?? "?"))"
+        )
 
         configuration.userContentController.removeScriptMessageHandler(
             forName: "agentkitWorkbench"
@@ -1713,6 +1969,7 @@ private final class ConversationWebBridgeProbe: NSObject, WKScriptMessageHandler
     private let ready: XCTestExpectation
     private var acknowledgementExpectations: [Int: XCTestExpectation] = [:]
     private var localAssetRequestExpectation: XCTestExpectation?
+    private var previewRequestExpectation: XCTestExpectation?
     private(set) var protocolVersion: Int?
     private(set) var acknowledgedRevision: Int?
     private(set) var lastViewportPinned: Bool?
@@ -1720,6 +1977,10 @@ private final class ConversationWebBridgeProbe: NSObject, WKScriptMessageHandler
     private(set) var localAssetRequestID: String?
     private(set) var requestedLocalAssetID: String?
     private(set) var requestedLocalAssetConversationID: String?
+    private(set) var previewConversationID: String?
+    private(set) var previewTurnID: String?
+    private(set) var previewAssetKind: String?
+    private(set) var previewAssetID: String?
 
     init(ready: XCTestExpectation) {
         self.ready = ready
@@ -1731,6 +1992,10 @@ private final class ConversationWebBridgeProbe: NSObject, WKScriptMessageHandler
 
     func expectLocalAssetRequest(_ expectation: XCTestExpectation) {
         localAssetRequestExpectation = expectation
+    }
+
+    func expectPreviewRequest(_ expectation: XCTestExpectation) {
+        previewRequestExpectation = expectation
     }
 
     func userContentController(
@@ -1760,6 +2025,13 @@ private final class ConversationWebBridgeProbe: NSObject, WKScriptMessageHandler
             requestedLocalAssetConversationID = body["conversationID"] as? String
             localAssetRequestExpectation?.fulfill()
             localAssetRequestExpectation = nil
+        case "previewTurnAssets":
+            previewConversationID = body["conversationID"] as? String
+            previewTurnID = body["turnID"] as? String
+            previewAssetKind = body["assetKind"] as? String
+            previewAssetID = body["assetID"] as? String
+            previewRequestExpectation?.fulfill()
+            previewRequestExpectation = nil
         default:
             break
         }
