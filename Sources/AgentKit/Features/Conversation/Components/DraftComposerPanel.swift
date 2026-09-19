@@ -85,7 +85,13 @@ struct DraftComposerPanel: View {
         newVM.onAppear()
     }
     
-   
+    private func handleViewModelChange(_ newVM: ConversationViewModel?) {
+        guard let newVM else { return }
+        let newModel = newVM.selectedModel
+        guard newModel != vm?.selectedModel else { return }
+        vm?.handleViewModelModelChange(oldModel: vm?.selectedModel ?? UnifiedModel(model: "", reasoningEffort: nil), newModel: newModel)
+    }
+    
     private func contentView(_ vm: DraftComposerPanelViewModel) -> some View {
         VStack(spacing: 0) {
 #if os(iOS)
@@ -141,40 +147,11 @@ struct DraftComposerPanel: View {
                 vm.handleSubmissionRejected()
             }
         }
-        .onChange(of: viewModel?.selectedModel) { _, newModel in
-            guard let newModel, newModel != vm.selectedModel else { return }
-            vm.handleViewModelModelChange(oldModel: vm.selectedModel ?? UnifiedModel(model: "", reasoningEffort: nil), newModel: newModel)
+        .onChange(of: viewModel) { _, newVM in
+            handleViewModelChange(newVM)
         }
         .modifier(DraftComposerSurfaceModifier())
-        .confirmationDialog(
-            "这会将文件上传到云端进行视觉识别。",
-            isPresented: Binding(
-                get: { vm.isGatewayUploadConfirmationPresented },
-                set: { vm.isGatewayUploadConfirmationPresented = $0 }
-            ),
-            titleVisibility: .visible
-        ) {
-            Button("上传并使用云端视觉") {
-                vm.confirmGatewayUpload()
-            }
-            Button("取消", role: .cancel) {
-                vm.pendingGatewayUploadID = nil
-            }
-        }
-        .alert(AgentKitLocalized.string("composer.voice_input.no_permission_title"),
-               isPresented: Binding(
-                get: { vm.showPermissionAlert },
-                set: { vm.showPermissionAlert = $0 }
-               )) {
-            Button(AgentKitLocalized.string("composer.voice_input.open_settings")) {
-                VoiceInputService.openSystemSettings()
-            }
-            Button(AgentKitLocalized.string("composer.voice_input.cancel"), role: .cancel) {
-                vm.voiceService.reset()
-            }
-        } message: {
-            Text(AgentKitLocalized.string("composer.voice_input.no_permission"))
-        }
+        .modifier(ComposerAlertsModifier(vm: vm))
 #if os(iOS)
         .sheet(isPresented: Binding(
             get: { vm.isIOSModelPickerPresented },
@@ -870,5 +847,46 @@ struct DraftComposerSurfaceModifier: ViewModifier {
             .shadow(color: Color.black.opacity(0.02), radius: 6, x: 0, y: 2)   // 几乎不可见的近景阴影
             .shadow(color: Color.black.opacity(0.04), radius: 20, x: 0, y: 6)  // 柔和弥散阴影
 #endif
+    }
+}
+
+struct ComposerAlertsModifier: ViewModifier {
+    let vm: DraftComposerPanelViewModel
+    
+    func body(content: Content) -> some View {
+        content
+            .confirmationDialog(
+                "这会将文件上传到云端进行视觉识别。",
+                isPresented: Binding(
+                    get: { vm.isGatewayUploadConfirmationPresented },
+                    set: { vm.isGatewayUploadConfirmationPresented = $0 }
+                ),
+                titleVisibility: .visible
+            ) {
+                Button("上传并使用云端视觉") {
+                    vm.confirmGatewayUpload()
+                }
+                Button("取消", role: .cancel) {
+                    vm.pendingGatewayUploadID = nil
+                }
+            }
+            .alert(
+                AgentKitLocalized.string("composer.voice_input.no_permission_title"),
+                isPresented: Binding(
+                    get: { vm.showPermissionAlert },
+                    set: { vm.showPermissionAlert = $0 }
+                ),
+                actions: {
+                    Button(AgentKitLocalized.string("composer.voice_input.open_settings")) {
+                        VoiceInputService.openSystemSettings()
+                    }
+                    Button(AgentKitLocalized.string("composer.voice_input.cancel"), role: .cancel) {
+                        vm.voiceService.reset()
+                    }
+                },
+                message: {
+                    Text(AgentKitLocalized.string("composer.voice_input.no_permission"))
+                }
+            )
     }
 }
