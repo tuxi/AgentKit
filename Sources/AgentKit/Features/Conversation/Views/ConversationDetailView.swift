@@ -129,6 +129,8 @@ public struct ConversationDetailView: View {
     
     private var draftComposer: some View {
         DraftComposerPanel(
+            workspaceStore: store,
+            modelSettings: modelSettings,
             placeholder: store.isPreparingWorkspace ? AgentKitLocalized.string("conversation.preparing_workspace") : AgentKitLocalized.string("conversation.describe_placeholder"),
             isEnabled: (store.draft?.canCommit ?? false) && !store.isPreparingWorkspace,
             isDraft: true,
@@ -265,6 +267,26 @@ public struct ConversationDetailView: View {
 #endif
     }
     
+    private func placeholder(vm: ConversationViewModel, isPaused: Bool, isArchived: Bool) -> String {
+        vm.isAwaitingTurnAcceptance
+        ? AgentKitLocalized.string("conversation.submitting_task")
+        : vm.isLocallyQueued
+        ? AgentKitLocalized.string("conversation.queued_no_parallel")
+        : vm.lifecycleStatus == "queued"
+        ? vm.runtimeQueueDescription
+        : vm.lifecycleStatus == "accepted"
+        ? AgentKitLocalized.string("conversation.runtime_received")
+        : isPaused
+        ? AgentKitLocalized.string("conversation.paused_click_to_resume")
+        : isArchived
+        ? AgentKitLocalized.string("conversation.archived_restore_to_continue")
+        : (vm.snapshot.pendingAskUser != nil)
+        ? AgentKitLocalized.string("conversation.answer_questions_to_continue")
+        : (vm.snapshot.pendingApproval != nil || vm.snapshot.pendingPlanApproval != nil)
+        ? AgentKitLocalized.string("conversation.approval_needed_allow_deny")
+        : AgentKitLocalized.string("conversation.input_message")
+    }
+    
     /// Bottom bar shared by both macOS (inline VStack) and iOS (safeAreaInset).
     @ViewBuilder
     private func activeBottomBar(vm: ConversationViewModel, isPaused: Bool, isArchived: Bool) -> some View {
@@ -319,23 +341,9 @@ public struct ConversationDetailView: View {
             //            #endif
             
             DraftComposerPanel(
-                placeholder: vm.isAwaitingTurnAcceptance
-                ? AgentKitLocalized.string("conversation.submitting_task")
-                : vm.isLocallyQueued
-                ? AgentKitLocalized.string("conversation.queued_no_parallel")
-                : vm.lifecycleStatus == "queued"
-                ? vm.runtimeQueueDescription
-                : vm.lifecycleStatus == "accepted"
-                ? AgentKitLocalized.string("conversation.runtime_received")
-                : isPaused
-                ? AgentKitLocalized.string("conversation.paused_click_to_resume")
-                : isArchived
-                ? AgentKitLocalized.string("conversation.archived_restore_to_continue")
-                : (vm.snapshot.pendingAskUser != nil)
-                ? AgentKitLocalized.string("conversation.answer_questions_to_continue")
-                : (vm.snapshot.pendingApproval != nil || vm.snapshot.pendingPlanApproval != nil)
-                ? AgentKitLocalized.string("conversation.approval_needed_allow_deny")
-                : AgentKitLocalized.string("conversation.input_message"),
+                workspaceStore: store,
+                modelSettings: modelSettings,
+                placeholder: placeholder(vm: vm, isPaused: isPaused, isArchived: isArchived),
                 isEnabled: !isArchived && !vm.isTurnActive //  && !isPaused
                 && vm.snapshot.pendingAskUser == nil
                 && vm.snapshot.pendingApproval == nil

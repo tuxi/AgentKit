@@ -16,20 +16,14 @@ import ClientToolProtocol
 
 // MARK: - DraftComposerPanel
 
-private struct ComposerModelGroup: Identifiable {
-    let id: String
-    let name: String
-    let modelIDs: [String]
-}
-
 /// 统一输入面板 —— 合并了原 `ChatComposer` 和 `DraftComposerPanel`。
 /// 用于草稿页（新建对话）和活跃会话两种场景。
 /// 对标 Claude Code / Codex：模型选择器在输入栏中，每个对话独立管理自己的模型。
 struct DraftComposerPanel: View {
-    @Environment(WorkspaceStore.self) private var workspaceStore
-    @Environment(ModelSettingsStore.self) private var modelSettings
     @Environment(\.scenePhase) private var scenePhase
     
+    let workspaceStore: WorkspaceStore
+    let modelSettings: ModelSettingsStore
     let placeholder: String
     let isEnabled: Bool
     let isDraft: Bool
@@ -43,41 +37,47 @@ struct DraftComposerPanel: View {
     /// `.task(id:)` 靠它区分「新一次草稿」—— 否则取消草稿再新建时 id 恒为 nil，
     /// selectedModel 残留上一次的选择。活跃会话场景不需要传。
     var draftRevision: Int = 0
-    /// 当前对话的模型 ID（binding，每个对话独立）。
-    @State var selectedModel: UnifiedModel?
     /// 模型切换回调。
     var onModelChange: ((String) -> Void)? = nil
     
-    @State private var text = ""
-    @State private var attachments: [DraftAttachmentReference] = []
-    @State private var submittedTextSnapshot: String?
-    @State private var isSending = false
-    @State private var loadedStateKey: ConversationLocalStateKey?
-    @State private var pendingSaveTask: Task<Void, Never>?
-    @State private var isRestoringLocalState = false
-    @State private var pendingGatewayUploadID: String?
-    @State private var isGatewayUploadConfirmationPresented = false
-    @StateObject private var voiceService = VoiceInputService()
-#if os(macOS)
-    @State private var composerHeight: CGFloat = 56
-    private let composerMinHeight: CGFloat = 56
-    private let composerMaxHeight: CGFloat = 150
-#endif
+    @State private var vm: DraftComposerPanelViewModel
     
-    // MARK: - Model Selector
-    @State private var isIOSModelPickerPresented = false
-    
-    @State private var showPermissionAlert = false
-    
-    // MARK: - Context Window
-    @State private var contextSnapshot: ConversationContextSnapshot?
-    @State private var contextError: String?
-    @State private var isContextLoading = false
-    @State private var isContextPresented = false
-    @State private var contextRefreshTask: Task<Void, Never>?
-    @State private var contentWidth: CGFloat = 0
+    init(workspaceStore: WorkspaceStore, modelSettings: ModelSettingsStore, placeholder: String, isEnabled: Bool, isDraft: Bool, isTurnRunning: Bool = false, onStop: (() -> Void)? = nil, onSend: @escaping (_: String, _: UnifiedModel, _: [UserAssetRef]) async -> Bool, onAddAttachment: (() -> Void)? = nil, viewModel: ConversationViewModel?, draftRevision: Int = 0, onModelChange: ((String) -> Void)? = nil) {
+        self.workspaceStore = workspaceStore
+        self.modelSettings = modelSettings
+        self.placeholder = placeholder
+        self.isEnabled = isEnabled
+        self.isDraft = isDraft
+        self.isTurnRunning = isTurnRunning
+        self.onStop = onStop
+        self.onSend = onSend
+        self.onAddAttachment = onAddAttachment
+        self.viewModel = viewModel
+        self.draftRevision = draftRevision
+        self.onModelChange = onModelChange
+        self.vm = DraftComposerPanelViewModel(
+            workspaceStore: workspaceStore,
+            modelSettings: modelSettings,
+            conversationViewModel: viewModel,
+            isDraft: isDraft,
+            placeholder: placeholder,
+            isEnabled: isEnabled,
+            isTurnRunning: isTurnRunning,
+            draftRevision: draftRevision,
+            onSend: onSend,
+            onModelChange: onModelChange,
+            onAddAttachment: onAddAttachment,
+            onStop: onStop
+        )
+    }
     
     var body: some View {
+        contentView(vm)
+            .id(vm.persistenceKey)
+    }
+    
+   
+    private func contentView(_ vm: DraftComposerPanelViewModel) -> some View {
         VStack(spacing: 0) {
 #if os(iOS)
             if isDraft {
@@ -90,7 +90,7 @@ struct DraftComposerPanel: View {
             }
 #endif
             
-            content
+            composerContent(vm)
             
 #if os(macOS)
             if isDraft {
@@ -101,60 +101,83 @@ struct DraftComposerPanel: View {
             }
 #endif
         }
-        .onDisappear {
-            handleDisappear()
-        }
         .onAppear {
-            setupVoiceCallbacks()
+            vm.onAppear()
         }
-        .task(id: sessionID ?? "draft-context") {
-            refreshContext()
-        }
-        .task(id: persistenceKey?.storageKey ?? "none-\(draftRevision)") {
-            restoreLocalState()
+        .onDisappear {
+            vm.onDisappear()
         }
         .onGeometryChange(for: CGFloat.self, of: { proxy in
             return proxy.size.width
-        }, action: { oldValue, newValue in
-            contentWidth = newValue
+        }, action: { _, newValue in
+            vm.onGeometryChange(width: newValue)
         })
+        .onChange(of: scenePhase) { _, phase in
+            vm.handleScenePhaseChange(phase)
+        }
+        .onChange(of: isTurnRunning) { _, newValue in
+            vm.setTurnRunning(newValue)
+        }
+        .onChange(of: modelSettings.availableModelIDs) { _, newIDs in
+            vm.handleModelSettingsChange(newIDs: newIDs)
+        }
+        .onChange(of: viewModel?.lastAcceptedSubmissionRequestID) { _, _ in
+            vm.reconcileAcceptedSubmission()
+        }
+        .onChange(of: viewModel?.lastInputRejection) { _, newValue in
+            if newValue != nil {
+                vm.handleSubmissionRejected()
+            }
+        }
+        .onChange(of: viewModel?.selectedModel) { _, newModel in
+            guard let newModel, newModel != vm.selectedModel else { return }
+            vm.handleViewModelModelChange(oldModel: vm.selectedModel ?? UnifiedModel(model: "", reasoningEffort: nil), newModel: newModel)
+        }
         .modifier(DraftComposerSurfaceModifier())
         .confirmationDialog(
             "这会将文件上传到云端进行视觉识别。",
-            isPresented: $isGatewayUploadConfirmationPresented,
+            isPresented: Binding(
+                get: { vm.isGatewayUploadConfirmationPresented },
+                set: { vm.isGatewayUploadConfirmationPresented = $0 }
+            ),
             titleVisibility: .visible
         ) {
             Button("上传并使用云端视觉") {
-                confirmGatewayUpload()
+                vm.confirmGatewayUpload()
             }
             Button("取消", role: .cancel) {
-                pendingGatewayUploadID = nil
+                vm.pendingGatewayUploadID = nil
             }
         }
         .alert(AgentKitLocalized.string("composer.voice_input.no_permission_title"),
-               isPresented: $showPermissionAlert) {
+               isPresented: Binding(
+                get: { vm.showPermissionAlert },
+                set: { vm.showPermissionAlert = $0 }
+               )) {
             Button(AgentKitLocalized.string("composer.voice_input.open_settings")) {
                 VoiceInputService.openSystemSettings()
             }
             Button(AgentKitLocalized.string("composer.voice_input.cancel"), role: .cancel) {
-                voiceService.reset()
+                vm.voiceService.reset()
             }
         } message: {
             Text(AgentKitLocalized.string("composer.voice_input.no_permission"))
         }
 #if os(iOS)
-        .sheet(isPresented: $isIOSModelPickerPresented) {
+        .sheet(isPresented: Binding(
+            get: { vm.isIOSModelPickerPresented },
+            set: { vm.isIOSModelPickerPresented = $0 }
+        )) {
             IOSModelPickerSheet(
-                groups: modelGroups,
-                ungroupedModelIDs: modelGroups.isEmpty ? modelSettings.availableModelIDs : [],
-                selectedModel: selectedModel,
+                groups: vm.modelGroups,
+                ungroupedModelIDs: vm.modelGroups.isEmpty ? modelSettings.availableModelIDs : [],
+                selectedModel: vm.selectedModel,
                 displayName: { modelSettings.displayName(for: $0) },
                 onSelect: { modelID in
                     let resolved = modelSettings.getModel(with: viewModel?.conversation?.id)
                     if let resolved, !resolved.model.isEmpty {
-                        selectModel(modelID, reasoningEffort: resolved.reasoningEffort)
+                        vm.selectModel(modelID, reasoningEffort: resolved.reasoningEffort)
                     }
-                    isIOSModelPickerPresented = false
                 }
             )
             .presentationDetents([.medium, .height(260)])
@@ -163,23 +186,21 @@ struct DraftComposerPanel: View {
 #endif
     }
     
-    var content: some View {
+    @ViewBuilder
+    private func composerContent(_ vm: DraftComposerPanelViewModel) -> some View {
         VStack(spacing: 8) {
-            if voiceService.state == .recording || voiceService.state == .transcribing
-            // *voiceService.state == .preparing*/
-            {
-                // 录音浮层占据整个底部区域（隐藏附件、模型选择器、工具栏）
+            if vm.voiceService.state == .recording || vm.voiceService.state == .transcribing {
                 VoiceRecordingOverlay(
-                    service: voiceService,
-                    onStop: { voiceService.stopRecordingAndTranscribe() },
-                    onSend: { send() }
+                    service: vm.voiceService,
+                    onStop: { vm.voiceService.stopRecordingAndTranscribe() },
+                    onSend: { vm.send() }
                 )
                 .padding(.horizontal, 2)
-                .padding(.top, attachments.isEmpty ? 8 : 2)
+                .padding(.top, vm.attachments.isEmpty ? 8 : 2)
             } else {
-                if !attachments.isEmpty {
+                if !vm.attachments.isEmpty {
                     VStack(alignment: .leading, spacing: 5) {
-                        attachmentStrip
+                        attachmentStrip(vm)
                         Text("🔒 本地处理 · 文件不会自动上传")
                             .font(.caption2)
                             .foregroundStyle(.secondary)
@@ -187,18 +208,18 @@ struct DraftComposerPanel: View {
                     .padding(.horizontal, 16)
                     .padding(.top, 12)
                 }
-                inputField
+                inputField(vm)
                     .padding(.horizontal, 16)
-                    .padding(.top, attachments.isEmpty ? 14 : 2)
+                    .padding(.top, vm.attachments.isEmpty ? 14 : 2)
             }
             
-            if voiceService.state != .recording && voiceService.state != .transcribing && voiceService.state != .preparing {
-                HStack(spacing: composerControlSpacing) {
+            if vm.voiceService.state != .recording && vm.voiceService.state != .transcribing && vm.voiceService.state != .preparing {
+                HStack(spacing: vm.composerControlSpacing) {
                     Button {
                         if let onAddAttachment {
                             onAddAttachment()
                         } else {
-                            pickAttachments()
+                            vm.pickAttachments()
                         }
                     } label: {
                         Image(systemName: "plus")
@@ -208,22 +229,22 @@ struct DraftComposerPanel: View {
                     .foregroundStyle(.secondary)
                     .accessibilityLabel(AgentKitLocalized.string("composer.add_attachment"))
                     .disabled(
-                        attachments.count >= 4
+                        vm.attachments.count >= 4
                         || (onAddAttachment == nil && !workspaceStore.canSelectUserAssets)
                     )
                     
 #if os(macOS)
-                    if let vm = viewModel,
-                       vm.workspacePermissionPath != nil {
+                    if let conversationVM = viewModel,
+                       conversationVM.workspacePermissionPath != nil {
                         Menu {
-                            ForEach(vm.workspacePermissionModes, id: \.self) { mode in
+                            ForEach(conversationVM.workspacePermissionModes, id: \.self) { mode in
                                 Button {
-                                    Task { await vm.setWorkspacePermissionMode(mode) }
+                                    Task { await conversationVM.setWorkspacePermissionMode(mode) }
                                 } label: {
-                                    if mode == vm.workspacePermissionMode {
-                                        Label(approvalModeTitle(mode), systemImage: "checkmark")
+                                    if mode == conversationVM.workspacePermissionMode {
+                                        Label(vm.approvalModeTitle(mode), systemImage: "checkmark")
                                     } else {
-                                        Text(approvalModeTitle(mode))
+                                        Text(vm.approvalModeTitle(mode))
                                     }
                                 }
                             }
@@ -231,26 +252,26 @@ struct DraftComposerPanel: View {
                             Text("将应用于此工作区的所有对话")
                                 .font(.caption)
                                 .foregroundStyle(.secondary)
-                            if let error = vm.workspacePermissionError {
+                            if let error = conversationVM.workspacePermissionError {
                                 Text(error)
                                     .font(.caption)
                                     .foregroundStyle(.red)
                             }
                         } label: {
-                            if contentWidth <= 400 {
-                                Image(systemName: approvalModeIcon(vm.workspacePermissionMode))
+                            if vm.contentWidth <= 400 {
+                                Image(systemName: vm.approvalModeIcon(conversationVM.workspacePermissionMode))
                                     .font(.system(size: 13, weight: .medium))
                                     .labelStyle(.titleAndIcon)
                             } else {
                                 Label(
-                                    approvalModeShortTitle(vm.workspacePermissionMode),
-                                    systemImage: approvalModeIcon(vm.workspacePermissionMode)
+                                    vm.approvalModeShortTitle(conversationVM.workspacePermissionMode),
+                                    systemImage: vm.approvalModeIcon(conversationVM.workspacePermissionMode)
                                 )
                             }
                         }
                         .help("对话所属工作区的权限档位")
-                        .task(id: vm.workspacePermissionPath) {
-                            await vm.loadWorkspacePermissions()
+                        .task(id: conversationVM.workspacePermissionPath) {
+                            await conversationVM.loadWorkspacePermissions()
                         }
                         .menuStyle(.borderlessButton)
                         .fixedSize()
@@ -263,10 +284,10 @@ struct DraftComposerPanel: View {
                     // ── Model Selector ──
 #if os(iOS)
                     Button {
-                        isIOSModelPickerPresented = true
+                        vm.isIOSModelPickerPresented = true
                     } label: {
                         HStack(spacing: 5) {
-                            Text(modelSettings.selectionDisplayName(for: selectedModel?.model ?? ""))
+                            Text(modelSettings.selectionDisplayName(for: vm.selectedModel?.model ?? ""))
                                 .font(.system(size: 13, weight: .semibold))
                                 .lineLimit(1)
                             Image(systemName: "chevron.up")
@@ -286,28 +307,28 @@ struct DraftComposerPanel: View {
                     .accessibilityLabel(AgentKitLocalized.string("composer.select_model"))
 #else
                     Menu {
-                        if modelGroups.isEmpty {
+                        if vm.modelGroups.isEmpty {
                             ForEach(modelSettings.availableModelIDs, id: \.self) { modelID in
-                                modelMenuEntry(modelID)
+                                modelMenuEntry(modelID, vm: vm)
                             }
                         } else {
-                            ForEach(modelGroups) { group in
+                            ForEach(vm.modelGroups) { group in
                                 Section {
                                     ForEach(group.modelIDs, id: \.self) { modelID in
-                                        modelMenuEntry(modelID)
+                                        modelMenuEntry(modelID, vm: vm)
                                     }
                                 } header: {
                                     Text(group.name)
                                 }
                             }
                         }
-
+                        
                     } label: {
-                        if contentWidth <= 500 {
+                        if vm.contentWidth <= 500 {
                             Image(systemName: "brain.head.profile")
                                 .font(.system(size: 9, weight: .semibold))
                         } else {
-                            Text(modelSettings.selectionDisplayName(for: selectedModel?.model ?? ""))
+                            Text(modelSettings.selectionDisplayName(for: vm.selectedModel?.model ?? ""))
                                 .font(.system(size: 13, weight: .medium))
                                 .lineLimit(1)
                                 .frame(maxWidth: 35)
@@ -315,18 +336,17 @@ struct DraftComposerPanel: View {
                     }
                     .menuStyle(.borderlessButton)
                         .fixedSize()
-                    //                    .foregroundStyle(.secondary)
 #endif
-                    VoiceInputButton(service: voiceService)
+                    VoiceInputButton(service: vm.voiceService)
                     
                     // ── Send / Stop button ──
-                    if isTurnRunning {
+                    if vm.isTurnRunning {
                         Button {
-                            onStop?()
+                            vm.stop()
                         } label: {
                             Image(systemName: "stop.fill")
                                 .font(.system(size: 12, weight: .bold))
-                                .frame(width: sendButtonSize, height: sendButtonSize)
+                                .frame(width: vm.sendButtonSize, height: vm.sendButtonSize)
                         }
                         .buttonStyle(.plain)
                         .foregroundStyle(.white)
@@ -334,57 +354,63 @@ struct DraftComposerPanel: View {
                         .accessibilityLabel(AgentKitLocalized.string("composer.stop"))
                     } else {
                         Button {
-                            send()
+                            vm.send()
                         } label: {
-                            if isSending {
+                            if vm.isSending {
                                 ProgressView()
                                     .controlSize(.small)
-                                    .frame(width: sendButtonSize, height: sendButtonSize)
+                                    .frame(width: vm.sendButtonSize, height: vm.sendButtonSize)
                             } else {
                                 Image(systemName: "arrow.up")
                                     .font(.system(size: 16, weight: .bold))
-                                    .frame(width: sendButtonSize, height: sendButtonSize)
+                                    .frame(width: vm.sendButtonSize, height: vm.sendButtonSize)
                             }
                         }
                         .buttonStyle(.plain)
-                        .foregroundStyle(canSend ? Color.draftSendForeground : Color.draftDisabledSendForeground)
-                        .background(canSend ? Color.draftSendBackground : Color.draftDisabledSendBackground, in: Circle())
-                        .disabled(!canSend)
+                        .foregroundStyle(vm.canSend ? Color.draftSendForeground : Color.draftDisabledSendForeground)
+                        .background(vm.canSend ? Color.draftSendBackground : Color.draftDisabledSendBackground, in: Circle())
+                        .disabled(!vm.canSend)
                         .accessibilityLabel(AgentKitLocalized.string("composer.send"))
                     }
                     
-                    if sessionID != nil {
+                    if vm.sessionID != nil {
                         Button {
-                            isContextPresented = true
-                            refreshContext()
+                            vm.isContextPresented = true
+                            vm.refreshContext()
                         } label: {
-                            contextUsageRing
+                            contextUsageRing(vm)
                         }
                         .buttonStyle(.plain)
-                        .accessibilityLabel(contextButtonAccessibilityLabel)
+                        .accessibilityLabel(vm.contextButtonAccessibilityLabel)
 #if os(macOS)
                         .help(AgentKitLocalized.string("composer.context_window"))
-                        .popover(isPresented: $isContextPresented, arrowEdge: .bottom) {
+                        .popover(isPresented: Binding(
+                            get: { vm.isContextPresented },
+                            set: { vm.isContextPresented = $0 }
+                        ), arrowEdge: .bottom) {
                             ContextWindowDetailView(
-                                snapshot: contextSnapshot,
-                                isLoading: isContextLoading,
-                                errorMessage: contextError,
-                                onRefresh: refreshContext
+                                snapshot: vm.contextSnapshot,
+                                isLoading: vm.isContextLoading,
+                                errorMessage: vm.contextError,
+                                onRefresh: { vm.refreshContext() }
                             )
                         }
 #else
-                        .sheet(isPresented: $isContextPresented) {
+                        .sheet(isPresented: Binding(
+                            get: { vm.isContextPresented },
+                            set: { vm.isContextPresented = $0 }
+                        )) {
                             NavigationStack {
                                 ContextWindowDetailView(
-                                    snapshot: contextSnapshot,
-                                    isLoading: isContextLoading,
-                                    errorMessage: contextError,
-                                    onRefresh: refreshContext
+                                    snapshot: vm.contextSnapshot,
+                                    isLoading: vm.isContextLoading,
+                                    errorMessage: vm.contextError,
+                                    onRefresh: { vm.refreshContext() }
                                 )
                                 .toolbar {
                                     ToolbarItem(placement: .topBarTrailing) {
                                         Button(AgentKitLocalized.string("composer.done")) {
-                                            isContextPresented = false
+                                            vm.isContextPresented = false
                                         }
                                     }
                                 }
@@ -396,90 +422,49 @@ struct DraftComposerPanel: View {
                 }
                 .padding(.horizontal, 14)
                 .padding(.bottom, 10)
-            } // end: if not recording
-        }
-        .onChange(of: voiceService.state) { _, newState in
-            handleVoiceStateChange(newState)
-        }
-        .onChange(of: isTurnRunning) { _, newValue in
-            // turn 结束时刷新上下文占用（压缩可能刚刚发生）。
-            if !newValue { refreshContext() }
-        }
-        .onChange(of: text) { _, newValue in
-            guard !isRestoringLocalState, let key = loadedStateKey else { return }
-            scheduleTextSave(newValue, for: key)
-        }
-        .onChange(of: viewModel?.lastAcceptedSubmissionRequestID) { _, _ in
-            reconcileAcceptedSubmission()
-        }
-        .onChange(of: viewModel?.lastInputRejection) { _, newValue in
-            // 提交被 Runtime 拒绝：还原乐观清空的文本供修改后重发。
-            // blocked 状态下 pendingSubmission 仍在（随后仍可能被接受），不还原；
-            // handleSubmissionRejected 先执行 rejectSubmission 清掉 pendingSubmission
-            // 再置 lastInputRejection，因此此处读到 nil 即代表最终拒绝。
-            if newValue != nil,
-               let snapshot = submittedTextSnapshot, !snapshot.isEmpty,
-               let key = loadedStateKey,
-               (try? workspaceStore.localStateStore.state(for: key))?
-                   .composerDraft.pendingSubmission == nil {
-                restoreSubmittedText(snapshot)
-            } else {
-                submittedTextSnapshot = nil
-            }
-            refreshAttachmentsFromLocalState()
-        }
-        .onChange(of: scenePhase) { _, phase in
-            handleScenePhaseChange(phase)
-        }
-        .onChange(of: modelSettings.availableModelIDs) { _, newIDs in
-            // 模型列表延迟到达时自动恢复 selectedModel（Bug 2）。
-            // 若 UI 先于网络渲染，.task(id:) 恢复时 gatewayModels 尚为 nil，
-            // selectedModel 被设为空串。列表到达后此处重新解析并回填。
-            guard !newIDs.isEmpty, let current = selectedModel, current.model.isEmpty else { return }
-            let resolved = modelSettings.getModel(with: viewModel?.conversation?.id)
-            if let resolved, !resolved.model.isEmpty {
-                selectedModel = resolved
             }
         }
-        .onChange(of: voiceService.state) { _, newState in
-            if case .error = newState {
-                showPermissionAlert = true
-            }
+        .onChange(of: vm.voiceService.state) { _, newState in
+            vm.handleVoiceStateChange(newState)
         }
-        .onChange(of: viewModel?.selectedModel ?? UnifiedModel(model: "", reasoningEffort: nil)) { oldModel, newModel in
-            if oldModel == newModel {
-                return
-            }
-            if newModel == selectedModel {
-                return
-            }
-            self.selectModel(newModel.model, reasoningEffort: newModel.reasoningEffort)
+        .onChange(of: vm.text) { _, newValue in
+            guard let key = vm.loadedStateKey else { return }
+            vm.scheduleTextSave(newValue, for: key)
         }
     }
     
     // MARK: - Input Field
     
     @ViewBuilder
-    private var inputField: some View {
+    private func inputField(_ vm: DraftComposerPanelViewModel) -> some View {
 #if os(macOS)
         MacComposerTextView(
-            text: $text,
-            height: $composerHeight,
+            text: Binding(
+                get: { vm.text },
+                set: { vm.text = $0 }
+            ),
+            height: Binding(
+                get: { vm.composerHeight },
+                set: { vm.composerHeight = $0 }
+            ),
             placeholder: placeholder,
-            isEnabled: true, // 任何时候都应该可以输入内容，但是在isEnabled=false不可以发送
-            minHeight: composerMinHeight,
-            maxHeight: composerMaxHeight,
+            isEnabled: true,
+            minHeight: 56,
+            maxHeight: 150,
             onSend: {
-                send()
+                vm.send()
             },
             onFileDrop: { urls in
-                handleDroppedImages(urls)
+                vm.handleDroppedImages(urls)
                 return true
             }
         )
-        .frame(height: composerHeight)
+        .frame(height: vm.composerHeight)
 #else
-        TextField(placeholder, text: $text, axis: .vertical)
+        TextField(placeholder, text: Binding(
+            get: { vm.text },
+            set: { vm.text = $0 }
+        ), axis: .vertical)
             .textFieldStyle(.plain)
             .font(.body)
             .lineLimit(1...5)
@@ -488,108 +473,88 @@ struct DraftComposerPanel: View {
 #endif
     }
     
+    // MARK: - Attachment Strip
     
-    // MARK: - Workspace approval mode helpers
-
-    private func approvalModeTitle(_ mode: String) -> String {
-        switch mode {
-        case "auto": return "帮我批准 (Auto)"
-        case "full": return "完全访问 (Full)"
-        default: return "请求批准 (Ask)"
-        }
-    }
-
-    private func approvalModeShortTitle(_ mode: String?) -> String {
-        guard let mode, !mode.isEmpty else { return "权限" }
-        switch mode {
-        case "auto": return "帮我批准"
-        case "full": return "完全访问"
-        default: return "请求批准"
-        }
-    }
-
-    private func approvalModeIcon(_ mode: String?) -> String {
-        switch mode {
-        case "auto": return "shield.lefthalf.filled"
-        case "full": return "shield.fill"
-        default: return "shield"
-        }
-    }
-    
-    // MARK: - Helpers
-    
-    private func setupVoiceCallbacks() {
-        voiceService.onTranscriptionComplete = { transcription in
-            guard !transcription.isEmpty else { return }
-            if text.isEmpty {
-                text = transcription
-            } else {
-                text += "\n" + transcription
+    private func attachmentStrip(_ vm: DraftComposerPanelViewModel) -> some View {
+        ScrollView(.horizontal, showsIndicators: false) {
+            HStack(spacing: 8) {
+                ForEach(vm.attachments) { attachment in
+                    DraftAttachmentThumbnail(
+                        attachment: attachment,
+                        resolver: workspaceStore.userAssetDraftPreviewResolver,
+                        onRemove: { vm.removeAttachment(attachment.id) },
+                        onRetry: { vm.retryAttachment(attachment.id) },
+                        onUploadToGateway: vm.canOfferGatewayUpload(for: attachment)
+                        ? { vm.requestGatewayUpload(attachment.id) }
+                        : nil
+                    )
+                }
             }
         }
+        .frame(maxWidth: .infinity, alignment: .leading)
     }
     
-    private func handleVoiceStateChange(_ newState: VoiceInputService.State) {
-        // 录音/转写状态变化仅影响 UI 显示，无额外状态需要管理。
-        // 转写完成后的文本追加由 onTranscriptionComplete 处理。
-    }
+    // MARK: - Context Ring
     
-    private var trimmed: String {
-        text.trimmingCharacters(in: .whitespacesAndNewlines)
-    }
-    
-    private var modelGroups: [ComposerModelGroup] {
-        modelSettings.unifiedModelGroups.map { group in
-            ComposerModelGroup(
-                id: group.connectionID,
-                name: group.name,
-                modelIDs: group.models.map({
-                    $0.model
-                })
-            )
+    private func contextUsageRing(_ vm: DraftComposerPanelViewModel) -> some View {
+        ZStack {
+            Circle()
+                .stroke(Color.primary.opacity(0.12), lineWidth: 3)
+            Circle()
+                .trim(from: 0, to: vm.contextRingProgress)
+                .stroke(vm.contextRingColor, style: StrokeStyle(lineWidth: 3, lineCap: .round))
+                .rotationEffect(.degrees(-90))
         }
+        .frame(width: 11, height: 11)
+        .contentShape(Circle())
     }
+    
+    // MARK: - Model Menu Entry (macOS)
     
 #if os(macOS)
-    /// Renders one model row inside the model picker Menu. When the model
-    /// advertises `supportedReasoningEfforts`, the row becomes a hover-revealed
-    /// submenu listing those efforts (default check = the model's own
-    /// `reasoningEffort` / the user's per-conversation override). Otherwise it is
-    /// a plain click-to-select button.
     @ViewBuilder
-    private func modelMenuEntry(_ modelID: String) -> some View {
-        if let model = self.modelSettings.descriptor(for: modelID) {
+    private func modelMenuEntry(_ modelID: String, vm: DraftComposerPanelViewModel) -> some View {
+        if let model = modelSettings.descriptor(for: modelID) {
             let supported = model.supportedReasoningEfforts ?? []
-            let items = model.canDisableReasoning == true ? [.off] + supported : supported
+            let items = model.canDisableReasoning == true ? [ModelReasoningEffort.off] + supported : supported
             if items.isEmpty {
-                modelMenuButton(modelID)
+                modelMenuButton(modelID, vm: vm)
             } else {
                 Button {
-                    let selected = effectiveReasoningEffort(for: modelID, supported: items)
-                    applyReasoningEffort(selected, for: modelID)
+                    let selected = vm.effectiveReasoningEffort(for: modelID, supported: items)
+                    vm.applyReasoningEffort(selected ?? .off, for: modelID)
                 } label: {
-                    reasoningEffortMenu(modelID: modelID, supported: items)
+                    reasoningEffortMenu(modelID: modelID, supported: items, vm: vm)
                 }
             }
         } else {
-            modelMenuButton(modelID)
+            modelMenuButton(modelID, vm: vm)
         }
     }
-
-    /// A nested Menu (macOS submenu, revealed on hover of the parent row) that
-    /// lets the user pick a `supportedReasoningEfforts` value for this model.
-    private func reasoningEffortMenu(modelID: String, supported: [ModelReasoningEffort]) -> some View {
-        let selected = effectiveReasoningEffort(for: modelID, supported: supported)
+    
+    private func modelMenuButton(_ modelID: String, vm: DraftComposerPanelViewModel) -> some View {
+        Button {
+            vm.selectModel(modelID, reasoningEffort: nil)
+        } label: {
+            HStack {
+                Text(modelSettings.displayName(for: modelID))
+                if modelID == vm.selectedModel?.model {
+                    Image(systemName: "checkmark")
+                }
+            }
+        }
+    }
+    
+    private func reasoningEffortMenu(modelID: String, supported: [ModelReasoningEffort], vm: DraftComposerPanelViewModel) -> some View {
+        let selected = vm.effectiveReasoningEffort(for: modelID, supported: supported)
         
         return Menu {
-            
             Divider()
             
-            // 选项部分
             Section("Reasoning Effort") {
                 ForEach(supported) { effort in
                     Button {
-                        applyReasoningEffort(effort, for: modelID)
+                        vm.applyReasoningEffort(effort, for: modelID)
                     } label: {
                         HStack {
                             Text(effort.name)
@@ -603,589 +568,17 @@ struct DraftComposerPanel: View {
         } label: {
             HStack {
                 Text(modelSettings.displayName(for: modelID))
-                if modelID == selectedModel?.model {
+                if modelID == vm.selectedModel?.model {
                     Image(systemName: "checkmark")
                 }
             }
         }
         .menuStyle(.borderlessButton)
     }
-
-    /// The effort that should be shown as checked for a given model row: the
-    /// user's stored override when it targets the currently selected model and is
-    /// in the supported list; otherwise the model's own default.
-    private func effectiveReasoningEffort(for modelID: String, supported: [ModelReasoningEffort]) -> ModelReasoningEffort? {
-        if modelID == selectedModel?.model,
-           let override = storedReasoningEffortOverride,
-           supported.contains(override) {
-            return override
-        }
-        return self.modelSettings.descriptor(for: modelID)?.reasoningEffort
-    }
-
-    /// The user's per-conversation reasoning-effort override persisted in local
-    /// state (nil when the user has not overridden it).
-    private var storedReasoningEffortOverride: ModelReasoningEffort? {
-        guard let key = loadedStateKey,
-              let raw = try? workspaceStore.localStateStore.state(for: key)?.reasoningEffort,
-              !raw.isEmpty else { return nil }
-        return ModelReasoningEffort(rawValue: raw)
-    }
-
-    /// Picks a reasoning effort for `modelID`, storing it against the current
-    /// conversation. Selecting an effort also selects the model (the submenu row
-    /// the user hovered), mirroring `modelMenuButton`'s select-on-click.
-    private func applyReasoningEffort(_ effort: ModelReasoningEffort?, for modelID: String) {
-        selectModel(modelID, reasoningEffort: effort)
-    }
-
-    @ViewBuilder
-    private func modelMenuButton(_ modelID: String) -> some View {
-        Button {
-            selectModel(modelID, reasoningEffort: nil)
-        } label: {
-            HStack {
-                Text(modelSettings.displayName(for: modelID))
-                if modelID == selectedModel?.model {
-                    Image(systemName: "checkmark")
-                }
-            }
-        }
-    }
 #endif
-    
-    private var composerControlSpacing: CGFloat {
-#if os(macOS)
-        12
-#else
-        8
-#endif
-    }
-    
-    private var sendButtonSize: CGFloat {
-#if os(macOS)
-        30
-#else
-        34
-#endif
-    }
-    
-    private func selectModel(_ modelID: String, reasoningEffort: ModelReasoningEffort?) {
-        let model = UnifiedModel(model: modelID, reasoningEffort: reasoningEffort)
-        selectedModel = model
-        viewModel?.selectedModel = model
-        modelSettings.didUseModel(
-            modelID,
-            reasoningEffort: reasoningEffort,
-            conversation: viewModel?.conversation?.id ?? ""
-        )
-        persistModel(modelID, reasoningEffort: reasoningEffort)
-        if let wireModel = modelSettings.getWireModelID(for: modelID) {
-            onModelChange?(wireModel)
-        }
-    }
-    
-    private var readyAssets: [UserAssetRef] {
-        attachments.compactMap { attachment in
-            guard attachment.state == .ready,
-                  attachment.delivery == .gateway else { return nil }
-            return attachment.readyAsset
-        }
-    }
-    
-    private var canSend: Bool {
-        let hasContent = !trimmed.isEmpty || !attachments.isEmpty
-        let attachmentsReady = attachments.allSatisfy { attachment in
-            if attachment.delivery == .localOnly {
-                return attachment.state == .local
-                || attachment.state == .ready
-                || (isDraft && attachment.state == .failed && attachment.localAsset == nil)
-            }
-            return attachment.state == .ready
-        }
-        return isEnabled && hasContent && attachmentsReady && !isSending
-        && !isTurnRunning && modelSettings.isModelAvailable(selectedModel?.model)
-    }
-    
-    private func send() {
-        // 若正在录音，先停止并追加最终转录
-        if voiceService.state == .recording {
-            voiceService.stopRecordingAndTranscribe()
-        }
-        
-        guard canSend,
-              let selectedModel
-//              let wireModelId = modelSettings.getWireModelID(for: selectedModel.name)
-        else {
-            return
-        }
-        let toSend = trimmed
-        submittedTextSnapshot = toSend
-        // 乐观清空（对标主流聊天客户端）：清空与用户回车/点击在同一事件周期内完成，
-        // 不依赖 acceptance 回包。旧方案在 ack 到达后才经 updateNSView 同步清空，
-        // 一旦用户已开始输入下一条（IME 组字中），hasMarkedText 守卫会跳过同步，
-        // 随后 textDidChange 把旧文本写回 state，导致输入框永远清不掉。
-        // 带本地附件时 prepareUserAssets 拉长 ack 窗口，该问题几乎必现。
-        text = ""
-        // 附件同样乐观清空。durable 附件必须保留：staging 与 markSubmissionPending
-        // 依赖它计算 attachmentIDs，acceptSubmission 再按该名单删除。
-        // 在途期间由 refreshAttachmentsFromLocalState 的 pendingSubmission 过滤
-        // 保证它们不会回流到输入框，因此这里只持久化文本，不能走 persistCurrentDraft
-        // （那会把已清空的面板附件写回 durable，抹掉待 staging 的附件）。
-        let sendingAssets = readyAssets
-        attachments = []
-        if let key = loadedStateKey {
-            persist(text: "", for: key)
-        }
-        isSending = true
-        Task {
-            let accepted = await onSend(toSend, selectedModel, sendingAssets)
-            if !accepted {
-                // 提交失败：文本与附件都还原（pendingSubmission 尚未写入或被清，
-                // refresh 的过滤不再生效，附件从 durable 回到输入框）。
-                restoreSubmittedText(toSend)
-                refreshAttachmentsFromLocalState()
-            }
-            isSending = false
-        }
-    }
-
-    /// 乐观清空的回滚路径：提交失败/被拒绝时把快照文本还原回输入框。
-    /// 用户在等待期间已输入的新内容保留在快照之后，不丢失。
-    private func restoreSubmittedText(_ snapshot: String) {
-        submittedTextSnapshot = nil
-        guard !snapshot.isEmpty else { return }
-        if text.isEmpty {
-            text = snapshot
-        } else if !text.hasPrefix(snapshot) {
-            text = snapshot + "\n" + text
-        }
-        persistCurrentText()
-    }
-    
-    private var persistenceKey: ConversationLocalStateKey? {
-        if isDraft, let id = workspaceStore.draft?.id {
-            return .draft(id)
-        }
-        if let id = viewModel?.conversation?.id ?? workspaceStore.selectedConversation?.id {
-            return .session(id)
-        }
-        return nil
-    }
-    
-    // MARK: - Context Window
-    
-    /// 当前活跃会话 id；草稿模式下为 nil（无上下文可展示）。
-    private var sessionID: String? {
-        viewModel?.conversation?.id
-    }
-    
-    private var contextButtonAccessibilityLabel: String {
-        if let current = contextSnapshot?.current {
-            return String(
-                format: AgentKitLocalized.string("composer.context_window_usage"),
-                current.usagePct
-            )
-        }
-        return AgentKitLocalized.string("composer.context_window")
-    }
-    
-    private var contextUsageRing: some View {
-        ZStack {
-            Circle()
-                .stroke(Color.primary.opacity(0.12), lineWidth: 3)
-            Circle()
-                .trim(from: 0, to: contextRingProgress)
-                .stroke(contextRingColor, style: StrokeStyle(lineWidth: 3, lineCap: .round))
-                .rotationEffect(.degrees(-90))
-        }
-        .frame(width: 11, height: 11)
-        .contentShape(Circle())
-    }
-    
-    private var contextRingProgress: CGFloat {
-        guard let current = contextSnapshot?.current else { return 0 }
-        return CGFloat(ContextFormat.clamped(current.usagePct / 100))
-    }
-    
-    private var contextRingColor: Color {
-        guard let current = contextSnapshot?.current else { return .secondary }
-        if current.usagePct >= current.thresholdPct { return .red }
-        if current.usagePct >= current.thresholdPct * 0.8 { return .orange }
-        return .green
-    }
-    
-    private func refreshContext() {
-        guard let id = sessionID else { return }
-        contextRefreshTask?.cancel()
-        isContextLoading = true
-        contextRefreshTask = Task {
-            do {
-                let snapshot = try await workspaceStore.client.getConversationContext(id: id)
-                guard !Task.isCancelled else { return }
-                contextSnapshot = snapshot
-                contextError = nil
-            } catch {
-                guard !Task.isCancelled else { return }
-                contextSnapshot = nil
-                contextError = Self.mapContextError(error)
-            }
-            isContextLoading = false
-        }
-    }
-    
-    private static func mapContextError(_ error: Error) -> String {
-        if let httpError = error as? RuntimeHTTPError {
-            switch httpError {
-            case .unsupported, .notFound:
-                return AgentKitLocalized.string("context_window.unsupported")
-            default:
-                return AgentKitLocalized.string("context_window.load_failed")
-            }
-        }
-        return AgentKitLocalized.string("context_window.load_failed")
-    }
-    
-    private func restoreLocalState(persistOutgoingText: Bool = true) {
-        pendingSaveTask?.cancel()
-        if persistOutgoingText, let oldKey = loadedStateKey {
-            persist(text: text, for: oldKey)
-        }
-        let key = persistenceKey
-        loadedStateKey = key
-        isRestoringLocalState = true
-        defer { isRestoringLocalState = false }
-        
-        let state = key.flatMap { try? workspaceStore.localStateStore.state(for: $0) }
-        text = state?.composerDraft.text ?? ""
-        attachments = state.map { visibleAttachments(from: $0) } ?? []
-        submittedTextSnapshot = state?.composerDraft.pendingSubmission?.text
-        
-        if let selectedModelID = state?.selectedModelID {
-            selectedModel = UnifiedModel(model: selectedModelID, reasoningEffort: ModelReasoningEffort(rawValue: state?.reasoningEffort ?? ""))
-        } else {
-            let mo = modelSettings.getModel(with: viewModel?.conversation?.id)
-            selectedModel = mo
-        }
-    }
-    
-    private func scheduleTextSave(_ value: String, for key: ConversationLocalStateKey) {
-        pendingSaveTask?.cancel()
-        pendingSaveTask = Task {
-            try? await Task.sleep(for: .milliseconds(400))
-            guard !Task.isCancelled else { return }
-            persist(text: value, for: key)
-        }
-    }
-    
-    private func persistCurrentText() {
-        pendingSaveTask?.cancel()
-        guard let key = loadedStateKey else { return }
-        persist(text: text, for: key)
-    }
-    
-    private func handleScenePhaseChange(_ phase: ScenePhase) {
-        if phase == .background || phase == .inactive {
-            if voiceService.state == .recording {
-                voiceService.cancelRecording()
-            }
-            persistCurrentText()
-            try? workspaceStore.localStateStore.flush()
-        }
-    }
-    
-    private func handleDisappear() {
-        if voiceService.state == .recording {
-            voiceService.cancelRecording()
-        }
-        contextRefreshTask?.cancel()
-        persistCurrentText()
-    }
-    
-    private func persistCurrentDraft() {
-        pendingSaveTask?.cancel()
-        guard let key = loadedStateKey else { return }
-        let textSnapshot = text
-        let attachmentSnapshot = attachments
-        try? workspaceStore.localStateStore.updateState(for: key) { state in
-            state.composerDraft.text = textSnapshot
-            state.composerDraft.attachments = attachmentSnapshot
-            state.composerDraft.revision += 1
-        }
-    }
-    
-    /// Applies the accepted snapshot to the current editor value without writing
-    /// the stale pre-accept text back over the durable state. Text entered while
-    /// acknowledgement was pending remains in the composer.
-    private func reconcileAcceptedSubmission() {
-        pendingSaveTask?.cancel()
-        DispatchQueue.main.async {
-            if let submittedTextSnapshot, !submittedTextSnapshot.isEmpty {
-                if text == submittedTextSnapshot {
-                    text = ""
-                } else if text.hasPrefix(submittedTextSnapshot) {
-                    text.removeFirst(submittedTextSnapshot.count)
-                    text = text.trimmingCharacters(in: .whitespacesAndNewlines)
-                }
-                self.submittedTextSnapshot = nil
-                refreshAttachmentsFromLocalState()
-                persistCurrentText()
-            } else {
-                // Covers process-restart recovery where the UI did not originate the
-                // submission but the persisted pending snapshot has now been accepted.
-                restoreLocalState(persistOutgoingText: false)
-            }
-        }
-    }
-    
-    private func refreshAttachmentsFromLocalState() {
-        guard let key = loadedStateKey,
-              let state = try? workspaceStore.localStateStore.state(for: key) else { return }
-        attachments = visibleAttachments(from: state)
-    }
-    
-    /// durable 附件中剔除已被 pendingSubmission 认领（在途、等待 acceptance）的部分。
-    /// 这是面板附件的显示不变量：无论本函数在提交前、staging 中还是 acceptance 后
-    /// 被调用，在途附件都不会回流输入框；rejectSubmission 清掉 pendingSubmission
-    /// 后，下一次 refresh 自然把它们放回输入框供重发。
-    private func visibleAttachments(
-        from state: ConversationLocalState
-    ) -> [DraftAttachmentReference] {
-        guard let pending = state.composerDraft.pendingSubmission else {
-            return state.composerDraft.attachments
-        }
-        let pendingIDs = Set(pending.attachmentIDs)
-        return state.composerDraft.attachments.filter { !pendingIDs.contains($0.id) }
-    }
-    
-    private var attachmentStrip: some View {
-        ScrollView(.horizontal, showsIndicators: false) {
-            HStack(spacing: 8) {
-                ForEach(attachments) { attachment in
-                    DraftAttachmentThumbnail(
-                        attachment: attachment,
-                        resolver: workspaceStore.userAssetDraftPreviewResolver,
-                        onRemove: { removeAttachment(attachment.id) },
-                        onRetry: { retryAttachment(attachment.id) },
-                        onUploadToGateway: canOfferGatewayUpload(for: attachment)
-                        ? { requestGatewayUpload(attachment.id) }
-                        : nil
-                    )
-                }
-            }
-        }
-        .frame(maxWidth: .infinity, alignment: .leading)
-    }
-    
-    private func persist(text: String, for key: ConversationLocalStateKey) {
-        try? workspaceStore.localStateStore.updateState(for: key) { state in
-            state.composerDraft.text = text
-        }
-    }
-    
-    /// 持久化当前对话/草稿的模型选择到 local state。
-    /// 与 ModelSettingsStore.setUserModel() 互补：setUserModel 只写 .session(id)，
-    /// 草稿（无 session）依赖此方法写 .draft(uuid)，保证多草稿间模型选择隔离。
-    private func persistModel(_ modelID: String, reasoningEffort: ModelReasoningEffort?) {
-        guard let key = loadedStateKey, !modelID.isEmpty else { return }
-        try? workspaceStore.localStateStore.updateState(for: key) { state in
-            state.selectedModelID = modelID
-            state.reasoningEffort = reasoningEffort?.rawValue
-            state.recentModelIDs.removeAll { $0 == modelID }
-            state.recentModelIDs.insert(modelID, at: 0)
-            if state.recentModelIDs.count > 8 {
-                state.recentModelIDs.removeLast(state.recentModelIDs.count - 8)
-            }
-        }
-    }
-    
-    private func pickAttachments() {
-        guard let key = persistenceKey else { return }
-        Task {
-            await workspaceStore.selectUserAssets(
-                for: key,
-                remainingSlots: 4 - attachments.count
-            ) {
-                refreshAttachmentsFromLocalState()
-            }
-        }
-    }
-    
-    /// 处理拖入的图片附件（仅图片会走到这里 —— 非图片文件/目录由
-    /// MacComposerTextView 直接以完整路径文本插入输入框，不经过此方法）。
-    private func handleDroppedImages(_ urls: [URL]) {
-        guard let key = persistenceKey,
-              workspaceStore.canStageLocalUserAssets else { return }
-        let remainingSlots = maxFilesCount - attachments.count
-        guard remainingSlots > 0 else { return }
-        Task {
-            await workspaceStore.addDroppedFiles(
-                urls,
-                for: key,
-                maxFilesCount: maxFilesCount
-            ) {
-                refreshAttachmentsFromLocalState()
-            }
-        }
-    }
-    
-    private func removeAttachment(_ id: String) {
-        attachments.removeAll { $0.id == id }
-        persistCurrentDraft()
-    }
-    
-    private func retryAttachment(_ id: String) {
-        guard let key = persistenceKey else { return }
-        Task {
-            await workspaceStore.retryLocalUserAssetStaging(id: id, for: key) {
-                refreshAttachmentsFromLocalState()
-            }
-        }
-    }
-    
-    private func canOfferGatewayUpload(for attachment: DraftAttachmentReference) -> Bool {
-        guard workspaceStore.canUploadUserAssetsToGateway,
-              attachment.delivery == .localOnly,
-              attachment.state != .uploading,
-              attachment.state != .sending else { return false }
-        let name = attachment.displayName.lowercased()
-        return name.hasSuffix(".jpg")
-        || name.hasSuffix(".jpeg")
-        || name.hasSuffix(".png")
-        || attachment.localAsset?.mimeType == "image/jpeg"
-        || attachment.localAsset?.mimeType == "image/png"
-    }
-    
-    private func requestGatewayUpload(_ id: String) {
-        pendingGatewayUploadID = id
-        isGatewayUploadConfirmationPresented = true
-    }
-    
-    private func confirmGatewayUpload() {
-        guard let id = pendingGatewayUploadID,
-              let key = persistenceKey else { return }
-        pendingGatewayUploadID = nil
-        Task {
-            await workspaceStore.uploadUserAssetToGateway(id: id, for: key) {
-                refreshAttachmentsFromLocalState()
-            }
-        }
-    }
 }
 
-#if os(iOS)
-private struct IOSModelPickerSheet: View {
-    @Environment(\.dismiss) private var dismiss
-    
-    let groups: [ComposerModelGroup]
-    let ungroupedModelIDs: [String]
-    let selectedModel: UnifiedModel?
-    let displayName: (String) -> String
-    let onSelect: (String) -> Void
-    
-    private var isEmpty: Bool {
-        groups.allSatisfy(\.modelIDs.isEmpty) && ungroupedModelIDs.isEmpty
-    }
-    
-    var body: some View {
-        NavigationStack {
-            Group {
-                if isEmpty {
-                    ContentUnavailableView(
-                        AgentKitLocalized.string("composer.no_models"),
-                        systemImage: "cpu",
-                        description: Text(AgentKitLocalized.string("composer.models_load_hint"))
-                    )
-                } else {
-                    List {
-                        if groups.isEmpty {
-                            ForEach(ungroupedModelIDs, id: \.self) { modelID in
-                                modelRow(modelID)
-                            }
-                        } else {
-                            ForEach(groups) { group in
-                                Section {
-                                    ForEach(group.modelIDs, id: \.self) { modelID in
-                                        modelRow(modelID)
-                                    }
-                                } header: {
-                                    Text(group.name)
-                                }
-                            }
-                        }
-                    }
-                    .listStyle(.insetGrouped)
-                }
-            }
-            .navigationTitle(AgentKitLocalized.string("composer.select_model_title"))
-            .navigationBarTitleDisplayMode(.inline)
-            .toolbar {
-                ToolbarItem(placement: .topBarTrailing) {
-                    Button(AgentKitLocalized.string("composer.done")) { dismiss() }
-                }
-            }
-        }
-    }
-    
-    @ViewBuilder
-    private func modelRow(_ modelID: String) -> some View {
-        Button {
-            onSelect(modelID)
-        } label: {
-            HStack(spacing: 12) {
-                Image(systemName: "cpu")
-                    .font(.system(size: 14, weight: .semibold))
-                    .foregroundStyle(Color.accentColor)
-                    .frame(width: 32, height: 32)
-                    .background(
-                        Color.accentColor.opacity(0.12),
-                        in: RoundedRectangle(cornerRadius: 9, style: .continuous)
-                    )
-                Text(displayName(modelID))
-                    .foregroundStyle(.primary)
-                    .lineLimit(1)
-                Spacer()
-                if modelID == selectedModel?.id {
-                    Image(systemName: "checkmark")
-                        .font(.system(size: 13, weight: .bold))
-                        .foregroundStyle(Color.accentColor)
-                }
-            }
-            .contentShape(Rectangle())
-        }
-        .buttonStyle(.plain)
-    }
-}
-#endif
-
-struct DraftComposerSurfaceModifier: ViewModifier {
-    @Environment(\.colorScheme) private var colorScheme
-    func body(content: Content) -> some View {
-#if os(macOS)
-        content
-            .background(colorScheme == .dark ?         Color(NSColor(
-                calibratedRed: 44.0 / 255.0,
-                green: 44.0 / 255.0,
-                blue: 46.0 / 255.0,
-                alpha: 1
-            )) : Color(NSColor.windowBackgroundColor))
-            .clipShape(RoundedRectangle(cornerRadius: 20, style: .continuous))
-            .padding()
-            .shadow(color: .black.opacity(0.10), radius: 20, y: 10)
-#else
-        content
-        // 1. 强依赖 Material，使用 .thinMaterial 可以让背景颜色适度渗透
-            .background(.thinMaterial, in: RoundedRectangle(cornerRadius: 26, style: .continuous))
-        // 2. 移除任何纯色 background 叠加，只靠 Material
-        // 3. **极致关键：干掉描边 (overlay stroke)**
-            .padding(.horizontal, 16) // 调整 padding
-            .padding(.vertical, 8)  // 调整 padding
-        // 4. 极致阴影：极淡、极弥散
-            .shadow(color: Color.black.opacity(0.02), radius: 6, x: 0, y: 2)   // 几乎不可见的近景阴影
-            .shadow(color: Color.black.opacity(0.04), radius: 20, x: 0, y: 6)  // 柔和弥散阴影
-#endif
-    }
-}
+// MARK: - Attachment Thumbnail & Preview
 
 private struct DraftAttachmentThumbnail: View {
     let attachment: DraftAttachmentReference
@@ -1366,6 +759,7 @@ private struct DraftAttachmentPreview: View {
         }
     }
 }
+
 // MARK: - Cross-platform surface colors
 
 /// The approval panel uses window/fill surfaces that AppKit and UIKit name
@@ -1436,755 +830,33 @@ extension Color {
         Color(UIColor.systemBackground)
 #endif
     }
-    
-    static var approvalSecondaryFill: Color {
-#if os(macOS)
-        Color(NSColor.secondarySystemFill)
-#else
-        Color(UIColor.secondarySystemFill)
-#endif
-    }
 }
 
-
-// MARK: - PlanApprovalBar
-
-/// Plan Mode 审批卡片 — 展示完整 plan markdown。
-/// 比工具审批更大，提供 Approve / Reject 按钮。
-struct PlanApprovalBar: View {
-    let plan: PlanApprovalRequest
-    let onApprove: () -> Void
-    let onReject: () -> Void
-    @State private var contentHeight: CGFloat = 0
-    @State private var titleHeight: CGFloat = 0
-    
-    private var displayPath: String? {
-        plan.planPath ?? plan.filePath
-    }
-    
-    var body: some View {
-        VStack(spacing: 0) {
-            Divider()
-            
-            VStack(alignment: .leading, spacing: 10) {
-                // Header
-                header
-                
-                if let path = displayPath, !path.isEmpty {
-                    planPathRow(path)
-                }
-                
-                // Plan content — DAG rendering for workflow plans, markdown otherwise
-                if let dag = parseWorkflowDAG(from: plan.content) {
-                    workflowDAGPreview(dag: dag)
-                } else {
-                    ScrollView(.vertical, showsIndicators: true) {
-                        MarkdownRenderer(text: plan.content)
-                            .font(.caption)
-                            .onGeometryChange(for: CGFloat.self) { poxy in
-                                poxy.size.height
-                            } action: { newValue in
-                                contentHeight = newValue
-                            }
-                        
-                    }
-                    .frame(height: max(0, min(280, contentHeight)))
-                    .padding(12)
-                    .background(.quaternary.opacity(0.3))
-                    .clipShape(RoundedRectangle(cornerRadius: 8))
-                }
-                
-                // Action buttons
-                HStack(spacing: 8) {
-                    
-                    Button(role: .destructive, action: onReject) {
-                        Label("Reject", systemImage: "xmark.circle.fill")
-                            .frame(maxWidth: .infinity)
-                    }
-                    .buttonStyle(.bordered)
-                    .controlSize(.large)
-                    
-                    Button(action: onApprove) {
-                        Label("Approve Plan", systemImage: "checkmark.circle.fill")
-                            .frame(maxWidth: .infinity)
-                    }
-                    .buttonStyle(.borderedProminent)
-                    .controlSize(.large)
-                }
-            }
-            .padding(.horizontal, 12)
-            .padding(.vertical, 10)
-        }
-        .background(Color.approvalPanelBackground)
-        .layerBorder()
-        .padding(12)
-    }
-    
-    private var isWorkflowDAG: Bool {
-        plan.content.trimmingCharacters(in: .whitespacesAndNewlines).first == "{"
-    }
-    
-    private var header: some View {
-        HStack(alignment: .top, spacing: 8) {
-            Image(systemName: isWorkflowDAG ? "flowchart.fill" : "text.document.fill")
-                .foregroundStyle(isWorkflowDAG ? .purple : .blue)
-                .padding(.top, 1)
-            
-            VStack(alignment: .leading, spacing: 2) {
-                ScrollView(.vertical) {
-                    Text(plan.title)
-                        .font(.subheadline.weight(.semibold))
-                        .textSelection(.enabled)
-                        .onGeometryChange(for: CGFloat.self) { proxy in
-                            proxy.size.height
-                        } action: { newValue in
-                            titleHeight = newValue
-                        }
-                    
-                }
-                .frame(maxHeight: min(titleHeight, 70))
-                
-                Text(isWorkflowDAG ? "Workflow Plan" : "Proposed Plan")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-            }
-            
-            Spacer()
-            
-            if let deadline = plan.deadlineSeconds {
-                Text("\(deadline)s")
-                    .font(.caption2.weight(.medium))
-                    .foregroundStyle(.secondary)
-                    .padding(.horizontal, 6)
-                    .padding(.vertical, 2)
-                    .background(.quaternary)
-                    .clipShape(Capsule())
-            }
-        }
-    }
-    
-    private var actionButtons: some View {
-        HStack(spacing: 8) {
-            Button(action: onApprove) {
-                Label("Approve Plan", systemImage: "checkmark.circle.fill")
-                    .frame(maxWidth: .infinity)
-            }
-            .buttonStyle(.borderedProminent)
-            .controlSize(.large)
-            
-            Button(role: .destructive, action: onReject) {
-                Label("Reject", systemImage: "xmark.circle.fill")
-                    .frame(maxWidth: .infinity)
-            }
-            .buttonStyle(.bordered)
-            .controlSize(.large)
-        }
-    }
-    
-    private func planPathRow(_ path: String) -> some View {
-        HStack(spacing: 6) {
-            Image(systemName: "doc.text")
-                .foregroundStyle(.secondary)
-            
-            Text(path)
-                .font(.caption.monospaced())
-                .foregroundStyle(.secondary)
-                .lineLimit(1)
-                .truncationMode(.middle)
-                .textSelection(.enabled)
-            
-            Spacer()
-            
-#if os(macOS)
-            if canOpenPlanFile {
-                Button {
-                    openPlanFile()
-                } label: {
-                    Image(systemName: "arrow.up.forward.app")
-                }
-                .buttonStyle(.plain)
-                .help("Open plan file")
-            }
-#endif
-        }
-        .padding(.horizontal, 10)
-        .padding(.vertical, 7)
-        .background(.quaternary.opacity(0.25))
-        .clipShape(RoundedRectangle(cornerRadius: 7))
-    }
-    
-#if os(macOS)
-    private var canOpenPlanFile: Bool {
-        guard let filePath = plan.filePath, !filePath.isEmpty else {
-            return false
-        }
-        return FileManager.default.fileExists(atPath: filePath)
-    }
-    
-    private func openPlanFile() {
-        guard let filePath = plan.filePath else { return }
-        
-        openFolderInFinder(path: filePath)
-    }
-#endif
-    
-    // MARK: - Workflow DAG detection & preview
-    
-    private func parseWorkflowDAG(from jsonString: String) -> DAGApprovalData? {
-        guard let firstChar = jsonString.trimmingCharacters(in: .whitespacesAndNewlines).first,
-              firstChar == "{" else { return nil }
-        guard let data = jsonString.data(using: .utf8) else { return nil }
-        guard let dag = try? JSONDecoder().decode(DAGApprovalData.self, from: data),
-              !dag.nodes.isEmpty else { return nil }
-        return dag
-    }
-    
-    @ViewBuilder
-    private func workflowDAGPreview(dag: DAGApprovalData) -> some View {
-        let nodes = dag.nodes.map { wn in
-            WorkflowNode(
-                name: wn.name,
-                type: wn.type ?? (wn.tool != nil ? "tool" : "unknown"),
-                state: .pending,
-                toolName: wn.tool,
-                inputMapping: wn.inputMapping
-            )
-        }
-        let edges = (dag.edges ?? []).map { WorkflowEdge(from: $0.from, to: $0.to) }
-        
-        VStack(alignment: .leading, spacing: 6) {
-            HStack(spacing: 6) {
-                Image(systemName: "flowchart.fill")
-                    .font(.caption)
-                    .foregroundStyle(.purple)
-                Text("Workflow DAG")
-                    .font(.caption.weight(.medium))
-                Spacer()
-                Text("\(dag.nodes.count) nodes, \(dag.edges?.count ?? 0) edges")
-                    .font(.caption2)
-                    .foregroundStyle(.secondary)
-            }
-            
-            ScrollView([.horizontal, .vertical], showsIndicators: false) {
-                WorkflowDAGLayoutView(nodes: nodes, edges: edges)
-                    .padding(8)
-            }
-            .frame(maxHeight: 240)
-            .background(.ultraThinMaterial)
-            .clipShape(RoundedRectangle(cornerRadius: 8))
-        }
-        .padding(10)
-        .background(.quaternary.opacity(0.3))
-        .clipShape(RoundedRectangle(cornerRadius: 8))
-    }
-}
-
-
-// MARK: - ApprovalBar
-
-/// 文本高度测量 PreferenceKey。
-private struct TextHeightKey: PreferenceKey {
-    static let defaultValue: CGFloat = 0
-    static func reduce(value: inout CGFloat, nextValue: () -> CGFloat) {
-        value = nextValue()
-    }
-}
-
-/// 审批拦截栏 — 显示在输入框上方，阻断 input pipeline。
-/// 对标 Claude Code / Cursor：审批不是消息，而是阻塞输入的状态。
-
-/// v1.2 三态审批作用域。
-private enum ApprovalScope: String, CaseIterable, Hashable {
-    case local = "local"
-    case user = "user"
-    
-    var label: String {
-        switch self {
-        case .local: return "Project (local)"
-        case .user: return "User (global)"
-        }
-    }
-}
-
-// 扩展三态选择的回调
-struct ApprovalBar: View {
+struct DraftComposerSurfaceModifier: ViewModifier {
     @Environment(\.colorScheme) private var colorScheme
-    let request: ApprovalRequest
-    
-    private var appDisplayName: String {
-        Bundle.main.object(forInfoDictionaryKey: "CFBundleDisplayName") as? String
-        ?? Bundle.main.object(forInfoDictionaryKey: "CFBundleName") as? String
-        ?? "the agent"
+    func body(content: Content) -> some View {
+#if os(macOS)
+        content
+            .background(colorScheme == .dark ?         Color(NSColor(
+                calibratedRed: 44.0 / 255.0,
+                green: 44.0 / 255.0,
+                blue: 46.0 / 255.0,
+                alpha: 1
+            )) : Color(NSColor.windowBackgroundColor))
+            .clipShape(RoundedRectangle(cornerRadius: 20, style: .continuous))
+            .padding()
+            .shadow(color: .black.opacity(0.10), radius: 20, y: 10)
+#else
+        content
+        // 1. 强依赖 Material，使用 .thinMaterial 可以让背景颜色适度渗透
+            .background(.thinMaterial, in: RoundedRectangle(cornerRadius: 26, style: .continuous))
+        // 2. 移除任何纯色 background 叠加，只靠 Material
+        // 3. **极致关键：干掉描边 (overlay stroke)**
+            .padding(.horizontal, 16) // 调整 padding
+            .padding(.vertical, 8)  // 调整 padding
+        // 4. 极致阴影：极淡、极弥散
+            .shadow(color: Color.black.opacity(0.02), radius: 6, x: 0, y: 2)   // 几乎不可见的近景阴影
+            .shadow(color: Color.black.opacity(0.04), radius: 20, x: 0, y: 6)  // 柔和弥散阴影
+#endif
     }
-    
-    private var approvalHeaderText: String {
-        if request.isExternalPathAccess {
-            return String(format: AgentKitLocalized.string("composer.request_file_access"), appDisplayName)
-        }
-        return "Allow \(appDisplayName) to run \(request.displayToolName)?"
-    }
-    
-    
-    // 三态回调映射图中的按钮
-    let onDeny: () -> Void          // Deny 1
-    let onAlwaysAllow: (String) -> Void    // Always allow 2 — 参数为 scope ("local" | "user")
-    let onAllowOnce: () -> Void      // Allow once 3 ↩
-    
-    @State private var scope: ApprovalScope = .local
-    @State private var contentHeight: CGFloat = 0
-    
-    var body: some View {
-        VStack(spacing: 0) {
-            Divider()
-            
-            VStack(alignment: .leading, spacing: 0) {
-                // 1. 顶部 Header 栏
-                HStack(alignment: .center, spacing: 6) {
-                    // 左侧黄色小圆点指示器
-                    Circle()
-                        .fill(Color.orange)
-                        .frame(width: 6, height: 6)
-                    
-                    Text(approvalHeaderText)
-                        .font(.system(size: 13, weight: .semibold))
-                        .foregroundStyle(.primary)
-                    
-                    Spacer()
-                    
-                    // 右侧 scope 选择标签（点击切换）— 外部路径访问无需 scope
-                    if !request.isExternalPathAccess {
-                        Menu {
-                            Picker("Scope", selection: $scope) {
-                                ForEach(ApprovalScope.allCases, id: \.self) { s in
-                                    Text(s.label).tag(s)
-                                }
-                            }
-                        } label: {
-                            Text(scope.label)
-                                .font(.system(size: 11))
-                                .foregroundStyle(.secondary)
-                                .padding(.horizontal, 6)
-                                .padding(.vertical, 2)
-                                .background(Color.approvalPanelBackground.opacity(0.5))
-                                .cornerRadius(4)
-                        }
-                        .menuStyle(.borderlessButton)
-                        .fixedSize()
-                    }
-                }
-                .padding(.horizontal, 14)
-                .padding(.vertical, 10)
-                
-                // 2. 中间工具与参数内容区 (类似代码块容器)
-                VStack(alignment: .leading, spacing: 8) {
-                    // 外部路径访问：显示路径卡片
-                    if request.isExternalPathAccess {
-                        HStack(spacing: 6) {
-                            Image(systemName: "folder")
-                                .foregroundStyle(.secondary)
-                            Text(request.externalPathTarget)
-                                .font(.system(.caption, design: .monospaced))
-                                .foregroundStyle(.primary)
-                                .lineLimit(2)
-                                .truncationMode(.middle)
-                            Spacer(minLength: 0)
-                            Text(request.externalPathOperation)
-                                .font(.system(.caption))
-                                .foregroundStyle(.secondary)
-                                .padding(.horizontal, 6)
-                                .padding(.vertical, 2)
-                                .background(Color.secondary.opacity(0.15), in: Capsule())
-                        }
-                        .frame(maxWidth: .infinity)
-                    }
-                    // MCP 工具：显示 server → tool 解析结果
-                    if request.isMCP, let server = request.mcpServer {
-                        HStack(spacing: 4) {
-                            Text("MCP Server:")
-                                .font(.system(.caption, design: .monospaced))
-                                .foregroundStyle(.tertiary)
-                            Text(server)
-                                .font(.system(.caption, design: .monospaced))
-                                .foregroundStyle(.blue)
-                            Text("→")
-                                .font(.system(.caption, design: .monospaced))
-                                .foregroundStyle(.tertiary)
-                            Text(request.mcpBareToolName)
-                                .font(.system(.caption, design: .monospaced))
-                                .foregroundStyle(.secondary)
-                        }
-                        .frame(maxWidth: .infinity)
-                    }
-                    
-                    if let args = request.toolArgs, case .object(let dict) = args, !dict.isEmpty, !request.isExternalPathAccess {
-                        // 测量文本真实高度：≤10行自适应；>10行固定180pt可滚动
-                        ScrollView(.vertical, showsIndicators: true) {
-                            argsText(dict)
-                                .background(GeometryReader { geo in
-                                    Color.clear.preference(
-                                        key: TextHeightKey.self,
-                                        value: geo.size.height
-                                    )
-                                })
-                                .frame(maxWidth: .infinity)
-                        }
-                        .onPreferenceChange(TextHeightKey.self) { contentHeight = $0 }
-                        .frame(height: contentHeight > 0 ? min(contentHeight, 180) : nil)
-                        .animation(.none, value: contentHeight)
-                        
-                    } else if !request.isMCP, !request.isExternalPathAccess {
-                        Text("No arguments provided.")
-                            .font(.system(.caption, design: .monospaced))
-                            .foregroundStyle(.tertiary)
-                    }
-                }
-                .padding(12)
-                .background(Color.approvalSecondaryFill)
-                .cornerRadius(6)
-                .padding(.horizontal, 14)
-                
-                // 3. 底部三态按钮操作栏
-                HStack(spacing: 8) {
-                    // Deny 1
-                    Button(action: onDeny) {
-                        Text("Deny ") + Text("1").foregroundStyle(.tertiary)
-                    }
-                    .buttonStyle(.bordered)
-                    .controlSize(.small)
-                    
-                    Spacer()
-                    
-                    // Always allow 2 — MCP 工具显示 server 级提示
-                    if !request.isExternalPathAccess {
-                        Button(action: { onAlwaysAllow(scope.rawValue) }) {
-                            VStack(alignment: .center, spacing: 1) {
-                                Text("Always allow ") + Text("2").foregroundStyle(.tertiary)
-                            }
-                        }
-                        .buttonStyle(.bordered)
-                        .controlSize(.small)
-                        .overlay(alignment: .top) {
-                            if request.isMCP, let server = request.mcpServer {
-                                Text("all from \"\(server)\"")
-                                    .font(.system(size: 9))
-                                    .foregroundStyle(.tertiary)
-                                    .offset(CGSizeMake(0, 20))
-                            }
-                        }
-                    }
-                    
-                    // Allow once 3 ↩ (高亮主按钮)
-                    Button(action: onAllowOnce) {
-                        HStack(spacing: 4) {
-                            Text("Allow once ") + Text("3 ⌘↩")
-                        }
-                        .foregroundStyle(colorScheme == .light ? .white.opacity(0.7) : .black.opacity(0.7) )
-                    }
-                    .buttonStyle(.borderedProminent)
-                    .controlSize(.small)
-                    .tint(.primary)
-                }
-                .padding(.horizontal, 14)
-                .padding(.vertical, 12)
-            }
-            .background(Color.approvalPanelBackground)
-            .layerBorder()
-            .padding(12)
-        }
-    }
-    
-    private func argsSummary(_ dict: [String: JSONValue]) -> String {
-        dict.map { "\($0.key): \($0.value.stringValue)" }.joined(separator: "\n")
-    }
-    
-    private func argsText(_ dict: [String: JSONValue]) -> some View {
-        Text(argsSummary(dict))
-        //            .textSelection(.enabled)
-            .font(.system(.caption, design: .monospaced))
-            .foregroundStyle(.secondary)
-            .frame(maxWidth: .infinity, alignment: .leading)
-    }
-}
-
-// MARK: - AskUserBar
-
-/// ask_user 卡片 — 显示在输入框上方，阻断 input pipeline。
-/// 模型遇到歧义时展示选项供用户选择。优先级：AskUser > Plan > Approval。
-struct AskUserBar: View {
-    let request: AskUserRequest
-    let onSubmit: ([String], String?) -> Void
-    let onSkip: () -> Void
-    @State var optionsListHeight: CGFloat = 0
-    
-    @State private var selectedLabels: Set<String> = []
-    @State private var customText: String = ""
-    @State private var isExpanded: Bool = true
-    
-    /// 推荐项 label（含 `(Recommended)` 或 `（推荐）` 后缀），自动预选。
-    private var recommendedLabel: String? {
-        request.options.first { request.isRecommended($0) }?.label
-    }
-    
-    var body: some View {
-        VStack(spacing: 0) {
-            Divider()
-            
-            VStack(alignment: .leading, spacing: 10) {
-                // Header
-                headerRow
-                
-                // Question text
-                Text(request.question.trimmingCharacters(in: .whitespacesAndNewlines))
-                    .font(.callout)
-                    .foregroundStyle(.primary)
-                    .lineLimit(6)
-                    
-                
-                // Options list
-                if isExpanded {
-                    ScrollView(.vertical) {
-                        optionsList
-                            .onGeometryChange(for: CGFloat.self) { proxy in
-                                proxy.size.height
-                            } action: { newValue in
-                                self.optionsListHeight = newValue
-                            }
-                    }
-                    .frame(height: max(0, min(280, self.optionsListHeight)))
-                }
-                
-                // Custom input (only when allowCustom)
-                if request.allowCustom, isExpanded {
-                    customInputRow
-                }
-                
-                // Action buttons
-                if isExpanded {
-                    actionButtons
-                }
-            }
-            .padding(.horizontal, 14)
-            .padding(.vertical, 12)
-        }
-        .background(Color.approvalPanelBackground)
-        .layerBorder()
-        .padding(12)
-        .onAppear {
-            // Auto-select recommended option
-            if let rec = recommendedLabel {
-                selectedLabels = [rec]
-            }
-        }
-    }
-    
-    // MARK: - Header
-    
-    private var headerRow: some View {
-        HStack(spacing: 8) {
-            Image(systemName: "questionmark.bubble.fill")
-                .foregroundStyle(.blue)
-            
-            VStack(alignment: .leading, spacing: 2) {
-                Text(request.header.trimmingCharacters(in: .whitespacesAndNewlines))
-                    .font(.subheadline.weight(.semibold))
-                    .lineLimit(5)
-                
-                Text(request.multiSelect ? AgentKitLocalized.string("composer.multi_select") : AgentKitLocalized.string("composer.please_select"))
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-            }
-            
-            Spacer()
-            
-            // Deadline badge
-            if let deadline = request.deadlineSeconds {
-                Text("\(deadline)s")
-                    .font(.caption2.weight(.medium))
-                    .foregroundStyle(.secondary)
-                    .padding(.horizontal, 6)
-                    .padding(.vertical, 2)
-                    .background(.quaternary)
-                    .clipShape(Capsule())
-            }
-            
-            // Collapse/expand toggle
-            Button {
-                withAnimation(.easeOut(duration: 0.2)) {
-                    isExpanded.toggle()
-                }
-            } label: {
-                Image(systemName: isExpanded ? "chevron.down" : "chevron.up")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-            }
-            .buttonStyle(.plain)
-            .help(isExpanded ? AgentKitLocalized.string("composer.collapse") : AgentKitLocalized.string("composer.expand"))
-            
-            // Skip button
-            Button(action: onSkip) {
-                Image(systemName: "xmark.circle.fill")
-                    .foregroundStyle(.secondary)
-            }
-            .buttonStyle(.plain)
-            .help(AgentKitLocalized.string("composer.skip_question"))
-        }
-    }
-    
-    // MARK: - Options
-    
-    private var optionsList: some View {
-        VStack(spacing: 6) {
-            ForEach(request.options) { option in
-                optionRow(option)
-            }
-        }
-    }
-    
-    private func optionRow(_ option: AskUserOption) -> some View {
-        let isSelected = selectedLabels.contains(option.label)
-        let isRecommended = request.isRecommended(option)
-        
-        return Button {
-            if request.multiSelect {
-                if isSelected {
-                    selectedLabels.remove(option.label)
-                } else {
-                    selectedLabels.insert(option.label)
-                }
-            } else {
-                selectedLabels = [option.label]
-            }
-        } label: {
-            HStack(alignment: .top, spacing: 10) {
-                // Selection indicator
-                Group {
-                    if request.multiSelect {
-                        Image(systemName: isSelected ? "checkmark.square.fill" : "square")
-                            .foregroundStyle(isSelected ? .blue : .secondary)
-                    } else {
-                        Image(systemName: isSelected ? "largecircle.fill.circle" : "circle")
-                            .foregroundStyle(isSelected ? .blue : .secondary)
-                    }
-                }
-                .font(.system(size: 16))
-                
-                VStack(alignment: .leading, spacing: 3) {
-                    HStack(spacing: 4) {
-                        Text(option.label)
-                            .font(.subheadline.weight(isSelected ? .semibold : .regular))
-                            .foregroundStyle(.primary)
-                        
-                        if isRecommended {
-                            Text(verbatim: AgentKitLocalized.string("composer.recommended"))
-                                .font(.system(size: 9))
-                                .foregroundStyle(.blue)
-                                .padding(.horizontal, 4)
-                                .padding(.vertical, 1)
-                                .background(.blue.opacity(0.1))
-                                .clipShape(Capsule())
-                        }
-                    }
-                    
-                    if !option.description.isEmpty {
-                        Text(option.description)
-                            .font(.caption)
-                            .foregroundStyle(.secondary)
-                            .fixedSize(horizontal: false, vertical: true)
-                    }
-                }
-                
-                Spacer(minLength: 0)
-            }
-            .padding(10)
-            .frame(maxWidth: .infinity, alignment: .leading)
-            .background(
-                RoundedRectangle(cornerRadius: 8)
-                    .fill(isSelected ? Color.blue.opacity(0.08) : Color.clear)
-            )
-            .overlay(
-                RoundedRectangle(cornerRadius: 8)
-                    .stroke(isSelected ? Color.blue.opacity(0.3) : Color.gray.opacity(0.15), lineWidth: 1)
-            )
-        }
-        .buttonStyle(.plain)
-    }
-    
-    // MARK: - Custom input
-    
-    private var customInputRow: some View {
-        HStack(spacing: 8) {
-            Image(systemName: "pencil.line")
-                .foregroundStyle(.secondary)
-                .font(.caption)
-            
-            TextField(AgentKitLocalized.string("composer.custom_input_optional"), text: $customText)
-                .textFieldStyle(.plain)
-                .font(.subheadline)
-        }
-        .padding(10)
-        .background(.quaternary.opacity(0.3))
-        .clipShape(RoundedRectangle(cornerRadius: 8))
-    }
-    
-    // MARK: - Actions
-    
-    private var actionButtons: some View {
-        HStack(spacing: 8) {
-            Button(action: onSkip) {
-                Label(AgentKitLocalized.string("composer.skip"), systemImage: "forward.fill")
-                    .frame(maxWidth: .infinity)
-            }
-            .buttonStyle(.bordered)
-            .controlSize(.regular)
-            
-            Button {
-                let notes = customText.trimmingCharacters(in: .whitespacesAndNewlines)
-                onSubmit(Array(selectedLabels), notes.isEmpty ? nil : notes)
-            } label: {
-                Label(AgentKitLocalized.string("composer.confirm_selection"), systemImage: "checkmark.circle.fill")
-                    .frame(maxWidth: .infinity)
-            }
-            .buttonStyle(.borderedProminent)
-            .controlSize(.regular)
-            .disabled(selectedLabels.isEmpty && customText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
-        }
-    }
-}
-
-// 辅助扩展：便于快速绘制带圆角的细边框
-extension View {
-    func layerBorder() -> some View {
-        self.overlay(
-            RoundedRectangle(cornerRadius: 8)
-                .stroke(Color.gray.opacity(0.2), lineWidth: 1)
-        )
-        .cornerRadius(8)
-    }
-}
-
-// MARK: - Workflow DAG approval JSON types
-
-/// 审批卡中 workflow DAG 定义的轻量 Decodable。
-/// `plan_approval_request.content` 为 JSON string 且首字符为 `{` 时尝试解码为此类型。
-private struct DAGApprovalData: Decodable {
-    let nodes: [DAGApprovalNode]
-    let edges: [DAGApprovalEdge]?
-}
-
-private struct DAGApprovalNode: Decodable {
-    let name: String
-    let tool: String?
-    let type: String?
-    let label: String?
-    let inputMapping: JSONValue?
-    
-    enum CodingKeys: String, CodingKey {
-        case name, tool, type, label
-        case inputMapping = "input_mapping"
-    }
-}
-
-private struct DAGApprovalEdge: Decodable {
-    let from: String
-    let to: String
 }

@@ -695,8 +695,8 @@ public final class ConversationViewModel {
         
         if case .modelRequest(let turnID, let invocationID, let request) = event {
             if let provider = request.provider, !provider.isEmpty {
-                let modelID = "\(provider)/\(request.modelName ?? "")"
-                self.selectedModel = UnifiedModel(providerID: provider, wireModelID: request.modelName ?? "", reasoningEffort: ModelReasoningEffort(rawValue: request.reasoningEffort ?? ""))
+                let model = UnifiedModel(providerID: provider, wireModelID: request.modelName ?? "", reasoningEffort: ModelReasoningEffort(rawValue: request.reasoningEffort ?? ""))
+                selectedModel = model
             } else {
                 self.selectedModel = UnifiedModel(model: request.modelName ?? "", reasoningEffort: nil)
             }
