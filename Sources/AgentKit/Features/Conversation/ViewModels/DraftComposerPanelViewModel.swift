@@ -13,16 +13,16 @@ import SwiftUI
 final class DraftComposerPanelViewModel {
     // MARK: - Dependencies
     
-    private let workspaceStore: WorkspaceStore
-    private let modelSettings: ModelSettingsStore
-    private let conversationViewModel: ConversationViewModel?
-    private let isDraft: Bool
-    private let placeholder: String
-    private let isEnabled: Bool
-    private let onSend: (_ text: String, _ model: UnifiedModel, _ assets: [UserAssetRef]) async -> Bool
-    private let onModelChange: ((String) -> Void)?
-    private let onAddAttachment: (() -> Void)?
-    private let onStop: (() -> Void)?
+    let workspaceStore: WorkspaceStore
+    let modelSettings: ModelSettingsStore
+    let conversationViewModel: ConversationViewModel?
+    let isDraft: Bool
+    let placeholder: String
+    let isEnabled: Bool
+    let onSend: (_ text: String, _ model: UnifiedModel, _ assets: [UserAssetRef]) async -> Bool
+    let onModelChange: ((String) -> Void)?
+    let onAddAttachment: (() -> Void)?
+    let onStop: (() -> Void)?
     
     // MARK: - Published State (View binds to these)
     
@@ -56,7 +56,10 @@ final class DraftComposerPanelViewModel {
     private var isRestoringLocalState = false
     private var contextRefreshTask: Task<Void, Never>?
     var contentWidth: CGFloat = 0
-    private var draftRevision: Int
+    /// 草稿代次（WorkspaceStore.draftNavigationRevision）。草稿模式下 viewModel 为 nil，
+    /// `.task(id:)` 靠它区分「新一次草稿」—— 否则取消草稿再新建时 id 恒为 nil，
+    /// selectedModel 残留上一次的选择。活跃会话场景不需要传。
+    private var draftRevision: Int = 0
     
     // macOS-specific
 #if os(macOS)

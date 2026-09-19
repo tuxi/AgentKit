@@ -22,39 +22,12 @@ import ClientToolProtocol
 struct DraftComposerPanel: View {
     @Environment(\.scenePhase) private var scenePhase
     
-    let workspaceStore: WorkspaceStore
-    let modelSettings: ModelSettingsStore
-    let placeholder: String
-    let isEnabled: Bool
-    let isDraft: Bool
-    var isTurnRunning: Bool = false
-    var onStop: (() -> Void)? = nil
-    let onSend: (_ text: String, _ model: UnifiedModel, _ assets: [UserAssetRef]) async -> Bool
-    var onAddAttachment: (() -> Void)? = nil
-    
     let viewModel: ConversationViewModel?
-    /// 草稿代次（WorkspaceStore.draftNavigationRevision）。草稿模式下 viewModel 为 nil，
-    /// `.task(id:)` 靠它区分「新一次草稿」—— 否则取消草稿再新建时 id 恒为 nil，
-    /// selectedModel 残留上一次的选择。活跃会话场景不需要传。
-    var draftRevision: Int = 0
-    /// 模型切换回调。
-    var onModelChange: ((String) -> Void)? = nil
     
     @State private var vm: DraftComposerPanelViewModel
     
-    init(workspaceStore: WorkspaceStore, modelSettings: ModelSettingsStore, placeholder: String, isEnabled: Bool, isDraft: Bool, isTurnRunning: Bool = false, onStop: (() -> Void)? = nil, onSend: @escaping (_: String, _: UnifiedModel, _: [UserAssetRef]) async -> Bool, onAddAttachment: (() -> Void)? = nil, viewModel: ConversationViewModel?, draftRevision: Int = 0, onModelChange: ((String) -> Void)? = nil) {
-        self.workspaceStore = workspaceStore
-        self.modelSettings = modelSettings
-        self.placeholder = placeholder
-        self.isEnabled = isEnabled
-        self.isDraft = isDraft
-        self.isTurnRunning = isTurnRunning
-        self.onStop = onStop
-        self.onSend = onSend
-        self.onAddAttachment = onAddAttachment
+    init(workspaceStore: WorkspaceStore, modelSettings: ModelSettingsStore, viewModel: ConversationViewModel?, draftRevision: Int = 0, placeholder: String, isEnabled: Bool, isDraft: Bool, isTurnRunning: Bool = false, onStop: (() -> Void)? = nil, onSend: @escaping (_: String, _: UnifiedModel, _: [UserAssetRef]) async -> Bool, onAddAttachment: (() -> Void)? = nil, onModelChange: ((String) -> Void)? = nil) {
         self.viewModel = viewModel
-        self.draftRevision = draftRevision
-        self.onModelChange = onModelChange
         self.vm = DraftComposerPanelViewModel(
             workspaceStore: workspaceStore,
             modelSettings: modelSettings,
@@ -80,7 +53,7 @@ struct DraftComposerPanel: View {
     private func contentView(_ vm: DraftComposerPanelViewModel) -> some View {
         VStack(spacing: 0) {
 #if os(iOS)
-            if isDraft {
+            if vm.isDraft {
                 WorkspaceChipBar()
                     .padding(.horizontal, 4)
                     .padding(.top, 3)
@@ -93,7 +66,7 @@ struct DraftComposerPanel: View {
             composerContent(vm)
             
 #if os(macOS)
-            if isDraft {
+            if vm.isDraft {
                 WorkspaceChipBar()
                     .padding(.horizontal, 8)
                     .padding(.vertical, 3)
@@ -115,10 +88,10 @@ struct DraftComposerPanel: View {
         .onChange(of: scenePhase) { _, phase in
             vm.handleScenePhaseChange(phase)
         }
-        .onChange(of: isTurnRunning) { _, newValue in
+        .onChange(of: vm.isTurnRunning) { _, newValue in
             vm.setTurnRunning(newValue)
         }
-        .onChange(of: modelSettings.availableModelIDs) { _, newIDs in
+        .onChange(of: vm.modelSettings.availableModelIDs) { _, newIDs in
             vm.handleModelSettingsChange(newIDs: newIDs)
         }
         .onChange(of: viewModel?.lastAcceptedSubmissionRequestID) { _, _ in
@@ -170,11 +143,11 @@ struct DraftComposerPanel: View {
         )) {
             IOSModelPickerSheet(
                 groups: vm.modelGroups,
-                ungroupedModelIDs: vm.modelGroups.isEmpty ? modelSettings.availableModelIDs : [],
+                ungroupedModelIDs: vm.modelGroups.isEmpty ? vm.modelSettings.availableModelIDs : [],
                 selectedModel: vm.selectedModel,
-                displayName: { modelSettings.displayName(for: $0) },
+                displayName: { vm.modelSettings.displayName(for: $0) },
                 onSelect: { modelID in
-                    let resolved = modelSettings.getModel(with: viewModel?.conversation?.id)
+                    let resolved = vm.modelSettings.getModel(with: viewModel?.conversation?.id)
                     if let resolved, !resolved.model.isEmpty {
                         vm.selectModel(modelID, reasoningEffort: resolved.reasoningEffort)
                     }
@@ -216,7 +189,7 @@ struct DraftComposerPanel: View {
             if vm.voiceService.state != .recording && vm.voiceService.state != .transcribing && vm.voiceService.state != .preparing {
                 HStack(spacing: vm.composerControlSpacing) {
                     Button {
-                        if let onAddAttachment {
+                        if let onAddAttachment = vm.onAddAttachment {
                             onAddAttachment()
                         } else {
                             vm.pickAttachments()
@@ -230,7 +203,7 @@ struct DraftComposerPanel: View {
                     .accessibilityLabel(AgentKitLocalized.string("composer.add_attachment"))
                     .disabled(
                         vm.attachments.count >= 4
-                        || (onAddAttachment == nil && !workspaceStore.canSelectUserAssets)
+                        || (vm.onAddAttachment == nil && !vm.workspaceStore.canSelectUserAssets)
                     )
                     
 #if os(macOS)
@@ -287,7 +260,7 @@ struct DraftComposerPanel: View {
                         vm.isIOSModelPickerPresented = true
                     } label: {
                         HStack(spacing: 5) {
-                            Text(modelSettings.selectionDisplayName(for: vm.selectedModel?.model ?? ""))
+                            Text(vm.modelSettings.selectionDisplayName(for: vm.selectedModel?.model ?? ""))
                                 .font(.system(size: 13, weight: .semibold))
                                 .lineLimit(1)
                             Image(systemName: "chevron.up")
@@ -303,12 +276,12 @@ struct DraftComposerPanel: View {
                     }
                     .buttonStyle(.plain)
                     .frame(maxWidth: 132)
-                    .disabled(modelSettings.availableModelIDs.isEmpty)
+                    .disabled(vm.modelSettings.availableModelIDs.isEmpty)
                     .accessibilityLabel(AgentKitLocalized.string("composer.select_model"))
 #else
                     Menu {
                         if vm.modelGroups.isEmpty {
-                            ForEach(modelSettings.availableModelIDs, id: \.self) { modelID in
+                            ForEach(vm.modelSettings.availableModelIDs, id: \.self) { modelID in
                                 modelMenuEntry(modelID, vm: vm)
                             }
                         } else {
@@ -328,7 +301,7 @@ struct DraftComposerPanel: View {
                             Image(systemName: "brain.head.profile")
                                 .font(.system(size: 9, weight: .semibold))
                         } else {
-                            Text(modelSettings.selectionDisplayName(for: vm.selectedModel?.model ?? ""))
+                            Text(vm.modelSettings.selectionDisplayName(for: vm.selectedModel?.model ?? ""))
                                 .font(.system(size: 13, weight: .medium))
                                 .lineLimit(1)
                                 .frame(maxWidth: 35)
@@ -447,7 +420,7 @@ struct DraftComposerPanel: View {
                 get: { vm.composerHeight },
                 set: { vm.composerHeight = $0 }
             ),
-            placeholder: placeholder,
+            placeholder: vm.placeholder,
             isEnabled: true,
             minHeight: 56,
             maxHeight: 150,
@@ -461,7 +434,7 @@ struct DraftComposerPanel: View {
         )
         .frame(height: vm.composerHeight)
 #else
-        TextField(placeholder, text: Binding(
+        TextField(vm.placeholder, text: Binding(
             get: { vm.text },
             set: { vm.text = $0 }
         ), axis: .vertical)
@@ -469,7 +442,7 @@ struct DraftComposerPanel: View {
             .font(.body)
             .lineLimit(1...5)
             .frame(minHeight: 44, alignment: .topLeading)
-            .disabled(!isEnabled)
+            .disabled(!vm.isEnabled)
 #endif
     }
     
@@ -481,7 +454,7 @@ struct DraftComposerPanel: View {
                 ForEach(vm.attachments) { attachment in
                     DraftAttachmentThumbnail(
                         attachment: attachment,
-                        resolver: workspaceStore.userAssetDraftPreviewResolver,
+                        resolver: vm.workspaceStore.userAssetDraftPreviewResolver,
                         onRemove: { vm.removeAttachment(attachment.id) },
                         onRetry: { vm.retryAttachment(attachment.id) },
                         onUploadToGateway: vm.canOfferGatewayUpload(for: attachment)
@@ -514,7 +487,7 @@ struct DraftComposerPanel: View {
 #if os(macOS)
     @ViewBuilder
     private func modelMenuEntry(_ modelID: String, vm: DraftComposerPanelViewModel) -> some View {
-        if let model = modelSettings.descriptor(for: modelID) {
+        if let model = vm.modelSettings.descriptor(for: modelID) {
             let supported = model.supportedReasoningEfforts ?? []
             let items = model.canDisableReasoning == true ? [ModelReasoningEffort.off] + supported : supported
             if items.isEmpty {
@@ -537,7 +510,7 @@ struct DraftComposerPanel: View {
             vm.selectModel(modelID, reasoningEffort: nil)
         } label: {
             HStack {
-                Text(modelSettings.displayName(for: modelID))
+                Text(vm.modelSettings.displayName(for: modelID))
                 if modelID == vm.selectedModel?.model {
                     Image(systemName: "checkmark")
                 }
@@ -567,7 +540,7 @@ struct DraftComposerPanel: View {
             }
         } label: {
             HStack {
-                Text(modelSettings.displayName(for: modelID))
+                Text(vm.modelSettings.displayName(for: modelID))
                 if modelID == vm.selectedModel?.model {
                     Image(systemName: "checkmark")
                 }

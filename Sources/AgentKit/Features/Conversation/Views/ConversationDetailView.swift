@@ -131,6 +131,8 @@ public struct ConversationDetailView: View {
         DraftComposerPanel(
             workspaceStore: store,
             modelSettings: modelSettings,
+            viewModel: viewModel,
+            draftRevision: store.draftNavigationRevision,
             placeholder: store.isPreparingWorkspace ? AgentKitLocalized.string("conversation.preparing_workspace") : AgentKitLocalized.string("conversation.describe_placeholder"),
             isEnabled: (store.draft?.canCommit ?? false) && !store.isPreparingWorkspace,
             isDraft: true,
@@ -138,8 +140,6 @@ public struct ConversationDetailView: View {
                 await store.commitDraft(firstMessage: text, model: model, assets: assets)
                 return store.draft == nil
             },
-            viewModel: viewModel,
-            draftRevision: store.draftNavigationRevision,
         )
         .environment(modelSettings)
     }
@@ -343,6 +343,7 @@ public struct ConversationDetailView: View {
             DraftComposerPanel(
                 workspaceStore: store,
                 modelSettings: modelSettings,
+                viewModel: vm,
                 placeholder: placeholder(vm: vm, isPaused: isPaused, isArchived: isArchived),
                 isEnabled: !isArchived && !vm.isTurnActive //  && !isPaused
                 && vm.snapshot.pendingAskUser == nil
@@ -360,7 +361,6 @@ public struct ConversationDetailView: View {
                         through: vm
                     )
                 },
-                viewModel: vm,
                 onModelChange: { newID in
 #if os(iOS)
                     Task {
