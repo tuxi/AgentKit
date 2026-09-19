@@ -247,8 +247,9 @@ final class ComposerNSTextView: NSTextView {
 
         let caret = min(max(selectedRange.location, 0), (fullText as NSString).length)
         var insertion = joined
-        if caret > 0 {
-            let prev = fullText[fullText.index(fullText.startIndex, offsetBy: caret - 1)]
+        if caret > 0 && caret <= fullText.count {
+            let index  = fullText.index(fullText.startIndex, offsetBy: caret - 1)
+            let prev = fullText[index]
             if !prev.isWhitespace {
                 insertion = " " + insertion
             }
