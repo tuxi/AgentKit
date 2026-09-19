@@ -141,7 +141,7 @@ public struct ConversationDetailView: View {
                 return store.draft == nil
             },
         )
-        .environment(modelSettings)
+        .id(viewModel?.conversation?.id)
     }
     
     private var draftTitle: AttributedString {
@@ -372,7 +372,7 @@ public struct ConversationDetailView: View {
 #endif
                 }
             )
-            .environment(modelSettings)
+            .id(vm.conversation?.id)
             .background {
 #if os(iOS)
                 GeometryReader { proxy in

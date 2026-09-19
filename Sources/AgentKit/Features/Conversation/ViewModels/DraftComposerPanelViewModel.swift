@@ -17,8 +17,6 @@ final class DraftComposerPanelViewModel {
     let modelSettings: ModelSettingsStore
     let conversationViewModel: ConversationViewModel?
     let isDraft: Bool
-    let placeholder: String
-    let isEnabled: Bool
     let onSend: (_ text: String, _ model: UnifiedModel, _ assets: [UserAssetRef]) async -> Bool
     let onModelChange: ((String) -> Void)?
     let onAddAttachment: (() -> Void)?
@@ -31,6 +29,7 @@ final class DraftComposerPanelViewModel {
     var selectedModel: UnifiedModel?
     var isSending = false
     var isTurnRunning = false
+    var isEnabled: Bool
     
     // Context window
     var contextSnapshot: ConversationContextSnapshot?
@@ -126,7 +125,6 @@ final class DraftComposerPanelViewModel {
         modelSettings: ModelSettingsStore,
         conversationViewModel: ConversationViewModel?,
         isDraft: Bool,
-        placeholder: String,
         isEnabled: Bool,
         isTurnRunning: Bool = false,
         draftRevision: Int = 0,
@@ -139,7 +137,6 @@ final class DraftComposerPanelViewModel {
         self.modelSettings = modelSettings
         self.conversationViewModel = conversationViewModel
         self.isDraft = isDraft
-        self.placeholder = placeholder
         self.isEnabled = isEnabled
         self.isTurnRunning = isTurnRunning
         self.draftRevision = draftRevision

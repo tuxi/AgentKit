@@ -23,17 +23,56 @@ struct DraftComposerPanel: View {
     @Environment(\.scenePhase) private var scenePhase
     
     let viewModel: ConversationViewModel?
+    let workspaceStore: WorkspaceStore
+    let modelSettings: ModelSettingsStore
+    let draftRevision: Int
+    let placeholder: String
+    let isEnabled: Bool
+    let isDraft: Bool
+    let isTurnRunning: Bool
+    let onStop: (() -> Void)?
+    let onSend: (_ text: String, _ model: UnifiedModel, _ assets: [UserAssetRef]) async -> Bool
+    let onAddAttachment: (() -> Void)?
+    let onModelChange: ((String) -> Void)?
     
-    @State private var vm: DraftComposerPanelViewModel
+    @State private var vm: DraftComposerPanelViewModel?
     
     init(workspaceStore: WorkspaceStore, modelSettings: ModelSettingsStore, viewModel: ConversationViewModel?, draftRevision: Int = 0, placeholder: String, isEnabled: Bool, isDraft: Bool, isTurnRunning: Bool = false, onStop: (() -> Void)? = nil, onSend: @escaping (_: String, _: UnifiedModel, _: [UserAssetRef]) async -> Bool, onAddAttachment: (() -> Void)? = nil, onModelChange: ((String) -> Void)? = nil) {
+        self.workspaceStore = workspaceStore
+        self.modelSettings = modelSettings
         self.viewModel = viewModel
-        self.vm = DraftComposerPanelViewModel(
+        self.draftRevision = draftRevision
+        self.placeholder = placeholder
+        self.isEnabled = isEnabled
+        self.isDraft = isDraft
+        self.isTurnRunning = isTurnRunning
+        self.onStop = onStop
+        self.onSend = onSend
+        self.onAddAttachment = onAddAttachment
+        self.onModelChange = onModelChange
+        self._vm = State(initialValue: nil)
+    }
+    
+    var body: some View {
+        Group {
+            if let vm {
+                contentView(vm)
+            } else {
+                Color.clear
+                    .task {
+                        await initializeViewModel()
+                    }
+            }
+        }
+    }
+    
+    @MainActor
+    private func initializeViewModel() async {
+        let newVM = DraftComposerPanelViewModel(
             workspaceStore: workspaceStore,
             modelSettings: modelSettings,
             conversationViewModel: viewModel,
             isDraft: isDraft,
-            placeholder: placeholder,
             isEnabled: isEnabled,
             isTurnRunning: isTurnRunning,
             draftRevision: draftRevision,
@@ -42,11 +81,8 @@ struct DraftComposerPanel: View {
             onAddAttachment: onAddAttachment,
             onStop: onStop
         )
-    }
-    
-    var body: some View {
-        contentView(vm)
-            .id(vm.persistenceKey)
+        vm = newVM
+        newVM.onAppear()
     }
     
    
@@ -88,10 +124,13 @@ struct DraftComposerPanel: View {
         .onChange(of: scenePhase) { _, phase in
             vm.handleScenePhaseChange(phase)
         }
-        .onChange(of: vm.isTurnRunning) { _, newValue in
+        .onChange(of: isTurnRunning) { _, newValue in
             vm.setTurnRunning(newValue)
         }
-        .onChange(of: vm.modelSettings.availableModelIDs) { _, newIDs in
+        .onChange(of: isEnabled) { _, newValue in
+            vm.isEnabled = newValue
+        }
+        .onChange(of: modelSettings.availableModelIDs) { _, newIDs in
             vm.handleModelSettingsChange(newIDs: newIDs)
         }
         .onChange(of: viewModel?.lastAcceptedSubmissionRequestID) { _, _ in
@@ -420,7 +459,7 @@ struct DraftComposerPanel: View {
                 get: { vm.composerHeight },
                 set: { vm.composerHeight = $0 }
             ),
-            placeholder: vm.placeholder,
+            placeholder: placeholder,
             isEnabled: true,
             minHeight: 56,
             maxHeight: 150,
@@ -434,7 +473,7 @@ struct DraftComposerPanel: View {
         )
         .frame(height: vm.composerHeight)
 #else
-        TextField(vm.placeholder, text: Binding(
+        TextField(placeholder, text: Binding(
             get: { vm.text },
             set: { vm.text = $0 }
         ), axis: .vertical)
@@ -442,7 +481,7 @@ struct DraftComposerPanel: View {
             .font(.body)
             .lineLimit(1...5)
             .frame(minHeight: 44, alignment: .topLeading)
-            .disabled(!vm.isEnabled)
+            .disabled(!isEnabled)
 #endif
     }
     
