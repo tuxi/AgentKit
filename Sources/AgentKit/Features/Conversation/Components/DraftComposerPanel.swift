@@ -85,13 +85,6 @@ struct DraftComposerPanel: View {
         newVM.onAppear()
     }
     
-    private func handleViewModelChange(_ newVM: ConversationViewModel?) {
-        guard let newVM else { return }
-        let newModel = newVM.selectedModel
-        guard newModel != vm?.selectedModel else { return }
-        vm?.handleViewModelModelChange(oldModel: vm?.selectedModel ?? UnifiedModel(model: "", reasoningEffort: nil), newModel: newModel)
-    }
-    
     private func contentView(_ vm: DraftComposerPanelViewModel) -> some View {
         VStack(spacing: 0) {
 #if os(iOS)
@@ -147,8 +140,11 @@ struct DraftComposerPanel: View {
                 vm.handleSubmissionRejected()
             }
         }
-        .onChange(of: viewModel) { _, newVM in
-            handleViewModelChange(newVM)
+        .onChange(of: viewModel?.conversation?.id) { _, newConversationID in
+            guard let newConversationID, let newVM = viewModel else { return }
+            let newModel = newVM.selectedModel
+            guard newModel != vm.selectedModel else { return }
+            vm.handleViewModelModelChange(oldModel: vm.selectedModel ?? UnifiedModel(model: "", reasoningEffort: nil), newModel: newModel)
         }
         .modifier(DraftComposerSurfaceModifier())
         .modifier(ComposerAlertsModifier(vm: vm))
