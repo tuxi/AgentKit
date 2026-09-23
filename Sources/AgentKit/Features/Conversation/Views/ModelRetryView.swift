@@ -62,7 +62,11 @@ struct ModelRetryView: View {
             RoundedRectangle(cornerRadius: 6)
                 .fill(Color.orange.opacity(0.08))
         )
-        .transition(.opacity.combined(with: .scale(scale: 0.95)))
+        // No .transition() here: on macOS this view is hosted inside an
+        // NSTableView cell (NSHostingView), where AppKit drives layout
+        // synchronously — a size-animating transition re-enters the layout
+        // pass and is skipped ("NSHostingView is being laid out reentrantly").
+        // The iOS call site applies the transition where SwiftUI owns layout.
     }
 }
 
