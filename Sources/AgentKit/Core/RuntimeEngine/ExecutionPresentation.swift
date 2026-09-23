@@ -96,6 +96,8 @@ public struct PresentationResolver: Sendable {
                 return .minimal
             case .error:
                 return .full
+            case .modelRetrying:
+                return .compact
             }
         }
     }

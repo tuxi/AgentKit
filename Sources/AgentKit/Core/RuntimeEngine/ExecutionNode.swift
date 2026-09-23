@@ -157,6 +157,7 @@ public enum SystemNodeKind: String, Sendable {
     case verified
     case skillLoaded
     case error
+    case modelRetrying
 }
 
 /// 子流入口卡（task 子agent / 后台 job）— 父时间线中的折叠卡片，

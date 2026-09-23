@@ -40,6 +40,8 @@ public struct RuntimeSnapshot: Sendable {
     /// Latest plan state-machine state (`plan_state_changed`). `.none` when no
     /// plan is in progress.
     public let planState: PlanState
+    /// Active model retry state (ephemeral, live-only).
+    public let modelRetrying: ModelRetryState?
   
     public init(timeline: [ExecutionNode],
                 turns: [ConversationTurn] = [],
@@ -52,7 +54,8 @@ public struct RuntimeSnapshot: Sendable {
                 generation: UInt64 = 0,
                 modelStartedAt: Date? = nil,
                 turnStartedAt: Date? = nil,
-                planState: PlanState = .none) {
+                planState: PlanState = .none,
+                modelRetrying: ModelRetryState? = nil) {
         self.timeline = timeline
         self.turns = turns
         self.pendingApproval = pendingApprovals.first
@@ -67,12 +70,36 @@ public struct RuntimeSnapshot: Sendable {
         self.modelStartedAt = modelStartedAt
         self.turnStartedAt = turnStartedAt
         self.planState = planState
+        self.modelRetrying = modelRetrying
     }
 
     /// Empty snapshot for initial state.
     public static func empty(sessionID: String) -> RuntimeSnapshot {
         RuntimeSnapshot(timeline: [])
     }
+}
+
+/// Active model retry state (ephemeral, live-only).
+public struct ModelRetryState: Sendable, Equatable, Codable {
+    public let attempt: Int
+    public let maxAttempts: Int
+    public let retryDelayMs: Int
+    public let retryFallback: Bool
+    public let err: String?
+    public let invocationID: String?
+    
+    public init(attempt: Int, maxAttempts: Int, retryDelayMs: Int, retryFallback: Bool, err: String?, invocationID: String?) {
+        self.attempt = attempt
+        self.maxAttempts = maxAttempts
+        self.retryDelayMs = retryDelayMs
+        self.retryFallback = retryFallback
+        self.err = err
+        self.invocationID = invocationID
+    }
+    
+    public var progress: Double { Double(attempt) / Double(maxAttempts) }
+    public var isFallback: Bool { retryFallback }
+    public var delaySeconds: Double { Double(retryDelayMs) / 1000.0 }
 }
 
 /// Aggregated token, billing, and timing statistics for one turn.
@@ -187,6 +214,8 @@ public actor RuntimeEngine {
 
     /// Latest plan state-machine state (`plan_state_changed`).
     private var _planState: PlanState = .none
+    /// Active model retry state (ephemeral, live-only).
+    private var _modelRetryState: ModelRetryState?
 
     /// Whether the live WebSocket is connected.
     private var isLive: Bool = false
@@ -242,10 +271,20 @@ public actor RuntimeEngine {
         if case .modelStarted(_, _) = event {
             _modelStartedAt = Date()
         }
-        // Track model stats from model_finished + clear thinking timer
+        // Track model retrying (ephemeral, live-only)
+        if case .modelRetrying(_, let invocationID, let attempt, let maxAttempts,
+                               let retryDelayMs, let retryFallback, let err) = event {
+            _modelRetryState = ModelRetryState(
+                attempt: attempt, maxAttempts: maxAttempts,
+                retryDelayMs: retryDelayMs, retryFallback: retryFallback,
+                err: err, invocationID: invocationID
+            )
+        }
+        // Track model stats from model_finished + clear thinking timer + clear retry state
         if case .modelFinished(_, let promptTokens, let completionTokens, let totalTokens,
                                let billingUnits, let elapsedMs, let invocationID, _, _) = event {
             _modelStartedAt = nil
+            _modelRetryState = nil  // Clear retry state on model finish (success)
             if invocationID == nil || countedInvocationIDs.insert(invocationID!).inserted {
                 let invocationTokens = totalTokens ?? ((promptTokens ?? 0) + (completionTokens ?? 0))
                 var stats = _modelStats ?? ModelStats()
@@ -274,20 +313,24 @@ public actor RuntimeEngine {
         if case .turnFinished = event {
             _turnStartedAt = nil
             _modelStartedAt = nil
+            _modelRetryState = nil
             activeTurnID = nil
         }
         if case .turnPaused = event {
             _turnStartedAt = nil
             _modelStartedAt = nil
+            _modelRetryState = nil
         }
         if case .turnFailed = event {
             _turnStartedAt = nil
             _modelStartedAt = nil
+            _modelRetryState = nil
             activeTurnID = nil
         }
         if case .turnCancelled = event {
             _turnStartedAt = nil
             _modelStartedAt = nil
+            _modelRetryState = nil
             _pendingApprovals.removeAll()
             _pendingPlanApproval = nil
             _pendingAskUsers.removeAll()
@@ -350,14 +393,17 @@ public actor RuntimeEngine {
             if case .turnPaused = event {
                 _turnStartedAt = nil
                 _modelStartedAt = nil
+                _modelRetryState = nil
             }
             if case .turnFailed = event {
                 _turnStartedAt = nil
                 _modelStartedAt = nil
+                _modelRetryState = nil
             }
             if case .turnCancelled = event {
                 _turnStartedAt = nil
                 _modelStartedAt = nil
+                _modelRetryState = nil
                 _pendingApprovals.removeAll()
                 _pendingPlanApproval = nil
                 _pendingAskUsers.removeAll()
@@ -366,6 +412,7 @@ public actor RuntimeEngine {
             if case .turnResumed = event {
                 _modelStats = nil
                 _modelStartedAt = nil
+                _modelRetryState = nil
                 _turnStartedAt = Date()
             }
             // Clear on resolution (approval nodes in graph track resolved state)
@@ -527,6 +574,7 @@ public actor RuntimeEngine {
         self.activeTurnID = nil
         _turnStartedAt = nil
         _modelStartedAt = nil
+        _modelRetryState = nil
         _pendingApprovals.removeAll()
         _pendingPlanApproval = nil
         _pendingAskUsers.removeAll()
@@ -557,7 +605,8 @@ public actor RuntimeEngine {
             generation: generation,
             modelStartedAt: _modelStartedAt,
             turnStartedAt: _turnStartedAt,
-            planState: _planState
+            planState: _planState,
+            modelRetrying: _modelRetryState
         )
     }
 

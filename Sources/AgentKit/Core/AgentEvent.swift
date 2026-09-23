@@ -51,6 +51,10 @@ public enum AgentEvent: Sendable {
     /// 之后发出，反映真实请求。与同 `invocation_id` 的 `model_finished` 配对，
     /// 客户端据此把「带了什么 → 想了什么 → 花了多少」折成一张调用卡片。
     case modelRequest(turnID: String?, invocationID: String?, request: ModelRequestInfo)
+    /// `model_retrying`：provider 瞬态失败时，resilience layer 重试前发射（ephemeral，live-only）。
+    /// `attempt`/`maxAttempts`：重试进度；`retryDelayMs`：下次重试延迟；`retryFallback`：stream→non-stream 回退边界。
+    case modelRetrying(turnID: String?, invocationID: String?, attempt: Int, maxAttempts: Int,
+                       retryDelayMs: Int, retryFallback: Bool, err: String?)
 
     // ── 流式文本 ──
     case tokenDelta(turnID: String?, text: String)
@@ -334,6 +338,17 @@ extension AgentEvent {
                     toolChoice: wire.toolChoice,
                     streamed: wire.streamed
                 )
+            )
+
+        case "model_retrying":
+            return .modelRetrying(
+                turnID: turnID,
+                invocationID: wire.invocationId,
+                attempt: wire.attempt ?? 1,
+                maxAttempts: wire.maxAttempts ?? 3,
+                retryDelayMs: wire.retryDelayMs ?? 0,
+                retryFallback: wire.retryFallback ?? false,
+                err: wire.err
             )
 
         case "token_delta":

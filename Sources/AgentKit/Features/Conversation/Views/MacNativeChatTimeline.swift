@@ -126,6 +126,10 @@ struct MacNativeChatTimeline: NSViewRepresentable {
         }
 
         if snapshot.isLive, snapshot.turnStartedAt != nil {
+            // Insert model retry row before thinking timer if retry is active
+            if let retry = snapshot.modelRetrying {
+                rows.append(.modelRetrying(retry))
+            }
             rows.append(.thinking(
                 turnStartedAt: snapshot.turnStartedAt,
                 isThinking: snapshot.modelStartedAt != nil,
@@ -153,6 +157,7 @@ struct MacNativeChatTimeline: NSViewRepresentable {
         // a snapshot arrives, while normal turn rows remain value-diffed.
         case extensionContent(turnID: String, extensionID: String, generation: UInt64, content: AnyView)
         case thinking(turnStartedAt: Date?, isThinking: Bool, modelStats: ModelStats?)
+        case modelRetrying(ModelRetryState)
         /// Transparent padding reserving the floating bottom bar's height. It
         /// is always the last row and never renders content.
         case bottomPadding(CGFloat)
@@ -165,6 +170,8 @@ struct MacNativeChatTimeline: NSViewRepresentable {
                 return "extension.\(extensionID).\(turnID)"
             case .thinking:
                 return "thinking-timer"
+            case .modelRetrying:
+                return "model-retrying"
             case .bottomPadding:
                 return "bottom-padding"
             }
@@ -181,6 +188,8 @@ struct MacNativeChatTimeline: NSViewRepresentable {
                 return lhsStart == rhsStart
                     && lhsThinking == rhsThinking
                     && lhsStats == rhsStats
+            case (.modelRetrying(let lhs), .modelRetrying(let rhs)):
+                return lhs == rhs
             case (.bottomPadding(let lhs), .bottomPadding(let rhs)):
                 return lhs == rhs
             default:
@@ -214,6 +223,8 @@ struct MacNativeChatTimeline: NSViewRepresentable {
                     isThinking: isThinking,
                     modelStats: modelStats
                 ))
+            case .modelRetrying(let state):
+                content = AnyView(ModelRetryView(state: state))
             case .bottomPadding:
                 // The spacer row renders a plain transparent cell in
                 // `viewFor`; it never hosts SwiftUI content.

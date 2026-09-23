@@ -116,6 +116,12 @@ public struct TurnTimelineView: View {
                 // Live "agent working" indicator — only while a turn is
                 // actively running. Disappears when the turn finishes.
                 if snapshot.isLive, snapshot.turnStartedAt != nil {
+                    // Model retry banner (ephemeral, live-only)
+                    if let retry = snapshot.modelRetrying {
+                        ModelRetryView(state: retry)
+                            .id("model_retrying")
+                            .transition(.opacity.combined(with: .move(edge: .top)))
+                    }
                     ThinkingTimerView(
                         turnStartedAt: snapshot.turnStartedAt,
                         isThinking: snapshot.modelStartedAt != nil,

@@ -2392,6 +2392,22 @@ function App(): React.JSX.Element {
           {conversation.live.isThinking ? "Thinking" : "Working"}
         </div>
       ) : null}
+      {conversation.live?.modelRetrying ? (
+        <div
+          className="retry-banner"
+          role="status"
+          aria-live="polite"
+          aria-atomic="true"
+        >
+          <span className="retry-spinner" aria-hidden="true" />
+          <span className="retry-text">
+            Retrying… ({conversation.live.modelRetrying.attempt}/{conversation.live.modelRetrying.maxAttempts})
+            {conversation.live.modelRetrying.retryFallback && " · Switching to non-stream"}
+            {conversation.live.modelRetrying.err && ` · ${conversation.live.modelRetrying.err}`}
+          </span>
+          <div className="retry-progress" style={{ width: `${conversation.live.modelRetrying.progress * 100}%` }} />
+        </div>
+      ) : null}
       {!isPinned ? (
         <button
           className="jump-to-latest"

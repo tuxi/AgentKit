@@ -148,6 +148,10 @@ public struct ExecutionReducer: Sendable {
                                       invocationID: invocationID ?? internalState.currentInvocationID,
                                       request: request, ts: ts, graph: &graph)
 
+        // model_retrying is ephemeral (live-only, not persisted) — no graph mutation needed
+        case .modelRetrying:
+            return []
+
         // ── Context management (previously ignored!) ──
         case .compacted(let turnID, let before, let after, let saved, _, let ratio, let ineffective):
             return handleCompacted(turnID: turnID ?? internalState.currentTurnID ?? "",

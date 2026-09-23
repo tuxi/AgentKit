@@ -54,6 +54,7 @@ struct SystemMessageView: View {
         case .preMutation: return "编辑前自检"
         case .verified: return "验证结果"
         case .skillLoaded: return "技能加载"
+        case .modelRetrying: return "模型重试"
         }
     }
 
@@ -69,6 +70,7 @@ struct SystemMessageView: View {
         case .preMutation: return "brain"
         case .verified: return "terminal"
         case .skillLoaded: return "sparkles"
+        case .modelRetrying: return "arrow.clockwise"
         }
     }
 
@@ -84,6 +86,7 @@ struct SystemMessageView: View {
         case .preMutation: return .purple
         case .verified: return .teal
         case .skillLoaded: return .green
+        case .modelRetrying: return .orange
         }
     }
 }

@@ -1112,6 +1112,61 @@ summary:active {
   font-size: 12px;
 }
 
+.retry-banner {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 12px;
+  margin: 8px 0;
+  background: var(--warning);
+  color: var(--background);
+  border-radius: 6px;
+  font-size: 12px;
+  font-weight: 500;
+  position: relative;
+  overflow: hidden;
+}
+
+.retry-spinner {
+  flex: 0 0 auto;
+  width: 12px;
+  height: 12px;
+  border: 2px solid currentColor;
+  border-right-color: transparent;
+  border-radius: 50%;
+  animation: spin 0.8s linear infinite;
+}
+
+.retry-text {
+  flex: 1;
+  min-width: 0;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.retry-progress {
+  position: absolute;
+  bottom: 0;
+  left: 0;
+  height: 2px;
+  background: currentColor;
+  opacity: 0.4;
+  border-radius: 0 0 6px 6px;
+}
+
+@keyframes spin {
+  to { transform: rotate(360deg); }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .retry-spinner {
+    animation: none;
+    border-color: currentColor;
+    border-right-color: currentColor;
+  }
+}
+
 .jump-to-latest {
   position: fixed;
   z-index: 30;

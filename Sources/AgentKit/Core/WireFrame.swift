@@ -96,6 +96,12 @@ struct WireFrame: Decodable {
     let streamed: Bool?             // 是否流式
     let cachedPromptTokens: Int?    // "cached_prompt_tokens"：缓存命中 token（prompt_tokens 的子集）
     
+    // model_retrying (ephemeral, live-only)
+    let attempt: Int?               // "attempt": 当前重试次数（1-based）
+    let maxAttempts: Int?           // "max_attempts": 最大重试次数
+    let retryDelayMs: Int?          // "retry_delay_ms": 下次重试前延迟毫秒数
+    let retryFallback: Bool?        // "retry_fallback": 是否为 stream→non-stream 回退边界
+    
     // Plan 审批的内容
     let planPath: String?
     let filePath: String?
@@ -137,6 +143,10 @@ struct WireFrame: Decodable {
         case toolChoice = "tool_choice"
         case streamed
         case cachedPromptTokens = "cached_prompt_tokens"
+        case attempt = "attempt"
+        case maxAttempts = "max_attempts"
+        case retryDelayMs = "retry_delay_ms"
+        case retryFallback = "retry_fallback"
         case toolName = "tool_name"
         case toolArgs = "tool_args"
         case planId = "plan_id"

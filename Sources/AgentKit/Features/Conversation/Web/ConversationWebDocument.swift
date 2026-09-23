@@ -203,6 +203,7 @@ struct ConversationWebDocument: Codable, Equatable, Sendable {
     struct LiveState: Codable, Equatable, Sendable {
         let isThinking: Bool
         let startedAtMilliseconds: Int64?
+        let modelRetrying: ModelRetryState?
     }
 }
 
@@ -835,7 +836,8 @@ enum ConversationWebDocumentBuilder {
             isThinking: snapshot.modelStartedAt != nil,
             startedAtMilliseconds: snapshot.turnStartedAt.map {
                 Int64($0.timeIntervalSince1970 * 1_000)
-            }
+            },
+            modelRetrying: snapshot.modelRetrying
         )
     }
 
