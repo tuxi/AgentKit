@@ -87,19 +87,24 @@ public struct ModelRetryState: Sendable, Equatable, Codable {
     public let retryFallback: Bool
     public let err: String?
     public let invocationID: String?
+    /// When this retry sequence started (first attempt). Used for elapsed display.
+    public let startedAt: Date
     
-    public init(attempt: Int, maxAttempts: Int, retryDelayMs: Int, retryFallback: Bool, err: String?, invocationID: String?) {
+    public init(attempt: Int, maxAttempts: Int, retryDelayMs: Int, retryFallback: Bool, err: String?, invocationID: String?, startedAt: Date = Date()) {
         self.attempt = attempt
         self.maxAttempts = maxAttempts
         self.retryDelayMs = retryDelayMs
         self.retryFallback = retryFallback
         self.err = err
         self.invocationID = invocationID
+        self.startedAt = startedAt
     }
     
     public var progress: Double { Double(attempt) / Double(maxAttempts) }
     public var isFallback: Bool { retryFallback }
     public var delaySeconds: Double { Double(retryDelayMs) / 1000.0 }
+    /// Total elapsed time since first retry attempt.
+    public var elapsed: TimeInterval { Date().timeIntervalSince(startedAt) }
 }
 
 /// Aggregated token, billing, and timing statistics for one turn.
@@ -274,11 +279,22 @@ public actor RuntimeEngine {
         // Track model retrying (ephemeral, live-only)
         if case .modelRetrying(_, let invocationID, let attempt, let maxAttempts,
                                let retryDelayMs, let retryFallback, let err) = event {
-            _modelRetryState = ModelRetryState(
-                attempt: attempt, maxAttempts: maxAttempts,
-                retryDelayMs: retryDelayMs, retryFallback: retryFallback,
-                err: err, invocationID: invocationID
-            )
+            if attempt == 1 {
+                // First retry in this sequence — record start time
+                _modelRetryState = ModelRetryState(
+                    attempt: attempt, maxAttempts: maxAttempts,
+                    retryDelayMs: retryDelayMs, retryFallback: retryFallback,
+                    err: err, invocationID: invocationID, startedAt: Date()
+                )
+            } else if var existing = _modelRetryState {
+                // Subsequent retry — preserve original start time, update fields
+                existing = ModelRetryState(
+                    attempt: attempt, maxAttempts: maxAttempts,
+                    retryDelayMs: retryDelayMs, retryFallback: retryFallback,
+                    err: err, invocationID: invocationID, startedAt: existing.startedAt
+                )
+                _modelRetryState = existing
+            }
         }
         // Track model stats from model_finished + clear thinking timer + clear retry state
         if case .modelFinished(_, let promptTokens, let completionTokens, let totalTokens,

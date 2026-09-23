@@ -2097,6 +2097,62 @@ const Turn = memo(function Turn({
   );
 });
 
+// RetryBanner â compact inline view showing model retry progress.
+// Click to expand for error details.
+function RetryBanner({ retry }: { retry: {
+  attempt: number;
+  maxAttempts: number;
+  retryDelayMs: number;
+  retryFallback: boolean;
+  err?: string;
+  progress: number;
+  startedAtMilliseconds?: number;
+} }) {
+  const [isExpanded, setIsExpanded] = useState(false);
+  const [elapsed, setElapsed] = useState(0);
+
+  useEffect(() => {
+    if (!retry.startedAtMilliseconds) return;
+    const update = () => setElapsed(Date.now() - retry.startedAtMilliseconds!);
+    update();
+    const id = setInterval(update, 1000);
+    return () => clearInterval(id);
+  }, [retry.startedAtMilliseconds]);
+
+  const formatElapsed = (ms: number) => {
+    const s = Math.floor(ms / 1000);
+    if (s < 60) return `${s}s`;
+    if (s < 3600) return `${Math.floor(s / 60)}m ${s % 60}s`;
+    return `${Math.floor(s / 3600)}h ${Math.floor((s % 3600) / 60)}m`;
+  };
+
+  const hasError = retry.err && retry.err.length > 0;
+
+  return (
+    <div
+      className="retry-banner"
+      role="status"
+      aria-live="polite"
+      aria-atomic="true"
+      onClick={() => hasError && setIsExpanded(!isExpanded)}
+      style={{ cursor: hasError ? 'pointer' : 'default' }}
+    >
+      <span className="retry-spinner" aria-hidden="true" />
+      <span className="retry-text">
+        Retryingâ¦ ({retry.attempt}/{retry.maxAttempts})
+        Â· {formatElapsed(elapsed)}
+        {retry.retryFallback && " Â· Switching to non-stream"}
+      </span>
+      <div className="retry-progress" style={{ width: `${retry.progress * 100}%` }} />
+      {hasError && isExpanded && (
+        <div className="retry-error-detail">
+          {retry.err}
+        </div>
+      )}
+    </div>
+  );
+}
+
 function App(): React.JSX.Element {
   const [conversation, setConversation] = useState<ConversationWebDocument>();
   const [isPinned, setIsPinned] = useState(true);
@@ -2393,20 +2449,7 @@ function App(): React.JSX.Element {
         </div>
       ) : null}
       {conversation.live?.modelRetrying ? (
-        <div
-          className="retry-banner"
-          role="status"
-          aria-live="polite"
-          aria-atomic="true"
-        >
-          <span className="retry-spinner" aria-hidden="true" />
-          <span className="retry-text">
-            Retrying… ({conversation.live.modelRetrying.attempt}/{conversation.live.modelRetrying.maxAttempts})
-            {conversation.live.modelRetrying.retryFallback && " · Switching to non-stream"}
-            {conversation.live.modelRetrying.err && ` · ${conversation.live.modelRetrying.err}`}
-          </span>
-          <div className="retry-progress" style={{ width: `${conversation.live.modelRetrying.progress * 100}%` }} />
-        </div>
+        <RetryBanner retry={conversation.live.modelRetrying} />
       ) : null}
       {!isPinned ? (
         <button
