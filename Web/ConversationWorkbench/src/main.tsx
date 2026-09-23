@@ -2105,7 +2105,6 @@ function RetryBanner({ retry }: { retry: {
   retryDelayMs: number;
   retryFallback: boolean;
   err?: string;
-  progress: number;
   startedAtMilliseconds?: number;
 } }) {
   const [isExpanded, setIsExpanded] = useState(false);
@@ -2121,12 +2120,13 @@ function RetryBanner({ retry }: { retry: {
 
   const formatElapsed = (ms: number) => {
     const s = Math.floor(ms / 1000);
-    if (s < 60) return `${s}s`;
-    if (s < 3600) return `${Math.floor(s / 60)}m ${s % 60}s`;
-    return `${Math.floor(s / 3600)}h ${Math.floor((s % 3600) / 60)}m`;
+    if (s < 60) return s + "s";
+    if (s < 3600) return Math.floor(s / 60) + "m " + (s % 60) + "s";
+    return Math.floor(s / 3600) + "h " + Math.floor((s % 3600) / 60) + "m";
   };
 
   const hasError = retry.err && retry.err.length > 0;
+  const progress = retry.maxAttempts > 0 ? retry.attempt / retry.maxAttempts : 0;
 
   return (
     <div
@@ -2139,11 +2139,11 @@ function RetryBanner({ retry }: { retry: {
     >
       <span className="retry-spinner" aria-hidden="true" />
       <span className="retry-text">
-        Retryingâ¦ ({retry.attempt}/{retry.maxAttempts})
-        Â· {formatElapsed(elapsed)}
-        {retry.retryFallback && " Â· Switching to non-stream"}
+        {"Retrying... (" + retry.attempt + "/" + retry.maxAttempts + ")"}
+        {" | " + formatElapsed(elapsed)}
+        {retry.retryFallback ? " | Switching to non-stream" : ""}
       </span>
-      <div className="retry-progress" style={{ width: `${retry.progress * 100}%` }} />
+      <div className="retry-progress" style={{ width: (progress * 100) + "%" }} />
       {hasError && isExpanded && (
         <div className="retry-error-detail">
           {retry.err}

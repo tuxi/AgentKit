@@ -1114,24 +1114,24 @@ summary:active {
 
 .retry-banner {
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
   gap: 8px;
   padding: 8px 12px;
   margin: 8px 0;
-  background: var(--warning);
-  color: var(--background);
+  background: color-mix(in srgb, var(--warning) 12%, transparent);
+  border: 1px solid color-mix(in srgb, var(--warning) 40%, transparent);
   border-radius: 6px;
   font-size: 12px;
-  font-weight: 500;
+  color: var(--text);
   position: relative;
-  overflow: hidden;
 }
 
 .retry-spinner {
   flex: 0 0 auto;
   width: 12px;
   height: 12px;
-  border: 2px solid currentColor;
+  border: 2px solid var(--warning);
   border-right-color: transparent;
   border-radius: 50%;
   animation: spin 0.8s linear infinite;
@@ -1140,9 +1140,9 @@ summary:active {
 .retry-text {
   flex: 1;
   min-width: 0;
-  white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .retry-progress {
@@ -1150,14 +1150,15 @@ summary:active {
   bottom: 0;
   left: 0;
   height: 2px;
-  background: currentColor;
-  opacity: 0.4;
+  background: var(--warning);
+  opacity: 0.5;
   border-radius: 0 0 6px 6px;
 }
 
 .retry-error-detail {
-  margin-top: 8px;
-  padding: 8px 12px;
+  flex-basis: 100%;
+  margin-top: 6px;
+  padding: 8px 10px;
   background: var(--subtle);
   border-radius: 4px;
   font-size: 11px;
@@ -1165,6 +1166,8 @@ summary:active {
   color: var(--secondary);
   white-space: pre-wrap;
   word-break: break-word;
+  max-height: 120px;
+  overflow-y: auto;
 }
 
 @keyframes spin {

@@ -110,7 +110,7 @@ struct ModelRetryView_Previews: PreviewProvider {
                 retryFallback: false,
                 err: "OpenRouter free tier returned 503",
                 invocationID: "inv_123",
-                startedAt: Date().addingTimeInterval(-45)
+                startedAtMilliseconds: Int64((Date().addingTimeInterval(-45)).timeIntervalSince1970 * 1000)
             ))
 
             ModelRetryView(state: ModelRetryState(
@@ -120,7 +120,7 @@ struct ModelRetryView_Previews: PreviewProvider {
                 retryFallback: true,
                 err: "Stream failed, switching to non-stream",
                 invocationID: "inv_456",
-                startedAt: Date().addingTimeInterval(-125)
+                startedAtMilliseconds: Int64((Date().addingTimeInterval(-125)).timeIntervalSince1970 * 1000)
             ))
 
             ModelRetryView(state: ModelRetryState(
@@ -130,7 +130,7 @@ struct ModelRetryView_Previews: PreviewProvider {
                 retryFallback: false,
                 err: nil,
                 invocationID: "inv_789",
-                startedAt: Date()
+                startedAtMilliseconds: Int64(Date().timeIntervalSince1970 * 1000)
             ))
         }
         .padding()
