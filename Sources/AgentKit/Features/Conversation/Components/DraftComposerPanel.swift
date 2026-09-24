@@ -140,8 +140,8 @@ struct DraftComposerPanel: View {
                 vm.handleSubmissionRejected()
             }
         }
-        .onChange(of: viewModel?.conversation?.id) { _, newConversationID in
-            guard let newConversationID, let newVM = viewModel else { return }
+        .onChange(of: viewModel?.conversation?.id) { _, _ in
+            guard let newVM = viewModel else { return }
             let newModel = newVM.selectedModel
             guard newModel != vm.selectedModel else { return }
             vm.handleViewModelModelChange(oldModel: vm.selectedModel ?? UnifiedModel(model: "", reasoningEffort: nil), newModel: newModel)
@@ -309,18 +309,17 @@ struct DraftComposerPanel: View {
                         }
                         
                     } label: {
-                        if vm.contentWidth <= 500 {
+                        if vm.contentWidth <= 400 {
                             Image(systemName: "brain.head.profile")
                                 .font(.system(size: 9, weight: .semibold))
                         } else {
                             Text(vm.modelSettings.selectionDisplayName(for: vm.selectedModel?.model ?? ""))
                                 .font(.system(size: 13, weight: .medium))
                                 .lineLimit(1)
-                                .frame(maxWidth: 35)
+                                .frame(maxWidth: 55)
                         }
                     }
                     .menuStyle(.borderlessButton)
-                        .fixedSize()
 #endif
                     VoiceInputButton(service: vm.voiceService)
                     
