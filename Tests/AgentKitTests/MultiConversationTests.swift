@@ -952,6 +952,49 @@ final class MultiConversationTests: XCTestCase {
     }
 
     @MainActor
+    func testRunningActivityRepairsTransientPausedControllerState() async throws {
+        let capabilities = RuntimeCapabilitySnapshot(capabilities: [
+            "multi_session_execution_v1": true,
+            "session_scoped_client_tools_v1": true,
+            "activity_snapshot_v1": true,
+            "session_attention_snapshot_v1": true,
+            "workspace_execution_policy_v1": true,
+        ])
+        let conversation = ConversationRef(id: "resume-race", workspacePath: "/tmp/shared")
+        let client = MultiSessionRuntimeClient(
+            capabilitySnapshot: capabilities,
+            activity: RuntimeActivitySnapshot(sessions: [])
+        )
+        let store = WorkspaceStore(client: client)
+
+        store.selectedConversation = conversation
+        try await Task.sleep(for: .milliseconds(25))
+        let controller = try XCTUnwrap(store.activeConversationViewModel)
+        client.channel(for: conversation.id).yield(.turnPaused(
+            turnID: "turn_live",
+            text: nil,
+            err: nil
+        ))
+        try await Task.sleep(for: .milliseconds(25))
+        XCTAssertEqual(controller.lifecycleStatus, "paused")
+        XCTAssertFalse(controller.isTurnActive)
+
+        client.setActivity(RuntimeActivitySnapshot(sessions: [
+            RuntimeSessionActivity(
+                sessionID: conversation.id,
+                turnID: "turn_live",
+                state: "running"
+            )
+        ]))
+        await store.supervisor.refreshRuntimeState(conversations: [conversation])
+
+        XCTAssertEqual(controller.lifecycleStatus, "running")
+        XCTAssertTrue(controller.isTurnActive)
+        XCTAssertEqual(store.supervisor.activity(for: conversation), .running)
+        store.supervisor.stopActivityMonitoring()
+    }
+
+    @MainActor
     func testActivitySnapshotReattachesBackgroundRunningSession() async {
         let capabilities = RuntimeCapabilitySnapshot(capabilities: [
             "multi_session_execution_v1": true,

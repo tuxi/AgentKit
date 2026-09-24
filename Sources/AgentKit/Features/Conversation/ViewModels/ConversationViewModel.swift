@@ -85,7 +85,19 @@ public final class ConversationViewModel {
     public func applyRuntimeActivity(_ activity: RuntimeSessionActivity) {
         guard conversation == nil || conversation?.id == activity.sessionID else { return }
         runtimeActivityBaseline = activity
-        guard !isConnected else { return }
+        if isConnected {
+            // A connected channel is normally authoritative.  The one exception
+            // is the transient pause observed during a runtime thaw: the activity
+            // snapshot can already say that the turn is running while the
+            // turn_resumed event is still in flight on this channel.  Leaving the
+            // controller paused here makes the sidebar and the composer disagree
+            // indefinitely until another lifecycle event arrives.
+            if lifecycleStatus == "paused",
+               ["accepted", "queued", "running", "resuming"].contains(activity.state) {
+                projectRuntimeActivity(activity)
+            }
+            return
+        }
         projectRuntimeActivity(activity)
     }
 

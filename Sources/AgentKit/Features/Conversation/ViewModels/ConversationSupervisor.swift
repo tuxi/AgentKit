@@ -184,11 +184,13 @@ public final class ConversationSupervisor {
             switch controller.lifecycleStatus {
             case "accepted", "queued": return .queued
             case "running", "resuming":
-                // 安全检查：若轮询数据与 controller 声称的 running 矛盾，
-                // 优先采信 Runtime 轮询结果。防止 WebSocket 事件丢失导致
-                // lifecycleStatus 永久卡在 "running"。
-                // 轮询显示非 running 状态（paused/idle/done/failed 等）时
-                // 跳出 switch，落到下方 runtimeActivities fallback。
+                // A connected controller is fed by the session channel and is
+                // newer than the sampled activity snapshot.  Do not let a stale
+                // poll turn a live row into paused/idle while the composer still
+                // correctly shows the turn as active.
+                if controller.isConnected {
+                    return .running
+                }
                 if let remoteState = runtimeActivities[sessionID]?.state,
                    remoteState != "running", remoteState != "resuming" {
                     break
