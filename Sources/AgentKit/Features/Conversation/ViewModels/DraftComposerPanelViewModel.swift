@@ -411,6 +411,11 @@ final class DraftComposerPanelViewModel {
             guard let self else { return }
             do {
                 let snapshot = try await workspaceStore.client.getConversationContext(id: id)
+                // 优化自动化任务或者由对话创建出来的对话，本地没有保存这个对话的model时，切到这个对话时，缓存下真实使用的模型
+                let currentModel = self.modelSettings.getModel(with: id)
+                if currentModel == nil {
+                    self.selectModel(snapshot.model.id, reasoningEffort: snapshot.model.reasoningEffort)
+                }
                 guard !Task.isCancelled else { return }
                 await MainActor.run {
                     self.contextSnapshot = snapshot
@@ -538,7 +543,7 @@ final class DraftComposerPanelViewModel {
     
     // MARK: - Constants
     
-    var maxFilesCount: Int { 4 }
+    var maxFilesCount: Int { 15 }
     var composerControlSpacing: CGFloat {
 #if os(macOS)
         12
