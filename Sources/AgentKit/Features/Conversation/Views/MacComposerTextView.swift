@@ -59,6 +59,10 @@ struct MacComposerTextView: NSViewRepresentable {
         textView.placeholderString = placeholder
         textView.onSend = onSend
         textView.onFileDrop = onFileDrop
+        textView.onTextInserted = { [weak textView] in
+            guard let textView else { return }
+            context.coordinator.parent.text = textView.string
+        }
         textView.registerForDraggedTypes([.fileURL])
 
         scrollView.documentView = textView
@@ -86,6 +90,10 @@ struct MacComposerTextView: NSViewRepresentable {
         textView.isSelectable = isEnabled
         textView.onSend = onSend
         textView.onFileDrop = onFileDrop
+        textView.onTextInserted = { [weak textView] in
+            guard let textView else { return }
+            context.coordinator.parent.text = textView.string
+        }
         context.coordinator.recalculateHeight()
     }
 
@@ -153,6 +161,9 @@ final class ComposerNSTextView: NSTextView {
     }
     var onSend: (() -> Void)?
     var onFileDrop: (([URL]) -> Bool)?
+    /// Called after text is programmatically inserted (e.g., via drag-drop).
+    /// Allows the SwiftUI binding to be updated.
+    var onTextInserted: (() -> Void)?
 
     override func draw(_ dirtyRect: NSRect) {
         super.draw(dirtyRect)
@@ -222,6 +233,7 @@ final class ComposerNSTextView: NSTextView {
         // 非图片（文件/目录）：完整路径直接插入为文本。
         if !pathURLs.isEmpty {
             insertPathText(pathURLs)
+            onTextInserted?()
             accepted = true
         }
         // 图片：走附件流程（拷贝到工作区或上传 gateway）。
