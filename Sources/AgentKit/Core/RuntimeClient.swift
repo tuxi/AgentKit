@@ -43,6 +43,7 @@ public protocol RuntimeClient: Sendable {
 
     /// 列出 backend 内存中的活跃 session。
     func listConversations() async throws -> [ConversationRef]
+    func listConversationPage(archived: Bool, limit: Int, before: String?) async throws -> ConversationListPage
 
     /// List the Runtime-owned archived partition. Never synthesized locally.
     func listArchivedConversations() async throws -> [ConversationRef]
@@ -140,6 +141,32 @@ public protocol RuntimeClient: Sendable {
     /// 子流（job/subagent）id 可直接作为 `conversationID` —— 该端点按 id
     /// 直读事件日志，不要求是根会话。
     func getEventBatch(conversationID: String, since: Int) async throws -> AgentEventBatch
+    func getTailEventBatch(conversationID: String, limit: Int) async throws -> AgentEventBatch
+    func getOlderEventBatch(conversationID: String, before: Int, limit: Int) async throws -> AgentEventBatch
+
+    // MARK: - Conversation forks (conversation_fork_through_turn_v1)
+
+    /// `POST /v1/conversations/{source_id}/forks` — 在某一轮处 Fork 新对话。
+    /// `requestID` 幂等：相同 payload 重试返回同一子会话；payload 变化返回 409。
+    /// 目标轮已被压缩/未知/未结束时服务端 fail-closed（409），不会创建子会话。
+    func forkConversation(
+        sourceID: String,
+        requestID: String,
+        name: String?,
+        throughTurnID: String?,
+        executionPolicy: String,
+        worktreeName: String?
+    ) async throws -> ConversationForkResponse
+
+    /// `GET /v1/conversations/{source_id}/events?through_turn_id=` — 拉取源对话
+    /// 到该轮 terminal 事件为止的前缀（turn 对齐）。返回的事件 `seq` 属于源会话
+    /// 分区，渲染时必须作为独立 partition 与其子会话自身事件分开。
+    func getConversationEventsPrefix(
+        conversationID: String,
+        throughTurnID: String
+    ) async throws -> ConversationEventsPrefix
+
+
 
     // MARK: - Job 子流（P8.7 §4 Phase C）
 
@@ -234,6 +261,17 @@ public protocol RuntimeClient: Sendable {
 // MARK: - Backward compatibility
 
 extension RuntimeClient {
+    public func listConversationPage(archived: Bool, limit: Int, before: String?) async throws -> ConversationListPage {
+        let values = try await (archived ? listArchivedConversations() : listConversations())
+        return ConversationListPage(conversations: values)
+    }
+    public func getTailEventBatch(conversationID: String, limit: Int) async throws -> AgentEventBatch {
+        throw RuntimeHTTPError.unsupported
+    }
+
+    public func getOlderEventBatch(conversationID: String, before: Int, limit: Int) async throws -> AgentEventBatch {
+        throw RuntimeHTTPError.unsupported
+    }
     /// Source-compatible fallback for existing backends. This adapter remains
     /// single-session and therefore never advertises multi-session execution.
     public func makeSessionChannel(conversationID: String) -> any RuntimeSessionChannel {
@@ -396,6 +434,26 @@ extension RuntimeClient {
         let events = try await getEvents(conversationID: conversationID)
         let tail = since < events.count ? Array(events[since...]) : []
         return AgentEventBatch(events: tail, nextSince: max(since, events.count))
+    }
+
+    /// 默认不支持 Fork（mock / 旧 backend）。
+    public func forkConversation(
+        sourceID: String,
+        requestID: String,
+        name: String?,
+        throughTurnID: String?,
+        executionPolicy: String,
+        worktreeName: String?
+    ) async throws -> ConversationForkResponse {
+        throw RuntimeHTTPError.unsupported
+    }
+
+    /// 默认不支持按轮前缀拉取（mock / 旧 backend）。
+    public func getConversationEventsPrefix(
+        conversationID: String,
+        throughTurnID: String
+    ) async throws -> ConversationEventsPrefix {
+        throw RuntimeHTTPError.unsupported
     }
 
     /// 默认实现：不支持 workflow snapshot（mock backend）。

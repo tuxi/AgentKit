@@ -337,6 +337,25 @@ struct RuntimeHTTPClient: Sendable {
         try await listConversations(archived: true)
     }
 
+    func listConversationPage(archived: Bool, limit: Int, before: String?) async throws -> ConversationListPage {
+        var query = [URLQueryItem(name: "archived", value: archived ? "true" : "false"),
+                     URLQueryItem(name: "limit", value: String(limit))]
+        if let before { query.append(URLQueryItem(name: "before", value: before)) }
+        let request = try await buildRequest("GET", pathComponents: "v1/conversations", queryItems: query)
+        let (data, response) = try await session.data(for: request)
+        try validateHTTP(response, data: data)
+        let http = response as? HTTPURLResponse
+        let moreHeader = http?.value(forHTTPHeaderField: "X-Codeagent-Has-More")
+        let cursor = http?.value(forHTTPHeaderField: "X-Codeagent-Next-Cursor")
+        let more = moreHeader == "1"
+        guard !more || cursor?.isEmpty == false else { throw RuntimeHTTPError.invalidResponse }
+        return ConversationListPage(
+            conversations: try decodeEnvelope([ConversationRef].self, from: data),
+            nextCursor: cursor, hasMore: more,
+            isPaged: moreHeader == "0" || moreHeader == "1"
+        )
+    }
+
     private func listConversations(archived: Bool) async throws -> [ConversationRef] {
         let request = try await buildRequest(
             "GET",
@@ -477,6 +496,89 @@ struct RuntimeHTTPClient: Sendable {
         let (data, response) = try await session.data(for: request)
         try validateHTTP(response, data: data)
         return try decodeEnvelope([WireFrame].self, from: data)
+    }
+
+    struct EventPage: Sendable {
+        let frames: [WireFrame]
+        let oldestSeq: Int?
+        let hasMoreOlder: Bool
+        let replayTruncated: Bool
+        let turnFragment: Bool
+    }
+
+    /// The headers are the capability probe: older servers ignore `tail` and
+    /// return the legacy replay, so absent headers must never enable paging.
+    func getEventPage(conversationID: String, tail: Int? = nil, before: Int? = nil, limit: Int? = nil) async throws -> EventPage {
+        var query: [URLQueryItem] = []
+        if let tail { query.append(.init(name: "tail", value: String(tail))) }
+        if let before { query.append(.init(name: "before", value: String(before))) }
+        if let limit { query.append(.init(name: "limit", value: String(limit))) }
+        let request = try await buildRequest("GET", pathComponents: "v1/conversations", conversationID, "events", queryItems: query)
+        let (data, response) = try await session.data(for: request)
+        try validateHTTP(response, data: data)
+        let http = response as? HTTPURLResponse
+        let oldest = http?.value(forHTTPHeaderField: "X-Codeagent-Oldest-Seq").flatMap(Int.init)
+        let more = http?.value(forHTTPHeaderField: "X-Codeagent-Has-More-Older") == "1"
+        let truncated = http?.value(forHTTPHeaderField: "X-Codeagent-Replay-Truncated") == "1"
+        let fragment = http?.value(forHTTPHeaderField: "X-Codeagent-Turn-Fragment") == "1"
+        return EventPage(frames: try decodeEnvelope([WireFrame].self, from: data),
+                         oldestSeq: oldest, hasMoreOlder: oldest != nil && more,
+                         replayTruncated: truncated, turnFragment: fragment)
+    }
+
+    /// `GET /v1/conversations/{source_id}/events?through_turn_id=turn_xxx` — 按轮拉取源对话事件前缀。
+    /// 返回源对话从开头到该轮的 terminal 事件（turn_finished/turn_failed/turn_cancelled），按 emission 顺序。
+    /// 与 `?since=` 互斥，同时传返回 400。
+    /// 未知或未结束的轮返回 404。
+    /// 受跟 `?since=0` 相同的回放字节预算限制；被截断时响应头带 `X-Codeagent-Replay-Truncated: 1`。
+    func getConversationEventsPrefix(
+        conversationID: String,
+        throughTurnID: String
+    ) async throws -> (frames: [WireFrame], isTruncated: Bool) {
+        let request = try await buildRequest(
+            "GET",
+            pathComponents: "v1/conversations", conversationID, "events",
+            queryItems: [URLQueryItem(name: "through_turn_id", value: throughTurnID)]
+        )
+        let (data, response) = try await session.data(for: request)
+        try validateHTTP(response, data: data)
+        let truncated = (response as? HTTPURLResponse)?
+            .value(forHTTPHeaderField: "X-Codeagent-Replay-Truncated") == "1"
+        return (try decodeEnvelope([WireFrame].self, from: data), truncated)
+    }
+
+    /// `POST /v1/conversations/{source_id}/forks` — 按轮 Fork。
+    ///
+    /// - Parameters:
+    ///   - sourceID: 源对话 ID
+    ///   - requestID: 客户端稳定 ID，用于幂等（相同 payload 返回同一子会话）
+    ///   - name: 可选显示名
+    ///   - throughTurnID: 可选；不传=整段 checkpoint
+    ///   - executionPolicy: "shared_workspace" 或 "isolated_worktree"
+    ///   - worktreeName: 仅当 executionPolicy == "isolated_worktree" 时有效
+    func forkConversation(
+        sourceID: String,
+        requestID: String,
+        name: String? = nil,
+        throughTurnID: String? = nil,
+        executionPolicy: String = "shared_workspace",
+        worktreeName: String? = nil
+    ) async throws -> ConversationForkResponse {
+        let payload = ConversationForkRequest(
+            requestID: requestID,
+            name: (name?.isEmpty == false) ? name : nil,
+            throughTurnID: throughTurnID,
+            executionPolicy: executionPolicy,
+            worktreeName: worktreeName
+        )
+        let request = try await buildRequest(
+            "POST",
+            pathComponents: "v1/conversations", sourceID, "forks",
+            body: payload
+        )
+        let (data, response) = try await session.data(for: request)
+        try validateHTTP(response, data: data)
+        return try decodeEnvelope(ConversationForkResponse.self, from: data)
     }
 
     /// `GET /v1/jobs/{id}/events[?since=N]` — 后台 job 子流 backlog。

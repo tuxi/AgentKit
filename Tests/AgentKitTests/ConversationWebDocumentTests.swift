@@ -11,6 +11,25 @@ import WebKit
 
 @MainActor
 final class ConversationWebDocumentTests: XCTestCase {
+    func testDifferPrependsTurnsWithoutResettingExistingDOM() throws {
+        func turn(_ id: String) -> ConversationTurn {
+            ConversationTurn(id: id,
+                userPrompt: MessageNodePayload(role: .user, text: id),
+                blocks: [], footer: nil, isLive: false)
+        }
+        let old = ConversationWebDocumentBuilder.build(
+            snapshot: RuntimeSnapshot(timeline: [], turns: [turn("recent")]),
+            conversationID: "paging", revision: 1)
+        let new = ConversationWebDocumentBuilder.build(
+            snapshot: RuntimeSnapshot(timeline: [], turns: [turn("older-1"), turn("older-2"), turn("recent")]),
+            conversationID: "paging", revision: 2)
+        let update = try XCTUnwrap(ConversationWebDocumentDiffer.update(from: old, to: new))
+        XCTAssertEqual(update.kind, .patch)
+        XCTAssertEqual(update.patch?.operations.map(\.kind), [.prependTurns, .prependTurns])
+        XCTAssertEqual(update.patch?.operations.compactMap(\.turn?.id), ["older-2", "older-1"])
+        XCTAssertEqual(update.patch?.forcePinToBottom, false)
+    }
+
     func testBuilderPreservesStableIdentityMarkdownAndRevision() throws {
         let turn = ConversationTurn(
             id: "turn-1",

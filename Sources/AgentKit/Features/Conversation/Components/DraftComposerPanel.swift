@@ -13,6 +13,56 @@ import UIKit
 import ClientToolProtocol
 #endif
 
+#if os(iOS)
+/// Compact native picker used by the iOS composer sheet.
+private struct IOSModelPickerSheet: View {
+    let groups: [ComposerModelGroup]
+    let ungroupedModelIDs: [String]
+    let selectedModel: UnifiedModel?
+    let displayName: (String) -> String
+    let onSelect: (String) -> Void
+
+    @Environment(\.dismiss) private var dismiss
+
+    var body: some View {
+        NavigationStack {
+            List {
+                if groups.isEmpty {
+                    ForEach(ungroupedModelIDs, id: \.self) { modelID in
+                        modelRow(modelID)
+                    }
+                } else {
+                    ForEach(groups) { group in
+                        Section(group.name) {
+                            ForEach(group.modelIDs, id: \.self) { modelID in
+                                modelRow(modelID)
+                            }
+                        }
+                    }
+                }
+            }
+            .navigationTitle("选择模型")
+            .navigationBarTitleDisplayMode(.inline)
+        }
+    }
+
+    private func modelRow(_ modelID: String) -> some View {
+        Button {
+            onSelect(modelID)
+            dismiss()
+        } label: {
+            HStack {
+                Text(displayName(modelID))
+                Spacer()
+                if selectedModel?.model == modelID {
+                    Image(systemName: "checkmark")
+                }
+            }
+        }
+    }
+}
+#endif
+
 
 // MARK: - DraftComposerPanel
 

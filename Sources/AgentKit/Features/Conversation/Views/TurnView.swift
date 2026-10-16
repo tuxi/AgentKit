@@ -170,9 +170,29 @@ struct TurnView: View, Equatable {
                     .buttonStyle(.plain)
                     .help("查看本轮资产")
                 }
+                // Fork 按钮
+                forkButton
                 Spacer()
             }
             .padding(.top, 2)
+        }
+    }
+
+    /// Fork 按钮 — 按轮 Fork 对话入口。
+    @ViewBuilder
+    private var forkButton: some View {
+        // 只有在支持按轮 Fork 功能时才显示按钮。
+        if store.supportsConversationForkThroughTurn {
+            Button {
+                handleTranscriptAction(.forkConversation(turnID: turn.id))
+            } label: {
+                Image(systemName: "arrow.triangle.branch")
+                    .font(.caption2)
+                    .foregroundStyle(Color.secondary)
+                    .padding(5)
+            }
+            .buttonStyle(.plain)
+            .help("按本轮 Fork 对话")
         }
     }
 
@@ -245,6 +265,35 @@ struct TurnView: View, Equatable {
 
         case .copyBlock(let text):
             Clipboard.copy(text)
+
+        case .forkConversation(let turnID):
+            forkConversation(turnID: turnID)
+        }
+    }
+
+    private func forkConversation(turnID: String) {
+        guard let conversation = store.activeConversationViewModel?.conversation
+            ?? store.selectedConversation else { return }
+        guard store.supportsConversationForkThroughTurn else { return }
+        let prompt = (turn.userPrompt?.text ?? "")
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        let name: String?
+        if prompt.isEmpty {
+            name = nil
+        } else {
+            let first = prompt.split(separator: "\n").first.map(String.init) ?? prompt
+            name = first.count > 30 ? "Fork: " + String(first.prefix(30)) : "Fork: " + first
+        }
+        Task { @MainActor in
+            do {
+                _ = try await store.forkConversation(
+                    from: conversation,
+                    throughTurnID: turnID,
+                    name: name
+                )
+            } catch {
+                store.presentConversationForkError(error)
+            }
         }
     }
 

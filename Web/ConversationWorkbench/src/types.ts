@@ -167,6 +167,14 @@ export interface ConversationWebDocument {
   live?: {
     isThinking: boolean;
     startedAtMilliseconds?: number;
+    modelRetrying?: {
+      attempt: number;
+      maxAttempts: number;
+      retryDelayMs: number;
+      retryFallback: boolean;
+      err?: string;
+      startedAtMilliseconds?: number;
+    };
   };
 }
 
@@ -176,6 +184,7 @@ export interface ConversationWebOperation {
     | "replaceTurn"
     | "updateTurn"
     | "appendTurn"
+    | "prependTurns"
     | "removeTurns"
     | "replaceBlock"
     | "appendBlock"
@@ -233,6 +242,10 @@ export type NativeBridgeMessage =
       protocolVersion: number;
       currentRevision: number;
       receivedBaseRevision: number;
+    }
+  | {
+      type: "reachedTop";
+      conversationID: string;
     }
   | {
       type: "viewport";

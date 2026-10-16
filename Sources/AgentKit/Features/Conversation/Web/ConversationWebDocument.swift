@@ -44,6 +44,9 @@ struct ConversationWebDocument: Codable, Equatable, Sendable {
         /// P8.9 — action to open the native trajectory inspector for this turn.
         /// Present only when `invocations` is non-empty.
         let trajectoryActionID: String?
+        /// 按轮 Fork 入口（`conversation_fork_through_turn_v1`）。Present only when
+        /// the Runtime advertises the capability and the turn is not live.
+        let forkActionID: String?
     }
 
     /// P8.9 — one model invocation rendered as a card (request shape → usage → thinking).
@@ -229,6 +232,7 @@ enum ConversationWebDocumentBuilder {
         revision: UInt64? = nil,
         extensionContributions: [String: [TimelineWebContribution]] = [:],
         reusing reuseSource: ReuseSource? = nil,
+        supportsForkThroughTurn: Bool = false,
         assetIndexFactory: (ConversationTurn) -> AssetIndex = { AssetIndex(turn: $0) },
         registerAction: ((ConversationWebAction) -> String)? = nil
     ) -> ConversationWebDocument {
@@ -238,6 +242,7 @@ enum ConversationWebDocumentBuilder {
             revision: revision,
             extensionContributions: extensionContributions,
             reusing: reuseSource,
+            supportsForkThroughTurn: supportsForkThroughTurn,
             assetIndexFactory: assetIndexFactory,
             registerAction: registerAction
         ).document
@@ -252,6 +257,7 @@ enum ConversationWebDocumentBuilder {
         revision: UInt64? = nil,
         extensionContributions: [String: [TimelineWebContribution]] = [:],
         reusing reuseSource: ReuseSource? = nil,
+        supportsForkThroughTurn: Bool = false,
         assetIndexFactory: (ConversationTurn) -> AssetIndex = { AssetIndex(turn: $0) },
         registerAction: ((ConversationWebAction) -> String)? = nil
     ) -> BuildResult {
@@ -261,6 +267,7 @@ enum ConversationWebDocumentBuilder {
             revision: revision,
             extensionContributions: extensionContributions,
             reusing: reuseSource,
+            supportsForkThroughTurn: supportsForkThroughTurn,
             assetIndexFactory: assetIndexFactory,
             registerAction: registerAction
         )
@@ -272,6 +279,7 @@ enum ConversationWebDocumentBuilder {
         revision: UInt64?,
         extensionContributions: [String: [TimelineWebContribution]],
         reusing reuseSource: ReuseSource?,
+        supportsForkThroughTurn: Bool,
         assetIndexFactory: (ConversationTurn) -> AssetIndex,
         registerAction: ((ConversationWebAction) -> String)?
     ) -> BuildResult {
@@ -305,6 +313,7 @@ enum ConversationWebDocumentBuilder {
                     previousDocumentTurn: previousDocumentTurn?.id == turn.id
                         ? previousDocumentTurn
                         : nil,
+                    supportsForkThroughTurn: supportsForkThroughTurn,
                     assetIndexFactory: assetIndexFactory,
                     registerAction: registerAction
                 )
@@ -334,6 +343,7 @@ enum ConversationWebDocumentBuilder {
             if let token = turn.shareActionID { tokens.insert(token) }
             if let token = turn.assetsActionID { tokens.insert(token) }
             if let token = turn.trajectoryActionID { tokens.insert(token) }
+            if let token = turn.forkActionID { tokens.insert(token) }
             for block in turn.blocks {
                 if let token = block.actionID { tokens.insert(token) }
                 tokens.formUnion(block.codeCopyActionIDs)
@@ -359,6 +369,7 @@ enum ConversationWebDocumentBuilder {
         extensionContributions: [TimelineWebContribution],
         previousTurn: ConversationTurn?,
         previousDocumentTurn: ConversationWebDocument.Turn?,
+        supportsForkThroughTurn: Bool,
         assetIndexFactory: (ConversationTurn) -> AssetIndex,
         registerAction: ((ConversationWebAction) -> String)?
     ) -> ConversationWebDocument.Turn {
@@ -477,6 +488,9 @@ enum ConversationWebDocumentBuilder {
             },
             trajectoryActionID: turn.invocations.isEmpty ? nil : registerAction.map {
                 $0(.openTrajectory(turnID: turn.id))
+            },
+            forkActionID: (!supportsForkThroughTurn || turn.isLive) ? nil : registerAction.map {
+                $0(.transcript(turnID: turn.id, action: .forkConversation(turnID: turn.id)))
             }
         )
     }

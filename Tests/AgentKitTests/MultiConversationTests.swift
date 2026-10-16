@@ -3,6 +3,131 @@ import XCTest
 
 final class MultiConversationTests: XCTestCase {
     @MainActor
+    func testPagedListRefreshKeepsLoadedOlderRowsAndStableContinuation() async {
+        let client = MultiSessionRuntimeClient()
+        let recent = ConversationRef(id: "recent", workspacePath: "/tmp/recent")
+        let old = ConversationRef(id: "old", workspacePath: "/tmp/old")
+        let newest = ConversationRef(id: "newest", workspacePath: "/tmp/newest")
+        client.listPages = [
+            "active:head": ConversationListPage(conversations: [recent], nextCursor: "older", hasMore: true, isPaged: true),
+            "active:older": ConversationListPage(conversations: [recent, old], isPaged: true),
+        ]
+        let list = ConversationListViewModel(client: client)
+        await list.refresh()
+        XCTAssertEqual(list.conversations.map(\.id), ["recent"])
+        XCTAssertTrue(list.hasMoreConversations)
+        await list.loadMoreConversations()
+        XCTAssertEqual(list.conversations.map(\.id), ["recent", "old"])
+        XCTAssertFalse(list.hasMoreConversations)
+        client.listPages["active:head"] = ConversationListPage(
+            conversations: [newest, recent], nextCursor: "older", hasMore: true, isPaged: true)
+        await list.refresh()
+        XCTAssertEqual(list.conversations.map(\.id), ["newest", "recent", "old"])
+        XCTAssertFalse(list.hasMoreConversations)
+        XCTAssertEqual(client.listPageRequests, ["active:head", "active:older", "active:head"])
+    }
+
+    @MainActor
+    func testListContinuationFailureCanRetryWithoutDroppingLoadedRows() async {
+        let client = MultiSessionRuntimeClient()
+        let recent = ConversationRef(id: "recent", workspacePath: "")
+        client.listPages = [
+            "active:head": ConversationListPage(conversations: [recent], nextCursor: "older", hasMore: true, isPaged: true),
+            "active:older": ConversationListPage(conversations: [], nextCursor: "older", hasMore: true, isPaged: true),
+        ]
+        let list = ConversationListViewModel(client: client)
+        await list.refresh()
+        await list.loadMoreConversations()
+        XCTAssertNotNil(list.errorMessage)
+        XCTAssertEqual(list.conversations.map(\.id), ["recent"])
+        XCTAssertTrue(list.hasMoreConversations)
+        client.listPages["active:older"] = ConversationListPage(
+            conversations: [ConversationRef(id: "old", workspacePath: "")], isPaged: true)
+        await list.loadMoreConversations()
+        XCTAssertEqual(list.conversations.map(\.id), ["recent", "old"])
+        XCTAssertFalse(list.hasMoreConversations)
+    }
+
+    @MainActor
+    func testPartialListDoesNotDeleteSelectedConversationOutsideLoadedRange() async {
+        let client = MultiSessionRuntimeClient()
+        client.listPages["active:head"] = ConversationListPage(
+            conversations: [ConversationRef(id: "recent", workspacePath: "")],
+            nextCursor: "older", hasMore: true, isPaged: true)
+        let store = WorkspaceStore(client: client, localStateStore: InMemoryConversationLocalStateStore())
+        store.selectedConversation = ConversationRef(id: "older-selected", workspacePath: "/tmp/old")
+        await store.refreshConversationList()
+        XCTAssertEqual(store.selectedConversation?.id, "older-selected")
+        XCTAssertNotNil(store.supervisor.controller(sessionID: "older-selected"))
+        await store.supervisor.disconnectAll()
+    }
+
+    @MainActor
+    func testArchivedListIsLazyAndLegacyListRemainsSourceCompatible() async {
+        let client = MultiSessionRuntimeClient(
+            capabilitySnapshot: RuntimeCapabilitySnapshot(capabilities: ["conversation_archive_v1": true]),
+            activity: RuntimeActivitySnapshot(sessions: []),
+            activeConversations: [ConversationRef(id: "legacy", workspacePath: "")])
+        let store = WorkspaceStore(client: client, localStateStore: InMemoryConversationLocalStateStore())
+        await store.refreshConversationList()
+        XCTAssertEqual(store.listViewModel.conversations.map(\.id), ["legacy"])
+        XCTAssertFalse(store.listViewModel.hasMoreConversations)
+        XCTAssertEqual(client.listPageRequests, ["active:head"])
+        await store.supervisor.disconnectAll()
+    }
+
+    @MainActor
+    func testResidentTimelineLRUEvictsViewsWithoutDisconnectingRunningChannel() async throws {
+        let client = MultiSessionRuntimeClient()
+        let store = WorkspaceStore(client: client, localStateStore: InMemoryConversationLocalStateStore())
+        for id in ["a", "b", "c", "a", "d"] {
+            store.selectedConversation = ConversationRef(id: id, workspacePath: "/tmp/\(id)", turnStatus: "running")
+            await Task.yield()
+        }
+        try await Task.sleep(for: .milliseconds(30))
+        XCTAssertEqual(store.residentConversationIDs, ["a", "c", "d"])
+        XCTAssertNil(store.residentConversationViewModels["b"])
+        XCTAssertNotNil(store.supervisor.controller(sessionID: "b"))
+        XCTAssertEqual(client.channel(for: "b").disconnectCount, 0)
+        await store.supervisor.disconnectAll()
+    }
+
+    @MainActor
+    func testActivityRefreshDoesNotWaitForBackgroundHistoryOrSocket() async {
+        let client = MultiSessionRuntimeClient(
+            connectDelays: ["slow": .seconds(5)],
+            capabilitySnapshot: RuntimeCapabilitySnapshot(capabilities: ["activity_snapshot_v1": true]),
+            activity: RuntimeActivitySnapshot(sessions: [
+                RuntimeSessionActivity(sessionID: "slow", state: "running"),
+                RuntimeSessionActivity(sessionID: "paused", state: "paused"),
+            ]))
+        let store = WorkspaceStore(client: client, localStateStore: InMemoryConversationLocalStateStore())
+        await store.supervisor.refreshRuntimeState(conversations: [
+            ConversationRef(id: "slow", workspacePath: ""), ConversationRef(id: "paused", workspacePath: "")])
+        XCTAssertFalse(client.channel(for: "slow").isConnected)
+        XCTAssertNil(store.supervisor.controller(sessionID: "paused"))
+        store.supervisor.stopActivityMonitoring()
+        await store.supervisor.disconnectAll()
+    }
+
+    @MainActor
+    func testBackgroundRestorationUsesSmallTailAndNoPausedController() async {
+        let client = MultiSessionRuntimeClient(
+            capabilitySnapshot: RuntimeCapabilitySnapshot(capabilities: ["activity_snapshot_v1": true]),
+            activity: RuntimeActivitySnapshot(sessions: [
+                RuntimeSessionActivity(sessionID: "active", state: "running"),
+                RuntimeSessionActivity(sessionID: "paused", state: "paused"),
+            ]))
+        let store = WorkspaceStore(client: client, localStateStore: InMemoryConversationLocalStateStore())
+        await store.supervisor.refreshRuntimeState(conversations: [
+            ConversationRef(id: "active", workspacePath: ""), ConversationRef(id: "paused", workspacePath: "")])
+        await store.supervisor.waitForBackgroundRestoration()
+        XCTAssertEqual(client.tailPageLimits, [20])
+        XCTAssertTrue(client.channel(for: "active").isConnected)
+        XCTAssertNil(store.supervisor.controller(sessionID: "paused"))
+        await store.supervisor.disconnectAll()
+    }
+    @MainActor
     func testConversationViewModelRetainsWorkspaceRootWithoutSidebarState() async {
         let client = MultiSessionRuntimeClient()
         let viewModel = ConversationViewModel(
@@ -898,6 +1023,7 @@ final class MultiConversationTests: XCTestCase {
         store.listViewModel.prepend(conversation)
 
         await store.refreshRuntimeState()
+        await store.supervisor.waitForBackgroundRestoration()
 
         let controller = try XCTUnwrap(store.supervisor.controller(sessionID: conversation.id))
         XCTAssertEqual(controller.lifecycleStatus, "queued")
@@ -1014,6 +1140,7 @@ final class MultiConversationTests: XCTestCase {
 
         store.selectedConversation = a
         await store.supervisor.refreshRuntimeState(conversations: [a, b])
+        await store.supervisor.waitForBackgroundRestoration()
 
         XCTAssertEqual(store.selectedConversation?.id, "a")
         XCTAssertTrue(client.channel(for: "b").isConnected)
@@ -1044,11 +1171,14 @@ final class MultiConversationTests: XCTestCase {
         }
 
         await store.supervisor.refreshRuntimeState(conversations: conversations)
+        await store.supervisor.waitForBackgroundRestoration()
 
         XCTAssertEqual(client.activitySnapshotRequestCount, 1)
         XCTAssertTrue(client.channel(for: "running").isConnected)
         XCTAssertTrue(client.channel(for: "resuming").isConnected)
-        XCTAssertTrue(client.channel(for: "paused").isConnected)
+        XCTAssertFalse(client.channel(for: "paused").isConnected)
+        XCTAssertNil(store.supervisor.controller(sessionID: "paused"))
+        XCTAssertEqual(store.supervisor.activity(for: "paused"), .paused)
         XCTAssertFalse(client.channel(for: "done").isConnected)
         XCTAssertFalse(store.supervisor.runtimeCapabilities.allowsMultiSessionExecution)
     }
@@ -1175,7 +1305,9 @@ final class MultiConversationTests: XCTestCase {
         let conversation = ConversationRef(id: "approval", workspacePath: "/tmp/approval")
 
         await store.supervisor.refreshRuntimeState(conversations: [conversation])
+        await store.supervisor.waitForBackgroundRestoration()
         await store.supervisor.refreshRuntimeState(conversations: [conversation])
+        await store.supervisor.waitForBackgroundRestoration()
 
         XCTAssertEqual(store.supervisor.activity(for: conversation), .waitingForApproval)
         XCTAssertTrue(client.channel(for: "approval").isConnected)
@@ -1293,6 +1425,7 @@ final class MultiConversationTests: XCTestCase {
         let store = WorkspaceStore(client: client)
         let live = ConversationRef(id: "live", workspacePath: "/tmp/live")
         await store.supervisor.refreshRuntimeState(conversations: [live])
+        await store.supervisor.waitForBackgroundRestoration()
 
         store.supervisor.setSelectedSessionID("selected")
         _ = store.supervisor.controller(for: ConversationRef(id: "idle", workspacePath: ""))
@@ -1398,6 +1531,9 @@ private final class MultiSessionChannelDouble: RuntimeSessionChannel, @unchecked
 }
 
 private final class MultiSessionRuntimeClient: RuntimeClient, @unchecked Sendable {
+    var listPages: [String: ConversationListPage] = [:]
+    private(set) var listPageRequests: [String] = []
+    private(set) var tailPageLimits: [Int] = []
     private var channels: [String: MultiSessionChannelDouble] = [:]
     private let connectDelays: [String: Duration]
     private let capabilitySnapshot: RuntimeCapabilitySnapshot?
@@ -1519,6 +1655,20 @@ private final class MultiSessionRuntimeClient: RuntimeClient, @unchecked Sendabl
         )
     }
     func listConversations() async throws -> [ConversationRef] { activeConversations }
+
+    @MainActor
+    func listConversationPage(archived: Bool, limit: Int, before: String?) async throws -> ConversationListPage {
+        let key = (archived ? "archived:" : "active:") + (before ?? "head")
+        listPageRequests.append(key)
+        if let page = listPages[key] { return page }
+        return ConversationListPage(conversations: archived ? archivedConversations : activeConversations)
+    }
+
+    @MainActor
+    func getTailEventBatch(conversationID: String, limit: Int) async throws -> AgentEventBatch {
+        tailPageLimits.append(limit)
+        return AgentEventBatch(events: [], nextSince: 0)
+    }
     func listArchivedConversations() async throws -> [ConversationRef] { archivedConversations }
     func archiveConversation(id: String) async throws -> ConversationArchiveResponse {
         archivedConversationIDs.append(id)

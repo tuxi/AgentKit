@@ -29,6 +29,7 @@ struct ConversationWebWorkbenchView: NSViewRepresentable {
     /// the host rebuilds the turn's mixed image list and resolves display
     /// URLs natively (signed https / staged file URLs).
     var onPreviewAssets: (@MainActor (AssetPreviewPresentation) -> Void)? = nil
+    var onReachedTop: (@MainActor () -> Void)? = nil
 
     @Environment(WorkspaceStore.self) private var workspaceStore
     @Environment(\.openURL) private var openURL
@@ -70,7 +71,8 @@ struct ConversationWebWorkbenchView: NSViewRepresentable {
             messageProxy: messageProxy,
             schemeHandler: schemeHandler,
             onFatalFailure: onFatalFailure,
-            onPreviewAssets: onPreviewAssets
+            onPreviewAssets: onPreviewAssets,
+            onReachedTop: onReachedTop
         )
         context.coordinator.replaceSnapshot(
             snapshot,
@@ -87,6 +89,7 @@ struct ConversationWebWorkbenchView: NSViewRepresentable {
     }
 
     func updateNSView(_ hostView: ConversationWebWorkbenchHostView, context: Context) {
+        context.coordinator.onReachedTop = onReachedTop
         context.coordinator.replaceSnapshot(
             snapshot,
             conversationID: conversationID,
@@ -148,6 +151,7 @@ struct ConversationWebWorkbenchView: NSViewRepresentable {
         private var openURL: OpenURLAction?
         private var onFatalFailure: (@MainActor () -> Void)?
         private var onPreviewAssets: (@MainActor (AssetPreviewPresentation) -> Void)?
+        fileprivate var onReachedTop: (@MainActor () -> Void)?
         private var rendererFailureDates: [Date] = []
         private var recoveryViewport: ConversationWebUpdate.RecoveryViewport?
         private var shouldRestoreViewportAfterReload = false
@@ -170,7 +174,8 @@ struct ConversationWebWorkbenchView: NSViewRepresentable {
             messageProxy: WeakScriptMessageHandler,
             schemeHandler: ConversationWebSchemeHandler,
             onFatalFailure: @escaping @MainActor () -> Void,
-            onPreviewAssets: (@MainActor (AssetPreviewPresentation) -> Void)?
+            onPreviewAssets: (@MainActor (AssetPreviewPresentation) -> Void)?,
+            onReachedTop: (@MainActor () -> Void)?
         ) {
             self.hostView = hostView
             self.webView = webView
@@ -178,6 +183,7 @@ struct ConversationWebWorkbenchView: NSViewRepresentable {
             self.schemeHandler = schemeHandler
             self.onFatalFailure = onFatalFailure
             self.onPreviewAssets = onPreviewAssets
+            self.onReachedTop = onReachedTop
             hostView.onEffectiveAppearanceChange = { [weak self] in
                 self?.applyHostBackgroundToPage()
             }
@@ -197,6 +203,7 @@ struct ConversationWebWorkbenchView: NSViewRepresentable {
             schemeHandler?.removeAllLocalAssets()
             onFatalFailure = nil
             onPreviewAssets = nil
+            onReachedTop = nil
         }
 
         func replaceSnapshot(
@@ -416,6 +423,10 @@ struct ConversationWebWorkbenchView: NSViewRepresentable {
                 scheduleLatestDocumentSend(delayMilliseconds: 0)
             case "viewport":
                 handleViewport(body)
+            case "reachedTop":
+                if body["conversationID"] as? String == sourceConversationID {
+                    onReachedTop?()
+                }
             case "action":
                 handleAction(body)
             case "resolveUserAssetURL":
@@ -535,6 +546,7 @@ struct ConversationWebWorkbenchView: NSViewRepresentable {
                 revision: revision,
                 extensionContributions: sourceExtensionContributions,
                 reusing: reuseSource,
+                supportsForkThroughTurn: workspaceStore?.supportsConversationForkThroughTurn ?? false,
                 registerAction: { [actionRegistry] action in
                     actionRegistry.register(action)
                 }

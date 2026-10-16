@@ -31,7 +31,7 @@ public struct ConversationListView: View {
     @State private var didInitializeExpansion = false
     @State private var isProjectsExpanded = true
     @State private var isArchivedExpanded = false
-    @State private var showsRecentConversations = false
+    @State private var showsRecentConversations = true
     @State private var deletionTarget: ConversationRef?
     @State private var forcedDeletion: ForcedWorktreeDeletion?
     @State private var deletionErrorMessage: String?
@@ -212,13 +212,9 @@ public struct ConversationListView: View {
             }
         }
         .onChange(of: store.supportsConversationArchive) { _, supported in
-            Task {
-                if supported {
-                    await viewModel.refreshArchived()
-                } else {
-                    viewModel.clearArchived()
-                    isArchivedExpanded = false
-                }
+            if !supported {
+                viewModel.clearArchived()
+                isArchivedExpanded = false
             }
         }
         .modifier(conversationDialogModifier)
@@ -275,10 +271,36 @@ public struct ConversationListView: View {
             }
 
 
+            if viewModel.hasMoreConversations {
+                Text(searchText.isEmpty
+                     ? "较早对话可继续加载。项目分组仅包含当前加载的对话。"
+                     : "搜索范围为已加载对话；加载更早对话可扩大范围。")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .listRowSeparator(.hidden)
+                loadMoreRow(archived: false)
+            }
+
             if store.supportsConversationArchive {
                 archivedGroup()
             }
         }
+    }
+
+    private func loadMoreRow(archived: Bool) -> some View {
+        let loading = archived ? viewModel.isLoadingMoreArchived : viewModel.isLoadingMore
+        return Button {
+            Task { await viewModel.loadMoreConversations(archived: archived) }
+        } label: {
+            HStack {
+                if loading { ProgressView().controlSize(.small) }
+                Text(archived ? "加载更多归档对话" : "加载更早对话")
+            }
+            .frame(maxWidth: .infinity)
+        }
+        .disabled(loading)
+        .listRowSeparator(.hidden)
+        .listRowBackground(Color.clear)
     }
 
     private var conversationDialogModifier: some ViewModifier {
@@ -588,6 +610,9 @@ public struct ConversationListView: View {
     private func archivedGroup() -> some View {
         Button {
             isArchivedExpanded.toggle()
+            if isArchivedExpanded, !viewModel.hasLoadedArchivedConversations {
+                Task { await viewModel.refreshArchived() }
+            }
         } label: {
             HStack(spacing: 7) {
 //                Image(systemName: "archivebox")
@@ -667,6 +692,15 @@ public struct ConversationListView: View {
                             .disabled(!canDelete(ref))
                         }
                 }
+            }
+            if viewModel.hasMoreArchivedConversations {
+                if !searchText.isEmpty {
+                    Text("搜索范围为已加载归档；可继续加载更早记录。")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .listRowSeparator(.hidden)
+                }
+                loadMoreRow(archived: true)
             }
         }
     }

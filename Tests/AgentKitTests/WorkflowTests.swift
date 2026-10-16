@@ -13,6 +13,26 @@ import XCTest
 @MainActor
 final class WorkflowTests: XCTestCase {
 
+    func testOlderPageRebuildsWorkflowMetadataWithoutRewindingTerminalState() {
+        let store = WorkflowStore()
+        let started: AgentEvent = .workflowStarted(turnID: "old", callID: "call", workflowID: "wf-page")
+        let plan: AgentEvent = .workflowPlanReady(turnID: "old", callID: "call", workflow: WorkflowPlanReadyData(
+            workflowID: "wf-page", parentCallID: "call", goal: "older goal",
+            nodes: [WorkflowPlanNode(name: "x", type: "tool")], edges: []
+        ))
+        let finished: AgentEvent = .workflowTaskSucceeded(turnID: "old", workflow: WorkflowTaskBracketData(
+            workflowID: "wf-page", taskID: 1, message: "done", progress: 1, sequence: 3
+        ))
+        store.reduce(started)
+        store.reduce(finished)
+        XCTAssertNil(store.runs["wf-page"]?.goal)
+
+        store.reconcileLoadedHistory([started, plan, finished])
+        XCTAssertEqual(store.runs["wf-page"]?.goal, "older goal")
+        XCTAssertEqual(store.runs["wf-page"]?.status, .success)
+        XCTAssertEqual(store.runs["wf-page"]?.lastSequence, 3)
+    }
+
     // MARK: - Helpers
 
     private func decodeEvent(_ json: String) throws -> AgentEvent? {

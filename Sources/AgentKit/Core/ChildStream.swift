@@ -20,10 +20,20 @@ import Foundation
 public struct AgentEventBatch: Sendable {
     public let events: [AgentEvent]
     public let nextSince: Int
+    public let oldestSeq: Int?
+    public let hasMoreOlder: Bool
+    public let replayTruncated: Bool
+    public let turnFragment: Bool
 
-    public init(events: [AgentEvent], nextSince: Int) {
+    public init(events: [AgentEvent], nextSince: Int, oldestSeq: Int? = nil,
+                hasMoreOlder: Bool = false, replayTruncated: Bool = false,
+                turnFragment: Bool = false) {
         self.events = events
         self.nextSince = nextSince
+        self.oldestSeq = oldestSeq
+        self.hasMoreOlder = hasMoreOlder
+        self.replayTruncated = replayTruncated
+        self.turnFragment = turnFragment
     }
 }
 

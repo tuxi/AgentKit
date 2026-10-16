@@ -26,6 +26,33 @@ public final class WorkflowStore: ObservableObject {
 
     public init() {}
 
+    public static func isWorkflowEvent(_ event: AgentEvent) -> Bool {
+        switch event {
+        case .workflowStarted, .workflowPlanReady,
+             .workflowTaskStateChanged, .workflowNodeStateChanged,
+             .workflowSuspended, .workflowFinished, .workflowFailed,
+             .workflowTaskFailed, .workflowTaskSucceeded, .workflowTaskSuspended,
+             .workflowNodeProgress, .workflowTaskProgress,
+             .workflowToolProgress, .workflowToolLog,
+             .workflowToolStream, .workflowToolStreamEnd:
+            return true
+        default:
+            return false
+        }
+    }
+
+    /// Rebuild only workflows represented in this conversation's loaded pages.
+    /// Pages arrive newest first; replaying their union in event order fills
+    /// early plan metadata without applying stale terminal states over live ones.
+    public func reconcileLoadedHistory(_ events: [AgentEvent]) {
+        let rebuilt = WorkflowStore()
+        for event in events { rebuilt.reduce(event) }
+        for (id, run) in rebuilt.runs {
+            runs[id] = run
+            appliedSeq[id] = rebuilt.appliedSeq[id]
+        }
+    }
+
     // MARK: - Public API
 
     /// 处理单个事件。

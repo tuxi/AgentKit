@@ -25,6 +25,7 @@ struct MacNativeChatTimeline: NSViewRepresentable {
     /// rests exactly at the bar's top edge while the extended scroll range
     /// still lets content slide down behind the bar.
     let bottomInset: CGFloat
+    let onReachedTop: (@MainActor () -> Void)?
 
     @Environment(WorkspaceStore.self) private var workspaceStore
     @Environment(\.openURL) private var openURL
@@ -93,6 +94,8 @@ struct MacNativeChatTimeline: NSViewRepresentable {
             coordinator.reloadForNewConversation()
         } else if change.requiresFullReload {
             coordinator.reloadAllRows(followBottom: wasPinnedToBottom)
+        } else if change.prependCount > 0 {
+            coordinator.insertLeadingRows(change.prependCount, changedRows: change.changedRows)
         } else if !change.changedRows.isEmpty {
             coordinator.applyChangedRows(
                 change.changedRows,
@@ -292,6 +295,7 @@ struct MacNativeChatTimeline: NSViewRepresentable {
         private var isInvalidatingHeightsForWidth = false
         private var documentStates: [String: TranscriptDocumentState] = [:]
         var isPinnedToBottom = true
+        private var lastTopRequestAt = Date.distantPast
 
         init(parent: MacNativeChatTimeline) {
             self.parent = parent
@@ -478,6 +482,24 @@ struct MacNativeChatTimeline: NSViewRepresentable {
             }
         }
 
+        func insertLeadingRows(_ count: Int, changedRows: [Int]) {
+            guard let tableView, let scrollView, count > 0 else { return }
+            let clip = scrollView.contentView
+            let oldVisible = tableView.rows(in: tableView.visibleRect)
+            let anchorRow = oldVisible.location == NSNotFound ? 0 : oldVisible.location
+            let oldTop = anchorRow < tableView.numberOfRows
+                ? tableView.rect(ofRow: anchorRow).minY : 0
+            let oldY = clip.bounds.minY
+            performViewportMutation(followBottom: false) {
+                tableView.insertRows(at: IndexSet(integersIn: 0..<count), withAnimation: [])
+                tableView.layoutSubtreeIfNeeded()
+                let newTop = tableView.rect(ofRow: anchorRow + count).minY
+                clip.scroll(to: NSPoint(x: 0, y: oldY + newTop - oldTop))
+                scrollView.reflectScrolledClipView(clip)
+            }
+            if !changedRows.isEmpty { applyChangedRows(changedRows, followBottom: false) }
+        }
+
         func reloadForNewConversation() {
             guard let tableView else { return }
             awaitingInitialBottomPin = true
@@ -557,6 +579,7 @@ struct MacNativeChatTimeline: NSViewRepresentable {
 
         func willHandleUserScroll() {
             isHandlingUserScroll = true
+            requestOlderIfNearTop()
         }
 
         func didHandleUserScroll() {
@@ -602,6 +625,15 @@ struct MacNativeChatTimeline: NSViewRepresentable {
             scheduleVisibleRowRedraw()
             guard isHandlingUserScroll, !isPerformingProgrammaticScroll else { return }
             isPinnedToBottom = checkIfAtBottom()
+            requestOlderIfNearTop()
+        }
+
+        private func requestOlderIfNearTop() {
+            guard let scrollView, scrollView.contentView.bounds.minY < 160,
+                  !isPinnedToBottom,
+                  Date().timeIntervalSince(lastTopRequestAt) > 0.6 else { return }
+            lastTopRequestAt = Date()
+            parent.onReachedTop?()
         }
 
         private func redrawVisibleTranscriptRows() {
@@ -658,6 +690,18 @@ struct MacNativeChatTimeline: NSViewRepresentable {
             workspaceRoot = parent.workspaceRoot
             rows = newRows
 
+            if !isNewConversation && !didWorkspaceRootChange,
+               newRows.count > oldRows.count,
+               Array(newRows.suffix(oldRows.count).map(\.identity)) == oldRows.map(\.identity) {
+                let count = newRows.count - oldRows.count
+                let changed = oldRows.indices.compactMap { index in
+                    newRows[index + count].hasSameContent(as: oldRows[index]) ? nil : index + count
+                }
+                for index in changed { heightCache.removeValue(forKey: newRows[index].identity) }
+                return TimelineChange(requiresFullReload: false, changedRows: changed,
+                                      isNewConversation: false, prependCount: count)
+            }
+
             guard !isNewConversation,
                   !didWorkspaceRootChange,
                   oldRows.map(\.identity) == newRows.map(\.identity) else {
@@ -670,7 +714,8 @@ struct MacNativeChatTimeline: NSViewRepresentable {
                 return TimelineChange(
                     requiresFullReload: true,
                     changedRows: [],
-                    isNewConversation: isNewConversation
+                    isNewConversation: isNewConversation,
+                    prependCount: 0
                 )
             }
 
@@ -683,7 +728,8 @@ struct MacNativeChatTimeline: NSViewRepresentable {
             return TimelineChange(
                 requiresFullReload: false,
                 changedRows: changedRows,
-                isNewConversation: false
+                isNewConversation: false,
+                prependCount: 0
             )
         }
 
@@ -705,7 +751,8 @@ struct MacNativeChatTimeline: NSViewRepresentable {
                 let textHeight = transcriptMeasurer.sizeThatFits(width: contentWidth)?.height ?? 1
                 let controlsHeight = NativeTurnTableCellView.showsControls(
                     turn: turn,
-                    copyText: transcript.copyText
+                    copyText: transcript.copyText,
+                    showsFork: parent.workspaceStore.supportsConversationForkThroughTurn
                 ) ? NativeTurnTableCellView.controlsAreaHeight : 0
                 return ceil(textHeight
                     + NativeTurnTableCellView.verticalPadding * 2
@@ -896,6 +943,7 @@ private final class NativeTurnTableCellView: NSTableCellView {
     private lazy var copyButton = NSButton(frame: .zero)
     private lazy var shareButton = NSButton(frame: .zero)
     private lazy var assetsButton = NSButton(frame: .zero)
+    private lazy var forkButton = NSButton(frame: .zero)
     private var representedTurnID: String?
     private var turn: ConversationTurn?
     private var state = TranscriptDocumentState()
@@ -926,6 +974,12 @@ private final class NativeTurnTableCellView: NSTableCellView {
         assetsButton.target = self
         assetsButton.action = #selector(showAssets)
         addSubview(assetsButton)
+        
+        configureButton(forkButton, imageName: "arrow.triangle.branch", toolTip: "按本轮 Fork 对话")
+        forkButton.target = self
+        forkButton.action = #selector(forkConversation)
+        forkButton.isHidden = true // 默认隐藏，由 capabilities 决定
+        addSubview(forkButton)
     }
 
     required init?(coder: NSCoder) { nil }
@@ -961,7 +1015,7 @@ private final class NativeTurnTableCellView: NSTableCellView {
             height: textHeight
         )
 
-        guard !copyButton.isHidden || !shareButton.isHidden || !assetsButton.isHidden else { return }
+        guard !copyButton.isHidden || !shareButton.isHidden || !assetsButton.isHidden || !forkButton.isHidden else { return }
         let controlsY = Self.verticalPadding + textHeight + 4
         var x = Self.horizontalPadding
         if !copyButton.isHidden {
@@ -974,6 +1028,10 @@ private final class NativeTurnTableCellView: NSTableCellView {
         }
         if !assetsButton.isHidden {
             assetsButton.frame = NSRect(x: x, y: controlsY, width: 46, height: 20)
+            x += 54
+        }
+        if !forkButton.isHidden {
+            forkButton.frame = NSRect(x: x, y: controlsY, width: 22, height: 20)
         }
     }
 
@@ -997,8 +1055,8 @@ private final class NativeTurnTableCellView: NSTableCellView {
         transcriptView.displayIfNeeded()
     }
 
-    static func showsControls(turn: ConversationTurn, copyText: String) -> Bool {
-        (!copyText.isEmpty && !isAnswerStreaming(turn)) || !assets(in: turn).isEmpty
+    static func showsControls(turn: ConversationTurn, copyText: String, showsFork: Bool = false) -> Bool {
+        (!copyText.isEmpty && !isAnswerStreaming(turn)) || !assets(in: turn).isEmpty || showsFork
     }
 
     private func rebuildTranscript() {
@@ -1016,6 +1074,7 @@ private final class NativeTurnTableCellView: NSTableCellView {
         let assetCount = Self.assets(in: turn).count
         assetsButton.isHidden = assetCount == 0
         assetsButton.title = assetCount == 0 ? "" : "\(assetCount)"
+        forkButton.isHidden = !(dispatcher?.showsForkButton ?? false)
         needsLayout = true
     }
 
@@ -1074,6 +1133,11 @@ private final class NativeTurnTableCellView: NSTableCellView {
 
     @objc private func showAssets() {
         dispatcher?.showTurnAssets()
+    }
+
+    @objc private func forkConversation() {
+        guard let turnID = turn?.id else { return }
+        dispatcher?.handle(.forkConversation(turnID: turnID))
     }
 
     private func configureButton(_ button: NSButton, imageName: String, toolTip: String) {
@@ -1255,5 +1319,6 @@ private struct TimelineChange {
     let requiresFullReload: Bool
     let changedRows: [Int]
     let isNewConversation: Bool
+    let prependCount: Int
 }
 #endif

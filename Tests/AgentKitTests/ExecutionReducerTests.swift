@@ -12,6 +12,114 @@ import XCTest
 
 final class ExecutionReducerTests: XCTestCase {
 
+    func testOlderHistoryPrependsWithoutChangingLiveTurnOrForwardState() async {
+        let engine = RuntimeEngine(sessionID: "page-test")
+        await engine.importHistory([
+            .turnStarted(turnID: "recent", text: "recent question"),
+            .turnFinished(turnID: "recent", text: "recent answer", textAnnotations: []),
+        ])
+        let original = await engine.currentSnapshot()
+        await engine.importOlderHistory([
+            .turnStarted(turnID: "older", text: "older question"),
+            .turnFinished(turnID: "older", text: "older answer", textAnnotations: []),
+        ])
+        let expanded = await engine.currentSnapshot()
+        XCTAssertEqual(expanded.turns.map(\.id), ["turn_older_user", "turn_recent_user"])
+        XCTAssertEqual(expanded.turns.last?.contentVersion, original.turns.last?.contentVersion)
+
+        await engine.importOlderHistory([
+            .turnStarted(turnID: "oldest", text: "first question"),
+            .turnFinished(turnID: "oldest", text: "first answer", textAnnotations: []),
+        ])
+        let twoPages = await engine.currentSnapshot()
+        XCTAssertEqual(twoPages.turns.map(\.id),
+                       ["turn_oldest_user", "turn_older_user", "turn_recent_user"])
+        XCTAssertEqual(twoPages.turns.last?.contentVersion, original.turns.last?.contentVersion)
+
+        await engine.ingest(.turnStarted(turnID: "new", text: "new question"))
+        let live = await engine.currentSnapshot()
+        XCTAssertEqual(live.turns.map(\.id),
+                       ["turn_oldest_user", "turn_older_user", "turn_recent_user", "turn_new_user"])
+    }
+
+    func testHardLimitedTurnRejoinsAcrossTailAndTwoOlderPages() async {
+        let engine = RuntimeEngine(sessionID: "split-page-test")
+        await engine.importHistory([
+            .assistantText(turnID: "split", text: "tail fragment"),
+            .turnFinished(turnID: "split", text: "final answer", textAnnotations: []),
+            .turnStarted(turnID: "recent", text: "recent"),
+            .turnFinished(turnID: "recent", text: "done", textAnnotations: []),
+        ])
+        await engine.importOlderHistory([
+            .assistantText(turnID: "split", text: "middle fragment"),
+        ])
+        await engine.importOlderHistory([
+            .turnStarted(turnID: "split", text: "original prompt"),
+            .assistantText(turnID: "split", text: "first fragment"),
+        ])
+        let turns = await engine.currentSnapshot().turns
+        XCTAssertEqual(turns.map(\.id), ["turn_split_user", "turn_recent_user"])
+        XCTAssertEqual(turns.first?.userPrompt?.text, "original prompt")
+        let texts = turns.first?.blocks.compactMap { block -> String? in
+            if case .text(_, let payload) = block { return payload.text }
+            return nil
+        } ?? []
+        XCTAssertTrue(texts.contains { $0.contains("first fragment") })
+        XCTAssertTrue(texts.contains { $0.contains("middle fragment") })
+        XCTAssertTrue(texts.contains { $0.contains("tail fragment") })
+    }
+
+    func testHardLimitedActiveTurnKeepsStreamingAfterBoundaryRejoins() async {
+        let engine = RuntimeEngine(sessionID: "active-page-test")
+        await engine.importHistory([
+            .assistantText(turnID: "active", text: "tail text"),
+        ])
+        await engine.importOlderHistory([
+            .turnStarted(turnID: "active", text: "large prompt"),
+            .assistantText(turnID: "active", text: "head text"),
+        ])
+        await engine.ingest(.assistantText(turnID: "active", text: "new text"))
+        let active = await engine.currentSnapshot()
+        XCTAssertEqual(active.turns.map(\.id), ["turn_active_user"])
+        let text = active.turns[0].blocks.compactMap { block -> String? in
+            if case .text(_, let payload) = block { return payload.text }
+            return nil
+        }.joined(separator: " ")
+        XCTAssertTrue(text.contains("head text"))
+        XCTAssertTrue(text.contains("tail text"))
+        XCTAssertTrue(text.contains("new text"))
+
+        await engine.ingest(.turnStarted(turnID: "next", text: "next"))
+        let afterNext = await engine.currentSnapshot()
+        XCTAssertEqual(afterNext.turns.map(\.id),
+                       ["turn_active_user", "turn_next_user"])
+    }
+
+    func testAcceptedPreludeDoesNotCaptureLaterLiveTurnIntoHistoryPrefix() async {
+        let engine = RuntimeEngine(sessionID: "prelude-page-test")
+        await engine.importHistory([
+            .turnAccepted(turnID: "recent", requestID: nil, text: nil),
+            .turnStarted(turnID: "recent", text: "recent prompt"),
+        ])
+        await engine.importOlderHistory([
+            .turnStarted(turnID: "old", text: "old prompt"),
+            .turnFinished(turnID: "old", text: "old answer", textAnnotations: []),
+        ])
+        await engine.ingest(.assistantText(turnID: "recent", text: "live answer"))
+        let snapshot = await engine.currentSnapshot()
+        XCTAssertEqual(snapshot.turns.map(\.id), ["turn_old_user", "turn_recent_user"])
+        let oldText = snapshot.turns[0].blocks.compactMap { block -> String? in
+            if case .text(_, let payload) = block { return payload.text }
+            return nil
+        }.joined()
+        XCTAssertFalse(oldText.contains("live answer"))
+        let liveText = snapshot.turns[1].blocks.compactMap { block -> String? in
+            if case .text(_, let payload) = block { return payload.text }
+            return nil
+        }.joined()
+        XCTAssertTrue(liveText.contains("live answer"))
+    }
+
     private func todoArguments(
         content: String = "Create skill",
         activeFormKey: String = "activeForm"

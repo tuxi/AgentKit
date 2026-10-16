@@ -14,9 +14,19 @@ public protocol TimelineExtension: AnyObject {
 
     /// Receives runtime events after AgentKit has ingested them.
     func handle(_ event: AgentEvent) async
+    /// Called when an older, turn-aligned page is prepended. Implementations
+    /// with global latest-state projections can override this to merge by turn
+    /// rather than rewinding their current state.
+    func handleOlderHistory(_ events: [AgentEvent]) async
 
     /// Optional host-owned content inserted after a conversation turn.
     func makeContent(for turnID: String) -> AnyView?
+}
+
+public extension TimelineExtension {
+    func handleOlderHistory(_ events: [AgentEvent]) async {
+        for event in events { await handle(event) }
+    }
 }
 
 /// A Timeline extension that can render inside the single-document Web workbench.

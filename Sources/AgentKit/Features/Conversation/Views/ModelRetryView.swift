@@ -134,7 +134,7 @@ struct ModelRetryView_Previews: PreviewProvider {
             ))
         }
         .padding()
-        .background(Color(nsColor: .windowBackgroundColor))
+        .background(.background)
     }
 }
 #endif

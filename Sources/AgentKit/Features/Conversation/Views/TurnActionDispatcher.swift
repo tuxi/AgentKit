@@ -18,6 +18,11 @@ final class TurnActionDispatcher {
         self.openURL = openURL
     }
 
+    /// 是否展示「按轮 Fork」入口（Runtime 能力位决定）。
+    var showsForkButton: Bool {
+        store.supportsConversationForkThroughTurn
+    }
+
     func handle(_ action: TranscriptAction) {
         switch action {
         case .toggleTool:
@@ -56,7 +61,35 @@ final class TurnActionDispatcher {
             )))
         case .copyBlock(let text):
             Clipboard.copy(text)
+        case .forkConversation(let turnID):
+            forkConversation(turnID: turnID)
         }
+    }
+
+    private func forkConversation(turnID: String) {
+        guard let conversation = store.supervisor.controller(sessionID: store.activeConversationViewModel?.conversation?.id ?? "")?.conversation
+            ?? store.activeConversationViewModel?.conversation
+            ?? store.selectedConversation else { return }
+        guard store.supportsConversationForkThroughTurn else { return }
+        Task { @MainActor in
+            do {
+                _ = try await store.forkConversation(
+                    from: conversation,
+                    throughTurnID: turnID,
+                    name: forkName
+                )
+            } catch {
+                store.presentConversationForkError(error)
+            }
+        }
+    }
+
+    private var forkName: String? {
+        let prompt = (turn.userPrompt?.text ?? "")
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !prompt.isEmpty else { return nil }
+        let first = prompt.split(separator: "\n").first.map(String.init) ?? prompt
+        return first.count > 30 ? "Fork: " + String(first.prefix(30)) : "Fork: " + first
     }
 
     /// 该轮用户输入的首行，用作轨迹面板标题。

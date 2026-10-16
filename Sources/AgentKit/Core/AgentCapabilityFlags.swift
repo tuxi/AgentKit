@@ -71,6 +71,10 @@ public struct AgentCapabilityFlags: OptionSet, Sendable {
     public static let childStreaming = AgentCapabilityFlags(rawValue: 1 << 18)
     /// Runtime can list, create and checkout local branches in an authorized workspace.
     public static let workspaceGitBranch = AgentCapabilityFlags(rawValue: 1 << 19)
+    /// 支持按轮 Fork 对话（conversation_fork_through_turn_v1）。
+    public static let conversationForkThroughTurn = AgentCapabilityFlags(rawValue: 1 << 20)
+    public static let historyPagination = AgentCapabilityFlags(rawValue: 1 << 21)
+    public static let conversationListPagination = AgentCapabilityFlags(rawValue: 1 << 22)
 
     // MARK: - Presets
 

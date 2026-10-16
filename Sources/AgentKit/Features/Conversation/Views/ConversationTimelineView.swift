@@ -30,8 +30,18 @@ public struct ConversationTimelineView: View {
             workspaceRoot: viewModel.workspaceRootURL,
             rendererMode: store.conversationRendererMode,
             isVisible: isVisible,
-            bottomInset: bottomInset
+            bottomInset: bottomInset,
+            onReachedTop: { Task { await viewModel.loadOlderHistory() } }
         )
+        .safeAreaInset(edge: .top, spacing: 0) {
+            if viewModel.historyMayBeIncomplete {
+                Text("早期历史可能不完整。请更新 Runtime 以启用分页读取。")
+                    .font(.caption)
+                    .frame(maxWidth: .infinity)
+                    .padding(8)
+                    .background(.regularMaterial)
+            }
+        }
         // Scope identity to this resident session. The view remains mounted
         // across ordinary selection changes, so returning preserves its DOM
         // and viewport; only its first mount starts at the bottom.

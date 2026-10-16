@@ -57,10 +57,7 @@ public final class WorkspaceStore {
                 draft = nil
                 let controller = supervisor.controller(for: conversation, model: nil)
                 #if os(macOS)
-                if !residentConversationIDs.contains(conversation.id) {
-                    residentConversationIDs.append(conversation.id)
-                }
-                residentConversationViewModels[conversation.id] = controller
+                retainResidentTimeline(conversationID: conversation.id, controller: controller)
                 #endif
                 // Controller installation is synchronous; history/socket loading cannot
                 // later overwrite selection because it only mutates this session.
@@ -75,6 +72,31 @@ public final class WorkspaceStore {
     /// each WKWebView's DOM, viewport, selection, and disclosure state.
     public private(set) var residentConversationIDs: [String] = []
     public private(set) var residentConversationViewModels: [String: ConversationViewModel] = [:]
+    @ObservationIgnored private var residentAccess: [String: UInt64] = [:]
+    private var residentAccessSequence: UInt64 = 0
+    private static let maximumResidentTimelines = 3
+
+    private func retainResidentTimeline(conversationID: String, controller: ConversationViewModel) {
+        residentAccessSequence &+= 1
+        residentAccess[conversationID] = residentAccessSequence
+        if !residentConversationIDs.contains(conversationID) {
+            residentConversationIDs.append(conversationID)
+        }
+        residentConversationViewModels[conversationID] = controller
+        while residentConversationIDs.count > Self.maximumResidentTimelines {
+            guard let victim = residentConversationIDs.filter({ $0 != conversationID }).min(by: {
+                (residentAccess[$0] ?? 0) < (residentAccess[$1] ?? 0)
+            }) else { break }
+            residentConversationIDs.removeAll { $0 == victim }
+            residentConversationViewModels.removeValue(forKey: victim)
+            residentAccess.removeValue(forKey: victim)
+            if supervisor.controller(sessionID: victim)?.requiresControlChannelRetention != true {
+                inspectorWorkspaceStates.removeValue(forKey: victim)
+            }
+            // Evict presentation only. The supervisor independently retains
+            // active control channels, pending approvals and client tools.
+        }
+    }
     #endif
 
     // MARK: - Session Draft (P5.0 延迟创建)
@@ -195,6 +217,11 @@ public final class WorkspaceStore {
 
     public var supportsWorkspaceGitBranch: Bool {
         supervisor.runtimeCapabilities.supportsWorkspaceGitBranch
+    }
+
+    /// 按轮 Fork 入口只在 Runtime 声明 `conversation_fork_through_turn_v1` 时显示。
+    public var supportsConversationForkThroughTurn: Bool {
+        supervisor.runtimeCapabilities.flags.contains(.conversationForkThroughTurn)
     }
 
     public private(set) var workspaceGitBranches: [WorkspaceGitBranch] = []
@@ -561,6 +588,69 @@ public final class WorkspaceStore {
         }
     }
 
+    // MARK: - Conversation Forks (conversation_fork_through_turn_v1)
+
+    /// 最近一次按轮 Fork 的用户可见错误（409/404 等 fail-closed 情况）。
+    public var conversationForkErrorMessage: String?
+
+    /// 把 fork 失败翻译为可操作提示：压缩轮 / 未知轮 / 未结束轮 → 明确说明。
+    public func presentConversationForkError(_ error: Error) {
+        conversationForkErrorMessage = Self.forkErrorMessage(for: error)
+    }
+
+    public func clearConversationForkError() {
+        conversationForkErrorMessage = nil
+    }
+
+    static func forkErrorMessage(for error: Error) -> String {
+        if case RuntimeHTTPError.unexpectedStatus(let code, let body) = error {
+            switch code {
+            case 409:
+                return "该轮已被压缩或不可分叉，无法在此处创建分支。"
+            case 404:
+                return "未找到该轮次，可能尚未结束或已被移除。"
+            default:
+                return "分叉失败（HTTP \(code)）：\(body)"
+            }
+        }
+        return "分叉失败：\(error.localizedDescription)"
+    }
+
+    /// 在源对话的某一轮处 Fork 新对话，并把新子会话加入列表 / 选中。
+    ///
+    /// - Parameters:
+    ///   - source: 源对话。
+    ///   - throughTurnID: 目标轮 id（nil = 整段 checkpoint）。
+    ///   - executionPolicy: 默认与源绑定的工作区共享策略。
+    /// - Throws: `RuntimeHTTPError.unexpectedStatus`（409/404 等 fail-closed 情况）。
+    @discardableResult
+    public func forkConversation(
+        from source: ConversationRef,
+        throughTurnID: String?,
+        name: String? = nil,
+        executionPolicy: WorkspaceExecutionPolicy = .sharedWorkspace
+    ) async throws -> ConversationForkResponse {
+        guard supportsConversationForkThroughTurn else {
+            throw RuntimeHTTPError.unsupported
+        }
+        let response = try await client.forkConversation(
+            sourceID: source.id,
+            requestID: "fork_\(source.id)_\(throughTurnID ?? "checkpoint")_\(UUID().uuidString)",
+            name: name,
+            throughTurnID: throughTurnID,
+            executionPolicy: executionPolicy.rawValue,
+            worktreeName: nil
+        )
+        await listViewModel.refresh()
+        if let ref = listViewModel.conversations.first(where: { $0.id == response.id }) {
+            listViewModel.prepend(ref)
+            selectItem = .conversationDetail(conversation: ref)
+        } else {
+            selectConversation(sessionID: response.id)
+        }
+        return response
+    }
+
     public func canDeleteConversation(_ conversation: ConversationRef) -> Bool {
         switch supervisor.activity(for: conversation) {
         case .idle, .succeeded, .failed, .cancelled:
@@ -640,9 +730,12 @@ public final class WorkspaceStore {
     /// Refresh capability/activity snapshots and reconnect every live background session.
     public func refreshRuntimeState() async {
         await supervisor.refreshRuntimeState(conversations: listViewModel.conversations)
-        if supportsConversationArchive {
+        if supportsConversationArchive,
+           listViewModel.hasLoadedArchivedConversations || selectedConversation?.isArchived == true
+            || (listViewModel.hasLoadedConversations && !listViewModel.usesConversationPagination && selectedConversation != nil
+                && !listViewModel.conversations.contains(where: { $0.id == selectedConversation?.id })) {
             await listViewModel.refreshArchived()
-        } else {
+        } else if !supportsConversationArchive {
             listViewModel.clearArchived()
         }
         await reconcileSelectedConversationPartition()
@@ -652,6 +745,7 @@ public final class WorkspaceStore {
     /// Move the local selection to the Runtime-owned partition and ensure archived
     /// history cannot keep an old live control channel.
     private func reconcileSelectedConversationPartition() async {
+        guard listViewModel.hasLoadedConversations else { return }
         guard let selectedConversation else { return }
         if let active = listViewModel.conversations.first(where: { $0.id == selectedConversation.id }) {
             if selectedConversation.isArchived {
@@ -671,6 +765,9 @@ public final class WorkspaceStore {
             return
         }
 
+        // A paged list is not a deletion proof. The selected or retained
+        // conversation may simply lie beyond the loaded range.
+        guard !listViewModel.usesConversationPagination else { return }
         self.selectedConversation = nil
         await supervisor.removeDeletedConversation(sessionID: selectedConversation.id)
         #if os(macOS)

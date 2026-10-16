@@ -39,6 +39,7 @@ struct ConversationWebUpdate: Codable, Equatable, Sendable {
             case replaceTurn
             case updateTurn
             case appendTurn
+            case prependTurns
             case removeTurns
             case replaceBlock
             case appendBlock
@@ -80,6 +81,11 @@ struct ConversationWebUpdate: Codable, Equatable, Sendable {
                 kind: .appendTurn, index: nil, blockIndex: nil,
                 turn: turn, block: nil, todos: nil, live: nil
             )
+        }
+
+        static func prependTurn(_ turn: ConversationWebDocument.Turn) -> Self {
+            .init(kind: .prependTurns, index: nil, blockIndex: nil,
+                  turn: turn, block: nil, todos: nil, live: nil)
         }
 
         static func removeTurns(from index: Int) -> Self {
@@ -150,7 +156,9 @@ enum ConversationWebDocumentDiffer {
         guard let old,
               old.conversationID == new.conversationID,
               new.revision == old.revision + 1,
-              canPatchTurnShape(from: old.turns, to: new.turns) else {
+              (canPatchTurnShape(from: old.turns, to: new.turns)
+                || (new.turns.count > old.turns.count
+                    && Array(new.turns.suffix(old.turns.count).map(\.id)) == old.turns.map(\.id))) else {
             return reset(new)
         }
 
@@ -158,35 +166,46 @@ enum ConversationWebDocumentDiffer {
         // reuse source) and only the revision field differs — nothing to send.
         // (A full `old != new` deep comparison is avoided here: the revision
         // field differs on every patch, so it could never short-circuit anyway.)
-        if stableTurnIDs.count == new.turns.count,
+        if old.turns.count == new.turns.count,
+           stableTurnIDs.count == new.turns.count,
            old.todos == new.todos,
            old.live == new.live {
             return nil
         }
 
         var operations: [ConversationWebUpdate.Operation] = []
+        let prepended = new.turns.count > old.turns.count
+            && Array(new.turns.suffix(old.turns.count).map(\.id)) == old.turns.map(\.id)
+            && old.turns.first?.id != new.turns.first?.id
+            ? new.turns.count - old.turns.count : 0
+        if prepended > 0 {
+            for turn in new.turns.prefix(prepended).reversed() {
+                operations.append(.prependTurn(turn))
+            }
+        }
         if old.todos != new.todos {
             operations.append(.setTodos(new.todos))
         }
 
         let commonCount = min(old.turns.count, new.turns.count)
-        for index in 0..<commonCount {
+        for oldIndex in 0..<commonCount {
+            let index = oldIndex + prepended
             let newTurn = new.turns[index]
             // Turns whose content version matched the reuse source are known to
             // be identical to the acknowledged document — skip the deep
             // comparison entirely.
             if stableTurnIDs.contains(newTurn.id) { continue }
-            if old.turns[index] != newTurn {
+            if old.turns[oldIndex] != newTurn {
                 appendTurnOperations(
-                    from: old.turns[index],
+                    from: old.turns[oldIndex],
                     to: newTurn,
                     at: index,
                     into: &operations
                 )
             }
         }
-        if new.turns.count > old.turns.count {
-            for turn in new.turns.dropFirst(old.turns.count) {
+        if new.turns.count > old.turns.count + prepended {
+            for turn in new.turns.dropFirst(old.turns.count + prepended) {
                 operations.append(.appendTurn(turn))
             }
         } else if new.turns.count < old.turns.count {

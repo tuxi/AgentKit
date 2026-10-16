@@ -31,6 +31,7 @@ enum TranscriptAction: Hashable {
     case openWorkflow(workflowID: String)
     case openTrajectory(turnID: String)
     case copyBlock(text: String)
+    case forkConversation(turnID: String)  // 新增：按轮 Fork
 }
 
 struct TranscriptDocumentState: Hashable {

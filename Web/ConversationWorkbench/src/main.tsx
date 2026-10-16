@@ -445,6 +445,7 @@ class ViewportController {
   private reportDueAt: number | undefined;
   private resizeObserver: ResizeObserver | undefined;
   private lastEvent = "start";
+  private lastReachedTopAt = 0;
   private onPinChange: (pinned: boolean) => void = () => {};
   private onViewportChange: (snapshot: ViewportSnapshot) => void = () => {};
 
@@ -493,6 +494,11 @@ class ViewportController {
       if (!this.interacting) beginInteraction(false);
       this.lastEvent = "user-scroll";
       this.setPinned(this.isAtBottom());
+      if (!this.pinned && window.scrollY < 160 && currentConversationID
+          && performance.now() - this.lastReachedTopAt > 600) {
+        this.lastReachedTopAt = performance.now();
+        postToNative({ type: "reachedTop", conversationID: currentConversationID });
+      }
       // Do not walk the conversation on every scroll event. The throttled
       // viewport report or interaction-end checkpoint captures it once.
       this.lastAnchor = null;
@@ -792,6 +798,9 @@ function applyOperations(
       }
       case "appendTurn":
         if (operation.turn) next = { ...next, turns: [...next.turns, operation.turn] };
+        break;
+      case "prependTurns":
+        if (operation.turn) next = { ...next, turns: [operation.turn, ...next.turns] };
         break;
       case "removeTurns":
         if (operation.index !== undefined) {

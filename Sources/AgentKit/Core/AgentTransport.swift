@@ -53,6 +53,7 @@ public protocol AgentTransport: Sendable {
 
     /// 列出 backend 内存中的活跃 session。
     func listConversations() async throws -> [ConversationRef]
+    func listConversationPage(archived: Bool, limit: Int, before: String?) async throws -> ConversationListPage
     func listArchivedConversations() async throws -> [ConversationRef]
     func archiveConversation(id: String) async throws -> ConversationArchiveResponse
     func restoreConversation(id: String) async throws -> ConversationArchiveResponse
@@ -176,6 +177,28 @@ public protocol AgentTransport: Sendable {
     /// 事件增量读取（P8.7 子流轮询）。`since` 是不透明游标（0 = 从头），
     /// 下一次调用传返回值里的 `nextSince`。CodeAgent backend 的游标 = 最大 `seq`。
     func getEventBatch(conversationID: String, since: Int) async throws -> AgentEventBatch
+    func getTailEventBatch(conversationID: String, limit: Int) async throws -> AgentEventBatch
+    func getOlderEventBatch(conversationID: String, before: Int, limit: Int) async throws -> AgentEventBatch
+
+    // MARK: - Conversation forks (conversation_fork_through_turn_v1)
+
+    /// 拉取源对话到某轮 terminal 事件为止的前缀（`GET .../events?through_turn_id=`）。
+    func getConversationEventsPrefix(
+        conversationID: String,
+        throughTurnID: String
+    ) async throws -> ConversationEventsPrefix
+
+    // MARK: - Conversation forks (conversation_fork_through_turn_v1)
+
+    /// 在某一轮处 Fork 新对话（`POST /v1/conversations/{source_id}/forks`）。
+    func forkConversation(
+        sourceID: String,
+        requestID: String,
+        name: String?,
+        throughTurnID: String?,
+        executionPolicy: String,
+        worktreeName: String?
+    ) async throws -> ConversationForkResponse
 
     // MARK: - Job 子流（P8.7 §4 Phase C）
 
@@ -234,6 +257,17 @@ public protocol AgentTransport: Sendable {
 // MARK: - Default impls
 
 extension AgentTransport {
+    public func listConversationPage(archived: Bool, limit: Int, before: String?) async throws -> ConversationListPage {
+        let values = try await (archived ? listArchivedConversations() : listConversations())
+        return ConversationListPage(conversations: values)
+    }
+    public func getTailEventBatch(conversationID: String, limit: Int) async throws -> AgentEventBatch {
+        throw RuntimeHTTPError.unsupported
+    }
+
+    public func getOlderEventBatch(conversationID: String, before: Int, limit: Int) async throws -> AgentEventBatch {
+        throw RuntimeHTTPError.unsupported
+    }
     /// Compatibility adapter for transports that still expose only a current-session
     /// binding. It is intentionally not used by `CodeAgentTransport`.
     public func makeSessionChannel(sessionID: String) -> any RuntimeSessionChannel {
@@ -376,6 +410,26 @@ extension AgentTransport {
         let events = try await getEvents(conversationID: conversationID)
         let tail = since < events.count ? Array(events[since...]) : []
         return AgentEventBatch(events: tail, nextSince: max(since, events.count))
+    }
+
+    /// 默认实现：不支持 Fork（mock / 非 CodeAgent backend）。
+    public func forkConversation(
+        sourceID: String,
+        requestID: String,
+        name: String?,
+        throughTurnID: String?,
+        executionPolicy: String,
+        worktreeName: String?
+    ) async throws -> ConversationForkResponse {
+        throw RuntimeHTTPError.unsupported
+    }
+
+    /// 默认实现：不支持按轮前缀拉取（mock / 非 CodeAgent backend）。
+    public func getConversationEventsPrefix(
+        conversationID: String,
+        throughTurnID: String
+    ) async throws -> ConversationEventsPrefix {
+        throw RuntimeHTTPError.unsupported
     }
 
     /// 默认实现：不支持 job 端点（mock / 非 CodeAgent backend）。

@@ -180,6 +180,20 @@ public actor RuntimeEngine {
     /// Incremental turn projection cache. Re-projects only changed turns so
     /// per-event cost scales with the change, not the whole conversation.
     private var projectionCache: TurnProjectionCache
+    /// Older pages live outside the streaming graph so a prepend cannot reset
+    /// live node revisions, content versions, or the forward replay cursor.
+    private var olderEvents: [AgentEvent] = []
+    /// A hard page limit can cut through the oldest tail turn. Keep the tail
+    /// fragment so it can be replayed with its `turn_started` from an older page.
+    private var leadingTailEvents: [AgentEvent] = []
+    private var capturesLeadingTail = false
+    private var firstFullTailTurnID: String?
+    private var hasRejoinedLeadingTurn = false
+    private var olderGraph = ExecutionGraph()
+    private var olderReducer = ExecutionReducer()
+    private var olderProjectionCache: TurnProjectionCache
+    private var olderTimeline: [ExecutionNode] = []
+    private var olderTurns: [ConversationTurn] = []
 
     /// Pending approval queue. Order reflects arrival order from the server;
     /// the protocol guarantees serial tool execution, so concurrent approvals
@@ -250,6 +264,7 @@ public actor RuntimeEngine {
         self.timelineProjection = TimelineProjection(mergePolicy: mergePolicy)
         self.presenter = ExecutionPresenter()
         self.projectionCache = TurnProjectionCache(mergePolicy: mergePolicy)
+        self.olderProjectionCache = TurnProjectionCache(mergePolicy: mergePolicy)
     }
 
     // MARK: - Public API
@@ -257,6 +272,24 @@ public actor RuntimeEngine {
     /// Ingest a v1 AgentEvent from the wire.
     /// Persist → Reduce → Project → Notify UI (coalesced).
     public func ingest(_ event: AgentEvent) {
+        if capturesLeadingTail {
+            if case .turnStarted = event {
+                capturesLeadingTail = false
+                if firstFullTailTurnID == nil,
+                   case .turnStarted(let turnID, _, _, _) = event {
+                    firstFullTailTurnID = "turn_\(turnID)_user"
+                }
+            } else {
+                leadingTailEvents.append(event)
+                if !olderEvents.isEmpty {
+                    _ = olderReducer.reduce(event, into: &olderGraph)
+                    let projected = olderProjectionCache.project(graph: &olderGraph, isLive: isLive)
+                    olderTimeline = projected.timeline
+                    olderTurns = projected.turns
+                }
+                if Self.isTurnTerminal(event) { capturesLeadingTail = false }
+            }
+        }
         // Track pending approval (v1.2 去重：已回复过的 id 忽略)
         if case .approvalRequest(_, let request) = event,
            !resolvedApprovalIDs.contains(request.id) {
@@ -390,6 +423,19 @@ public actor RuntimeEngine {
     /// Import historical events (from HTTP GET /events).
     /// Replays all events through the reducer, then projects the final graph.
     public func importHistory(_ events: [AgentEvent]) {
+        leadingTailEvents = Array(events.prefix { event in
+            if case .turnStarted = event { return false }
+            return true
+        })
+        capturesLeadingTail = !leadingTailEvents.isEmpty
+            && leadingTailEvents.count == events.count
+            && !leadingTailEvents.contains(where: Self.isTurnTerminal)
+        firstFullTailTurnID = events.compactMap { event -> String? in
+            if case .turnStarted(let turnID, _, _, _) = event {
+                return "turn_\(turnID)_user"
+            }
+            return nil
+        }.first
         _latestTodos = []
         pendingTodoToolUpdates.removeAll()
         canonicalTodoRevision = 0
@@ -468,6 +514,38 @@ public actor RuntimeEngine {
         _pendingAskUsers.removeAll()
         isLive = false
         yieldSnapshot()
+    }
+
+    /// Prepend a turn-aligned page. Rebuild only the historical prefix; the
+    /// streaming graph and its incremental projection cache remain untouched.
+    public func importOlderHistory(_ events: [AgentEvent]) {
+        guard !events.isEmpty else { return }
+        olderEvents.insert(contentsOf: events, at: 0)
+        if !leadingTailEvents.isEmpty,
+           let start = olderEvents.lastIndex(where: { event in
+               if case .turnStarted = event { return true }
+               return false
+           }) {
+            hasRejoinedLeadingTurn = !olderEvents.suffix(from: olderEvents.index(after: start))
+                .contains(where: Self.isTurnTerminal)
+        }
+        olderGraph = ExecutionGraph()
+        olderReducer = ExecutionReducer()
+        olderProjectionCache = TurnProjectionCache(mergePolicy: timelineProjection.mergePolicy)
+        for event in olderEvents + leadingTailEvents {
+            _ = olderReducer.reduce(event, into: &olderGraph)
+        }
+        let projected = olderProjectionCache.project(graph: &olderGraph, isLive: isLive && capturesLeadingTail)
+        olderTimeline = projected.timeline
+        olderTurns = projected.turns
+        yieldSnapshot()
+    }
+
+    private static func isTurnTerminal(_ event: AgentEvent) -> Bool {
+        switch event {
+        case .turnFinished, .turnFailed, .turnCancelled: return true
+        default: return false
+        }
     }
 
     /// `todo_updated` is authoritative. A successful Todo tool call is used
@@ -618,9 +696,25 @@ public actor RuntimeEngine {
         // content versions. This makes per-event cost scale with the change
         // rather than the whole conversation.
         let (timeline, turns) = projectionCache.project(graph: &graph, isLive: isLive)
+        let prefixTurnIDs = Set(olderTurns.map(\.id))
+        let joinedLiveTurns: [ConversationTurn]
+        if hasRejoinedLeadingTurn {
+            if let firstFullTailTurnID,
+               let first = turns.firstIndex(where: { $0.id == firstFullTailTurnID }) {
+                joinedLiveTurns = Array(turns[first...])
+            } else if firstFullTailTurnID == nil {
+                joinedLiveTurns = []
+            } else {
+                joinedLiveTurns = turns
+            }
+        } else {
+            joinedLiveTurns = turns
+        }
+        let uniqueLiveTurns = joinedLiveTurns.filter { !prefixTurnIDs.contains($0.id) }
+        let prefixRawTurnIDs = Set(olderTimeline.map(\.turnID).filter { !$0.isEmpty })
         return RuntimeSnapshot(
-            timeline: timeline,
-            turns: turns,
+            timeline: olderTimeline + timeline.filter { !prefixRawTurnIDs.contains($0.turnID) },
+            turns: olderTurns + uniqueLiveTurns,
             pendingApprovals: _pendingApprovals,
             pendingPlanApproval: _pendingPlanApproval,
             pendingAskUsers: Array(_pendingAskUsers.values),

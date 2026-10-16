@@ -11,6 +11,42 @@
 import SwiftUI
 import ClientToolProtocol
 
+struct OlderHistoryPageResult: Sendable {
+    let events: [AgentEvent]
+    let oldestSeq: Int
+    let hasMoreOlder: Bool
+    let isIncomplete: Bool
+}
+
+enum ConversationHistoryPager {
+    static func load(
+        before: Int,
+        fetch: @Sendable (Int) async throws -> AgentEventBatch
+    ) async throws -> OlderHistoryPageResult {
+        var cursor = before
+        var events: [AgentEvent] = []
+        var finalBatch: AgentEventBatch?
+        repeat {
+            try Task.checkCancellation()
+            let batch = try await fetch(cursor)
+            guard let oldest = batch.oldestSeq, oldest < cursor else {
+                throw RuntimeHTTPError.invalidResponse
+            }
+            events.insert(contentsOf: batch.events, at: 0)
+            cursor = oldest
+            finalBatch = batch
+            if !batch.turnFragment || !batch.hasMoreOlder { break }
+        } while true
+        guard let finalBatch else { throw RuntimeHTTPError.invalidResponse }
+        return OlderHistoryPageResult(
+            events: events, oldestSeq: cursor,
+            hasMoreOlder: finalBatch.hasMoreOlder,
+            isIncomplete: finalBatch.turnFragment && !finalBatch.hasMoreOlder
+                || finalBatch.replayTruncated && !finalBatch.hasMoreOlder
+        )
+    }
+}
+
 // MARK: - ConversationViewModel
 
 @MainActor
@@ -24,6 +60,12 @@ public final class ConversationViewModel {
 
     /// Latest snapshot from the engine — primary UI data source.
     public private(set) var snapshot: RuntimeSnapshot = .empty(sessionID: "")
+    public private(set) var hasMoreOlderHistory = false
+    public private(set) var historyMayBeIncomplete = false
+    public private(set) var isLoadingOlderHistory = false
+    private var oldestHistorySeq: Int?
+    private let historyPageSize = 200
+    private var loadedWorkflowEvents: [AgentEvent] = []
 
     /// Current turn ID (from turn_started) — used by cancelTurn.
     private var currentTurnID: String?
@@ -50,6 +92,12 @@ public final class ConversationViewModel {
     public var isTurnActive: Bool {
         isLocallyQueued || isAwaitingTurnAcceptance
             || ["accepted", "queued", "running", "resuming", "cancelling"].contains(lifecycleStatus)
+    }
+
+    var requiresControlChannelRetention: Bool {
+        isTurnActive || isConnecting || !inFlightClientToolCallIDs.isEmpty
+            || snapshot.pendingApproval != nil || snapshot.pendingPlanApproval != nil
+            || snapshot.pendingAskUser != nil
     }
 
     /// turn 正在被取消（已发送 cancel_turn，等待 Runtime 确认）。
@@ -160,6 +208,7 @@ public final class ConversationViewModel {
     let timelineExtensions: [any TimelineExtension]
     private var streamTask: Task<Void, Never>?
     private var snapshotTask: Task<Void, Never>?
+    private var detailFetchTask: Task<Void, Never>?
     private var turnDispatchTask: Task<Void, Never>?
     private var pendingRestoreTask: Task<Void, Never>?
     private var queuedTicket: UUID?
@@ -276,7 +325,8 @@ public final class ConversationViewModel {
     ///   Phase 1: HTTP fetch history → RuntimeEngine.importHistory()
     ///   Phase 2: WebSocket stream → RuntimeEngine.ingest() per event
     ///   UI subscribes to RuntimeEngine.stateStream() for snapshots
-    public func connect(to conversation: ConversationRef) async {
+    public func connect(to conversation: ConversationRef, historyLimit: Int? = nil) async {
+        guard !Task.isCancelled else { return }
         if self.conversation?.id == conversation.id, isConnected || isConnecting {
             return
         }
@@ -289,6 +339,12 @@ public final class ConversationViewModel {
             completedClientToolCallIDs.removeAll()
         }
         self.snapshot = .empty(sessionID: conversation.id)
+        detailFetchTask?.cancel()
+        hasMoreOlderHistory = false
+        historyMayBeIncomplete = false
+        isLoadingOlderHistory = false
+        oldestHistorySeq = nil
+        loadedWorkflowEvents = []
         currentTurnID = nil
         detail = nil
         // 仅在尚无任何生命周期状态时，用 ConversationRef.turnStatus 兜底。
@@ -302,6 +358,29 @@ public final class ConversationViewModel {
         queuePosition = nil
         pausedAt = conversation.pausedDate
         messages = []
+        detailFetchTask = Task { [weak self, client] in
+            let result = try? await client.getConversationDetail(id: conversation.id)
+            guard let self, !Task.isCancelled,
+                  self.conversation?.id == conversation.id,
+                  let result else { return }
+            self.detail = result
+            if self.lifecycleStatus == nil || self.lifecycleStatus == conversation.turnStatus {
+                self.lifecycleStatus = result.turnStatus ?? self.lifecycleStatus
+                self.pausedAt = result.pausedAt.map {
+                    Date(timeIntervalSince1970: TimeInterval($0))
+                } ?? self.pausedAt
+            }
+            if self.lifecycleStatus == "running" || self.lifecycleStatus == "resuming" {
+                await self.turnCoordinator?.markActive(sessionID: conversation.id)
+            }
+            if result.isArchived, let channel = self.channel {
+                self.streamTask?.cancel()
+                self.streamTask = nil
+                await channel.disconnect()
+                self.channel = nil
+                self.isConnected = false
+            }
+        }
 
         // Create engine for this session
         let eng = RuntimeEngine(sessionID: conversation.id)
@@ -318,7 +397,9 @@ public final class ConversationViewModel {
 
         // Phase 1: 拉取历史数据 → import into engine。
         // 返回值 = 历史批最大 seq（v1.2 §4 续传游标）。
-        let sinceCursor = await fetchHistory(conversationID: conversation.id, engine: eng)
+        let sinceCursor = await fetchHistory(conversationID: conversation.id, engine: eng,
+                                             limit: historyLimit ?? historyPageSize)
+        guard !Task.isCancelled else { return }
         reconcileRuntimeActivityBaseline(historyCursor: sinceCursor)
         let pendingAtConnect = try? localStateStore.state(for: .session(conversation.id))?
             .composerDraft.pendingSubmission
@@ -346,6 +427,10 @@ public final class ConversationViewModel {
             // 且每次（重）连后传输层先 GET /events?since=<已收最大 seq> 补缺口再放行直播帧
             // ——断线重连对本 stream 透明，不再整页重放历史。
             let eventStream = try await channel.connect(since: sinceCursor)
+            guard !Task.isCancelled else {
+                await channel.disconnect()
+                return
+            }
             isConnected = true
             await eng.markLive()
 
@@ -610,6 +695,8 @@ public final class ConversationViewModel {
         isAwaitingTurnAcceptance = false
         streamTask?.cancel()
         streamTask = nil
+        detailFetchTask?.cancel()
+        detailFetchTask = nil
         pendingRestoreTask?.cancel()
         pendingRestoreTask = nil
         snapshotTask?.cancel()
@@ -625,27 +712,29 @@ public final class ConversationViewModel {
 
     /// - Returns: v1.2 §4 续传游标 = 历史批最大 `seq`（`AgentEventBatch.nextSince`），
     ///   传给 `connect(conversationID:since:)` 衔接直播流。历史拉取失败时返回 0（从头）。
-    private func fetchHistory(conversationID: String, engine: RuntimeEngine) async -> Int {
-        async let detailTask = try? client.getConversationDetail(id: conversationID)
-        async let messagesTask = try? client.getMessages(conversationID: conversationID)
-        // 用 getEventBatch 而非 getEvents：除事件外还带 nextSince（= 最大 seq）游标。
-        async let eventsTask = try? client.getEventBatch(conversationID: conversationID, since: 0)
+    private func fetchHistory(conversationID: String, engine: RuntimeEngine, limit: Int) async -> Int {
+        // A legacy server ignores `tail`; absent pagination headers leave the
+        // page metadata empty and retain its original replay behaviour.
+        async let eventsTask = try? client.getTailEventBatch(conversationID: conversationID, limit: limit)
         
-        let (detailResult, messagesResult, eventsResult) = await (detailTask, messagesTask, eventsTask)
+        let tailResult = await eventsTask
+        let eventsResult: AgentEventBatch?
+        if let tailResult {
+            eventsResult = tailResult
+        } else {
+            eventsResult = try? await client.getEventBatch(conversationID: conversationID, since: 0)
+        }
 
-        self.detail = detailResult
-        if let detailResult {
-            lifecycleStatus = detailResult.turnStatus ?? lifecycleStatus
-            pausedAt = detailResult.pausedAt.map { Date(timeIntervalSince1970: TimeInterval($0)) } ?? pausedAt
-        }
-        if lifecycleStatus == "running" || lifecycleStatus == "resuming" {
-            await turnCoordinator?.markActive(sessionID: conversationID)
-        }
-        self.messages = messagesResult ?? []
+        // The detail timeline is projected from events. `/messages` walks the
+        // complete conversation and has no consumer on this screen, so it must
+        // not hold up a paged first paint.
 
         var sinceCursor = 0
         if let batch = eventsResult {
             sinceCursor = batch.nextSince
+            oldestHistorySeq = batch.oldestSeq
+            hasMoreOlderHistory = batch.hasMoreOlder && batch.oldestSeq != nil
+            historyMayBeIncomplete = batch.replayTruncated && !hasMoreOlderHistory
 
             // v2: import into engine (replays through reducer → projects timeline)
             await engine.importHistory(batch.events)
@@ -659,6 +748,40 @@ public final class ConversationViewModel {
             }
         }
         return sinceCursor
+    }
+
+    public func loadOlderHistory() async {
+        guard !isLoadingOlderHistory, hasMoreOlderHistory,
+              let before = oldestHistorySeq,
+              let conversationID = conversation?.id,
+              let engine else { return }
+        isLoadingOlderHistory = true
+        defer { isLoadingOlderHistory = false }
+        do {
+            let limit = historyPageSize
+            let client = self.client
+            let result = try await ConversationHistoryPager.load(before: before) { cursor in
+                try await client.getOlderEventBatch(
+                    conversationID: conversationID, before: cursor, limit: limit
+                )
+            }
+            guard conversation?.id == conversationID, self.engine === engine else { return }
+            oldestHistorySeq = result.oldestSeq
+            hasMoreOlderHistory = result.hasMoreOlder
+            historyMayBeIncomplete = result.isIncomplete
+            await engine.importOlderHistory(result.events)
+            for timelineExtension in timelineExtensions {
+                await timelineExtension.handleOlderHistory(result.events)
+            }
+            if let workflowStore {
+                loadedWorkflowEvents.insert(
+                    contentsOf: result.events.filter(WorkflowStore.isWorkflowEvent), at: 0
+                )
+                workflowStore.reconcileLoadedHistory(loadedWorkflowEvents)
+            }
+        } catch {
+            // Keep the cursor so the next user scroll can retry.
+        }
     }
 
     /// Activity is sampled before the history request. Prefer persisted history
@@ -799,18 +922,9 @@ public final class ConversationViewModel {
     /// v1.3 — 将 workflow 事件转发到 WorkflowStore。
     private func forwardWorkflowEvent(_ event: AgentEvent) {
         guard let store = workflowStore else { return }
-        switch event {
-        case .workflowStarted, .workflowPlanReady,
-             .workflowTaskStateChanged, .workflowNodeStateChanged,
-             .workflowSuspended, .workflowFinished, .workflowFailed,
-             .workflowTaskFailed, .workflowTaskSucceeded, .workflowTaskSuspended,
-             .workflowNodeProgress, .workflowTaskProgress,
-             .workflowToolProgress, .workflowToolLog,
-             .workflowToolStream, .workflowToolStreamEnd:
-            store.reduce(event)
-        default:
-            break
-        }
+        guard WorkflowStore.isWorkflowEvent(event) else { return }
+        loadedWorkflowEvents.append(event)
+        store.reduce(event)
     }
 
     private func updateLifecycle(from event: AgentEvent) {

@@ -27,6 +27,15 @@ public final class ConversationListViewModel {
     public private(set) var isLoadingArchived = false
     public private(set) var hasLoadedConversations = false
     public private(set) var hasLoadedArchivedConversations = false
+    public private(set) var hasMoreConversations = false
+    public private(set) var hasMoreArchivedConversations = false
+    public private(set) var isLoadingMore = false
+    public private(set) var isLoadingMoreArchived = false
+    public private(set) var usesConversationPagination = false
+    private var usesArchivedPagination = false
+    private var nextConversationCursor: String?
+    private var nextArchivedCursor: String?
+    private let pageSize = 100
 
     /// Conversations currently executing a destructive delete workflow.
     public private(set) var deletingConversationIDs: Set<String> = []
@@ -114,10 +123,17 @@ public final class ConversationListViewModel {
         let maxAttempts = 30          // ≈ 30 × 150ms = 4.5s，覆盖冷启动 start() 的延迟
         for attempt in 1...maxAttempts {
             do {
-                let fetched = try await client.listConversations()
+                let page = try await client.listConversationPage(archived: false, limit: pageSize, before: nil)
                 guard refreshGeneration == mutationGeneration,
                       activeMutationCount == 0 else { return }
-                publishConversations(fetched)
+                if page.isPaged, page.hasMore, usesConversationPagination {
+                    publishConversations(mergePage(page.conversations, with: conversations))
+                } else {
+                    publishConversations(page.conversations)
+                    nextConversationCursor = page.nextCursor
+                    hasMoreConversations = page.hasMore
+                }
+                usesConversationPagination = page.isPaged
                 hasLoadedConversations = true
                 errorMessage = nil
                 #if os(iOS)
@@ -149,13 +165,21 @@ public final class ConversationListViewModel {
     /// Refresh the Runtime-owned archived partition. Callers must capability-gate
     /// this method; unsupported backends intentionally remain empty.
     public func refreshArchived() async {
-        guard !isLoadingArchived else { return }
+        guard !isLoadingArchived, !isLoadingMoreArchived else { return }
         isLoadingArchived = true
         defer { isLoadingArchived = false }
+        let refreshGeneration = mutationGeneration
         do {
-            let fetched = try await client.listArchivedConversations()
-            guard activeMutationCount == 0 else { return }
-            publishArchivedConversations(fetched)
+            let page = try await client.listConversationPage(archived: true, limit: pageSize, before: nil)
+            guard activeMutationCount == 0, refreshGeneration == mutationGeneration else { return }
+            if page.isPaged, page.hasMore, usesArchivedPagination {
+                publishArchivedConversations(mergePage(page.conversations, with: archivedConversations))
+            } else {
+                publishArchivedConversations(page.conversations)
+                nextArchivedCursor = page.nextCursor
+                hasMoreArchivedConversations = page.hasMore
+            }
+            usesArchivedPagination = page.isPaged
             hasLoadedArchivedConversations = true
             errorMessage = nil
         } catch {
@@ -164,11 +188,60 @@ public final class ConversationListViewModel {
     }
 
     public func clearArchived() {
-        guard !archivedConversations.isEmpty else { return }
+        guard !archivedConversations.isEmpty || hasLoadedArchivedConversations
+                || hasMoreArchivedConversations else { return }
         archivedConversations = []
         archivedConversationItems = []
         hasLoadedArchivedConversations = false
+        hasMoreArchivedConversations = false
+        nextArchivedCursor = nil
+        usesArchivedPagination = false
         revision += 1
+    }
+
+    public func loadMoreConversations(archived: Bool = false) async {
+        if archived {
+            guard !isLoadingArchived, !isLoadingMoreArchived,
+                  hasMoreArchivedConversations, let cursor = nextArchivedCursor else { return }
+            isLoadingMoreArchived = true
+            defer { isLoadingMoreArchived = false }
+            await loadPage(archived: true, cursor: cursor)
+        } else {
+            guard !isLoading, !isLoadingMore,
+                  hasMoreConversations, let cursor = nextConversationCursor else { return }
+            isLoadingMore = true
+            defer { isLoadingMore = false }
+            await loadPage(archived: false, cursor: cursor)
+        }
+    }
+
+    private func loadPage(archived: Bool, cursor: String) async {
+        let generation = mutationGeneration
+        do {
+            let page = try await client.listConversationPage(archived: archived, limit: pageSize, before: cursor)
+            guard generation == mutationGeneration, activeMutationCount == 0 else { return }
+            guard !page.hasMore || page.nextCursor != cursor else {
+                throw RuntimeHTTPError.invalidResponse
+            }
+            if archived {
+                publishArchivedConversations(mergePage(archivedConversations, with: page.conversations))
+                nextArchivedCursor = page.nextCursor
+                hasMoreArchivedConversations = page.hasMore
+            } else {
+                publishConversations(mergePage(conversations, with: page.conversations))
+                nextConversationCursor = page.nextCursor
+                hasMoreConversations = page.hasMore
+            }
+            errorMessage = nil
+        } catch {
+            errorMessage = error.localizedDescription
+        }
+    }
+
+    /// Keep the caller's ordering while deduplicating page-boundary records.
+    private func mergePage(_ first: [ConversationRef], with second: [ConversationRef]) -> [ConversationRef] {
+        var ids = Set(first.map(\.id))
+        return first + second.filter { ids.insert($0.id).inserted }
     }
 
     private func publishConversations(_ incoming: [ConversationRef]) {

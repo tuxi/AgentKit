@@ -153,6 +153,12 @@ public final class CodeAgentSessionChannel: RuntimeSessionChannel, @unchecked Se
         if values.contains("workspace_git_branch_v1") {
             flags.insert(.workspaceGitBranch)
         }
+        if values.contains("history_pagination") {
+            flags.insert(.historyPagination)
+        }
+        if values.contains("conversation_list_pagination_v1") {
+            flags.insert(.conversationListPagination)
+        }
         return flags
     }
 }
@@ -304,8 +310,46 @@ public final class CodeAgentTransport: AgentTransport, @unchecked Sendable {
         try await http.createConversation(request: request)
     }
 
+    // MARK: - Conversation forks
+
+    public func forkConversation(
+        sourceID: String,
+        requestID: String,
+        name: String?,
+        throughTurnID: String?,
+        executionPolicy: String,
+        worktreeName: String?
+    ) async throws -> ConversationForkResponse {
+        try await http.forkConversation(
+            sourceID: sourceID,
+            requestID: requestID,
+            name: name,
+            throughTurnID: throughTurnID,
+            executionPolicy: executionPolicy,
+            worktreeName: worktreeName
+        )
+    }
+
+    public func getConversationEventsPrefix(
+        conversationID: String,
+        throughTurnID: String
+    ) async throws -> ConversationEventsPrefix {
+        let result = try await http.getConversationEventsPrefix(
+            conversationID: conversationID,
+            throughTurnID: throughTurnID
+        )
+        return ConversationEventsPrefix(
+            events: result.frames.compactMap { AgentEvent.from(wire: $0) },
+            isTruncated: result.isTruncated
+        )
+    }
+
     public func listConversations() async throws -> [ConversationRef] {
         try await http.listConversations()
+    }
+
+    public func listConversationPage(archived: Bool, limit: Int, before: String?) async throws -> ConversationListPage {
+        try await http.listConversationPage(archived: archived, limit: limit, before: before)
     }
 
     public func listArchivedConversations() async throws -> [ConversationRef] {
@@ -448,6 +492,20 @@ public final class CodeAgentTransport: AgentTransport, @unchecked Sendable {
         return Self.batch(from: wireFrames, since: since)
     }
 
+    public func getTailEventBatch(conversationID: String, limit: Int) async throws -> AgentEventBatch {
+        let page = try await http.getEventPage(conversationID: conversationID, tail: limit)
+        return Self.batch(from: page.frames, since: 0, oldestSeq: page.oldestSeq,
+                          hasMoreOlder: page.hasMoreOlder, replayTruncated: page.replayTruncated,
+                          turnFragment: page.turnFragment)
+    }
+
+    public func getOlderEventBatch(conversationID: String, before: Int, limit: Int) async throws -> AgentEventBatch {
+        let page = try await http.getEventPage(conversationID: conversationID, before: before, limit: limit)
+        return Self.batch(from: page.frames, since: 0, oldestSeq: page.oldestSeq,
+                          hasMoreOlder: page.hasMoreOlder, replayTruncated: page.replayTruncated,
+                          turnFragment: page.turnFragment)
+    }
+
     public func getJobEventBatch(jobID: String, since: Int) async throws -> AgentEventBatch {
         let wireFrames = try await http.getJobEvents(jobID: jobID, since: since)
         return Self.batch(from: wireFrames, since: since)
@@ -556,11 +614,17 @@ public final class CodeAgentTransport: AgentTransport, @unchecked Sendable {
     /// wire 帧 → 事件批。游标 = 已收到帧里最大的 seq（v1.2 §4）。seq 单调递增但**有空洞**
     /// （底层是共享自增 rowid），绝不能按条数推进；未知 kind 被 compactMap 丢弃也不影响
     /// 游标——seq 来自原始帧。job 分区与会话分区共用此逻辑（各自的 seq 空间）。
-    private static func batch(from wireFrames: [WireFrame], since: Int) -> AgentEventBatch {
+    static func batch(from wireFrames: [WireFrame], since: Int, oldestSeq: Int? = nil,
+                              hasMoreOlder: Bool = false, replayTruncated: Bool = false,
+                              turnFragment: Bool = false) -> AgentEventBatch {
         let maxSeq = wireFrames.compactMap(\.seq).max() ?? since
         return AgentEventBatch(
             events: wireFrames.compactMap { AgentEvent.from(wire: $0) },
-            nextSince: max(since, maxSeq)
+            nextSince: max(since, maxSeq),
+            oldestSeq: oldestSeq,
+            hasMoreOlder: hasMoreOlder,
+            replayTruncated: replayTruncated,
+            turnFragment: turnFragment
         )
     }
 
@@ -772,8 +836,40 @@ public final class DefaultAgentClient: RuntimeClient, @unchecked Sendable {
         try await transport.createConversation(request: request)
     }
 
+    public func forkConversation(
+        sourceID: String,
+        requestID: String,
+        name: String?,
+        throughTurnID: String?,
+        executionPolicy: String,
+        worktreeName: String?
+    ) async throws -> ConversationForkResponse {
+        try await transport.forkConversation(
+            sourceID: sourceID,
+            requestID: requestID,
+            name: name,
+            throughTurnID: throughTurnID,
+            executionPolicy: executionPolicy,
+            worktreeName: worktreeName
+        )
+    }
+
+    public func getConversationEventsPrefix(
+        conversationID: String,
+        throughTurnID: String
+    ) async throws -> ConversationEventsPrefix {
+        try await transport.getConversationEventsPrefix(
+            conversationID: conversationID,
+            throughTurnID: throughTurnID
+        )
+    }
+
     public func listConversations() async throws -> [ConversationRef] {
         try await transport.listConversations()
+    }
+
+    public func listConversationPage(archived: Bool, limit: Int, before: String?) async throws -> ConversationListPage {
+        try await transport.listConversationPage(archived: archived, limit: limit, before: before)
     }
 
     public func listArchivedConversations() async throws -> [ConversationRef] {
@@ -873,6 +969,14 @@ public final class DefaultAgentClient: RuntimeClient, @unchecked Sendable {
 
     public func getEventBatch(conversationID: String, since: Int) async throws -> AgentEventBatch {
         try await transport.getEventBatch(conversationID: conversationID, since: since)
+    }
+
+    public func getTailEventBatch(conversationID: String, limit: Int) async throws -> AgentEventBatch {
+        try await transport.getTailEventBatch(conversationID: conversationID, limit: limit)
+    }
+
+    public func getOlderEventBatch(conversationID: String, before: Int, limit: Int) async throws -> AgentEventBatch {
+        try await transport.getOlderEventBatch(conversationID: conversationID, before: before, limit: limit)
     }
 
     public func getJobEventBatch(jobID: String, since: Int) async throws -> AgentEventBatch {

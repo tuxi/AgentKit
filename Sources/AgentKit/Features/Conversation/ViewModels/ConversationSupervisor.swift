@@ -76,6 +76,8 @@ public final class ConversationSupervisor {
     @ObservationIgnored private var activityRefreshTask: Task<Void, Never>?
     @ObservationIgnored private var activityMonitoringTask: Task<Void, Never>?
     @ObservationIgnored private var resourceReconciliationTask: Task<Void, Never>?
+    @ObservationIgnored private var backgroundRestorationTask: Task<Void, Never>?
+    private var backgroundRestorationGeneration: UInt64 = 0
     private var capabilityRefreshRevision: UInt64 = 0
 
     private static let defaultMaxRetainedControllers = 8
@@ -175,6 +177,8 @@ public final class ConversationSupervisor {
                 return .waitingForApproval
             }
             if controller.isConnecting {
+                if runtimeActivities[sessionID]?.state == "waiting_approval" { return .waitingForApproval }
+                if runtimeActivities[sessionID]?.state == "waiting_client_tool" { return .waitingForClientTool }
                 if let terminal = unreadTerminals[sessionID],
                    !isActiveState(runtimeActivities[sessionID]?.state) {
                     return activity(for: terminal.outcome)
@@ -270,7 +274,7 @@ public final class ConversationSupervisor {
 
     /// Refresh runtime-wide truth. Unsupported/404 is an intentional legacy downgrade.
     public func refreshRuntimeState(conversations: [ConversationRef]) async {
-        knownConversations = Dictionary(uniqueKeysWithValues: conversations.map { ($0.id, $0) })
+        for conversation in conversations { knownConversations[conversation.id] = conversation }
         capabilityRefreshRevision &+= 1
         let refreshRevision = capabilityRefreshRevision
         runtimeCapabilityDiscoveryState = .loading
@@ -304,8 +308,9 @@ public final class ConversationSupervisor {
     }
 
     private func shouldRetainLiveChannel(sessionID: String) -> Bool {
-        guard let state = runtimeActivities[sessionID]?.state else { return false }
-        return ["queued", "running", "resuming", "waiting_approval", "waiting_client_tool", "paused"].contains(state)
+        guard let activity = runtimeActivities[sessionID] else { return false }
+        return ["accepted", "queued", "running", "resuming", "waiting_approval", "waiting_client_tool"].contains(activity.state)
+            || (activity.pendingApprovalCount ?? 0) > 0 || (activity.pendingClientToolCount ?? 0) > 0
     }
 
     private func refreshActivitySnapshot() async {
@@ -349,14 +354,69 @@ public final class ConversationSupervisor {
 
         // Reattach every live session, not only the selected one, so background
         // approvals and terminal events continue to flow after app restoration.
-        for conversation in knownConversations.values where shouldRetainLiveChannel(sessionID: conversation.id) {
-            let controller = controller(for: conversation, model: UnifiedModel(model: "", reasoningEffort: nil))
-            if let remote = runtimeActivities[conversation.id] {
-                controller.applyRuntimeActivity(remote)
+        let ids = runtimeActivities.keys.filter {
+            shouldRetainLiveChannel(sessionID: $0)
+                && controllers[$0]?.isConnected != true && controllers[$0]?.isConnecting != true
+        }.sorted { lhs, rhs in
+            if lhs == rhs { return false }
+            if lhs == selectedSessionID { return true }
+            if rhs == selectedSessionID { return false }
+            return lhs < rhs
+        }
+        // Bounded parallelism prevents one slow history page from serially
+        // blocking all background approvals. Backgrounds request only a small
+        // tail; paused sessions stay metadata-only until opened or resumed.
+        if backgroundRestorationTask == nil, !ids.isEmpty {
+            backgroundRestorationGeneration &+= 1
+            let generation = backgroundRestorationGeneration
+            backgroundRestorationTask = Task { [weak self] in
+                guard let self else { return }
+                await self.restoreLiveSessions(ids)
+                if self.backgroundRestorationGeneration == generation {
+                    self.backgroundRestorationTask = nil
+                }
             }
-            await controller.connect(to: conversation)
         }
         await enforceControllerLimit()
+    }
+
+    private func restoreLiveSessions(_ ids: [String]) async {
+        await withTaskGroup(of: Void.self) { group in
+            var pending = ids.makeIterator()
+            for _ in 0..<3 {
+                if let id = pending.next() { group.addTask { await self.restoreLiveSession(id) } }
+            }
+            while await group.next() != nil, !Task.isCancelled {
+                if let id = pending.next() { group.addTask { await self.restoreLiveSession(id) } }
+            }
+        }
+        await enforceControllerLimit()
+    }
+
+    /// Awaitable boundary for deterministic restoration verification. UI refresh
+    /// never waits here; histories and socket attachment run independently.
+    func waitForBackgroundRestoration() async {
+        await backgroundRestorationTask?.value
+    }
+
+    private func restoreLiveSession(_ sessionID: String) async {
+        guard shouldRetainLiveChannel(sessionID: sessionID), !Task.isCancelled else { return }
+        var conversation = knownConversations[sessionID]
+        // Active work can lie outside the first list page. Fetch only that
+        // session's metadata rather than traversing the whole sidebar history.
+        if conversation == nil, let detail = try? await client.getConversationDetail(id: sessionID) {
+            conversation = ConversationRef(
+                id: detail.id, workspacePath: detail.workspacePath ?? "", workspace: detail.workspace,
+                name: detail.name, turnStatus: detail.turnStatus,
+                executionPolicy: detail.executionPolicy, workspaceID: detail.workspaceID,
+                baseWorkspaceID: detail.baseWorkspaceID, worktree: detail.worktree
+            )
+        }
+        guard let conversation, shouldRetainLiveChannel(sessionID: sessionID), !Task.isCancelled else { return }
+        knownConversations[sessionID] = conversation
+        let controller = controller(for: conversation, model: nil)
+        if let remote = runtimeActivities[sessionID] { controller.applyRuntimeActivity(remote) }
+        await controller.connect(to: conversation, historyLimit: sessionID == selectedSessionID ? nil : 20)
     }
 
     private func scheduleActivityRefresh() {
@@ -373,7 +433,8 @@ public final class ConversationSupervisor {
         activityMonitoringTask = Task { [weak self] in
             while !Task.isCancelled {
                 guard let hasLiveWork = self?.runtimeActivities.values.contains(where: {
-                    ["accepted", "queued", "running", "resuming", "waiting_approval", "waiting_client_tool", "paused"].contains($0.state)
+                    ["accepted", "queued", "running", "resuming", "waiting_approval", "waiting_client_tool"].contains($0.state)
+                        || ($0.pendingApprovalCount ?? 0) > 0 || ($0.pendingClientToolCount ?? 0) > 0
                 }) else { return }
                 try? await Task.sleep(for: hasLiveWork ? .seconds(3) : .seconds(20))
                 guard !Task.isCancelled, let self else { return }
@@ -389,6 +450,9 @@ public final class ConversationSupervisor {
         activityMonitoringTask = nil
         resourceReconciliationTask?.cancel()
         resourceReconciliationTask = nil
+        backgroundRestorationTask?.cancel()
+        backgroundRestorationTask = nil
+        backgroundRestorationGeneration &+= 1
     }
 
     private func reconcileAttention(with snapshot: RuntimeActivitySnapshot) {
@@ -578,18 +642,20 @@ public final class ConversationSupervisor {
     /// cap, correctness wins and the temporary excess is retained.
     public func enforceControllerLimit() async {
         let advertised = runtimeCapabilities.limits?.maxConnectedSessions ?? 0
-        let limit = advertised > 0 ? advertised : Self.defaultMaxRetainedControllers
+        let limit = advertised > 0 ? min(advertised, Self.defaultMaxRetainedControllers) : Self.defaultMaxRetainedControllers
         guard controllers.count > limit else { return }
 
         let excess = controllers.count - limit
         let candidates = controllers.compactMap { id, controller -> (String, ConversationViewModel, UInt64)? in
-            guard id != selectedSessionID, activity(for: id) == .idle else { return nil }
+            guard id != selectedSessionID, !controller.requiresControlChannelRetention,
+                  !shouldRetainLiveChannel(sessionID: id) else { return nil }
             return (id, controller, controllerLastAccess[id] ?? 0)
         }
         .sorted { $0.2 < $1.2 }
 
         for (id, controller, _) in candidates.prefix(excess) {
             await controller.disconnect()
+            guard id != selectedSessionID, !controller.requiresControlChannelRetention else { continue }
             controllers.removeValue(forKey: id)
             controllerLastAccess.removeValue(forKey: id)
         }

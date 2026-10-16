@@ -36,6 +36,12 @@ public struct ConversationDetail: Sendable, Codable, Hashable {
     public let warnings: [RuntimeAPIWarning]?
     public let archivedAt: String?
 
+    /// P6.0 — 服务端返回的分叉血缘字段。
+    /// `fork_source_session_id`：源对话 id
+    /// `fork_through_turn_id`：切到的轮（整段 fork 时为空/缺省）
+    public let forkSourceSessionID: String?
+    public let forkThroughTurnID: String?
+
     enum CodingKeys: String, CodingKey {
         case id
         case turnCount = "turn_count"
@@ -52,6 +58,8 @@ public struct ConversationDetail: Sendable, Codable, Hashable {
         case baseWorkspaceID = "base_workspace_id"
         case worktree, warnings
         case archivedAt = "archived_at"
+        case forkSourceSessionID = "fork_source_session_id"
+        case forkThroughTurnID = "fork_through_turn_id"
     }
 
     public init(from decoder: Decoder) throws {
@@ -72,6 +80,8 @@ public struct ConversationDetail: Sendable, Codable, Hashable {
         worktree = try c.decodeIfPresent(ManagedWorktreeMetadata.self, forKey: .worktree)
         warnings = try c.decodeIfPresent([RuntimeAPIWarning].self, forKey: .warnings)
         archivedAt = try c.decodeIfPresent(String.self, forKey: .archivedAt)
+        forkSourceSessionID = try c.decodeIfPresent(String.self, forKey: .forkSourceSessionID)
+        forkThroughTurnID = try c.decodeIfPresent(String.self, forKey: .forkThroughTurnID)
     }
 
     public var isArchived: Bool { archivedAt?.isEmpty == false }
@@ -86,5 +96,66 @@ public struct ConversationDetail: Sendable, Codable, Hashable {
             return URL(fileURLWithPath: baseWorkspaceID).lastPathComponent
         }
         return baseWorkspaceID
+    }
+}
+
+/// Fork 响应模型
+public struct ConversationForkResponse: Sendable, Codable, Hashable {
+    public let id: String
+    public let parentSessionID: String
+    public let sourceSessionID: String
+    public let workspacePath: String
+    public let kind: String
+    public let status: String
+    public let throughTurnID: String?
+
+    enum CodingKeys: String, CodingKey {
+        case id
+        case parentSessionID = "parent_session_id"
+        case sourceSessionID = "source_session_id"
+        case workspacePath = "workspace_path"
+        case kind
+        case status
+        case throughTurnID = "through_turn_id"
+    }
+}
+
+/// `POST /v1/conversations/{source_id}/forks` 请求体。
+struct ConversationForkRequest: Sendable, Codable {
+    let requestID: String
+    let name: String?
+    let throughTurnID: String?
+    let executionPolicy: String
+    let worktreeName: String?
+
+    enum CodingKeys: String, CodingKey {
+        case requestID = "request_id"
+        case name
+        case throughTurnID = "through_turn_id"
+        case executionPolicy = "execution_policy"
+        case worktreeName = "worktree_name"
+    }
+
+    func encode(to encoder: Encoder) throws {
+        var c = encoder.container(keyedBy: CodingKeys.self)
+        try c.encode(requestID, forKey: .requestID)
+        try c.encodeIfPresent(name, forKey: .name)
+        try c.encodeIfPresent(throughTurnID, forKey: .throughTurnID)
+        try c.encode(executionPolicy, forKey: .executionPolicy)
+        try c.encodeIfPresent(worktreeName, forKey: .worktreeName)
+    }
+}
+
+/// `GET /v1/conversations/{source_id}/events?through_turn_id=` 结果。
+///
+/// 这些事件的 `seq` 属于**源会话**分区，不能与 fork 子会话自身（从 1 开始）
+/// 的事件混入同一序列。渲染方必须把它们作为独立 partition 处理。
+public struct ConversationEventsPrefix: Sendable {
+    public let events: [AgentEvent]
+    public let isTruncated: Bool
+
+    public init(events: [AgentEvent], isTruncated: Bool) {
+        self.events = events
+        self.isTruncated = isTruncated
     }
 }

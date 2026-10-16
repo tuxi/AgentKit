@@ -26,6 +26,7 @@ public struct TurnTimelineView: View {
     /// its newest content just above this bar; the scroll range still extends
     /// behind it so the user can scroll content underneath the bar.
     let bottomInset: CGFloat
+    let onReachedTop: (@MainActor () -> Void)?
     @State private var didWebRendererFail = false
     @State private var assetPreviewPresentation: AssetPreviewPresentation?
 
@@ -36,7 +37,8 @@ public struct TurnTimelineView: View {
         workspaceRoot: URL? = nil,
         rendererMode: ConversationRendererMode = .auto,
         isVisible: Bool = true,
-        bottomInset: CGFloat = 0
+        bottomInset: CGFloat = 0,
+        onReachedTop: (@MainActor () -> Void)? = nil
     ) {
         self.snapshot = snapshot
         self.timelineExtensions = timelineExtensions
@@ -45,6 +47,7 @@ public struct TurnTimelineView: View {
         self.rendererMode = rendererMode
         self.isVisible = isVisible
         self.bottomInset = bottomInset
+        self.onReachedTop = onReachedTop
     }
     
     // 获取当前排在最底部的view的id
@@ -70,7 +73,8 @@ public struct TurnTimelineView: View {
                 isVisible: isVisible,
                 bottomInset: bottomInset,
                 onFatalFailure: { didWebRendererFail = true },
-                onPreviewAssets: { assetPreviewPresentation = $0 }
+                onPreviewAssets: { assetPreviewPresentation = $0 },
+                onReachedTop: onReachedTop
             )
             .sheet(item: $assetPreviewPresentation) { presentation in
                 AssetPreviewViewer(
@@ -88,13 +92,16 @@ public struct TurnTimelineView: View {
                 timelineExtensions: timelineExtensions,
                 conversationID: conversationID,
                 workspaceRoot: workspaceRoot,
-                bottomInset: bottomInset
+                bottomInset: bottomInset,
+                onReachedTop: onReachedTop
             )
         }
         #else
         FollowingScrollView(
             lastItemId: actualLastItemId,
-            repinTrigger: snapshot.turns.last?.id
+            repinTrigger: snapshot.turns.last?.id,
+            onReachedTop: onReachedTop,
+            prependVersion: snapshot.turns.first?.id
         ) {
             LazyVStack(alignment: .leading, spacing: 12) {
                 ForEach(snapshot.turns) { turn in
@@ -130,6 +137,7 @@ public struct TurnTimelineView: View {
                     .id("thinking_timer") // 如果它存在，它就是最底部
                 }
             }
+            .scrollTargetLayout()
             .frame(maxWidth: .infinity, alignment: .leading)
             .padding()
         }

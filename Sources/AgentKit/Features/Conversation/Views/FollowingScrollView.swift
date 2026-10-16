@@ -37,6 +37,8 @@ struct FollowingScrollView<Content: View>: View {
 
     /// Show the floating "jump to latest" button while unpinned.
     var showsJumpButton: Bool = true
+    var onReachedTop: (@MainActor () -> Void)? = nil
+    var prependVersion: String? = nil
 
     @ViewBuilder var content: () -> Content
 
@@ -48,6 +50,10 @@ struct FollowingScrollView<Content: View>: View {
     @State private var scrollPosition = ScrollPosition(edge: .bottom)
     /// Debounced snap-to-bottom after a viewport resize settles.
     @State private var resizeSettleTask: Task<Void, Never>?
+    @State private var lastTopRequestAt = Date.distantPast
+    @State private var visibleAnchorID: String?
+    @State private var lastMetrics: FollowScrollMetrics?
+    @State private var pendingPrepend: (top: CGFloat, height: CGFloat)?
 
     var body: some View {
         ScrollView {
@@ -55,6 +61,9 @@ struct FollowingScrollView<Content: View>: View {
         }
         .scrollDismissesKeyboard(.immediately)
         .scrollPosition($scrollPosition)
+        .onScrollTargetVisibilityChange(idType: String.self) { ids in
+            visibleAnchorID = ids.first
+        }
         .defaultScrollAnchor(.bottom, for: .initialOffset)
         // Content-growth following is delegated to the framework: sizeChanges
         // anchoring adjusts the offset INSIDE the layout pass, atomically.
@@ -77,6 +86,7 @@ struct FollowingScrollView<Content: View>: View {
         .onScrollGeometryChange(for: FollowScrollMetrics.self) { geometry in
             FollowScrollMetrics(
                 distanceFromBottom: max(0, geometry.contentSize.height - geometry.visibleRect.maxY),
+                distanceFromTop: geometry.visibleRect.minY,
                 // How far the viewport rests BEYOND the legitimate bottom
                 // (content bottom + bottom inset). Positive = blank space:
                 // scrolling to the bottom of a freshly opened conversation
@@ -90,6 +100,19 @@ struct FollowingScrollView<Content: View>: View {
                 containerSize: geometry.containerSize
             )
         } action: { old, new in
+            lastMetrics = new
+            if let pendingPrepend, new.contentHeight > pendingPrepend.height + 1 {
+                self.pendingPrepend = nil
+                // Preserve the exact distance into a partially visible turn.
+                // The new prefix shifts every old row by the same height delta.
+                scrollPosition.scrollTo(y: pendingPrepend.top + new.contentHeight - pendingPrepend.height)
+            }
+            if isUserScrolling, !isPinnedToBottom,
+               new.distanceFromTop < 160,
+               Date().timeIntervalSince(lastTopRequestAt) > 0.6 {
+                lastTopRequestAt = Date()
+                onReachedTop?()
+            }
             // 窗口尺寸改变的处理
             if new.containerSize != old.containerSize {
                 // Viewport is being resized (window drag / inspector toggle).
@@ -166,6 +189,16 @@ struct FollowingScrollView<Content: View>: View {
                 }
             }
         }
+        .onChange(of: prependVersion) { oldValue, newValue in
+            guard oldValue != nil, newValue != nil,
+                  !isPinnedToBottom else { return }
+            if let lastMetrics {
+                pendingPrepend = (lastMetrics.distanceFromTop,
+                                  lastMetrics.contentHeight)
+            } else if let visibleAnchorID {
+                scrollPosition.scrollTo(id: visibleAnchorID, anchor: .top)
+            }
+        }
         .onChange(of: repinTrigger) { oldValue, newValue in
             // 核心修复：如果 oldValue 存在，且 newValue 存在，说明是从旧 Turn 变到新 Turn（同会话内生长）
             // 如果你是切换会话，建议在外部控制：切换会话时先把 repinTrigger 设为 nil，或者不触发此处的动画
@@ -229,6 +262,7 @@ struct FollowingScrollView<Content: View>: View {
 /// `onScrollGeometryChange` only fires the action when something relevant moved.
 private struct FollowScrollMetrics: Equatable {
     var distanceFromBottom: CGFloat
+    var distanceFromTop: CGFloat
     var overshootBeyondBottom: CGFloat
     var contentHeight: CGFloat
     var bottomInset: CGFloat
