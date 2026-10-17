@@ -36,6 +36,7 @@ public final class ConversationListViewModel {
     private var nextConversationCursor: String?
     private var nextArchivedCursor: String?
     private let pageSize = 100
+    private var isLoadingRemaining = false
 
     /// Conversations currently executing a destructive delete workflow.
     public private(set) var deletingConversationIDs: Set<String> = []
@@ -215,11 +216,34 @@ public final class ConversationListViewModel {
         }
     }
 
+    /// Populate search/project metadata after first paint. Each page yields to
+    /// input/rendering; no history, controller or socket is created per row.
+    /// Errors stop this pass and retain the cursor for a later retry.
+    public func loadRemainingConversations() async {
+        guard !isLoadingRemaining else { return }
+        isLoadingRemaining = true
+        defer { isLoadingRemaining = false }
+        var visited = Set<String>()
+        while hasMoreConversations, !Task.isCancelled {
+            do { try await Task.sleep(for: .milliseconds(100)) }
+            catch { return }
+            guard !isLoading, !isLoadingMore else { continue }
+            let cursor = nextConversationCursor
+            if let cursor, !visited.insert(cursor).inserted {
+                errorMessage = RuntimeHTTPError.invalidResponse.localizedDescription
+                return
+            }
+            await loadMoreConversations()
+            guard nextConversationCursor != cursor else { return }
+        }
+    }
+
     private func loadPage(archived: Bool, cursor: String) async {
         let generation = mutationGeneration
         do {
             let page = try await client.listConversationPage(archived: archived, limit: pageSize, before: cursor)
-            guard generation == mutationGeneration, activeMutationCount == 0 else { return }
+            guard !Task.isCancelled, generation == mutationGeneration,
+                  activeMutationCount == 0 else { return }
             guard !page.hasMore || page.nextCursor != cursor else {
                 throw RuntimeHTTPError.invalidResponse
             }
@@ -263,6 +287,7 @@ public final class ConversationListViewModel {
                 || current.uiID != replacement.uiID
                 || current.workspaceGroupingID != replacement.workspaceGroupingID
                 || current.workspaceGroupingName != replacement.workspaceGroupingName
+                || current.workspacePath != replacement.workspacePath
         }
     }
 

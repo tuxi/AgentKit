@@ -36,6 +36,7 @@ public struct ConversationListView: View {
     @State private var forcedDeletion: ForcedWorktreeDeletion?
     @State private var deletionErrorMessage: String?
     @State private var archiveErrorMessage: String?
+    @State private var projection = ConversationListProjection()
 
     public init(viewModel: ConversationListViewModel,
                 selected: Binding<ConversationRef?>,
@@ -47,113 +48,45 @@ public struct ConversationListView: View {
 
     /// 当前可见的会话列表（客户端搜索过滤）。
     private var filteredConversations: [ConversationRef] {
-        let conversations = viewModel.conversations
-        guard !searchText.trimmingCharacters(in: .whitespaces).isEmpty else {
-            return conversations
-        }
-        return conversations.filter { ref in
-            ref.id.localizedCaseInsensitiveContains(searchText)
-                || (ref.name ?? "").localizedCaseInsensitiveContains(searchText)
-        }
+        projection.conversations
     }
 
     private var filteredArchivedConversations: [ConversationRef] {
-        let conversations = viewModel.archivedConversations
-        guard !searchText.trimmingCharacters(in: .whitespaces).isEmpty else {
-            return conversations
-        }
-        return conversations.filter { ref in
-            ref.id.localizedCaseInsensitiveContains(searchText)
-                || (ref.name ?? "").localizedCaseInsensitiveContains(searchText)
-        }
+        projection.archivedConversations
     }
 
     private var conversationItemsByID: [String: ConversationListItem] {
-        Dictionary(uniqueKeysWithValues: viewModel.conversationItems.map { ($0.id, $0) })
+        projection.itemsByID
     }
 
     private var archivedConversationItemsByID: [String: ConversationListItem] {
-        Dictionary(uniqueKeysWithValues: viewModel.archivedConversationItems.map { ($0.id, $0) })
+        projection.archivedItemsByID
     }
 
-    /// The Runtime list does not require a per-row detail request for this MVP.
-    /// Prefer the local session activity timestamp and retain Runtime order for
-    /// remote history that has not yet been opened on this device.
+    /// Runtime already orders by updated_at/id. Opening a local draft must not
+    /// reorder remote history or issue SQLite reads during a List body update.
     private var recentConversationItems: [ConversationListItem] {
-        let query = searchText.trimmingCharacters(in: .whitespacesAndNewlines)
-        return viewModel.conversationItems.enumerated()
-            .filter { _, item in
-                query.isEmpty
-                    || item.ref.id.localizedCaseInsensitiveContains(query)
-                    || (item.ref.name ?? "").localizedCaseInsensitiveContains(query)
-            }
-            .sorted { lhs, rhs in
-                let left = activityDate(for: lhs.element.ref)
-                let right = activityDate(for: rhs.element.ref)
-                return left == right ? lhs.offset < rhs.offset : left > right
-            }
-            .map(\.element)
-    }
-
-    private func activityDate(for conversation: ConversationRef) -> Date {
-        (try? store.localStateStore.state(for: .session(conversation.id)))?.updatedAt
-            ?? .distantPast
+        projection.recentItems
     }
 
     /// 侧边栏仅用的展示分组。每个真实会话固定属于一个 workspace；旧数据或通用会话
     /// 没有工作区路径时统一归入「聊天」。
     private var conversationGroups: [ConversationWorkspaceGroup] {
-        var groups: [ConversationWorkspaceGroup] = []
-        var indices: [String: Int] = [:]
-
-        // Runtime 只会返回已创建的 Conversation。将本地项目目录也纳入投影，
-        // 使刚创建但尚未发送首条消息的空项目仍能出现在侧边栏。
-        for workspace in visibleProjectWorkspaces {
-            let descriptor = ConversationWorkspaceGroup.Descriptor(workspace: workspace)
-            guard indices[descriptor.id] == nil else { continue }
-            indices[descriptor.id] = groups.count
-            groups.append(ConversationWorkspaceGroup(
-               descriptor: descriptor,
-                conversations: [],
-               isRunning: false
-            ))
-        }
-
-        for conversation in filteredConversations {
-            let descriptor = ConversationWorkspaceGroup.Descriptor(conversation: conversation)
-            if let index = indices[descriptor.id] {
-                var group = groups[index]
-                group.isRunning = conversation.isRunning
-                group.conversations.append(conversation)
-                groups[index] = group
-            } else {
-                indices[descriptor.id] = groups.count
-                var group = ConversationWorkspaceGroup(
-                    descriptor: descriptor,
-                    conversations: [conversation]
-                )
-                group.isRunning = conversation.isRunning
-                groups.append(group)
-            }
-            
-        }
-        return groups
+        projection.groups
     }
 
     private var visibleProjectWorkspaces: [Workspace] {
-        let query = searchText.trimmingCharacters(in: .whitespacesAndNewlines)
-        var result: [Workspace] = []
-        var seenPaths: Set<String> = []
+        projection.workspaces
+    }
 
-        for workspace in store.recentWorkspaces.workspaces + store.projects.projects {
-            let path = workspace.url.canonicalPathForGrouping
-            guard seenPaths.insert(path).inserted else { continue }
-            guard query.isEmpty || workspace.name.localizedCaseInsensitiveContains(query) else {
-                continue
-            }
-            result.append(workspace)
-        }
-        return result
+    private func rebuildProjection() {
+        projection = ConversationListProjection(
+            items: viewModel.conversationItems,
+            archivedItems: viewModel.archivedConversationItems,
+            workspaces: store.recentWorkspaces.workspaces + store.projects.projects,
+            searchText: searchText
+        )
+        syncExpandedWorkspaceIDs()
     }
 
     #if os(iOS)
@@ -193,16 +126,19 @@ public struct ConversationListView: View {
         .scrollContentBackground(.hidden)
         .task {
             store.setConversationListVisible(true)
-            await store.refreshConversationList()
         }
         .onDisappear { store.setConversationListVisible(false) }
-        .onAppear {
-            syncExpandedWorkspaceIDs()
+        .onChange(of: viewModel.revision, initial: true) { _, _ in
+            rebuildProjection()
         }
-        .onChange(of: viewModel.revision) { _, _ in
-            syncExpandedWorkspaceIDs()
+        .onChange(of: store.recentWorkspaces.workspaces) { _, _ in
+            rebuildProjection()
+        }
+        .onChange(of: store.projects.projects) { _, _ in
+            rebuildProjection()
         }
         .onChange(of: searchText) { _, newValue in
+            rebuildProjection()
             guard !newValue.trimmingCharacters(in: .whitespaces).isEmpty else { return }
             // 搜索结果位于某个收起的项目时，自动展开该项目，避免结果被隐藏。
             isProjectsExpanded = true
@@ -367,11 +303,7 @@ public struct ConversationListView: View {
     private var recentConversationRows: some View {
         ForEach(recentConversationItems) { item in
                 let ref = item.ref
-                ConversationRow(
-                    item: item,
-                    activity: store.supervisor.activity(for: ref),
-                    queueReason: store.supervisor.queueReason(for: ref.id)
-                )
+                ConversationRow(item: item)
                 .tag(ref)
                 .listRowInsets(.init(top: 0, leading: 12, bottom: 0, trailing: 12))
                 .listRowSeparator(.hidden)
@@ -487,11 +419,7 @@ public struct ConversationListView: View {
         if isExpanded {
             ForEach(visibleConversations(in: group).compactMap { conversationItemsByID[$0.id] }) { item in
                 let ref = item.ref
-                ConversationRow(
-                    item: item,
-                    activity: store.supervisor.activity(for: ref),
-                    queueReason: store.supervisor.queueReason(for: ref.id)
-                )
+                ConversationRow(item: item)
                     .tag(ref)
                     .listRowInsets(.init(top: 0, leading: 12, bottom: 0, trailing: 12))
                     .listRowSeparator(.hidden)
@@ -656,7 +584,7 @@ public struct ConversationListView: View {
             } else {
                 ForEach(filteredArchivedConversations.compactMap { archivedConversationItemsByID[$0.id] }) { item in
                     let ref = item.ref
-                    ConversationRow(item: item, activity: .idle, queueReason: nil)
+                    ConversationRow(item: item, showsRuntimeActivity: false)
                         .tag(ref)
                         .listRowInsets(.init(top: 0, leading: 12, bottom: 0, trailing: 12))
                         .listRowSeparator(.hidden)
@@ -909,8 +837,57 @@ private struct ConversationListDialogModifier: ViewModifier {
 
 // MARK: - Local presentation model
 
+/// Rebuilt only when list contents, project inputs or search change. Activity
+/// ticks and selection changes reuse this value without disk access or sorting.
+struct ConversationListProjection {
+    var conversations: [ConversationRef] = []
+    var archivedConversations: [ConversationRef] = []
+    var recentItems: [ConversationListItem] = []
+    var itemsByID: [String: ConversationListItem] = [:]
+    var archivedItemsByID: [String: ConversationListItem] = [:]
+    var groups: [ConversationWorkspaceGroup] = []
+    var workspaces: [Workspace] = []
+
+    init(items: [ConversationListItem] = [], archivedItems: [ConversationListItem] = [],
+         workspaces: [Workspace] = [], searchText: String = "") {
+        let query = searchText.trimmingCharacters(in: .whitespacesAndNewlines)
+        func matches(_ ref: ConversationRef) -> Bool {
+            query.isEmpty || ref.id.localizedCaseInsensitiveContains(query)
+                || (ref.name ?? "").localizedCaseInsensitiveContains(query)
+        }
+        recentItems = items.filter { matches($0.ref) }
+        conversations = recentItems.map(\.ref)
+        archivedConversations = archivedItems.map(\.ref).filter(matches)
+        itemsByID = Dictionary(uniqueKeysWithValues: recentItems.map { ($0.id, $0) })
+        archivedItemsByID = Dictionary(uniqueKeysWithValues: archivedItems.map { ($0.id, $0) })
+        var paths = Set<String>()
+        var indices: [String: Int] = [:]
+        for workspace in workspaces {
+            guard paths.insert(workspace.url.canonicalPathForGrouping).inserted,
+                  query.isEmpty || workspace.name.localizedCaseInsensitiveContains(query) else { continue }
+            self.workspaces.append(workspace)
+            let descriptor = ConversationWorkspaceGroup.Descriptor(workspace: workspace)
+            indices[descriptor.id] = groups.count
+            groups.append(ConversationWorkspaceGroup(descriptor: descriptor, conversations: []))
+        }
+        for conversation in conversations {
+            let descriptor = ConversationWorkspaceGroup.Descriptor(conversation: conversation)
+            let index: Int
+            if let existing = indices[descriptor.id] {
+                index = existing
+            } else {
+                index = groups.count
+                indices[descriptor.id] = index
+                groups.append(ConversationWorkspaceGroup(descriptor: descriptor, conversations: []))
+            }
+            groups[index].conversations.append(conversation)
+            groups[index].isRunning = groups[index].isRunning || conversation.isRunning
+        }
+    }
+}
+
 /// 只服务于侧边栏渲染，不参与 Runtime 会话数据的持久化或传输。
-private struct ConversationWorkspaceGroup: Identifiable {
+struct ConversationWorkspaceGroup: Identifiable {
     struct Descriptor: Identifiable {
         let id: String
         let title: String
@@ -961,11 +938,17 @@ private struct ConversationWorkspaceGroup: Identifiable {
 // MARK: - ConversationRow
 
 private struct ConversationRow: View {
+    @Environment(WorkspaceStore.self) private var store
     let item: ConversationListItem
-    let activity: ConversationActivityState
-    let queueReason: String?
+    var showsRuntimeActivity = true
 
     private var ref: ConversationRef { item.ref }
+    private var activity: ConversationActivityState {
+        showsRuntimeActivity ? store.supervisor.activity(for: ref) : .idle
+    }
+    private var queueReason: String? {
+        showsRuntimeActivity ? store.supervisor.queueReason(for: ref.id) : nil
+    }
 
     var body: some View {
         HStack(spacing: 8) {

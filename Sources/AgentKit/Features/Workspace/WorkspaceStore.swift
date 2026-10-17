@@ -258,6 +258,9 @@ public final class WorkspaceStore {
     // MARK: - Conversation list refresh lifecycle
 
     @ObservationIgnored private var conversationListPollingTask: Task<Void, Never>?
+    @ObservationIgnored private var conversationRefreshTask: Task<Void, Never>?
+    @ObservationIgnored private var runtimeStateRefreshTask: Task<Void, Never>?
+    @ObservationIgnored private var listPrefetchTask: Task<Void, Never>?
     private var isConversationListVisible = false
     private var isAppActive = true
 
@@ -267,16 +270,44 @@ public final class WorkspaceStore {
         guard isConversationListVisible != visible else { return }
         isConversationListVisible = visible
         updateConversationListPolling()
+        if !visible {
+            listPrefetchTask?.cancel()
+            listPrefetchTask = nil
+        }
         if visible, isAppActive {
             Task { await refreshConversationList() }
         }
     }
 
-    /// The canonical list refresh path. `ConversationListViewModel` coalesces
-    /// overlapping calls, so an older response cannot overwrite a newer one.
+    /// Coalesce the entire foreground refresh, including capability/activity
+    /// discovery. List rows publish before the remaining runtime work completes.
     public func refreshConversationList() async {
-        await listViewModel.refresh()
-        await refreshRuntimeState()
+        if let conversationRefreshTask {
+            await conversationRefreshTask.value
+            return
+        }
+        let task = Task { [weak self] in
+            guard let self else { return }
+            await self.listViewModel.refresh()
+            guard !Task.isCancelled else { return }
+            self.startListPrefetch()
+            await self.refreshRuntimeState()
+        }
+        conversationRefreshTask = task
+        await task.value
+        conversationRefreshTask = nil
+    }
+
+    private func startListPrefetch() {
+        guard isConversationListVisible, isAppActive,
+              listPrefetchTask == nil, listViewModel.hasMoreConversations else { return }
+        listPrefetchTask = Task { [weak self] in
+            guard let self else { return }
+            await self.listViewModel.loadRemainingConversations()
+            // The task is cleared by its owner when the list hides or the app
+            // backgrounds; completed work can also be retried on the next poll.
+            if !Task.isCancelled { self.listPrefetchTask = nil }
+        }
     }
 
     private func updateConversationListPolling() {
@@ -288,7 +319,15 @@ public final class WorkspaceStore {
             while !Task.isCancelled {
                 try? await Task.sleep(for: .seconds(8))
                 guard !Task.isCancelled, let self else { return }
-                await self.refreshConversationList()
+                // Activity has its own 3s/20s delta monitor. Do not rediscover
+                // capabilities and request a second activity snapshot every 8s.
+                await self.listViewModel.refresh()
+                guard !Task.isCancelled else { return }
+                self.startListPrefetch()
+                if self.listViewModel.hasLoadedArchivedConversations {
+                    await self.listViewModel.refreshArchived()
+                }
+                await self.reconcileSelectedConversationPartition()
             }
         }
     }
@@ -729,7 +768,25 @@ public final class WorkspaceStore {
 
     /// Refresh capability/activity snapshots and reconnect every live background session.
     public func refreshRuntimeState() async {
+        if let runtimeStateRefreshTask {
+            await runtimeStateRefreshTask.value
+            return
+        }
+        let task = Task<Void, Never> { [weak self] in
+            await self?.performRuntimeStateRefresh()
+        }
+        runtimeStateRefreshTask = task
+        await task.value
+        runtimeStateRefreshTask = nil
+    }
+
+    private func performRuntimeStateRefresh() async {
+        guard !Task.isCancelled else { return }
         await supervisor.refreshRuntimeState(conversations: listViewModel.conversations)
+        guard !Task.isCancelled else {
+            supervisor.stopActivityMonitoring()
+            return
+        }
         if supportsConversationArchive,
            listViewModel.hasLoadedArchivedConversations || selectedConversation?.isArchived == true
             || (listViewModel.hasLoadedConversations && !listViewModel.usesConversationPagination && selectedConversation != nil
@@ -887,6 +944,8 @@ public final class WorkspaceStore {
     public func handleAppEnteredBackground() {
         isAppActive = false
         updateConversationListPolling()
+        listPrefetchTask?.cancel()
+        listPrefetchTask = nil
         try? localStateStore.flush()
         #if os(iOS)
         supervisor.stopActivityMonitoring()
@@ -898,6 +957,10 @@ public final class WorkspaceStore {
     public func handleWorkspaceDisappeared() {
         isConversationListVisible = false
         updateConversationListPolling()
+        listPrefetchTask?.cancel()
+        listPrefetchTask = nil
+        conversationRefreshTask?.cancel()
+        runtimeStateRefreshTask?.cancel()
         try? localStateStore.flush()
         supervisor.stopActivityMonitoring()
         Task { await supervisor.disconnectAll() }
