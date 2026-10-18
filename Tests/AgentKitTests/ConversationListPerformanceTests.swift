@@ -4,6 +4,36 @@ import ClientToolProtocol
 
 final class ConversationListPerformanceTests: XCTestCase {
     @MainActor
+    func testMissingRuntimeStaysWaitingAfterRetryWindowAndThenRecovers() async {
+        let client = ListPerformanceClient()
+        client.runtimeAvailable = false
+        let store = WorkspaceStore(client: client, localStateStore: InMemoryConversationLocalStateStore())
+        await store.refreshConversationList()
+        XCTAssertTrue(store.listViewModel.isWaitingForRuntime)
+        XCTAssertFalse(store.listViewModel.hasLoadedConversations)
+        XCTAssertNil(store.listViewModel.errorMessage)
+        XCTAssertEqual(client.capabilityRequests, 0)
+        XCTAssertEqual(client.activityRequests, 0)
+        client.runtimeAvailable = true
+        await store.refreshConversationList()
+        XCTAssertFalse(store.listViewModel.isWaitingForRuntime)
+        XCTAssertTrue(store.listViewModel.hasLoadedConversations)
+        XCTAssertEqual(client.capabilityRequests, 1)
+        store.supervisor.stopActivityMonitoring()
+    }
+
+    @MainActor
+    func testRealListFailureIsNotHiddenAsStartup() async {
+        let client = ListPerformanceClient()
+        client.failedOffset = 0
+        let list = ConversationListViewModel(client: client)
+        await list.refresh()
+        XCTAssertFalse(list.isWaitingForRuntime)
+        XCTAssertNotNil(list.errorMessage)
+        XCTAssertFalse(list.hasLoadedConversations)
+    }
+
+    @MainActor
     func testOverlappingForegroundRefreshesShareActivityAndPublishListFirst() async {
         let client = ListPerformanceClient()
         client.blockActivity = true
@@ -118,6 +148,7 @@ final class ConversationListPerformanceTests: XCTestCase {
 
 @MainActor
 private final class ListPerformanceClient: RuntimeClient {
+    var runtimeAvailable = true
     var pageRequests: [Int] = []
     var capabilityRequests = 0
     var activityRequests = 0
@@ -144,6 +175,7 @@ private final class ListPerformanceClient: RuntimeClient {
     func resumeActivity() { activityContinuation?.resume(); activityContinuation = nil }
     func resumePage() { pageContinuation?.resume(); pageContinuation = nil }
     func listConversationPage(archived: Bool, limit: Int, before: String?) async throws -> ConversationListPage {
+        guard runtimeAvailable else { throw RuntimeHTTPError.runtimeNotStarted }
         let offset = Int(before ?? "0") ?? 0
         pageRequests.append(offset)
         if offset == failedOffset { throw RuntimeHTTPError.invalidResponse }

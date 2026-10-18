@@ -290,6 +290,7 @@ public final class WorkspaceStore {
             guard let self else { return }
             await self.listViewModel.refresh()
             guard !Task.isCancelled else { return }
+            guard !self.listViewModel.isWaitingForRuntime else { return }
             self.startListPrefetch()
             await self.refreshRuntimeState()
         }

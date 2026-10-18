@@ -7,6 +7,7 @@
 //
 
 import Foundation
+import OSLog
 
 // MARK: - RuntimeHTTPClient
 
@@ -338,22 +339,33 @@ struct RuntimeHTTPClient: Sendable {
     }
 
     func listConversationPage(archived: Bool, limit: Int, before: String?) async throws -> ConversationListPage {
+        let started = ProcessInfo.processInfo.systemUptime
         var query = [URLQueryItem(name: "archived", value: archived ? "true" : "false"),
                      URLQueryItem(name: "limit", value: String(limit))]
         if let before { query.append(URLQueryItem(name: "before", value: before)) }
         let request = try await buildRequest("GET", pathComponents: "v1/conversations", queryItems: query)
+        let prepared = ProcessInfo.processInfo.systemUptime
         let (data, response) = try await session.data(for: request)
+        let received = ProcessInfo.processInfo.systemUptime
         try validateHTTP(response, data: data)
         let http = response as? HTTPURLResponse
         let moreHeader = http?.value(forHTTPHeaderField: "X-Codeagent-Has-More")
         let cursor = http?.value(forHTTPHeaderField: "X-Codeagent-Next-Cursor")
         let more = moreHeader == "1"
         guard !more || cursor?.isEmpty == false else { throw RuntimeHTTPError.invalidResponse }
-        return ConversationListPage(
+        let page = ConversationListPage(
             conversations: try decodeEnvelope([ConversationRef].self, from: data),
             nextCursor: cursor, hasMore: more,
             isPaged: moreHeader == "0" || moreHeader == "1"
         )
+        if before == nil {
+            let prepareMS = Int((prepared - started) * 1000)
+            let responseMS = Int((received - prepared) * 1000)
+            let decodeMS = Int((ProcessInfo.processInfo.systemUptime - received) * 1000)
+            Logger(subsystem: "com.agentkit", category: "ListPerformance").debug(
+                "[list-perf] head prepare_ms=\(prepareMS) response_ms=\(responseMS) decode_ms=\(decodeMS) rows=\(page.conversations.count) bytes=\(data.count)")
+        }
+        return page
     }
 
     private func listConversations(archived: Bool) async throws -> [ConversationRef] {

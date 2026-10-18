@@ -158,9 +158,13 @@ public struct ConversationListView: View {
 
     private var conversationList: some View {
         return List(selection: $selected) {
-            if viewModel.isLoading && !viewModel.hasLoadedConversations {
-                ProgressView()
-                    .controlSize(.small)
+            if (viewModel.isLoading || viewModel.isWaitingForRuntime) && !viewModel.hasLoadedConversations {
+                HStack {
+                    ProgressView().controlSize(.small)
+                    Text(viewModel.isWaitingForRuntime ? "正在启动本地服务…" : "正在加载对话…")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
                     .frame(maxWidth: .infinity)
                     .listRowSeparator(.hidden)
                     .listRowBackground(Color.clear)

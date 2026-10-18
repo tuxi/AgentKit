@@ -6,6 +6,7 @@
 //
 
 import SwiftUI
+import OSLog
 
 // MARK: - ConversationListViewModel
 
@@ -24,6 +25,7 @@ public final class ConversationListViewModel {
 
     /// 是否正在加载。
     public private(set) var isLoading = false
+    public private(set) var isWaitingForRuntime = false
     public private(set) var isLoadingArchived = false
     public private(set) var hasLoadedConversations = false
     public private(set) var hasLoadedArchivedConversations = false
@@ -115,6 +117,7 @@ public final class ConversationListViewModel {
     }
 
     private func performRefresh() async {
+        let started = ProcessInfo.processInfo.systemUptime
         let refreshGeneration = mutationGeneration
         isLoading = true
         errorMessage = nil
@@ -135,6 +138,12 @@ public final class ConversationListViewModel {
                     hasMoreConversations = page.hasMore
                 }
                 usesConversationPagination = page.isPaged
+                if !hasLoadedConversations {
+                    let elapsed = Int((ProcessInfo.processInfo.systemUptime - started) * 1000)
+                    Logger(subsystem: "com.agentkit", category: "ListPerformance").info(
+                        "[list-perf] first_page_published rows=\(page.conversations.count) elapsed_ms=\(elapsed)")
+                }
+                isWaitingForRuntime = false
                 hasLoadedConversations = true
                 errorMessage = nil
                 #if os(iOS)
@@ -143,11 +152,17 @@ public final class ConversationListViewModel {
                 return
             } catch {
                 if let httpError = error as? RuntimeHTTPError,
-                   case .runtimeNotStarted = httpError,
-                   attempt < maxAttempts {
-                    try? await Task.sleep(for: .milliseconds(150))
-                    continue            // runtime 尚未 start → 等端口就绪重试
+                   case .runtimeNotStarted = httpError {
+                    isWaitingForRuntime = true
+                    if attempt < maxAttempts {
+                        try? await Task.sleep(for: .milliseconds(150))
+                        continue
+                    }
+                    // A missing endpoint is startup state, not a failed
+                    // conversation. The host publishes/rebuilds when ready.
+                    return
                 }
+                isWaitingForRuntime = false
                 #if os(iOS)
                 // listener 被 iOS 挂起回收 → -1004。探活+重启一次，成功则重试本次拉取。
                 if Self.isCannotConnect(error), !didAttemptRecover {
