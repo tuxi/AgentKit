@@ -194,7 +194,7 @@ struct RuntimeServerPreflightService: Sendable {
 
         let info: RuntimeServerInfo
         do {
-            info = try await client.runtimeInfo()
+            info = try await client.runtimeInfo(timeout: 5)
         } catch RuntimeHTTPError.authenticationRequired {
             throw RuntimeServerPreflightError.authenticationRequired
         } catch RuntimeHTTPError.authenticationInvalid {
@@ -208,7 +208,7 @@ struct RuntimeServerPreflightService: Sendable {
 
         let capabilities: RuntimeCapabilitySnapshot
         do {
-            capabilities = try await client.runtimeCapabilities()
+            capabilities = try await client.runtimeCapabilities(timeout: 5)
         } catch RuntimeHTTPError.authenticationRequired {
             throw RuntimeServerPreflightError.authenticationRequired
         } catch RuntimeHTTPError.authenticationInvalid {
@@ -219,7 +219,7 @@ struct RuntimeServerPreflightService: Sendable {
 
         let models: RuntimeServerModelCatalog
         do {
-            models = try await client.runtimeModels()
+            models = try await client.runtimeModels(timeout: 5)
         } catch RuntimeHTTPError.authenticationRequired {
             throw RuntimeServerPreflightError.authenticationRequired
         } catch RuntimeHTTPError.authenticationInvalid {

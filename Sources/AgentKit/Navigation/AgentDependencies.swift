@@ -14,6 +14,8 @@ import ClientToolProtocol
 public struct AgentDependencies {
     /// 与 Agent Runtime 通信的客户端（agent-wire v1）。
     public let client: RuntimeClient
+    /// Only embedded workspaces may probe, restart, or resume the local runtime.
+    public let usesEmbeddedRuntime: Bool
 
     /// 客户端工具注册表。服务端声明 `executor: "client"` 的工具调用在此查找并执行。
     /// 默认空（不注册任何工具），由 app 层注入。
@@ -49,6 +51,7 @@ public struct AgentDependencies {
 
     public init(
         client: RuntimeClient,
+        usesEmbeddedRuntime: Bool = true,
         toolRegistry: ToolRegistry = ToolRegistry(),
         timelineExtensions: [any TimelineExtension] = [],
         conversationRendererMode: ConversationRendererMode = .auto,
@@ -64,6 +67,7 @@ public struct AgentDependencies {
         onAttentionEvent: (@MainActor (ConversationAttentionEvent) -> Void)? = nil
     ) {
         self.client = client
+        self.usesEmbeddedRuntime = usesEmbeddedRuntime
         self.toolRegistry = toolRegistry
         self.timelineExtensions = timelineExtensions
         self.conversationRendererMode = conversationRendererMode

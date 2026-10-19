@@ -103,11 +103,13 @@ public final class RuntimeServerCoordinator {
     /// Per-connection rate limiter for endpoint rediscovery, so the settings
     /// polling loop cannot hammer Bonjour while a server stays offline.
     @ObservationIgnored private var lastRediscoveryAttempt: [String: Date] = [:]
-    private static let rediscoveryMinInterval: TimeInterval = 30
+    @ObservationIgnored private var rediscoveryTasks: [String: Task<Bool, Never>] = [:]
+    @ObservationIgnored private var externalCheckTasks: [String: Task<Bool, Error>] = [:]
+    private static let rediscoveryMinInterval: TimeInterval = 5
 
     public init(
         registry: RuntimeServerRegistry = RuntimeServerRegistry(),
-        embeddedStatusMonitor: RuntimeServerStatusMonitor = .init(),
+        embeddedStatusMonitor: RuntimeServerStatusMonitor? = nil,
         runtimeCredentialStore: any CredentialStore = KeychainCredentialStore(
             service: "com.agentkit.runtime-server-access"
         ),
@@ -115,12 +117,18 @@ public final class RuntimeServerCoordinator {
         endpointResolver: (@MainActor (String) async -> URL?)? = nil
     ) {
         self.registry = registry
-        self.embeddedStatusMonitor = embeddedStatusMonitor
+        #if canImport(CodeAgentRuntime)
+        self.embeddedStatusMonitor = embeddedStatusMonitor ?? .embedded
+        #else
+        self.embeddedStatusMonitor = embeddedStatusMonitor ?? .init()
+        #endif
         self.runtimeCredentialStore = runtimeCredentialStore
         self.platform = platform
         self.preflightService = RuntimeServerPreflightService(platform: platform)
-        let browser = RuntimeBonjourBrowser()
         self.endpointResolver = endpointResolver ?? { serverID in
+            // Each lookup owns its browser; simultaneous lookups for different
+            // servers must not stop or clear each other's discovery session.
+            let browser = RuntimeBonjourBrowser()
             let discovered = await browser.resolveOnce()
             return discovered.first { $0.serverID == serverID }?.endpoint
         }
@@ -408,7 +416,7 @@ public final class RuntimeServerCoordinator {
             )
         }
         do {
-            let snapshot = try await makeActiveClient().activitySnapshot()
+            let snapshot = try await activitySnapshotForSwitch()
             return RuntimeServerSwitchAssessment(
                 sourceConnectionID: activeConnectionID,
                 targetConnectionID: connectionID,
@@ -424,6 +432,15 @@ public final class RuntimeServerCoordinator {
                 hasActiveWork: false
             )
         }
+    }
+
+    /// Keep explicit switching usable even if the selected server is offline.
+    /// Hosts may apply their own activity policy to this bounded snapshot.
+    public func activitySnapshotForSwitch() async throws -> RuntimeActivitySnapshot {
+        guard let source = activeConnection else {
+            throw RuntimeServerRegistryError.noActiveConnection
+        }
+        return try await makeHTTPClient(connection: source).activitySnapshot(timeout: 3)
     }
 
     @discardableResult
@@ -456,6 +473,7 @@ public final class RuntimeServerCoordinator {
             throw RuntimeServerRegistryError.noActiveConnection
         }
         let context = try await loadContext(connection: connection)
+        guard activeConnectionID == connection.id else { throw CancellationError() }
         activeContext = context
         return context
     }
@@ -528,6 +546,19 @@ public final class RuntimeServerCoordinator {
 
     @discardableResult
     public func checkExternal(connectionID: String) async throws -> Bool {
+        try Task.checkCancellation()
+        if let task = externalCheckTasks[connectionID] {
+            return try await task.value
+        }
+        // Join the entire health/discovery/recheck operation. Otherwise a new
+        // probe of the old endpoint could overlap discovery and mask recovery.
+        let task = Task { try await self.runExternalCheck(connectionID: connectionID) }
+        externalCheckTasks[connectionID] = task
+        defer { externalCheckTasks[connectionID] = nil }
+        return try await task.value
+    }
+
+    private func runExternalCheck(connectionID: String) async throws -> Bool {
         let monitor = try externalStatusMonitor(connectionID: connectionID)
         var healthy = await monitor.check()
         if !healthy,
@@ -561,6 +592,20 @@ public final class RuntimeServerCoordinator {
     public func rediscoverPairedEndpoint(
         connectionID: String
     ) async -> Bool {
+        guard !Task.isCancelled else { return false }
+        if let task = rediscoveryTasks[connectionID] {
+            return await task.value
+        }
+        let task = Task {
+            await self.resolvePairedEndpoint(connectionID: connectionID)
+        }
+        rediscoveryTasks[connectionID] = task
+        let updated = await task.value
+        rediscoveryTasks[connectionID] = nil
+        return updated
+    }
+
+    private func resolvePairedEndpoint(connectionID: String) async -> Bool {
         guard let connection = registry.connection(id: connectionID),
               connection.kind != .embedded,
               let serverID = connection.serverID,
@@ -576,7 +621,9 @@ public final class RuntimeServerCoordinator {
 
         guard let endpoint = await endpointResolver(serverID),
               endpoint != connection.endpoint,
-              let host = endpoint.host else {
+              let host = endpoint.host,
+              let current = registry.connection(id: connectionID),
+              current == connection else {
             return false
         }
         let updated: RuntimeServerConnection
@@ -604,6 +651,12 @@ public final class RuntimeServerCoordinator {
             return false
         }
         externalStatusMonitor(for: updated).update(connection: updated)
+        if activeConnectionID == connectionID {
+            // HTTP endpoints are lazy but TLS policies and existing WebSockets
+            // are captured by clients. Recreate the active workspace for both.
+            activeContext = nil
+            activeRevision &+= 1
+        }
         return true
     }
 

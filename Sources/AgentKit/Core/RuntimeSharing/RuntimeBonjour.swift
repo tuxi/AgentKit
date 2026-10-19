@@ -84,8 +84,18 @@ private final class RuntimeBonjourBrowserDelegate:
         moreComing: Bool
     ) {
         let key = "\(service.name).\(service.domain)"
-        services.removeValue(forKey: key)
+        services.removeValue(forKey: key)?.stop()
         onRemoved?(service.name, service.domain)
+    }
+
+    func stop() {
+        for service in services.values {
+            service.stop()
+            service.delegate = nil
+        }
+        services.removeAll()
+        onResolved = nil
+        onRemoved = nil
     }
 
     func netServiceDidResolveAddress(_ sender: NetService) {
@@ -111,13 +121,22 @@ public final class RuntimeBonjourBrowser {
     public private(set) var servers: [RuntimeDiscoveredSharedServer] = []
     public private(set) var isBrowsing = false
 
-    @ObservationIgnored private let browser = NetServiceBrowser()
-    @ObservationIgnored private let delegate = RuntimeBonjourBrowserDelegate()
+    @ObservationIgnored private var browser: NetServiceBrowser?
+    @ObservationIgnored private var delegate: RuntimeBonjourBrowserDelegate?
+    @ObservationIgnored private var generation = 0
 
-    public init() {
+    public init() {}
+
+    public func start() {
+        guard !isBrowsing else { return }
+        generation += 1
+        let currentGeneration = generation
+        let browser = NetServiceBrowser()
+        let delegate = RuntimeBonjourBrowserDelegate()
         delegate.onResolved = { [weak self] server in
             Task { @MainActor in
-                guard let self else { return }
+                guard let self, self.isBrowsing,
+                      self.generation == currentGeneration else { return }
                 if let index = self.servers.firstIndex(where: {
                     $0.id == server.id
                 }) {
@@ -130,16 +149,16 @@ public final class RuntimeBonjourBrowser {
         }
         delegate.onRemoved = { [weak self] name, domain in
             Task { @MainActor in
-                self?.servers.removeAll {
+                guard let self, self.isBrowsing,
+                      self.generation == currentGeneration else { return }
+                self.servers.removeAll {
                     $0.serviceName == name && $0.domain == domain
                 }
             }
         }
         browser.delegate = delegate
-    }
-
-    public func start() {
-        guard !isBrowsing else { return }
+        self.browser = browser
+        self.delegate = delegate
         servers = []
         isBrowsing = true
         browser.searchForServices(
@@ -149,7 +168,11 @@ public final class RuntimeBonjourBrowser {
     }
 
     public func stop() {
-        browser.stop()
+        browser?.stop()
+        browser?.delegate = nil
+        delegate?.stop()
+        browser = nil
+        delegate = nil
         isBrowsing = false
     }
 
@@ -159,11 +182,17 @@ public final class RuntimeBonjourBrowser {
     /// host/port after it restarted (the daemon's shared listener binds an
     /// ephemeral port, while `server_id` and the TLS identity stay stable).
     public func resolveOnce(
-        timeout: Duration = .seconds(4)
+        timeout: Duration = .seconds(8)
     ) async -> [RuntimeDiscoveredSharedServer] {
+        guard !Task.isCancelled else { return [] }
         start()
-        try? await Task.sleep(for: timeout)
-        stop()
+        defer { stop() }
+        do {
+            // Service resolution itself can take five seconds after discovery.
+            try await Task.sleep(for: timeout)
+        } catch {
+            return []
+        }
         return servers
     }
 }

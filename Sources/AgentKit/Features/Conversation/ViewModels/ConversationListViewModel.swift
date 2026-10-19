@@ -49,6 +49,7 @@ public final class ConversationListViewModel {
     public private(set) var revision = 0
 
     private let client: RuntimeClient
+    public let usesEmbeddedRuntime: Bool
     /// A single flight prevents a slow, older list request from publishing after
     /// a newer refresh trigger (activation, polling, or a local mutation).
     @ObservationIgnored private var refreshTask: Task<Void, Never>?
@@ -60,8 +61,9 @@ public final class ConversationListViewModel {
 
     // MARK: - Init
 
-    public init(client: RuntimeClient) {
+    public init(client: RuntimeClient, usesEmbeddedRuntime: Bool = true) {
         self.client = client
+        self.usesEmbeddedRuntime = usesEmbeddedRuntime
     }
 
     // MARK: - Public API
@@ -147,7 +149,7 @@ public final class ConversationListViewModel {
                 hasLoadedConversations = true
                 errorMessage = nil
                 #if os(iOS)
-                RuntimeConnectionMonitor.shared.markConnected()
+                if usesEmbeddedRuntime { RuntimeConnectionMonitor.shared.markConnected() }
                 #endif
                 return
             } catch {
@@ -165,7 +167,7 @@ public final class ConversationListViewModel {
                 isWaitingForRuntime = false
                 #if os(iOS)
                 // listener 被 iOS 挂起回收 → -1004。探活+重启一次，成功则重试本次拉取。
-                if Self.isCannotConnect(error), !didAttemptRecover {
+                if usesEmbeddedRuntime, Self.isCannotConnect(error), !didAttemptRecover {
                     didAttemptRecover = true
                     if await RuntimeConnectionMonitor.shared.ensureHealthy() {
                         continue

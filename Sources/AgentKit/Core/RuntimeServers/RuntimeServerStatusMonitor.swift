@@ -114,6 +114,7 @@ public final class RuntimeServerStatusMonitor {
     #if canImport(CodeAgentRuntime)
     /// Non-nil only when monitoring the embedded gomobile runtime.
     private let lifecycle: EmbeddedRuntimeLifecycle?
+    private let joinTimeout: Duration
     #endif
 
     @ObservationIgnored private var inflight: Task<Bool, Never>?
@@ -127,8 +128,9 @@ public final class RuntimeServerStatusMonitor {
     /// Creates a monitor for the embedded gomobile runtime.
     public static let embedded = RuntimeServerStatusMonitor(lifecycle: .live)
 
-    private init(lifecycle: EmbeddedRuntimeLifecycle) {
+    init(lifecycle: EmbeddedRuntimeLifecycle, joinTimeout: Duration = .seconds(10)) {
         self.lifecycle = lifecycle
+        self.joinTimeout = joinTimeout
     }
     #endif
 
@@ -137,6 +139,7 @@ public final class RuntimeServerStatusMonitor {
     public init() {
 #if canImport(CodeAgentRuntime)
         self.lifecycle = nil
+        self.joinTimeout = .seconds(10)
 #endif
     }
 
@@ -182,7 +185,7 @@ public final class RuntimeServerStatusMonitor {
             // 上一次检查可能钉在一个已死的 listener 上（如检查中途进程被冻结，
             // 回环 socket 被回收，HTTP 探针迟迟不返回）。join 必须有界；超窗后
             // 弃旧结果，针对当前 runtime 状态重新发起检查。
-            if let joined = await Self.boundedJoin(existing, limit: .seconds(10)) {
+            if let joined = await Self.boundedJoin(existing, limit: joinTimeout) {
                 if joined || !repairIfNeeded { return joined }
                 return await beginCheck(lifecycle: lifecycle, repairIfNeeded: true)
             }
@@ -194,7 +197,7 @@ public final class RuntimeServerStatusMonitor {
     public func restartEmbedded() async -> Bool {
         guard let lifecycle else { return false }
         if let existing = inflight {
-            _ = await Self.boundedJoin(existing, limit: .seconds(10))
+            _ = await Self.boundedJoin(existing, limit: joinTimeout)
         }
         return await beginRestart(lifecycle: lifecycle)
     }
@@ -203,6 +206,7 @@ public final class RuntimeServerStatusMonitor {
         lifecycle: EmbeddedRuntimeLifecycle,
         repairIfNeeded: Bool
     ) async -> Bool {
+        inflight?.cancel()
         inflightGeneration += 1
         let generation = inflightGeneration
         let task = Task { await self.runCheck(lifecycle: lifecycle, repairIfNeeded: repairIfNeeded) }
@@ -217,6 +221,7 @@ public final class RuntimeServerStatusMonitor {
     }
 
     private func beginRestart(lifecycle: EmbeddedRuntimeLifecycle) async -> Bool {
+        inflight?.cancel()
         inflightGeneration += 1
         let generation = inflightGeneration
         let task = Task { await self.runRestart(lifecycle: lifecycle) }
@@ -230,23 +235,26 @@ public final class RuntimeServerStatusMonitor {
 
     /// 等待 `task` 至多 `limit` 时间。返回其结果；超窗返回 nil（旧任务继续
     /// 在后台跑完，但不再被视为权威结果）。
-    private static func boundedJoin(
+    static func boundedJoin(
         _ task: Task<Bool, Never>,
         limit: Duration
     ) async -> Bool? {
-        await withTaskGroup(of: Bool?.self) { group in
-            group.addTask { await task.value }
-            group.addTask {
-                try? await Task.sleep(for: limit)
-                return nil
+        // A task group waits for every child when leaving its scope. Waiting
+        // for task.value ignores cancellation, so a group-based timeout can
+        // remain stuck on the very check it was supposed to abandon.
+        await withCheckedContinuation { continuation in
+            let waiter = RuntimeStatusCheckWaiter(continuation: continuation)
+            Task { waiter.finish(await task.value) }
+            waiter.timer = Task {
+                do { try await Task.sleep(for: limit) }
+                catch { return }
+                waiter.finish(nil)
             }
-            let first = await group.next() ?? nil
-            group.cancelAll()
-            return first
         }
     }
 
     private func runCheck(lifecycle: EmbeddedRuntimeLifecycle, repairIfNeeded: Bool) async -> Bool {
+        guard !Task.isCancelled else { return false }
         lastCheckedAt = Date()
         lastErrorDescription = nil
 
@@ -260,15 +268,19 @@ public final class RuntimeServerStatusMonitor {
             do {
                 _ = try await lifecycle.start()
             } catch {
+                guard !Task.isCancelled else { return false }
                 status = .configurationError
                 lastErrorDescription = Self.safeDescription(error)
                 return false
             }
+            guard !Task.isCancelled else { return false }
             return await finishHealthCheck(lifecycle: lifecycle)
         }
 
         status = .checking
-        if await lifecycle.healthCheck() {
+        let healthy = await lifecycle.healthCheck()
+        guard !Task.isCancelled else { return false }
+        if healthy {
             return await finishAuthenticatedCheck(lifecycle: lifecycle)
         }
 
@@ -281,22 +293,27 @@ public final class RuntimeServerStatusMonitor {
     }
 
     private func runRestart(lifecycle: EmbeddedRuntimeLifecycle) async -> Bool {
+        guard !Task.isCancelled else { return false }
         status = .reconnecting
         lastCheckedAt = Date()
         lastErrorDescription = nil
         do {
             _ = try await lifecycle.restart()
         } catch {
+            guard !Task.isCancelled else { return false }
             status = .configurationError
             lastErrorDescription = Self.safeDescription(error)
             return false
         }
+        guard !Task.isCancelled else { return false }
         return await finishHealthCheck(lifecycle: lifecycle)
     }
 
     private func finishHealthCheck(lifecycle: EmbeddedRuntimeLifecycle) async -> Bool {
         lastCheckedAt = Date()
-        if await lifecycle.healthCheck() {
+        let healthy = await lifecycle.healthCheck()
+        guard !Task.isCancelled else { return false }
+        if healthy {
             return await finishAuthenticatedCheck(lifecycle: lifecycle)
         }
         status = .offline
@@ -307,6 +324,7 @@ public final class RuntimeServerStatusMonitor {
     private func finishAuthenticatedCheck(lifecycle: EmbeddedRuntimeLifecycle) async -> Bool {
         do {
             let info = try await lifecycle.runtimeInfo()
+            guard !Task.isCancelled else { return false }
             guard info.isAgentWireV1Compatible else {
                 status = .protocolIncompatible
                 lastErrorDescription = "Embedded Runtime Agent Wire protocol is incompatible."
@@ -316,14 +334,17 @@ public final class RuntimeServerStatusMonitor {
             markConnected()
             return true
         } catch RuntimeHTTPError.authenticationRequired {
+            guard !Task.isCancelled else { return false }
             status = .authenticationRequired
             lastErrorDescription = "Embedded Runtime did not receive its access token."
             return false
         } catch RuntimeHTTPError.authenticationInvalid {
+            guard !Task.isCancelled else { return false }
             status = .authenticationFailed
             lastErrorDescription = "Embedded Runtime rejected its access token."
             return false
         } catch {
+            guard !Task.isCancelled else { return false }
             status = .configurationError
             lastErrorDescription = Self.safeDescription(error)
             return false
@@ -338,3 +359,23 @@ public final class RuntimeServerStatusMonitor {
 
     #endif // canImport(CodeAgentRuntime)
 }
+
+#if canImport(CodeAgentRuntime)
+@MainActor
+private final class RuntimeStatusCheckWaiter {
+    private var continuation: CheckedContinuation<Bool?, Never>?
+    var timer: Task<Void, Never>?
+
+    init(continuation: CheckedContinuation<Bool?, Never>) {
+        self.continuation = continuation
+    }
+
+    func finish(_ result: Bool?) {
+        guard let continuation else { return }
+        self.continuation = nil
+        timer?.cancel()
+        timer = nil
+        continuation.resume(returning: result)
+    }
+}
+#endif

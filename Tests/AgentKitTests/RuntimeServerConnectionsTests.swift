@@ -595,6 +595,150 @@ final class RuntimeServerConnectionsTests: XCTestCase {
         XCTAssertEqual(refreshed.endpoint?.absoluteString, "https://127.0.0.1:65530")
     }
 
+    func testConcurrentRediscoveryJoinsSameLookupAndRebuildsActiveClient() async throws {
+        let registry = makeRegistry()
+        let (started, startedSignal) = AsyncStream<Void>.makeStream()
+        let (release, releaseSignal) = AsyncStream<Void>.makeStream()
+        var calls = 0
+        let coordinator = RuntimeServerCoordinator(
+            registry: registry,
+            runtimeCredentialStore: MemoryCredentialStore(),
+            platform: .macOS,
+            endpointResolver: { _ in
+                calls += 1
+                startedSignal.yield(())
+                for await _ in release { break }
+                return URL(string: "https://renamed-mac.local:19500")
+            }
+        )
+        _ = try await coordinator.saveExternalConnection(
+            id: "paired", displayName: "Mac",
+            preflight: Self.pairedPreflight(serverID: "srv_stable", host: "my-mac.local", port: 19400),
+            accessToken: String(repeating: "g", count: 32)
+        )
+        try registry.setActive(connectionID: "paired")
+        let revision = coordinator.activeRevision
+        let first = Task { await coordinator.rediscoverPairedEndpoint(connectionID: "paired") }
+        for await _ in started { break }
+        let second = Task { await coordinator.rediscoverPairedEndpoint(connectionID: "paired") }
+        // Both callers enter while the resolver is still suspended.
+        await Task.yield()
+        releaseSignal.yield(())
+        releaseSignal.finish()
+        let results = await (first.value, second.value)
+        XCTAssertTrue(results.0)
+        XCTAssertTrue(results.1)
+        XCTAssertEqual(calls, 1)
+        XCTAssertEqual(coordinator.activeRevision, revision + 1)
+        XCTAssertEqual(registry.activeConnection?.trustPolicy?.expectedHost, "renamed-mac.local")
+        XCTAssertEqual(registry.activeConnection?.trustPolicy?.spkiSHA256, Self.testSPKI)
+    }
+
+    func testRediscoveryCannotResurrectRemovedConnection() async throws {
+        let registry = makeRegistry()
+        let coordinator = RuntimeServerCoordinator(
+            registry: registry,
+            runtimeCredentialStore: MemoryCredentialStore(),
+            platform: .macOS,
+            endpointResolver: { _ in
+                _ = try? registry.remove(connectionID: "paired")
+                return URL(string: "https://my-mac.local:19500")
+            }
+        )
+        _ = try await coordinator.saveExternalConnection(
+            id: "paired", displayName: "Mac",
+            preflight: Self.pairedPreflight(serverID: "srv_stable", host: "my-mac.local", port: 19400),
+            accessToken: String(repeating: "g", count: 32)
+        )
+        let changed = await coordinator.rediscoverPairedEndpoint(connectionID: "paired")
+        XCTAssertFalse(changed)
+        XCTAssertNil(registry.connection(id: "paired"))
+    }
+
+    func testCancelledRediscoveryDoesNotStartOrConsumeCooldown() async throws {
+        var calls = 0
+        let coordinator = RuntimeServerCoordinator(
+            registry: makeRegistry(),
+            runtimeCredentialStore: MemoryCredentialStore(),
+            platform: .macOS,
+            endpointResolver: { _ in
+                calls += 1
+                return URL(string: "https://my-mac.local:19500")
+            }
+        )
+        _ = try await coordinator.saveExternalConnection(
+            id: "paired", displayName: "Mac",
+            preflight: Self.pairedPreflight(serverID: "srv_stable", host: "my-mac.local", port: 19400),
+            accessToken: String(repeating: "g", count: 32)
+        )
+        let task = Task { await coordinator.rediscoverPairedEndpoint(connectionID: "paired") }
+        task.cancel()
+        let cancelled = await task.value
+        XCTAssertFalse(cancelled)
+        XCTAssertEqual(calls, 0)
+        let changed = await coordinator.rediscoverPairedEndpoint(connectionID: "paired")
+        XCTAssertTrue(changed)
+        XCTAssertEqual(calls, 1)
+    }
+
+    #if canImport(CodeAgentRuntime)
+    func testDefaultCoordinatorUsesLiveEmbeddedMonitor() {
+        let coordinator = RuntimeServerCoordinator(registry: makeRegistry())
+        XCTAssertTrue(coordinator.embeddedStatusMonitor === RuntimeServerStatusMonitor.embedded)
+    }
+
+    func testLateEmbeddedProbeCannotRestartOrOverwriteRecoveredRuntime() async {
+        let (started, startedSignal) = AsyncStream<Void>.makeStream()
+        let (release, releaseSignal) = AsyncStream<Bool>.makeStream()
+        var probes = 0
+        var restarts = 0
+        let monitor = RuntimeServerStatusMonitor(lifecycle: EmbeddedRuntimeLifecycle(
+            isAlive: { true },
+            start: { 12345 },
+            restart: { restarts += 1; return 12345 },
+            endpoint: { URL(string: "http://127.0.0.1:12345") },
+            profile: { "sandboxed" },
+            healthCheck: {
+                probes += 1
+                if probes == 1 {
+                    startedSignal.yield(())
+                    for await result in release { return result }
+                    return false
+                }
+                return true
+            },
+            runtimeInfo: { Self.runtimeInfo(profile: "sandboxed") }
+        ), joinTimeout: .milliseconds(20))
+        let oldCheck = Task { await monitor.checkEmbedded(repairIfNeeded: true) }
+        for await _ in started { break }
+        let recovered = await monitor.checkEmbedded(repairIfNeeded: true)
+        XCTAssertTrue(recovered)
+        XCTAssertEqual(monitor.status, .connected)
+        releaseSignal.yield(false)
+        releaseSignal.finish()
+        _ = await oldCheck.value
+        XCTAssertEqual(restarts, 0)
+        XCTAssertEqual(monitor.status, .connected)
+    }
+
+    func testEmbeddedCheckJoinTimesOutWithoutWaitingForOriginalTask() async {
+        let (release, signal) = AsyncStream<Bool>.makeStream()
+        let pending = Task { for await result in release { return result }; return false }
+        let finished = expectation(description: "bounded join returns while original check is pending")
+        let join = Task {
+            let result = await RuntimeServerStatusMonitor.boundedJoin(pending, limit: .milliseconds(20))
+            XCTAssertNil(result)
+            finished.fulfill()
+        }
+        await fulfillment(of: [finished], timeout: 1)
+        signal.yield(true)
+        signal.finish()
+        await join.value
+        // A late original result must not resume the continuation twice.
+        _ = await pending.value
+    }
+    #endif
+
     private func makeRegistry() -> RuntimeServerRegistry {
         let suite = "RuntimeServerConnectionsTests.\(UUID().uuidString)"
         return RuntimeServerRegistry(

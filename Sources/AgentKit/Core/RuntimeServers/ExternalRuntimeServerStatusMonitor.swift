@@ -88,7 +88,7 @@ public final class ExternalRuntimeServerStatusMonitor {
                 lastErrorDescription = "Runtime Server health check failed."
                 return false
             }
-            let info = try await client.runtimeInfo()
+            let info = try await client.runtimeInfo(timeout: 5)
             guard info.isAgentWireV1Compatible else {
                 status = .protocolIncompatible
                 lastErrorDescription = "Runtime Server Agent Wire protocol is incompatible."

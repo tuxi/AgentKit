@@ -22,6 +22,24 @@ final class ConversationListPerformanceTests: XCTestCase {
         store.supervisor.stopActivityMonitoring()
     }
 
+    #if os(iOS)
+    @MainActor
+    func testExternalConnectionFailureDoesNotRecoverOrMarkEmbeddedRuntime() async {
+        let client = ListPerformanceClient()
+        client.cannotConnect = true
+        let list = ConversationListViewModel(client: client, usesEmbeddedRuntime: false)
+        let wasAlive = AgentRuntime.shared.isAlive
+        let state = RuntimeConnectionMonitor.shared.state
+        let embeddedStatus = RuntimeServerStatusMonitor.embedded.status
+        await list.refresh()
+        XCTAssertEqual(client.pageRequests, [0], "A remote failure must not retry through embedded recovery")
+        XCTAssertNotNil(list.errorMessage)
+        XCTAssertEqual(AgentRuntime.shared.isAlive, wasAlive)
+        XCTAssertEqual(RuntimeConnectionMonitor.shared.state, state)
+        XCTAssertEqual(RuntimeServerStatusMonitor.embedded.status, embeddedStatus)
+    }
+    #endif
+
     @MainActor
     func testRealListFailureIsNotHiddenAsStartup() async {
         let client = ListPerformanceClient()
@@ -153,6 +171,7 @@ private final class ListPerformanceClient: RuntimeClient {
     var capabilityRequests = 0
     var activityRequests = 0
     var failedOffset: Int?
+    var cannotConnect = false
     var blockActivity = false
     var blockPage = false
     var onActivity: (() -> Void)?
@@ -178,6 +197,7 @@ private final class ListPerformanceClient: RuntimeClient {
         guard runtimeAvailable else { throw RuntimeHTTPError.runtimeNotStarted }
         let offset = Int(before ?? "0") ?? 0
         pageRequests.append(offset)
+        if cannotConnect { throw URLError(.cannotConnectToHost) }
         if offset == failedOffset { throw RuntimeHTTPError.invalidResponse }
         if blockPage, offset > 0 {
             await withCheckedContinuation { pageContinuation = $0; onOlderPage?() }

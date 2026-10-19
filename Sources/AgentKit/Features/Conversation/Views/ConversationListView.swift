@@ -171,9 +171,10 @@ public struct ConversationListView: View {
             }
 
             #if os(iOS)
-            connectionBanner
+            if viewModel.usesEmbeddedRuntime { connectionBanner }
             // 连接类错误由 connectionBanner 呈现；其余错误才用原始文案，避免与横幅重复。
-            if RuntimeConnectionMonitor.shared.state == .connected
+            if !viewModel.usesEmbeddedRuntime
+                || RuntimeConnectionMonitor.shared.state == .connected
                 || RuntimeConnectionMonitor.shared.state == .connecting,
                let error = viewModel.errorMessage {
                 Label(error, systemImage: "exclamationmark.triangle")

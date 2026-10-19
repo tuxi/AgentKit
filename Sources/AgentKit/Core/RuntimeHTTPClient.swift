@@ -171,24 +171,24 @@ struct RuntimeHTTPClient: Sendable {
     // MARK: - Endpoints
 
     /// `GET /v1/runtime/info` — stable Runtime identity and wire compatibility.
-    func runtimeInfo() async throws -> RuntimeServerInfo {
-        let request = try await buildRequest("GET", pathComponents: "v1/runtime/info")
+    func runtimeInfo(timeout: TimeInterval = 60) async throws -> RuntimeServerInfo {
+        let request = try await buildRequest("GET", pathComponents: "v1/runtime/info", timeout: timeout)
         let (data, response) = try await session.data(for: request)
         try validateHTTP(response, data: data)
         return try decodeEnvelope(RuntimeServerInfo.self, from: data)
     }
 
     /// `GET /v1/runtime/models` — server-scoped, secret-free model catalog.
-    func runtimeModels() async throws -> RuntimeServerModelCatalog {
-        let request = try await buildRequest("GET", pathComponents: "v1/runtime/models")
+    func runtimeModels(timeout: TimeInterval = 60) async throws -> RuntimeServerModelCatalog {
+        let request = try await buildRequest("GET", pathComponents: "v1/runtime/models", timeout: timeout)
         let (data, response) = try await session.data(for: request)
         try validateHTTP(response, data: data)
         return try decodeEnvelope(RuntimeServerModelCatalog.self, from: data)
     }
 
     /// `GET /v1/runtime/capabilities` — versioned runtime-wide guarantees and limits.
-    func runtimeCapabilities() async throws -> RuntimeCapabilitySnapshot {
-        let request = try await buildRequest("GET", pathComponents: "v1/runtime/capabilities")
+    func runtimeCapabilities(timeout: TimeInterval = 60) async throws -> RuntimeCapabilitySnapshot {
+        let request = try await buildRequest("GET", pathComponents: "v1/runtime/capabilities", timeout: timeout)
         let (data, response) = try await session.data(for: request)
         try validateHTTP(response, data: data)
         return try decodeEnvelope(RuntimeCapabilitySnapshot.self, from: data)
@@ -289,18 +289,19 @@ struct RuntimeHTTPClient: Sendable {
     }
 
     /// `GET /v1/activity` — sessions owned by the authenticated principal/device.
-    func activitySnapshot() async throws -> RuntimeActivitySnapshot {
-        try await activitySnapshot(sinceSequence: nil)
+    func activitySnapshot(timeout: TimeInterval = 60) async throws -> RuntimeActivitySnapshot {
+        try await activitySnapshot(sinceSequence: nil, timeout: timeout)
     }
 
-    func activitySnapshot(sinceSequence: Int64?) async throws -> RuntimeActivitySnapshot {
+    func activitySnapshot(sinceSequence: Int64?, timeout: TimeInterval = 60) async throws -> RuntimeActivitySnapshot {
         let queryItems = sinceSequence.map {
             [URLQueryItem(name: "since_sequence", value: String($0))]
         }
         let request = try await buildRequest(
             "GET",
             pathComponents: "v1/activity",
-            queryItems: queryItems
+            queryItems: queryItems,
+            timeout: timeout
         )
         let (data, response) = try await session.data(for: request)
         try validateHTTP(response, data: data)

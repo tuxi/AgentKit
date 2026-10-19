@@ -333,10 +333,13 @@ public final class WorkspaceStore {
         }
     }
 
+    private let usesEmbeddedRuntime: Bool
+
     // MARK: - Init
 
     public init(
         client: RuntimeClient = DefaultAgentClient(),
+        usesEmbeddedRuntime: Bool = true,
         toolRegistry: ToolRegistry = ToolRegistry(),
         timelineExtensions: [any TimelineExtension] = [],
         conversationRendererMode: ConversationRendererMode = .auto,
@@ -354,6 +357,7 @@ public final class WorkspaceStore {
         projects: ProjectsStore = ProjectsStore()
     ) {
         self.client = client
+        self.usesEmbeddedRuntime = usesEmbeddedRuntime
         self.localStateStore = localStateStore
         self.userAssetPicker = userAssetPicker
         self.userAssetDraftCoordinator = (localUserAssetStager != nil || userAssetUploader != nil)
@@ -374,7 +378,7 @@ public final class WorkspaceStore {
         self.timelineExtensions = timelineExtensions
         self.conversationRendererMode = conversationRendererMode
         self.onAuthExpired = onAuthExpired
-        self.listViewModel = ConversationListViewModel(client: client)
+        self.listViewModel = ConversationListViewModel(client: client, usesEmbeddedRuntime: usesEmbeddedRuntime)
         let resolvedAttentionStore = attentionReadStore
             ?? ConversationLocalStateAttentionReadStore(localStateStore: localStateStore)
         self.supervisor = ConversationSupervisor(
@@ -399,6 +403,7 @@ public final class WorkspaceStore {
     ) {
         self.init(
             client: dependencies.client,
+            usesEmbeddedRuntime: dependencies.usesEmbeddedRuntime,
             toolRegistry: dependencies.toolRegistry,
             timelineExtensions: dependencies.timelineExtensions,
             conversationRendererMode: dependencies.conversationRendererMode,
@@ -856,6 +861,10 @@ public final class WorkspaceStore {
         isAppActive = true
         updateConversationListPolling()
         #if os(iOS)
+        guard usesEmbeddedRuntime else {
+            await refreshConversationList()
+            return
+        }
         let wasAlive = AgentRuntime.shared.isAlive
         // 前台探活：iOS 挂起会回收回环 listening socket，但指针/端口仍在 → 指针存活≠listener存活。
         // ensureHealthy() 探 /healthz，死则重启 runtime（新端口，会话从 DB 重载），杜绝「回来后恒 -1004」。
@@ -908,6 +917,7 @@ public final class WorkspaceStore {
     /// Embedded iOS Runtime suspends all active sessions together. Resume every paused
     /// session after a same-process thaw; selection only controls which one is visible.
     private func resumePausedConversationsAfterThaw() async {
+        guard usesEmbeddedRuntime else { return }
         let ids = Set(pausedRetainedSessionIDs + listViewModel.conversations.filter(\.isPaused).map(\.id))
         for sessionID in ids {
             do {
