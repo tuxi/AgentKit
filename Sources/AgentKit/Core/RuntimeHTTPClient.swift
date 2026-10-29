@@ -168,6 +168,51 @@ struct RuntimeHTTPClient: Sendable {
         return request
     }
 
+    // MARK: - Read-only CodingTask port
+
+    func codingTaskGet<T: Decodable & Sendable>(
+        _ type: T.Type, path: [String], query: [URLQueryItem] = []
+    ) async throws -> T {
+        let request = try await buildRequest("GET", pathArray: path, queryItems: query, timeout: 20)
+        // Bound the received bytes before decoding, including large frozen bundles.
+        let (stream, response) = try await session.bytes(for: request)
+        var data = Data()
+        for try await byte in stream {
+            guard data.count < 24 * 1024 * 1024 else { throw RuntimeHTTPError.invalidResponse }
+            data.append(byte)
+        }
+        try validateHTTP(response, data: data)
+        return try await Task.detached {
+            let envelope = try JSONDecoder().decode(RuntimeEnvelope<T>.self, from: data)
+            guard envelope.code == 0, let value = envelope.data else { throw RuntimeHTTPError.invalidResponse }
+            return value
+        }.value
+    }
+
+    /// Pin the origin AND credential-bearing request before probing its identity.
+    /// A dynamic endpoint change after the probe must not redirect a user's command to another Runtime.
+    func codingTaskPost<T: Decodable, Body: Encodable>(
+        _ type: T.Type, path: [String], body: Body, identity: CodingTaskIdentity, required: [String]
+    ) async throws -> T {
+        let request = try await buildRequest("POST", pathArray: path, body: body, timeout: 30)
+        guard let url = request.url, var components = URLComponents(url: url, resolvingAgainstBaseURL: false),
+              !identity.serverID.isEmpty, !identity.storeID.isEmpty else { throw RuntimeHTTPError.invalidResponse }
+        components.path = "/v1/tasks/capabilities"; components.query = nil
+        var probe = request
+        probe.url = components.url; probe.httpMethod = "GET"; probe.httpBody = nil
+        let (probeData, probeResponse) = try await session.data(for: probe)
+        try validateHTTP(probeResponse, data: probeData)
+        let caps = try decodeEnvelope(CodingTaskCapabilities.self, from: probeData)
+        guard caps.identity == identity, required.allSatisfy(caps.capabilities.contains) else {
+            throw CodingTaskReadError.identityChanged
+        }
+        try Task.checkCancellation()
+        // No automatic retries. Caller retains the same request ID for an explicitly requested retry.
+        let (data, response) = try await session.data(for: request)
+        try validateHTTP(response, data: data)
+        return try decodeEnvelope(type, from: data)
+    }
+
     // MARK: - Endpoints
 
     /// `GET /v1/runtime/info` — stable Runtime identity and wire compatibility.

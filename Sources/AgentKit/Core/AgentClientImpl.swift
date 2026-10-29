@@ -169,7 +169,7 @@ public final class CodeAgentSessionChannel: RuntimeSessionChannel, @unchecked Se
 /// 组合 `RuntimeHTTPClient`（HTTP） + `AgentWireSocket`（WebSocket）。
 ///
 /// 替换此类即可接入不同 backend：`DreamAITransport` / `MockTransport`。
-public final class CodeAgentTransport: AgentTransport, @unchecked Sendable {
+public final class CodeAgentTransport: AgentTransport, CodingTaskReading, CodingTaskWriting, CodingTaskModelReading, @unchecked Sendable {
 
     private let http: RuntimeHTTPClient
     private var socket: AgentWireSocket?
@@ -201,6 +201,36 @@ public final class CodeAgentTransport: AgentTransport, @unchecked Sendable {
             credentialTarget: credentialTarget,
             trustPolicy: trustPolicy
         )
+    }
+
+    public func codingTaskCapabilities() async throws -> CodingTaskCapabilities {
+        try await http.codingTaskGet(CodingTaskCapabilities.self, path: ["v1", "tasks", "capabilities"])
+    }
+    public func codingTaskModels() async throws -> RuntimeServerModelCatalog { try await http.runtimeModels() }
+    public func codingTasks() async throws -> [CodingTaskSummary] {
+        try await http.codingTaskGet([CodingTaskSummary].self, path: ["v1", "tasks"], query: [.init(name: "limit", value: "200")])
+    }
+    public func codingTaskSnapshot(id: String) async throws -> CodingTaskSnapshot {
+        try await http.codingTaskGet(CodingTaskSnapshot.self, path: ["v1", "tasks", id])
+    }
+    public func codingTaskEvents(id: String, after: String) async throws -> CodingTaskEventPage {
+        try await http.codingTaskGet(CodingTaskEventPage.self, path: ["v1", "tasks", id, "events"], query: [
+            .init(name: "after", value: after), .init(name: "limit", value: "200")
+        ])
+    }
+    public func codingTaskBundle(taskID: String, artifactID: String) async throws -> CodingTaskReviewBundle {
+        try await http.codingTaskGet(CodingTaskReviewBundle.self, path: ["v1", "tasks", taskID, "immutable-artifacts", artifactID])
+    }
+
+    public func createCodingTask(_ request: CodingTaskCreateRequest, identity: CodingTaskIdentity) async throws -> CodingTaskReceipt {
+        try await http.codingTaskPost(CodingTaskReceipt.self, path: ["v1", "tasks"], body: request, identity: identity, required: ["task_links_v1"])
+    }
+    public func attachCodingTaskExecutor(taskID: String, request: CodingTaskExecutorRequest, identity: CodingTaskIdentity) async throws -> CodingTaskReceipt {
+        try await http.codingTaskPost(CodingTaskReceipt.self, path: ["v1", "tasks", taskID, "participations"], body: request, identity: identity, required: ["task_links_v1"])
+    }
+    public func startCodingTask(taskID: String, request: CodingTaskStartRequest, identity: CodingTaskIdentity) async throws -> CodingTaskReceipt {
+        let required = ["task_managed_workflow_v1", "task_review_gate_v1"] + (request.executor_model == nil ? [] : ["task_executor_model_v1"])
+        return try await http.codingTaskPost(CodingTaskReceipt.self, path: ["v1", "tasks", taskID, "runs"], body: request, identity: identity, required: required)
     }
 
     // MARK: - AgentTransport: Session lifecycle
@@ -664,7 +694,7 @@ public final class CodeAgentTransport: AgentTransport, @unchecked Sendable {
 ///
 /// UI 通过 `AgentDependencies` 拿到 `RuntimeClient` 协议实例。
 /// 要替换 backend，替换 `transport` 即可，不修改 UI 层。
-public final class DefaultAgentClient: RuntimeClient, @unchecked Sendable {
+public final class DefaultAgentClient: RuntimeClient, CodingTaskReading, CodingTaskWriting, CodingTaskModelReading, @unchecked Sendable {
 
     private let transport: any AgentTransport
 
@@ -735,6 +765,32 @@ public final class DefaultAgentClient: RuntimeClient, @unchecked Sendable {
         )
     }
     #endif
+
+    private var taskReader: any CodingTaskReading {
+        get throws {
+            guard let reader = transport as? any CodingTaskReading else { throw RuntimeHTTPError.unsupported }
+            return reader
+        }
+    }
+    public func codingTaskCapabilities() async throws -> CodingTaskCapabilities { try await taskReader.codingTaskCapabilities() }
+    public func codingTaskModels() async throws -> RuntimeServerModelCatalog {
+        guard let reader = transport as? any CodingTaskModelReading else { throw RuntimeHTTPError.unsupported }
+        return try await reader.codingTaskModels()
+    }
+    public func codingTasks() async throws -> [CodingTaskSummary] { try await taskReader.codingTasks() }
+    public func codingTaskSnapshot(id: String) async throws -> CodingTaskSnapshot { try await taskReader.codingTaskSnapshot(id: id) }
+    public func codingTaskEvents(id: String, after: String) async throws -> CodingTaskEventPage { try await taskReader.codingTaskEvents(id: id, after: after) }
+    public func codingTaskBundle(taskID: String, artifactID: String) async throws -> CodingTaskReviewBundle { try await taskReader.codingTaskBundle(taskID: taskID, artifactID: artifactID) }
+
+    private var taskWriter: any CodingTaskWriting {
+        get throws {
+            guard let writer = transport as? any CodingTaskWriting else { throw RuntimeHTTPError.unsupported }
+            return writer
+        }
+    }
+    public func createCodingTask(_ request: CodingTaskCreateRequest, identity: CodingTaskIdentity) async throws -> CodingTaskReceipt { try await taskWriter.createCodingTask(request, identity: identity) }
+    public func attachCodingTaskExecutor(taskID: String, request: CodingTaskExecutorRequest, identity: CodingTaskIdentity) async throws -> CodingTaskReceipt { try await taskWriter.attachCodingTaskExecutor(taskID: taskID, request: request, identity: identity) }
+    public func startCodingTask(taskID: String, request: CodingTaskStartRequest, identity: CodingTaskIdentity) async throws -> CodingTaskReceipt { try await taskWriter.startCodingTask(taskID: taskID, request: request, identity: identity) }
 
     // MARK: - RuntimeClient conformance
 

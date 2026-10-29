@@ -164,6 +164,8 @@ public struct RuntimeServerConnectionCredential: Codable, Sendable, Equatable {
 }
 
 public struct RuntimeServerModelDescriptor: Codable, Sendable, Equatable {
+    /// Canonical, namespaced catalog ID. Older runtimes may omit it.
+    public let id: String?
     public let runtimeAlias: String
     public let wireModelID: String
     public let displayName: String
@@ -180,7 +182,7 @@ public struct RuntimeServerModelDescriptor: Codable, Sendable, Equatable {
     public let reasoningEffort: ModelReasoningEffort?
 
     enum CodingKeys: String, CodingKey {
-        case available
+        case id, available
         case runtimeAlias = "runtime_alias"
         case wireModelID = "wire_model_id"
         case displayName = "display_name"
@@ -206,8 +208,10 @@ public struct RuntimeServerModelDescriptor: Codable, Sendable, Equatable {
         unavailableReason: String? = nil,
         supportedReasoningEfforts: [ModelReasoningEffort]? = nil,
         canDisableReasoning: Bool? = nil,
-        reasoningEffort: ModelReasoningEffort? = nil
+        reasoningEffort: ModelReasoningEffort? = nil,
+        id: String? = nil
     ) {
+        self.id = id
         self.runtimeAlias = runtimeAlias
         self.wireModelID = wireModelID
         self.displayName = displayName
