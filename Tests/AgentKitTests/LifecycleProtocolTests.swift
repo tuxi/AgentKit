@@ -14,7 +14,7 @@ final class LifecycleProtocolTests: XCTestCase {
         let event = try decodeEvent("""
         {"kind":"model_finished","turn_id":"t1","prompt_tokens":52444,"completion_tokens":199,"total_tokens":52643,"billing_units":53112,"elapsed_ms":7500,"invocation_id":"inv_15"}
         """)
-        guard case let .modelFinished(turnID, prompt, completion, total, units, elapsed, invocationID, err, cached) = event else {
+        guard case let .modelFinished(turnID, prompt, completion, total, units, elapsed, invocationID, err, cached, _) = event else {
             return XCTFail("expected model_finished")
         }
         XCTAssertEqual(turnID, "t1")
@@ -32,7 +32,7 @@ final class LifecycleProtocolTests: XCTestCase {
         let event = try decodeEvent("""
         {"kind":"model_finished","turn_id":"t1","prompt_tokens":24900,"completion_tokens":1800,"total_tokens":26700,"elapsed_ms":1200,"invocation_id":"inv_1","cached_prompt_tokens":12100}
         """)
-        guard case let .modelFinished(_, _, _, _, _, _, _, _, cached) = event else {
+        guard case let .modelFinished(_, _, _, _, _, _, _, _, cached, _) = event else {
             return XCTFail("expected model_finished")
         }
         XCTAssertEqual(cached, 12_100)

@@ -65,10 +65,10 @@ public struct ExecutionReducer: Sendable {
                 graph: &graph
             )
 
-        case .turnCancelled(let turnID, _):
+        case .turnCancelled(let turnID, let reason):
             return handleTurnCancelled(
                 turnID: turnID ?? internalState.currentTurnID ?? "",
-                ts: ts,
+                reason: reason, ts: ts,
                 graph: &graph
             )
 
@@ -134,7 +134,7 @@ public struct ExecutionReducer: Sendable {
                                       ts: ts, graph: &graph)
 
         case .modelFinished(let turnID, let promptTokens, let completionTokens, let totalTokens,
-                            let billingUnits, let elapsedMs, let invocationID, let err, let cachedPromptTokens):
+                            let billingUnits, let elapsedMs, let invocationID, let err, let cachedPromptTokens, _):
             return handleModelFinished(turnID: turnID ?? internalState.currentTurnID ?? "",
                                        promptTokens: promptTokens, completionTokens: completionTokens,
                                        totalTokens: totalTokens, billingUnits: billingUnits,
@@ -391,11 +391,16 @@ public struct ExecutionReducer: Sendable {
                 )
                 appendNode(node, to: &graph)
                 internalState.lastNodeOfKind[.assistantMessage] = nodeID
-            } else if !textAnnotations.isEmpty,
-                      let lastAssistantNode,
+            } else if let lastAssistantNode,
                       var node = graph.nodes[lastAssistantNode.id] {
-                node.payload = .assistantMessage(text: text, textAnnotations: textAnnotations)
+                // The node was created when the answer started streaming; the
+                // turn really ends now. Stamp the terminal time so the turn's
+                // wall clock is measured to the end, not to the first token.
+                if !textAnnotations.isEmpty {
+                    node.payload = .assistantMessage(text: text, textAnnotations: textAnnotations)
+                }
                 node.status = .completed
+                node.timestamp = max(node.timestamp, ts)
                 graph.upsertNode(node)
             }
         }
@@ -482,6 +487,7 @@ public struct ExecutionReducer: Sendable {
 
     private mutating func handleTurnCancelled(
         turnID: String,
+        reason: String?,
         ts: TimeInterval,
         graph: inout ExecutionGraph
     ) -> [NodeID] {
@@ -498,7 +504,15 @@ public struct ExecutionReducer: Sendable {
         internalState.lastNodeOfKind[.thinking] = nil
         internalState.activeToolCallIDs = []
         internalState.currentTurnID = nil
-        return changed
+        let nodeID = "\(turnID)_cancelled"
+        if graph.nodes[nodeID] == nil {
+            let text = reason.flatMap { $0.isEmpty ? nil : $0 }.map { "已取消 — \($0)" } ?? "已取消"
+            let payload = SystemPayload(kind: .modelActivity, text: text,
+                                        metadata: ["type": "cancelled"])
+            appendNode(GraphNode(id: nodeID, kind: .system, payload: .system(payload),
+                                 status: .completed, timestamp: ts, turnID: turnID), to: &graph)
+        }
+        return changed + [nodeID]
     }
 
     // MARK: - Streaming handlers
@@ -1023,15 +1037,25 @@ public struct ExecutionReducer: Sendable {
     private mutating func handleAutoApproved(turnID: String, toolName: String, args: JSONValue?,
                                               reason: String?, ts: TimeInterval,
                                               graph: inout ExecutionGraph) -> [NodeID] {
-        let callID = "auto_\(turnID)_\(UUID().uuidString.prefix(8))"
-        let payload = ToolExecPayload(
-            callID: callID, toolName: toolName, args: args,
-            output: reason ?? "", exitCode: 0, isAutoApproved: true
-        )
-        let node = GraphNode(id: callID, kind: .toolCall, payload: .toolCall(payload),
-                             status: .completed, timestamp: ts, turnID: turnID)
-        appendNode(node, to: &graph)
-        return [callID]
+        // Approval is metadata on an existing call, never a synthetic execution.
+        let candidates = graph.nodes.values.filter { node in
+            guard node.turnID == turnID, node.status == .running,
+                  case .toolCall(let tool) = node.payload else { return false }
+            return tool.toolName == toolName && tool.args == args
+        }
+        if candidates.count == 1, var node = candidates.first,
+           case .toolCall(var tool) = node.payload {
+            tool.isAutoApproved = true
+            node.payload = .toolCall(tool)
+            graph.upsertNode(node)
+            return [node.id]
+        }
+        let nodeID = "auto_\(turnID)_\(UUID().uuidString.prefix(8))"
+        let payload = SystemPayload(kind: .modelActivity, text: reason ?? "Auto-approved: \(toolName)",
+                                    metadata: ["type": "approval"])
+        appendNode(GraphNode(id: nodeID, kind: .system, payload: .system(payload),
+                             status: .completed, timestamp: ts, turnID: turnID), to: &graph)
+        return [nodeID]
     }
 
     // MARK: - Skill loaded handler (PREVIOUSLY IGNORED)

@@ -1662,6 +1662,223 @@ final class ConversationWebDocumentTests: XCTestCase {
         _ = webView
     }
 
+    /// L1 turn summary (Codex-aligned): a finished turn folds the work that
+    /// produced it into one "用时 …" disclosure, keeps the final answer
+    /// visible, and stamps the end time — without losing a single block.
+    func testCompletedTurnFoldsProcessAndKeepsAnswerVisible() async throws {
+        let ready = expectation(description: "Web renderer handshake")
+        let acknowledged = expectation(description: "Web document acknowledgement")
+        let probe = ConversationWebBridgeProbe(ready: ready)
+        probe.expectAcknowledgement(revision: 1, expectation: acknowledged)
+        let configuration = WKWebViewConfiguration()
+        configuration.websiteDataStore = .nonPersistent()
+        configuration.setURLSchemeHandler(
+            ConversationWebSchemeHandler(),
+            forURLScheme: ConversationWebSchemeHandler.scheme
+        )
+        configuration.userContentController.add(probe, name: "agentkitWorkbench")
+
+        let webView = WKWebView(
+            frame: .init(x: 0, y: 0, width: 480, height: 640),
+            configuration: configuration
+        )
+        webView.load(URLRequest(url: ConversationWebSchemeHandler.indexURL))
+        await fulfillment(of: [ready], timeout: 5)
+
+        let registry = ConversationWebActionRegistry()
+        let startedAt = Date(timeIntervalSince1970: 1_700_000_000)
+        let finishedAt = startedAt.addingTimeInterval(1_480)
+        let foldable = ConversationTurn(
+            id: "turn-fold",
+            userPrompt: MessageNodePayload(role: .user, text: "fix the build"),
+            blocks: [
+                .thinking(
+                    id: "think-1",
+                    ThinkingNodePayload(text: "the build is broken")
+                ),
+                .toolGroup(ToolGroup(id: "read-1", tools: [
+                    ToolNodePayload(
+                        callID: "read-1",
+                        toolName: "read_file",
+                        args: .object(["path": .string("/tmp/a.swift")]),
+                        status: .completed,
+                        output: "contents"
+                    )
+                ])),
+                .text(
+                    id: "final-1",
+                    MessageNodePayload(role: .assistant, text: "Fixed the build.")
+                )
+            ],
+            footer: nil,
+            isLive: false,
+            startedAt: startedAt,
+            finishedAt: finishedAt
+        )
+        let fixture = RuntimeSnapshot(timeline: [], turns: [foldable], generation: 3)
+        let document = ConversationWebDocumentBuilder.build(
+            snapshot: fixture,
+            conversationID: "fixture",
+            revision: 1,
+            registerAction: registry.register
+        )
+        let payload = try JSONEncoder().encode(
+            ConversationWebDocumentDiffer.reset(document)
+        ).base64EncodedString()
+        _ = try await webView.evaluateJavaScript(
+            "window.AgentKitWorkbench.applyUpdateBase64('\(payload)')"
+        )
+        await fulfillment(of: [acknowledged], timeout: 5)
+        try await Task.sleep(for: .milliseconds(30))
+
+        let inspection = try await webView.evaluateJavaScript(
+            """
+            (() => {
+              const process = document.querySelector('details.turn-process');
+              const body = process?.querySelector('.turn-process-body');
+              const answer = [...document.querySelectorAll('.turn-block')]
+                .find((element) => element.dataset.blockId === 'final-1');
+              return {
+                hasProcess: Boolean(process),
+                processOpen: process?.open ?? null,
+                summary: process?.querySelector('.turn-process-label')?.textContent ?? null,
+                processBlockIDs: [...(body?.querySelectorAll('.turn-block') ?? [])]
+                  .map((element) => element.dataset.blockId),
+                answerInProcess: answer ? Boolean(answer.closest('.turn-process')) : null,
+                answerVisible: answer ? answer.getBoundingClientRect().height > 0 : false,
+                timestamp: document.querySelector('.turn-timestamp')?.textContent ?? null,
+                blockCount: document.querySelectorAll('.turn-block').length,
+                footerInProcess: Boolean(process?.querySelector('.turn-footer'))
+              };
+            })()
+            """
+        ) as? [String: Any]
+
+        XCTAssertEqual(inspection?["hasProcess"] as? Bool, true)
+        XCTAssertEqual(inspection?["processOpen"] as? Bool, false)
+        XCTAssertEqual(inspection?["summary"] as? String, "用时 24分40秒")
+        XCTAssertEqual(inspection?["processBlockIDs"] as? [String], ["think-1", "read-1"])
+        XCTAssertEqual(inspection?["answerInProcess"] as? Bool, false)
+        XCTAssertEqual(inspection?["answerVisible"] as? Bool, true)
+        XCTAssertEqual(inspection?["timestamp"] as? String, foldable.finishedAtClock)
+        // No block is dropped by the fold — only moved.
+        XCTAssertEqual(inspection?["blockCount"] as? Int, 3)
+
+        configuration.userContentController.removeScriptMessageHandler(forName: "agentkitWorkbench")
+        _ = webView
+    }
+
+    /// Codex parity: a running turn stays flat, but carries one live clock on
+    /// top ("已处理 8分15秒"). It must tick without a Runtime snapshot.
+    func testLiveTurnShowsProcessingClockAboveFlatTranscript() async throws {
+        let ready = expectation(description: "Web renderer handshake")
+        let acknowledged = expectation(description: "Web document acknowledgement")
+        let probe = ConversationWebBridgeProbe(ready: ready)
+        probe.expectAcknowledgement(revision: 1, expectation: acknowledged)
+        let configuration = WKWebViewConfiguration()
+        configuration.websiteDataStore = .nonPersistent()
+        configuration.setURLSchemeHandler(
+            ConversationWebSchemeHandler(),
+            forURLScheme: ConversationWebSchemeHandler.scheme
+        )
+        configuration.userContentController.add(probe, name: "agentkitWorkbench")
+
+        let webView = WKWebView(
+            frame: .init(x: 0, y: 0, width: 480, height: 640),
+            configuration: configuration
+        )
+        webView.load(URLRequest(url: ConversationWebSchemeHandler.indexURL))
+        await fulfillment(of: [ready], timeout: 5)
+
+        let registry = ConversationWebActionRegistry()
+        let startedAt = Date().addingTimeInterval(-495)
+        let liveTurn = ConversationTurn(
+            id: "turn-live",
+            userPrompt: MessageNodePayload(role: .user, text: "check the build"),
+            blocks: [
+                .thinking(
+                    id: "think-live",
+                    ThinkingNodePayload(text: "reading the project")
+                ),
+                .toolGroup(ToolGroup(id: "read-live", tools: [
+                    ToolNodePayload(
+                        callID: "read-live",
+                        toolName: "read_file",
+                        args: .object(["path": .string("/tmp/a.swift")]),
+                        status: .completed,
+                        output: "contents"
+                    )
+                ])),
+                .text(
+                    id: "text-live",
+                    MessageNodePayload(
+                        role: .assistant,
+                        text: "Working on it.",
+                        isStreaming: true
+                    )
+                )
+            ],
+            footer: nil,
+            isLive: true,
+            startedAt: startedAt
+        )
+        let fixture = RuntimeSnapshot(timeline: [], turns: [liveTurn], generation: 4)
+        let document = ConversationWebDocumentBuilder.build(
+            snapshot: fixture,
+            conversationID: "fixture-live",
+            revision: 1,
+            registerAction: registry.register
+        )
+        XCTAssertEqual(
+            document.turns.first?.startedAtMilliseconds,
+            Int64((startedAt.timeIntervalSince1970 * 1_000).rounded()),
+            "the live clock needs the turn's start stamp"
+        )
+
+        let payload = try JSONEncoder().encode(
+            ConversationWebDocumentDiffer.reset(document)
+        ).base64EncodedString()
+        _ = try await webView.evaluateJavaScript(
+            "window.AgentKitWorkbench.applyUpdateBase64('\(payload)')"
+        )
+        await fulfillment(of: [acknowledged], timeout: 5)
+        try await Task.sleep(for: .milliseconds(30))
+
+        func inspect() async throws -> [String: Any]? {
+            try await webView.evaluateJavaScript(
+                """
+                (() => ({
+                  header: document.querySelector('.turn-live-header .turn-live-elapsed')
+                    ?.textContent ?? null,
+                  headerIsFirst: document.querySelector('.assistant-lane')
+                    ?.firstElementChild?.className ?? null,
+                  hasProcess: Boolean(document.querySelector('details.turn-process')),
+                  blockCount: document.querySelectorAll('.turn-block').length
+                }))()
+                """
+            ) as? [String: Any]
+        }
+
+        let first = try await inspect()
+        XCTAssertEqual(first?["hasProcess"] as? Bool, false, "live turns never fold")
+        XCTAssertEqual(first?["blockCount"] as? Int, 3, "every block stays flat")
+        XCTAssertEqual(first?["headerIsFirst"] as? String, "turn-live-header")
+        let firstLabel = try XCTUnwrap(first?["header"] as? String)
+        XCTAssertTrue(
+            firstLabel.hasPrefix("已处理 8分1"),
+            "expected a running clock near 8分15秒, got \(firstLabel)"
+        )
+
+        // The counter must advance on its own (no new snapshot was applied).
+        try await Task.sleep(for: .milliseconds(1_200))
+        let second = try await inspect()
+        let secondLabel = try XCTUnwrap(second?["header"] as? String)
+        XCTAssertNotEqual(firstLabel, secondLabel, "the live clock must tick")
+
+        configuration.userContentController.removeScriptMessageHandler(forName: "agentkitWorkbench")
+        _ = webView
+    }
+
     func testStreamingMarkdownPlaysProgressivelyAndFlushesFinalText() async throws {
         let ready = expectation(description: "Typewriter renderer handshake")
         let streamingAcknowledgement = expectation(description: "Streaming target accepted")

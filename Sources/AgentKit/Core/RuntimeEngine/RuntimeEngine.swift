@@ -195,6 +195,12 @@ public actor RuntimeEngine {
     private var olderTimeline: [ExecutionNode] = []
     private var olderTurns: [ConversationTurn] = []
 
+    /// Server-stamped wall clock per protocol turn id. History arrives in a
+    /// burst, so ingest-time timestamps cannot reproduce how long a turn took —
+    /// the wire `at` field is the only faithful source for the "用时" summary.
+    /// Live turns record arrival time as they happen.
+    private var turnWallClock: [String: TurnWallClock] = [:]
+
     /// Pending approval queue. Order reflects arrival order from the server;
     /// the protocol guarantees serial tool execution, so concurrent approvals
     /// are not expected. First-in-first-out via `pendingApproval()`.
@@ -245,6 +251,16 @@ public actor RuntimeEngine {
     /// Whether the live WebSocket is connected.
     private var isLive: Bool = false
 
+    /// Whether a turn is actually executing right now.
+    ///
+    /// Deliberately NOT `isLive`: the socket stays connected between turns (and
+    /// reconnects mid-turn), so socket state cannot answer "is this turn still
+    /// running". Projecting a finished turn as live keeps its process
+    /// expanded and silently drops the "用时" header — and because the last
+    /// turn is re-projected on every change, one stray event was enough to
+    /// unfold a turn the user had just seen folded.
+    private var turnIsExecuting: Bool { activeTurnID != nil }
+
     /// UI continuation for RuntimeSnapshot stream.
     private var continuation: AsyncStream<RuntimeSnapshot>.Continuation?
 
@@ -279,15 +295,24 @@ public actor RuntimeEngine {
                    case .turnStarted(let turnID, _, _, _) = event {
                     firstFullTailTurnID = "turn_\(turnID)_user"
                 }
+                // The leading tail turn ended with this new turn: release the
+                // stale "live" stamp so it folds like every other finished turn.
+                refreshOlderProjection(isLive: false)
             } else {
                 leadingTailEvents.append(event)
                 if !olderEvents.isEmpty {
                     _ = olderReducer.reduce(event, into: &olderGraph)
-                    let projected = olderProjectionCache.project(graph: &olderGraph, isLive: isLive)
+                    let projected = olderProjectionCache.project(
+                        graph: &olderGraph, isLive: turnIsExecuting,
+                        wallClock: turnWallClock
+                    )
                     olderTimeline = projected.timeline
                     olderTurns = projected.turns
                 }
-                if Self.isTurnTerminal(event) { capturesLeadingTail = false }
+                if Self.isTurnTerminal(event) {
+                    capturesLeadingTail = false
+                    refreshOlderProjection(isLive: false)
+                }
             }
         }
         // Track pending approval (v1.2 去重：已回复过的 id 忽略)
@@ -340,7 +365,7 @@ public actor RuntimeEngine {
         }
         // Track model stats from model_finished + clear thinking timer + clear retry state
         if case .modelFinished(_, let promptTokens, let completionTokens, let totalTokens,
-                               let billingUnits, let elapsedMs, let invocationID, _, _) = event {
+                               let billingUnits, let elapsedMs, let invocationID, _, _, _) = event {
             _modelStartedAt = nil
             _modelRetryState = nil  // Clear retry state on model finish (success)
             if invocationID == nil || countedInvocationIDs.insert(invocationID!).inserted {
@@ -367,31 +392,35 @@ public actor RuntimeEngine {
             _modelStartedAt = nil
             _turnStartedAt = Date()
             activeTurnID = turnID
+            recordWallClock(turnID: turnID, startedAt: _turnStartedAt, finishedAt: nil)
         }
-        if case .turnFinished = event {
+        if case .turnFinished(let turnID, _, _) = event {
             _turnStartedAt = nil
             _modelStartedAt = nil
             _modelRetryState = nil
             activeTurnID = nil
+            recordWallClock(turnID: turnID, startedAt: nil, finishedAt: Date())
         }
         if case .turnPaused = event {
             _turnStartedAt = nil
             _modelStartedAt = nil
             _modelRetryState = nil
         }
-        if case .turnFailed = event {
+        if case .turnFailed(let turnID, _, _, _) = event {
             _turnStartedAt = nil
             _modelStartedAt = nil
             _modelRetryState = nil
+            recordTerminalWallClock(turnID: turnID)
             activeTurnID = nil
         }
-        if case .turnCancelled = event {
+        if case .turnCancelled(let turnID, _) = event {
             _turnStartedAt = nil
             _modelStartedAt = nil
             _modelRetryState = nil
             _pendingApprovals.removeAll()
             _pendingPlanApproval = nil
             _pendingAskUsers.removeAll()
+            recordTerminalWallClock(turnID: turnID)
             activeTurnID = nil
         }
         if case .turnResumed = event {
@@ -422,7 +451,13 @@ public actor RuntimeEngine {
 
     /// Import historical events (from HTTP GET /events).
     /// Replays all events through the reducer, then projects the final graph.
-    public func importHistory(_ events: [AgentEvent]) {
+    /// - Parameter wallClock: server-stamped turn boundaries decoded from the
+    ///   same frames. Without them a burst replay has no meaningful duration.
+    public func importHistory(
+        _ events: [AgentEvent],
+        wallClock: [String: TurnWallClock] = [:]
+    ) {
+        mergeWallClock(wallClock)
         leadingTailEvents = Array(events.prefix { event in
             if case .turnStarted = event { return false }
             return true
@@ -466,10 +501,24 @@ public actor RuntimeEngine {
                 _modelStartedAt = nil
                 _modelRetryState = nil
             }
+            // Recover turn activity from history: the app can be opened while a
+            // turn is still executing, and the live stream then continues that
+            // turn without re-sending `turn_started`. Without this the running
+            // turn would be projected as finished and fold while streaming.
+            if case .turnStarted(let turnID, _, _, _) = event {
+                activeTurnID = turnID
+            }
+            if case .turnFinished = event {
+                _turnStartedAt = nil
+                _modelStartedAt = nil
+                _modelRetryState = nil
+                activeTurnID = nil
+            }
             if case .turnFailed = event {
                 _turnStartedAt = nil
                 _modelStartedAt = nil
                 _modelRetryState = nil
+                activeTurnID = nil
             }
             if case .turnCancelled = event {
                 _turnStartedAt = nil
@@ -518,8 +567,12 @@ public actor RuntimeEngine {
 
     /// Prepend a turn-aligned page. Rebuild only the historical prefix; the
     /// streaming graph and its incremental projection cache remain untouched.
-    public func importOlderHistory(_ events: [AgentEvent]) {
+    public func importOlderHistory(
+        _ events: [AgentEvent],
+        wallClock: [String: TurnWallClock] = [:]
+    ) {
         guard !events.isEmpty else { return }
+        mergeWallClock(wallClock)
         olderEvents.insert(contentsOf: events, at: 0)
         if !leadingTailEvents.isEmpty,
            let start = olderEvents.lastIndex(where: { event in
@@ -535,16 +588,56 @@ public actor RuntimeEngine {
         for event in olderEvents + leadingTailEvents {
             _ = olderReducer.reduce(event, into: &olderGraph)
         }
-        let projected = olderProjectionCache.project(graph: &olderGraph, isLive: isLive && capturesLeadingTail)
+        let projected = olderProjectionCache.project(
+            graph: &olderGraph,
+            isLive: turnIsExecuting && capturesLeadingTail,
+            wallClock: turnWallClock
+        )
         olderTimeline = projected.timeline
         olderTurns = projected.turns
         yieldSnapshot()
+    }
+
+    /// Re-project the historical prefix with a new live stamp. Used when the
+    /// leading tail turn is known to have ended (a newer `turn_started` or a
+    /// terminal event arrived): without it the prefix keeps its old `isLive`
+    /// value and stays expanded forever.
+    private func refreshOlderProjection(isLive: Bool) {
+        guard !olderEvents.isEmpty else { return }
+        let projected = olderProjectionCache.project(
+            graph: &olderGraph, isLive: isLive, wallClock: turnWallClock
+        )
+        olderTimeline = projected.timeline
+        olderTurns = projected.turns
     }
 
     private static func isTurnTerminal(_ event: AgentEvent) -> Bool {
         switch event {
         case .turnFinished, .turnFailed, .turnCancelled: return true
         default: return false
+        }
+    }
+
+    /// Merge a turn's wall-clock observation into the map. Earliest start and
+    /// latest end win, so a turn observed by both history replay and the live
+    /// stream reports the widest known span.
+    private func recordWallClock(turnID: String, startedAt: Date?, finishedAt: Date?) {
+        guard !turnID.isEmpty else { return }
+        let observation = TurnWallClock(startedAt: startedAt, finishedAt: finishedAt)
+        guard !observation.isEmpty else { return }
+        turnWallClock[turnID] = (turnWallClock[turnID] ?? TurnWallClock()).merging(observation)
+    }
+
+    private func recordTerminalWallClock(turnID: String?) {
+        let resolved = turnID ?? activeTurnID ?? ""
+        guard !resolved.isEmpty else { return }
+        recordWallClock(turnID: resolved, startedAt: nil, finishedAt: Date())
+    }
+
+    /// Fold the server-stamped boundaries decoded from a history page.
+    private func mergeWallClock(_ clocks: [String: TurnWallClock]) {
+        for (turnID, clock) in clocks where !turnID.isEmpty {
+            turnWallClock[turnID] = (turnWallClock[turnID] ?? TurnWallClock()).merging(clock)
         }
     }
 
@@ -695,7 +788,9 @@ public actor RuntimeEngine {
         // yield are re-projected; unchanged turns keep their cached values and
         // content versions. This makes per-event cost scale with the change
         // rather than the whole conversation.
-        let (timeline, turns) = projectionCache.project(graph: &graph, isLive: isLive)
+        let (timeline, turns) = projectionCache.project(
+            graph: &graph, isLive: turnIsExecuting, wallClock: turnWallClock
+        )
         let prefixTurnIDs = Set(olderTurns.map(\.id))
         let joinedLiveTurns: [ConversationTurn]
         if hasRejoinedLeadingTurn {

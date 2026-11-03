@@ -84,6 +84,8 @@ struct WireFrame: Decodable {
     let exitCode: Int?              // P8.7 §8.5（golden 已冻结）：仅失败时出现；>0 = 非零退出，-1 = 启动失败/被信号杀死
 
     // v1.4: model_request 请求信封 + model_finished 缓存命中
+    let modelSelection: ModelSelectionIdentity?
+    let modelSucceeded: Bool?
     let modelName: String?          // "model": 模型标识
     let provider: String?           // provider 提供商，比如deepseek、qwen
     let baseURL: String?            // provider 的url
@@ -132,6 +134,8 @@ struct WireFrame: Decodable {
         case turnStatus = "turn_status"
         case pausedAt = "paused_at"
         case exitCode = "exit_code"
+        case modelSelection = "model_selection"
+        case modelSucceeded = "model_succeeded"
         case modelName = "model"
         case provider
         case baseURL = "base_url"
@@ -520,4 +524,31 @@ struct OutgoingAskUserResponse: Encodable {
 struct OutgoingAskUserAnswer: Encodable {
     let selected: [String]
     let notes: String?
+}
+
+// MARK: - Server-stamped event time
+
+extension WireFrame {
+    /// The server's `at` stamp (RFC3339 with milliseconds, e.g.
+    /// `2026-11-03T15:04:05.123Z`). Replayed history arrives in a burst, so
+    /// this is the only faithful timing source for a historical turn.
+    var eventDate: Date? {
+        guard let at, !at.isEmpty else { return nil }
+        if let date = Self.isoFractional.date(from: at) { return date }
+        return Self.isoPlain.date(from: at)
+    }
+
+    // `ISO8601DateFormatter` is documented as thread-safe for parsing; the
+    // annotation only satisfies Swift 6's static-storage rule.
+    nonisolated(unsafe) private static let isoFractional: ISO8601DateFormatter = {
+        let formatter = ISO8601DateFormatter()
+        formatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+        return formatter
+    }()
+
+    nonisolated(unsafe) private static let isoPlain: ISO8601DateFormatter = {
+        let formatter = ISO8601DateFormatter()
+        formatter.formatOptions = [.withInternetDateTime]
+        return formatter
+    }()
 }

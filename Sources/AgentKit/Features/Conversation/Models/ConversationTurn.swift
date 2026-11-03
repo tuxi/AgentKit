@@ -34,11 +34,19 @@ public struct ConversationTurn: Identifiable, Sendable, Equatable {
     /// `0` means "never projected" (hand-built turns in tests/shares) — Web
     /// consumers treat it as "unknown, fall back to deep equality".
     public let contentVersion: UInt64
+    /// Wall-clock start of the turn (`turn_started`). Server-stamped for
+    /// replayed history, ingest time for the live stream. Drives the
+    /// "used 24分40秒" summary line, not the model-only footer timing.
+    public let startedAt: Date?
+    /// Wall-clock end of the turn (`turn_finished` / failed / cancelled).
+    /// Nil while the turn is still streaming.
+    public let finishedAt: Date?
 
     public init(id: String, userPrompt: MessageNodePayload?,
                 blocks: [TurnBlock], plans: [TurnPlan] = [], todos: [TodoItem] = [],
                 footer: TurnStats?, isLive: Bool, invocations: [ModelInvocation] = [],
-                contentVersion: UInt64 = 0) {
+                contentVersion: UInt64 = 0,
+                startedAt: Date? = nil, finishedAt: Date? = nil) {
         self.id = id
         self.userPrompt = userPrompt
         self.blocks = blocks
@@ -48,6 +56,8 @@ public struct ConversationTurn: Identifiable, Sendable, Equatable {
         self.isLive = isLive
         self.invocations = invocations
         self.contentVersion = contentVersion
+        self.startedAt = startedAt
+        self.finishedAt = finishedAt
     }
 
     /// Nothing worth rendering — skip (e.g. a stray leading run with only
@@ -62,8 +72,103 @@ public struct ConversationTurn: Identifiable, Sendable, Equatable {
         ConversationTurn(
             id: id, userPrompt: userPrompt, blocks: blocks, plans: plans,
             todos: todos, footer: footer, isLive: isLive, invocations: invocations,
-            contentVersion: version
+            contentVersion: version, startedAt: startedAt, finishedAt: finishedAt
         )
+    }
+
+    // MARK: - Wall clock
+
+    /// Whole seconds the turn occupied, or nil while it is still running / the
+    /// timestamps are unknown.
+    public var elapsedSeconds: Int? {
+        guard let startedAt, let finishedAt else { return nil }
+        let interval = finishedAt.timeIntervalSince(startedAt)
+        guard interval.isFinite, interval >= 0 else { return nil }
+        return max(1, Int(interval.rounded()))
+    }
+
+    /// Compact human duration — "48秒" / "24分40秒" / "1小时5分" / "2小时".
+    /// Matches the Codex turn summary ("用时 24分40秒").
+    public var formattedDuration: String? {
+        guard let seconds = elapsedSeconds else { return nil }
+        if seconds < 60 {
+            return "\(seconds)秒"
+        }
+        if seconds < 3600 {
+            let minutes = seconds / 60
+            let rest = seconds % 60
+            return rest == 0 ? "\(minutes)分" : "\(minutes)分\(rest)秒"
+        }
+        let hours = seconds / 3600
+        let minutes = (seconds % 3600) / 60
+        return minutes == 0 ? "\(hours)小时" : "\(hours)小时\(minutes)分"
+    }
+
+    /// `HH:mm` of the moment the turn ended — the timestamp Codex puts under a
+    /// completed answer.
+    public var finishedAtClock: String? {
+        guard let finishedAt else { return nil }
+        var calendar = Calendar(identifier: .gregorian)
+        calendar.timeZone = .current
+        let parts = calendar.dateComponents([.hour, .minute], from: finishedAt)
+        guard let hour = parts.hour, let minute = parts.minute else { return nil }
+        return String(format: "%02d:%02d", hour, minute)
+    }
+
+    /// Start of the turn as epoch milliseconds. The Web renderer anchors the
+    /// live "已处理 …" header on this and ticks it locally, so the number keeps
+    /// moving without asking the Runtime for a snapshot every second.
+    public var startedAtMilliseconds: Int64? {
+        guard let startedAt else { return nil }
+        let milliseconds = (startedAt.timeIntervalSince1970 * 1_000).rounded()
+        guard milliseconds.isFinite else { return nil }
+        return Int64(milliseconds)
+    }
+}
+
+// MARK: - TurnWallClock
+
+/// Server-stamped wall-clock boundaries of one turn, captured while decoding
+/// the wire frames (`turn_started.at` → `turn_finished.at`). Replayed history
+/// arrives in a burst, so ingest-time timestamps cannot reproduce the real
+/// duration — this is the only faithful source for "用时".
+public struct TurnWallClock: Sendable, Equatable {
+    public let startedAt: Date?
+    public let finishedAt: Date?
+
+    public init(startedAt: Date? = nil, finishedAt: Date? = nil) {
+        self.startedAt = startedAt
+        self.finishedAt = finishedAt
+    }
+
+    public var isEmpty: Bool { startedAt == nil && finishedAt == nil }
+
+    /// Merge two observations of the same turn (history page + live stream).
+    /// Earliest start and latest end win so a partially observed turn still
+    /// reports the widest known span.
+    public func merging(_ other: TurnWallClock) -> TurnWallClock {
+        TurnWallClock(
+            startedAt: Self.earlier(startedAt, other.startedAt),
+            finishedAt: Self.later(finishedAt, other.finishedAt)
+        )
+    }
+
+    private static func earlier(_ lhs: Date?, _ rhs: Date?) -> Date? {
+        switch (lhs, rhs) {
+        case (let lhs?, let rhs?): return min(lhs, rhs)
+        case (let lhs?, nil): return lhs
+        case (nil, let rhs?): return rhs
+        case (nil, nil): return nil
+        }
+    }
+
+    private static func later(_ lhs: Date?, _ rhs: Date?) -> Date? {
+        switch (lhs, rhs) {
+        case (let lhs?, let rhs?): return max(lhs, rhs)
+        case (let lhs?, nil): return lhs
+        case (nil, let rhs?): return rhs
+        case (nil, nil): return nil
+        }
     }
 }
 

@@ -286,6 +286,69 @@ live 和 history 都必须遵守。含义：
 
 ---
 
+## Turn-level process fold（L1，2026-11，macOS）
+
+已完成的一轮对话在视觉上对齐 Codex：**过程收起，只留最终答案 + 用时**。
+
+### 规则
+
+- 进行中（`turn.isLive`）**不折叠**，过程照常实时展示；顶部加一行 **`已处理 8分15秒`**
+  计时头（Codex 同款），由 `startedAtMilliseconds` 本地每秒 tick，不向 Runtime 要快照。
+  计时格式与完成态 `用时 8分15秒` 共用同一套规则，避免轮次结束时数字“换形状”。
+- 完成后：blocks 里**最后一个非空 `.text` 是答案**，它之前的全部 block 折进一个
+  `<details class="turn-process">`，头部文案 `用时 24分40秒 ›`。
+- **失败永不隐藏**：`system(error)` / 失败的 toolGroup 被提到折叠区外（答案之前）。
+- 纯工具轮（步数上限 / 取消）没有答案 block → 全部折进过程，头部保留，轮次不会变成空壳。
+- token / ctx / 缓存 / 轨迹入口从底部移到**折叠区末尾**；底部只留动作行 + `HH:mm` 时间戳。
+- 折叠状态沿用 `data-disclosure-id` 的 capture/restore 机制，patch 后自动保留展开态。
+
+### 用时口径（重要）
+
+`ExecutionReducer` 原本用 `Date()`（收到事件的本地时间）作为节点时间戳，**历史回放时
+全部事件在几百毫秒内灌完，用时会被算成 0.3 秒**。现在：
+
+- 历史：`AgentEventBatch.turnWallClock` 在解码 wire 帧时解析服务端 `at`
+  （`turn_started.at` / `turn_finished.at`），经 `RuntimeEngine.importHistory/importOlderHistory`
+  合并进 `turnWallClock`，投影时落到 `ConversationTurn.startedAt/finishedAt`。
+  `TurnWallClock.merging` 取最早开始 + 最晚结束，live 与回放观测到同一轮时结果稳定。
+- 实时：`ingest` 记录到达时间（`turn_started` / `turn_finished` / `turn_failed` / `turn_cancelled`）。
+- 兜底：没有服务端时间戳时用 `nodes.first/last.timestamp`（`handleTurnFinished` 会把答案节点
+  的时间戳更新为终止时刻，避免把「答案开始流式」当成结束）。
+- 进行中：文档额外下发 `ConversationWebDocument.Turn.startedAtMilliseconds`
+  （来自 `ConversationTurn.startedAt`），渲染器据此本地计时。`hasEqualMetadata`
+  必须包含该字段，否则“开始时间后到”的轮次不会触发 patch。
+- 注意：`footer.elapsedMs` 是各次 model 调用的耗时**之和**，不含工具执行，不能当「用时」用。
+
+### 「进行中」的判定（曾导致折叠闪回）
+
+`ConversationTurn.isLive` **必须来自 turn 本身的执行态，不能来自 socket 连接态**。
+
+`RuntimeEngine.isLive` 的语义是「实时流已连接」，它在一轮结束后仍然为 true、中途重连也会
+再次置 true。折叠最初直接把它传进投影，结果：
+
+- 一轮结束后，最后一轮仍被判定为 live → 不折叠（`用时` 头部不出现）；
+- 历史导入（`importHistory` 会把 `isLive` 置 false）先折起来，随后任意一次快照又把它重新
+  展开 → 用户看到「`用时` 突然消失、所有事件又铺开」。
+
+现在投影使用 `turnIsExecuting`（`activeTurnID != nil`，由 `turn_started` 置位、
+`turn_finished/failed/cancelled` 清除）。另外：
+
+- `importHistory` 会从回放事件里恢复未终止的 turn（应用在一轮执行中途启动时，live 流
+  不会重发 `turn_started`，否则正在跑的轮次会被当成已完成而折叠）。
+- `leadingTail` 的前缀 turn 在新 `turn_started` 或终止事件到来时用 `isLive: false`
+  重新投影，避免它永久停留在展开态。
+
+回归用例：`Tests/AgentKitTests/TurnLivenessTests.swift`。
+
+### 尚未做
+
+- 「· 编辑 3 个文件」依赖服务端 `turn_finished` 的 diffstat（当前事件无该字段；
+  `apply_patch` 只返回 "Patch applied successfully."，客户端无法从输出统计）。
+  契约落定后在 `ConversationWebDocument.Turn` 加 `changes` 并在 `processSummaryLabel` 追加即可。
+- iOS native 渲染（`AgentResponseView`）未做 L1，待 macOS 验证稳定后跟进。
+
+---
+
 ## References
 
 - Claude Code — streamed blocks 模型：<https://fazm.ai/t/watch-claude-code-desktop-agent-ui>

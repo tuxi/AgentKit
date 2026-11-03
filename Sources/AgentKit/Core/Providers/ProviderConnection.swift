@@ -69,7 +69,7 @@ public enum ModelReasoningEffort: String, Identifiable, CaseIterable, Codable, S
     case low
     case medium
     case high
-    case xHigh = "x-high"
+    case xHigh = "xhigh"
     case max
     
     public var id: String {

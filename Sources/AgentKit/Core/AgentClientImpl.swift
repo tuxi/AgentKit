@@ -654,8 +654,30 @@ public final class CodeAgentTransport: AgentTransport, CodingTaskReading, Coding
             oldestSeq: oldestSeq,
             hasMoreOlder: hasMoreOlder,
             replayTruncated: replayTruncated,
-            turnFragment: turnFragment
+            turnFragment: turnFragment,
+            turnWallClock: wallClock(from: wireFrames)
         )
+    }
+
+    /// Collect the server-stamped turn boundaries of a page. Replay is a burst,
+    /// so only `at` can tell how long a historical turn actually took.
+    static func wallClock(from wireFrames: [WireFrame]) -> [String: TurnWallClock] {
+        var clocks: [String: TurnWallClock] = [:]
+        for frame in wireFrames {
+            guard let turnID = frame.turnId, !turnID.isEmpty,
+                  let date = frame.eventDate else { continue }
+            let observation: TurnWallClock
+            switch frame.kind {
+            case "turn_started":
+                observation = TurnWallClock(startedAt: date, finishedAt: nil)
+            case "turn_finished", "turn_failed", "turn_cancelled":
+                observation = TurnWallClock(startedAt: nil, finishedAt: date)
+            default:
+                continue
+            }
+            clocks[turnID] = (clocks[turnID] ?? TurnWallClock()).merging(observation)
+        }
+        return clocks
     }
 
     public func getAssetPreview(conversationID: String, assetID: String) async throws -> AgentAssetPreviewResponse {

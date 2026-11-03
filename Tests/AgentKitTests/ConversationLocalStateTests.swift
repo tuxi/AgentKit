@@ -12,6 +12,8 @@ final class ConversationLocalStateTests: XCTestCase {
             state.composerDraft.workspacePath = "/tmp/project"
             state.composerDraft.wantsManagedWorktree = true
             state.selectedModelID = "provider/model-a"
+            state.modelSelectionMode = .explicit
+            state.composerSelectionVersion = ConversationLocalState.currentComposerSelectionVersion
             state.reasoningEffort = "high"
             state.recentModelIDs = ["provider/model-a", "provider/model-b"]
         }
@@ -30,6 +32,8 @@ final class ConversationLocalStateTests: XCTestCase {
         XCTAssertEqual(draft.composerDraft.workspacePath, "/tmp/project")
         XCTAssertTrue(draft.composerDraft.wantsManagedWorktree)
         XCTAssertEqual(draft.selectedModelID, "provider/model-a")
+        XCTAssertEqual(draft.modelSelectionMode, .explicit)
+        XCTAssertEqual(draft.composerSelectionVersion, ConversationLocalState.currentComposerSelectionVersion)
         XCTAssertEqual(draft.reasoningEffort, "high")
         XCTAssertEqual(draft.recentModelIDs, ["provider/model-a", "provider/model-b"])
 

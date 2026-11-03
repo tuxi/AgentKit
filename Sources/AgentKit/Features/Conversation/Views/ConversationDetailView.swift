@@ -287,10 +287,43 @@ public struct ConversationDetailView: View {
         : AgentKitLocalized.string("conversation.input_message")
     }
     
+    private func nextSendModelLabel(_ vm: ConversationViewModel) -> String {
+        switch vm.composerSelectionMode {
+        case .followDefault:
+            let defaultID = modelSettings.runtimeDefaultModelID
+            guard !defaultID.isEmpty else {
+                return AgentKitLocalized.string("composer.model_follow_default")
+            }
+            return String(
+                format: AgentKitLocalized.string("composer.model_follow_default_format"),
+                modelSettings.selectionDisplayName(for: defaultID)
+            )
+        case .explicit:
+            guard let modelID = vm.composerSelectedModelID, !modelID.isEmpty else {
+                return "—"
+            }
+            return "显式 · \(modelSettings.selectionDisplayName(for: modelID))"
+        }
+    }
+
     /// Bottom bar shared by both macOS (inline VStack) and iOS (safeAreaInset).
     @ViewBuilder
     private func activeBottomBar(vm: ConversationViewModel, isPaused: Bool, isArchived: Bool) -> some View {
         VStack(spacing: 0) {
+            if let resolved = vm.modelIdentity.resolvedModel {
+                VStack(alignment: .leading, spacing: 2) {
+                    Text("下次发送：\(nextSendModelLabel(vm))")
+                    Text("最近 Turn 路由：\(resolved)")
+                    if let actual = vm.modelIdentity.actualModel {
+                        Text("最近实际响应：\(actual)")
+                    }
+                }
+                .font(.caption)
+                .foregroundStyle(.secondary)
+                .textSelection(.enabled)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .padding(.horizontal, 12)
+            }
             ZStack(alignment: .bottom) {
                 // ── ask_user ──
                 if let askUser = vm.snapshot.pendingAskUser {
@@ -356,8 +389,8 @@ public struct ConversationDetailView: View {
                     let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
                     return await store.sendUserMessage(
                         trimmed,
-                        model: model.model,
-                        reasoningEffort: model.reasoningEffort,
+                        model: model?.model,
+                        reasoningEffort: model?.reasoningEffort,
                         through: vm
                     )
                 },

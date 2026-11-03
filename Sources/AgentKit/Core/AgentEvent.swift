@@ -46,7 +46,8 @@ public enum AgentEvent: Sendable {
     case modelStarted(turnID: String?, invocationID: String?)
     case modelFinished(turnID: String?, promptTokens: Int?, completionTokens: Int?,
                        totalTokens: Int?, billingUnits: Int64?, elapsedMs: Int?,
-                       invocationID: String?, err: String?, cachedPromptTokens: Int? = nil)
+                       invocationID: String?, err: String?, cachedPromptTokens: Int? = nil,
+                       selection: ModelSelectionIdentity? = nil)
     /// `model_request`（since v1.4）：一次模型调用的请求信封，在所有 context transform
     /// 之后发出，反映真实请求。与同 `invocation_id` 的 `model_finished` 配对，
     /// 客户端据此把「带了什么 → 想了什么 → 花了多少」折成一张调用卡片。
@@ -167,6 +168,7 @@ public enum AgentEvent: Sendable {
 /// 全部字段可选：老服务端不发此事件，新服务端字段也逐个 omitempty。
 public struct ModelRequestInfo: Sendable, Equatable {
     /// 本次调用使用的模型标识，如 "deepseek/deepseek-v4-flash"。
+    public var selection: ModelSelectionIdentity? = nil
     public let modelName: String?
     /// Provider 类型，如 "openai_compatible"。
     public let provider: String?
@@ -318,14 +320,12 @@ extension AgentEvent {
                 elapsedMs: wire.elapsedMs,
                 invocationID: wire.invocationId,
                 err: wire.err,
-                cachedPromptTokens: wire.cachedPromptTokens
+                cachedPromptTokens: wire.cachedPromptTokens,
+                selection: wire.modelSucceeded == false ? nil : wire.modelSelection
             )
 
         case "model_request":
-            return .modelRequest(
-                turnID: turnID,
-                invocationID: wire.invocationId,
-                request: ModelRequestInfo(
+            var request = ModelRequestInfo(
                     modelName: wire.modelName,
                     provider: wire.provider,
                     baseURL: wire.baseURL,
@@ -338,7 +338,8 @@ extension AgentEvent {
                     toolChoice: wire.toolChoice,
                     streamed: wire.streamed
                 )
-            )
+            request.selection = wire.modelSelection
+            return .modelRequest(turnID: turnID, invocationID: wire.invocationId, request: request)
 
         case "model_retrying":
             return .modelRetrying(

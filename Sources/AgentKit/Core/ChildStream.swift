@@ -24,16 +24,22 @@ public struct AgentEventBatch: Sendable {
     public let hasMoreOlder: Bool
     public let replayTruncated: Bool
     public let turnFragment: Bool
+    /// Server-stamped wall clock per protocol turn id, decoded from the same
+    /// frames (`turn_started.at` / `turn_finished.at`). Empty when the backend
+    /// predates the `at` stamp or the page carries no turn boundary.
+    public let turnWallClock: [String: TurnWallClock]
 
     public init(events: [AgentEvent], nextSince: Int, oldestSeq: Int? = nil,
                 hasMoreOlder: Bool = false, replayTruncated: Bool = false,
-                turnFragment: Bool = false) {
+                turnFragment: Bool = false,
+                turnWallClock: [String: TurnWallClock] = [:]) {
         self.events = events
         self.nextSince = nextSince
         self.oldestSeq = oldestSeq
         self.hasMoreOlder = hasMoreOlder
         self.replayTruncated = replayTruncated
         self.turnFragment = turnFragment
+        self.turnWallClock = turnWallClock
     }
 }
 

@@ -590,7 +590,7 @@ public final class WorkspaceStore {
 
     public func sendUserMessage(
         _ text: String,
-        model: String,
+        model: String?,
         reasoningEffort: ModelReasoningEffort?,
         through viewModel: ConversationViewModel,
         onStateChange: @escaping @MainActor @Sendable () -> Void = {}
@@ -1240,7 +1240,7 @@ public final class WorkspaceStore {
     /// 这是唯一的 Session 创建点。失败时草稿进入 `.failed`，保留用户输入以便重试。
     public func commitDraft(
         firstMessage: String,
-        model: UnifiedModel,
+        model: UnifiedModel?,
         assets: [UserAssetRef] = []
     ) async {
         guard let current = draft, let workspace = current.workspace else { return }
@@ -1283,17 +1283,23 @@ public final class WorkspaceStore {
             // 加固：显式写入 selectedModelID 到 session state。
             // migrateDraft 已从 draft state merge，此处提供第二条恢复路径，
             // 防止因 WAL 时序或状态覆盖导致 active view 显示回退到默认模型（Bug 1）。
-            if !model.model.isEmpty {
-                try? localStateStore.updateState(for: .session(ref.id)) { state in
+            try? localStateStore.updateState(for: .session(ref.id)) { state in
+                state.composerSelectionVersion = ConversationLocalState.currentComposerSelectionVersion
+                if let model, !model.model.isEmpty {
+                    state.modelSelectionMode = .explicit
                     state.selectedModelID = model.model
                     state.reasoningEffort = model.reasoningEffort?.rawValue
+                } else {
+                    state.modelSelectionMode = .followDefault
+                    state.selectedModelID = nil
+                    state.reasoningEffort = nil
                 }
             }
             await vm.connect(to: ref)
             let firstInput = AgentInput.text(
                 firstMessage,
-                model: model.model,
-                reasoningEffort: model.reasoningEffort,
+                model: model?.model,
+                reasoningEffort: model?.reasoningEffort,
                 assets: preparedAssets.assets.isEmpty ? assets : preparedAssets.assets,
                 localAssets: preparedAssets.localAssets
             )

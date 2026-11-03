@@ -129,6 +129,13 @@ export interface ConversationWebTurn {
   invocations: ConversationWebInvocation[];
   /// P8.9 — action to open the native trajectory inspector for this turn.
   trajectoryActionID?: string;
+  /// Wall-clock duration of the turn ("24分40秒"). Absent while live.
+  elapsedText?: string;
+  /// `HH:mm` the turn ended, rendered next to the turn actions.
+  finishedAtClock?: string;
+  /// Epoch milliseconds the turn started. The live turn ticks
+  /// "已处理 8分15秒" from this anchor; ignored once the turn finished.
+  startedAtMilliseconds?: number;
 }
 
 export interface ConversationWebExtensionNode {

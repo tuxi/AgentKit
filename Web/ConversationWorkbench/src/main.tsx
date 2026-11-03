@@ -1887,6 +1887,99 @@ function CollapsibleUserPrompt({
   );
 }
 
+/// A failed tool / errored system event is never hidden by the process fold —
+/// an error the user cannot see is worse than a noisy timeline.
+function isFailureBlock(block: ConversationWebBlock): boolean {
+  return block.status === "failed" || block.status === "cancelled";
+}
+
+/// L1 split: everything before the last non-empty answer block is "process",
+/// the answer itself (plus trailing artifacts and any failures pulled forward)
+/// stays visible. Live turns never split — Codex shows the work while it runs.
+function splitTurnForDisplay(turn: ConversationWebTurn): {
+  process: ConversationWebBlock[];
+  answer: ConversationWebBlock[];
+} {
+  if (turn.isLive) {
+    return { process: [], answer: turn.blocks };
+  }
+
+  let answerIndex = -1;
+  for (let index = turn.blocks.length - 1; index >= 0; index -= 1) {
+    const block = turn.blocks[index];
+    if (block.kind === "markdown" && (block.text ?? "").trim().length > 0) {
+      answerIndex = index;
+      break;
+    }
+  }
+
+  // Tool-only turn (step limit, cancel, pure action): fold the work but keep
+  // every failure outside so the turn never becomes an empty shell.
+  if (answerIndex < 0) {
+    return {
+      process: turn.blocks.filter((block) => !isFailureBlock(block)),
+      answer: turn.blocks.filter(isFailureBlock),
+    };
+  }
+
+  const failures = turn.blocks.slice(0, answerIndex).filter(isFailureBlock);
+  return {
+    process: turn.blocks.slice(0, answerIndex).filter((block) => !isFailureBlock(block)),
+    answer: [...failures, ...turn.blocks.slice(answerIndex)],
+  };
+}
+
+/// The collapsed header: "用时 24分40秒". Once the server reports a turn
+/// diffstat this becomes "用时 24分40秒 · 编辑 3 个文件".
+function processSummaryLabel(turn: ConversationWebTurn): string {
+  const parts: string[] = [];
+  if (turn.elapsedText) parts.push(`用时 ${turn.elapsedText}`);
+  return parts.length ? parts.join(" · ") : "查看执行过程";
+}
+
+/// Compact duration, mirroring `ConversationTurn.formattedDuration` so the live
+/// counter and the final "用时 …" never disagree in shape: 48秒 / 24分40秒 / 1小时5分.
+function formatDuration(totalSeconds: number): string {
+  const seconds = Math.max(0, Math.floor(totalSeconds));
+  if (seconds < 60) return `${seconds}秒`;
+  if (seconds < 3600) {
+    const minutes = Math.floor(seconds / 60);
+    const rest = seconds % 60;
+    return rest === 0 ? `${minutes}分` : `${minutes}分${rest}秒`;
+  }
+  const hours = Math.floor(seconds / 3600);
+  const minutes = Math.floor((seconds % 3600) / 60);
+  return minutes === 0 ? `${hours}小时` : `${hours}小时${minutes}分`;
+}
+
+/// Codex keeps a running turn flat, with one live clock on top: "已处理 8分15秒".
+/// The counter ticks locally from the turn's start stamp — asking the Runtime
+/// for a snapshot every second would repaint the whole transcript.
+function LiveTurnHeader({
+  startedAtMilliseconds,
+}: {
+  startedAtMilliseconds?: number;
+}) {
+  const [now, setNow] = useState(() => Date.now());
+
+  useEffect(() => {
+    if (startedAtMilliseconds === undefined) return;
+    setNow(Date.now());
+    const id = window.setInterval(() => setNow(Date.now()), 1_000);
+    return () => window.clearInterval(id);
+  }, [startedAtMilliseconds]);
+
+  if (startedAtMilliseconds === undefined) return null;
+  const elapsedSeconds = (now - startedAtMilliseconds) / 1_000;
+  return (
+    <div className="turn-live-header">
+      <span className="turn-live-elapsed">
+        已处理 {formatDuration(elapsedSeconds)}
+      </span>
+    </div>
+  );
+}
+
 const Turn = memo(function Turn({
   turn,
   conversationID,
@@ -1917,6 +2010,53 @@ const Turn = memo(function Turn({
       }
     }
   }, [turn.localAssets, conversationID]);
+
+  // L1 (Codex-aligned): a finished turn shows its final answer; the work that
+  // produced it folds into one "用时 …" disclosure. Nothing is ever hidden
+  // while the turn is still streaming.
+  const { process, answer } = splitTurnForDisplay(turn);
+
+  const renderBlocks = (blocks: ConversationWebBlock[]) =>
+    blocks.map((block) => (
+      <div
+        className="turn-block"
+        data-block-id={block.id}
+        data-selection-id={`block:${block.id}`}
+        key={block.id}
+      >
+        <Block block={block} />
+      </div>
+    ));
+
+  // Token/context accounting is internal telemetry, not content: it lives at
+  // the bottom of the folded process body instead of under the answer.
+  const footerNode = footer ? (
+    <footer className="turn-footer" data-selection-id={`turn:${turn.id}:footer`}>
+      <span>{footer.totalTokens} tokens</span>
+      {footer.usageUnits ? <span>{footer.usageUnits} units</span> : null}
+      {footer.cachedTokens ? (
+        <span className="turn-footer-cached">缓存 {footer.cachedTokens}</span>
+      ) : null}
+      <span>{footer.elapsed}</span>
+      {footer.invocationCount ? <span>{footer.invocationCount}x</span> : null}
+      {footer.contextTokens ? <span>ctx {footer.contextTokens}</span> : null}
+      {turn.trajectoryActionID ? (
+        <button
+          type="button"
+          className="turn-footer-trajectory"
+          data-focus-id={`turn-trajectory:${turn.id}`}
+          onClick={() => dispatchAction(turn.trajectoryActionID!)}
+          title="查看本轮调用轨迹"
+        >
+          轨迹 ›
+        </button>
+      ) : null}
+    </footer>
+  ) : null;
+
+  const todoNode = turn.todos.length ? (
+    <TodoPanel todos={turn.todos} turnID={turn.id} isLive={turn.isLive} />
+  ) : null;
 
   return (
     <article
@@ -2029,43 +2169,38 @@ const Turn = memo(function Turn({
         <CollapsibleUserPrompt turnID={turn.id} text={turn.userPrompt} />
       ) : null}
       <div className="assistant-lane">
-        {turn.blocks.map((block) => (
-          <div
-            className="turn-block"
-            data-block-id={block.id}
-            data-selection-id={`block:${block.id}`}
-            key={block.id}
-          >
-            <Block block={block} />
-          </div>
-        ))}
-        {turn.todos.length ? (
-          <TodoPanel todos={turn.todos} turnID={turn.id} isLive={turn.isLive} />
-        ) : null}
-        {footer ? (
-          <footer className="turn-footer" data-selection-id={`turn:${turn.id}:footer`}>
-            <span>{footer.totalTokens} tokens</span>
-            {footer.usageUnits ? <span>{footer.usageUnits} units</span> : null}
-            {footer.cachedTokens ? (
-              <span className="turn-footer-cached">缓存 {footer.cachedTokens}</span>
-            ) : null}
-            <span>{footer.elapsed}</span>
-            {footer.invocationCount ? <span>{footer.invocationCount}x</span> : null}
-            {footer.contextTokens ? <span>ctx {footer.contextTokens}</span> : null}
-            {turn.trajectoryActionID ? (
-              <button
-                type="button"
-                className="turn-footer-trajectory"
-                data-focus-id={`turn-trajectory:${turn.id}`}
-                onClick={() => dispatchAction(turn.trajectoryActionID!)}
-                title="查看本轮调用轨迹"
+        {turn.isLive ? (
+          <>
+            <LiveTurnHeader startedAtMilliseconds={turn.startedAtMilliseconds} />
+            {renderBlocks(turn.blocks)}
+            {todoNode}
+            {footerNode}
+          </>
+        ) : (
+          <>
+            {process.length || todoNode || footerNode ? (
+              <details
+                className="turn-process"
+                data-disclosure-id={`turn-process:${turn.id}`}
               >
-                轨迹 ›
-              </button>
+                <summary
+                  className="interactive turn-process-summary"
+                  data-focus-id={`turn-process:${turn.id}`}
+                >
+                  <span className="turn-process-label">{processSummaryLabel(turn)}</span>
+                  <span className="disclosure-chevron" aria-hidden="true">›</span>
+                </summary>
+                <div className="turn-process-body">
+                  {renderBlocks(process)}
+                  {todoNode}
+                  {footerNode}
+                </div>
+              </details>
             ) : null}
-          </footer>
-        ) : null}
-        {!turn.isLive && (turn.copyActionID || turn.shareActionID || turn.assetsActionID) ? (
+            {renderBlocks(answer)}
+          </>
+        )}
+        {!turn.isLive && (turn.copyActionID || turn.shareActionID || turn.assetsActionID || turn.finishedAtClock) ? (
           <div className="turn-actions" aria-label="Turn actions">
             {turn.copyActionID ? (
               <ActionButton
@@ -2089,6 +2224,9 @@ const Turn = memo(function Turn({
               >
                 Assets {turn.assetCount}
               </ActionButton>
+            ) : null}
+            {turn.finishedAtClock ? (
+              <span className="turn-timestamp">{turn.finishedAtClock}</span>
             ) : null}
           </div>
         ) : null}

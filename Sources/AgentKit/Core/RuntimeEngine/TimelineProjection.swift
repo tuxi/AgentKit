@@ -81,7 +81,11 @@ public struct TimelineProjection: Sendable {
 
     /// Build a single turn from its merged ExecutionNodes. Exposed to the
     /// incremental projection cache so unchanged turns skip re-projection.
-    func buildTurn(nodes: [ExecutionNode], isLive: Bool) -> ConversationTurn {
+    /// - Parameter wallClock: server-stamped turn boundaries. When absent the
+    ///   node timestamps are used, which is correct for the live stream but
+    ///   compresses to near-zero on a burst replay.
+    func buildTurn(nodes: [ExecutionNode], isLive: Bool,
+                   wallClock: TurnWallClock? = nil) -> ConversationTurn {
         // Unique, stable id = first node's id (the user node, created once).
         // Never the raw turn_id, which can collide across a server restart.
         let turnUID = nodes.first?.id ?? UUID().uuidString
@@ -298,9 +302,18 @@ public struct TimelineProjection: Sendable {
                         cachedContextTokens: totalCachedTokens)
             : nil
         let invocations = invocationOrder.compactMap { invocationByID[$0] }
+        let startedAt = wallClock?.startedAt ?? nodes.first.map {
+            Date(timeIntervalSince1970: $0.timestamp)
+        }
+        let finishedAt: Date? = isLive
+            ? nil
+            : wallClock?.finishedAt ?? nodes.last.map {
+                Date(timeIntervalSince1970: $0.timestamp)
+            }
         return ConversationTurn(id: turnUID, userPrompt: userPrompt,
                                 blocks: blocks, plans: plans, todos: todos,
-                                footer: footer, isLive: isLive, invocations: invocations)
+                                footer: footer, isLive: isLive, invocations: invocations,
+                                startedAt: startedAt, finishedAt: finishedAt)
     }
 
     /// Collapse adjacent assistant-text blocks when one is a prefix of the other.

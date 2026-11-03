@@ -177,6 +177,96 @@ public final class ModelSettingsStore {
         return gatewayModels?.contains { $0.id == modelID && $0.available != false } ?? false
     }
 
+    /// Whether a usable Runtime default can be resolved. Legacy local state must
+    /// not be normalized before this is true; an empty catalog is not evidence.
+    public var hasResolvedModelCatalog: Bool {
+        !runtimeDefaultModelID.isEmpty
+    }
+
+    /// The model the Runtime will use when a request omits `model`.
+    public var runtimeDefaultModelID: String {
+        if let unifiedModels {
+            if let unifiedDefaultModelID,
+               unifiedModels.contains(where: { $0.id == unifiedDefaultModelID }) {
+                return unifiedDefaultModelID
+            }
+            return unifiedModels.first?.id ?? ""
+        }
+        if let model = gatewayDefaultModel,
+           let models = gatewayModels,
+           models.contains(where: { $0.id == model && $0.available != false }) {
+            return model
+        }
+        return gatewayModels?.first(where: { $0.available != false })?.id ?? ""
+    }
+
+    public var runtimeDefaultModel: UnifiedModel? {
+        let id = runtimeDefaultModelID
+        guard !id.isEmpty else { return nil }
+        return UnifiedModel(model: id, reasoningEffort: nil)
+    }
+
+    /// Matches both the stable catalog ID and its `provider/wire` presentation.
+    public func isRuntimeDefaultModel(_ modelID: String) -> Bool {
+        guard !modelID.isEmpty else { return false }
+        let defaultID = runtimeDefaultModelID
+        guard !defaultID.isEmpty else { return false }
+        if modelID == defaultID { return true }
+        if let descriptor = descriptor(for: defaultID) {
+            return modelID == descriptor.id
+            || modelID == descriptor.model
+            || modelID == descriptor.providerID + "/" + descriptor.wireModelID
+        }
+        if let model = gatewayModels?.first(where: { $0.id == defaultID }) {
+            return modelID == model.id || modelID == model.model
+        }
+        return false
+    }
+
+    /// Resolves persisted input intent. Nil mode means legacy state: without any
+    /// durable provenance, a stored model cannot be proven to be a user choice,
+    /// so it must not keep routing future turns. Legacy state migrates to the
+    /// Runtime default; explicit intent is only recognized when it was persisted
+    /// by a version that records the mode.
+    public func composerSelection(
+        selectedModelID: String?,
+        storedMode: ComposerModelSelectionMode?,
+        storedVersion: Int? = nil,
+        reasoningEffort: String?
+    ) -> ComposerModelSelection {
+        if let storedMode {
+            switch storedMode {
+            case .followDefault:
+                return .followDefault
+            case .explicit:
+                // Unversioned explicit values were written by older migration
+                // heuristics, not by a picker action. Normalize them once.
+                guard storedVersion == ConversationLocalState.currentComposerSelectionVersion else {
+                    return .followDefault
+                }
+                guard let selectedModelID, !selectedModelID.isEmpty else {
+                    return .followDefault
+                }
+                return .explicit(UnifiedModel(
+                    model: selectedModelID,
+                    reasoningEffort: ModelReasoningEffort(rawValue: reasoningEffort ?? "")
+                ))
+            }
+        }
+        return .followDefault
+    }
+
+    public func composerSelection(for conversation: String?) -> ComposerModelSelection {
+        guard let conversation, !conversation.isEmpty else { return .followDefault }
+        let state = try? localStateStore.state(for: .session(conversation))
+        return composerSelection(
+            selectedModelID: state?.selectedModelID,
+            storedMode: state?.modelSelectionMode,
+            storedVersion: state?.composerSelectionVersion,
+            reasoningEffort: state?.reasoningEffort
+        )
+    }
+
     public func getWireModelID(for modelID: String) -> String? {
         if let unifiedModels {
             let curModel = unifiedModels.first { $0.id == modelID }
@@ -216,6 +306,8 @@ public final class ModelSettingsStore {
         guard !conversation.isEmpty else { return }
         guard !modelID.isEmpty else { return }
         try? localStateStore.updateState(for: .session(conversation)) { state in
+            state.modelSelectionMode = .explicit
+            state.composerSelectionVersion = ConversationLocalState.currentComposerSelectionVersion
             state.selectedModelID = modelID
             state.reasoningEffort = reasoningEffort?.rawValue
             state.recentModelIDs.removeAll { $0 == modelID }
@@ -226,9 +318,25 @@ public final class ModelSettingsStore {
         }
     }
 
+    /// Switches a conversation back to Runtime-default routing and removes any
+    /// stale explicit model or reasoning override from local state.
+    public func useRuntimeDefaultModel(for conversation: String) {
+        guard !conversation.isEmpty else { return }
+        try? localStateStore.updateState(for: .session(conversation)) { state in
+            state.modelSelectionMode = .followDefault
+            state.composerSelectionVersion = ConversationLocalState.currentComposerSelectionVersion
+            state.selectedModelID = nil
+            state.reasoningEffort = nil
+        }
+    }
+
     public func getModel(with conversation: String?) -> UnifiedModel? {
         guard let conversation, !conversation.isEmpty else {
             return modelForNewConversation
+        }
+        if let persisted = try? localStateStore.state(for: .session(conversation)),
+           persisted.modelSelectionMode == .followDefault {
+            return UnifiedModel(model: defaultModelForExistingConversation, reasoningEffort: nil)
         }
         if let persisted = try? localStateStore.state(for: .session(conversation)), let model = persisted.selectedModelID, !model.isEmpty {
             return UnifiedModel(model: model, reasoningEffort: ModelReasoningEffort(rawValue: persisted.reasoningEffort ?? ""))
@@ -342,4 +450,27 @@ public final class ModelSettingsStore {
         return (try? localStateStore.state(for: .session(conversation))?.recentModelIDs) ?? []
     }
 
+}
+
+/// Next-input model intent. The wire payload is derived from this value; it is
+/// never derived from `ConversationModelIdentity`.
+public struct ComposerModelSelection: Equatable, Sendable {
+    public let mode: ComposerModelSelectionMode
+    public let model: UnifiedModel?
+
+    public static let followDefault = ComposerModelSelection(mode: .followDefault, model: nil)
+
+    public static func explicit(_ model: UnifiedModel) -> ComposerModelSelection {
+        ComposerModelSelection(mode: .explicit, model: model)
+    }
+
+    /// Nil means "omit `model` from the request".
+    public var wireModelID: String? {
+        mode == .explicit ? model?.model : nil
+    }
+
+    /// Nil means "omit reasoning overrides from the request".
+    public var reasoningEffort: ModelReasoningEffort? {
+        mode == .explicit ? model?.reasoningEffort : nil
+    }
 }

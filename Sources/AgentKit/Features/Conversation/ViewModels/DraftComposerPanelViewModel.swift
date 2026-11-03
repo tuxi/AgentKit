@@ -17,7 +17,7 @@ final class DraftComposerPanelViewModel {
     let modelSettings: ModelSettingsStore
     let conversationViewModel: ConversationViewModel?
     let isDraft: Bool
-    let onSend: (_ text: String, _ model: UnifiedModel, _ assets: [UserAssetRef]) async -> Bool
+    let onSend: (_ text: String, _ model: UnifiedModel?, _ assets: [UserAssetRef]) async -> Bool
     let onModelChange: ((String) -> Void)?
     let onAddAttachment: (() -> Void)?
     let onStop: (() -> Void)?
@@ -26,7 +26,20 @@ final class DraftComposerPanelViewModel {
     
     var text = ""
     var attachments: [DraftAttachmentReference] = []
-    var selectedModel: UnifiedModel?
+    /// Input intent. `.followDefault` means the next request omits `model`.
+    private(set) var selectionMode: ComposerModelSelectionMode = .followDefault
+    /// Only meaningful when `selectionMode == .explicit`.
+    private(set) var explicitModel: UnifiedModel?
+    /// Effective display model: the explicit pick, or the Runtime default while
+    /// following it. Never use this in the wire payload directly.
+    var selectedModel: UnifiedModel? {
+        switch selectionMode {
+        case .followDefault:
+            return modelSettings.runtimeDefaultModel
+        case .explicit:
+            return explicitModel
+        }
+    }
     var isSending = false
     var isTurnRunning = false
     var isEnabled: Bool
@@ -36,6 +49,12 @@ final class DraftComposerPanelViewModel {
     var isContextLoading = false
     var contextError: String?
     var isContextPresented = false
+
+    /// True when the session had no local state at restore time. Used by
+    /// `refreshContext()` to adopt the context snapshot's model as the initial
+    /// explicit selection for externally-created sessions. Cleared after the
+    /// first successful adoption or when the user manually selects a model.
+    private var hadNoLocalState = false
     
     // Voice
     let voiceService = VoiceInputService()
@@ -117,6 +136,44 @@ final class DraftComposerPanelViewModel {
             )
         }
     }
+
+    var modelSelection: ComposerModelSelection {
+        switch selectionMode {
+        case .followDefault:
+            return .followDefault
+        case .explicit:
+            guard let explicitModel, !explicitModel.model.isEmpty else { return .followDefault }
+            return .explicit(explicitModel)
+        }
+    }
+
+    var modelButtonTitle: String {
+        switch selectionMode {
+        case .followDefault:
+            return runtimeDefaultTitle
+        case .explicit:
+            return modelSettings.selectionDisplayName(for: explicitModel?.model ?? "")
+        }
+    }
+
+    var runtimeDefaultTitle: String {
+        let defaultID = modelSettings.runtimeDefaultModelID
+        guard !defaultID.isEmpty else {
+            return AgentKitLocalized.string("composer.model_follow_default")
+        }
+        return String(
+            format: AgentKitLocalized.string("composer.model_follow_default_format"),
+            modelSettings.selectionDisplayName(for: defaultID)
+        )
+    }
+
+    var showsRuntimeDefaultEntry: Bool {
+        !modelSettings.runtimeDefaultModelID.isEmpty
+    }
+
+    func isExplicitModelSelected(_ modelID: String) -> Bool {
+        selectionMode == .explicit && explicitModel?.model == modelID
+    }
     
     // MARK: - Init
     
@@ -128,7 +185,7 @@ final class DraftComposerPanelViewModel {
         isEnabled: Bool,
         isTurnRunning: Bool = false,
         draftRevision: Int = 0,
-        onSend: @escaping (_ text: String, _ model: UnifiedModel, _ assets: [UserAssetRef]) async -> Bool,
+        onSend: @escaping (_ text: String, _ model: UnifiedModel?, _ assets: [UserAssetRef]) async -> Bool,
         onModelChange: ((String) -> Void)? = nil,
         onAddAttachment: (() -> Void)? = nil,
         onStop: (() -> Void)? = nil
@@ -153,6 +210,9 @@ final class DraftComposerPanelViewModel {
     func onAppear() {
         refreshContext()
         restoreLocalState()
+        // If events are already loaded (view re-appears after disconnect),
+        // adopt the resolved model immediately without waiting for onChange.
+        adoptResolvedModelIfNeeded(resolvedModel: conversationViewModel?.modelIdentity.resolvedModel)
     }
     
     func onDisappear() {
@@ -197,13 +257,15 @@ final class DraftComposerPanelViewModel {
     }
     
     // MARK: - Model Selection
-    
+
+    /// User explicitly chose a model. This is the only path that turns a value
+    /// into an explicit next-send intent.
     func selectModel(_ modelID: String, reasoningEffort: ModelReasoningEffort?) {
         guard !modelID.isEmpty else { return }
+        hadNoLocalState = false
         let model = UnifiedModel(model: modelID, reasoningEffort: reasoningEffort)
-        selectedModel = model
-        conversationViewModel?.selectedModel = model
-        
+        applySelection(.explicit(model))
+
         modelSettings.didUseModel(
             modelID,
             reasoningEffort: reasoningEffort,
@@ -212,6 +274,27 @@ final class DraftComposerPanelViewModel {
         persistModel(modelID, reasoningEffort: reasoningEffort)
         if let wireModel = modelSettings.getWireModelID(for: modelID) {
             onModelChange?(wireModel)
+        }
+    }
+
+    /// User chose to let the Runtime resolve its configured default. Persist the
+    /// intent and remove any explicit model/reasoning leftover.
+    func selectRuntimeDefault() {
+        applySelection(.followDefault)
+        persistSelection(.followDefault)
+        if let defaultModel = modelSettings.runtimeDefaultModel {
+            conversationViewModel?.selectedModel = defaultModel
+        }
+    }
+
+    private func applySelection(_ selection: ComposerModelSelection) {
+        selectionMode = selection.mode
+        explicitModel = selection.mode == .explicit ? selection.model : nil
+        conversationViewModel?.applyComposerSelection(selection)
+        if let model = selection.model {
+            conversationViewModel?.selectedModel = model
+        } else if let defaultModel = modelSettings.runtimeDefaultModel {
+            conversationViewModel?.selectedModel = defaultModel
         }
     }
     
@@ -243,8 +326,9 @@ final class DraftComposerPanelViewModel {
             voiceService.stopRecordingAndTranscribe()
         }
         
-        guard canSend, let selectedModel else { return }
-        
+        guard canSend else { return }
+        let selection = modelSelection
+
         let toSend = trimmed
         submittedTextSnapshot = toSend
         
@@ -258,7 +342,7 @@ final class DraftComposerPanelViewModel {
         isSending = true
         
         Task {
-            let accepted = await onSend(toSend, selectedModel, sendingAssets)
+            let accepted = await onSend(toSend, selection.model, sendingAssets)
             if !accepted {
                 restoreSubmittedText(toSend)
                 refreshAttachmentsFromLocalState()
@@ -403,6 +487,17 @@ final class DraftComposerPanelViewModel {
     
     // MARK: - Context Window
     
+    /// Adopts the resolved model from the event stream when a session has no
+    /// local state (e.g., externally created by an agent). Called when
+    /// `modelIdentity.resolvedModel` changes. Only fires once per session open.
+    func adoptResolvedModelIfNeeded(resolvedModel: String?) {
+        guard hadNoLocalState,
+              selectionMode == .followDefault,
+              let modelID = resolvedModel, !modelID.isEmpty else { return }
+        hadNoLocalState = false
+        selectModel(modelID, reasoningEffort: nil)
+    }
+
     func refreshContext() {
         guard let id = sessionID else { return }
         contextRefreshTask?.cancel()
@@ -411,15 +506,22 @@ final class DraftComposerPanelViewModel {
             guard let self else { return }
             do {
                 let snapshot = try await workspaceStore.client.getConversationContext(id: id)
-                // 优化自动化任务或者由对话创建出来的对话，本地没有保存这个对话的model时，切到这个对话时，缓存下真实使用的模型
-                let currentModel = self.modelSettings.getModel(with: id)
-                if currentModel == nil {
-                    self.selectModel(snapshot.model.id, reasoningEffort: snapshot.model.reasoningEffort)
-                }
                 guard !Task.isCancelled else { return }
                 await MainActor.run {
                     self.contextSnapshot = snapshot
                     self.contextError = nil
+                    // Externally-created sessions have no local state. Adopt the
+                    // model the Runtime actually used as the initial explicit
+                    // selection so the composer reflects reality on first open.
+                    if self.hadNoLocalState,
+                       self.selectionMode == .followDefault,
+                       !snapshot.model.name.isEmpty {
+                        self.hadNoLocalState = false
+                        self.selectModel(
+                            snapshot.model.name,
+                            reasoningEffort: snapshot.model.reasoningEffort
+                        )
+                    }
                 }
             } catch {
                 guard !Task.isCancelled else { return }
@@ -459,15 +561,24 @@ final class DraftComposerPanelViewModel {
         defer { isRestoringLocalState = false }
         
         let state = key.flatMap { try? workspaceStore.localStateStore.state(for: $0) }
+        hadNoLocalState = (state == nil)
         text = state?.composerDraft.text ?? ""
         attachments = state.map { visibleAttachments(from: $0) } ?? []
         submittedTextSnapshot = state?.composerDraft.pendingSubmission?.text
-        
-        if let selectedModelID = state?.selectedModelID {
-            selectedModel = UnifiedModel(model: selectedModelID, reasoningEffort: ModelReasoningEffort(rawValue: state?.reasoningEffort ?? ""))
-        } else {
-            let mo = modelSettings.getModel(with: conversationViewModel?.conversation?.id)
-            selectedModel = mo
+
+        let selection = modelSettings.composerSelection(
+            selectedModelID: state?.selectedModelID,
+            storedMode: state?.modelSelectionMode,
+            storedVersion: state?.composerSelectionVersion,
+            reasoningEffort: state?.reasoningEffort
+        )
+        applySelection(selection)
+
+        // Legacy and unversioned state has no durable provenance. Migrate it
+        // once so a stale automatic value cannot keep routing turns.
+        if key != nil,
+           state?.composerSelectionVersion != ConversationLocalState.currentComposerSelectionVersion {
+            persistSelection(selection)
         }
     }
     
@@ -507,6 +618,8 @@ final class DraftComposerPanelViewModel {
     private func persistModel(_ modelID: String, reasoningEffort: ModelReasoningEffort?) {
         guard let key = loadedStateKey, !modelID.isEmpty else { return }
         try? workspaceStore.localStateStore.updateState(for: key) { state in
+            state.modelSelectionMode = .explicit
+            state.composerSelectionVersion = ConversationLocalState.currentComposerSelectionVersion
             state.selectedModelID = modelID
             state.reasoningEffort = reasoningEffort?.rawValue
             state.recentModelIDs.removeAll { $0 == modelID }
@@ -516,20 +629,37 @@ final class DraftComposerPanelViewModel {
             }
         }
     }
-    
-    // MARK: - Model Settings Change Handling
-    
-    func handleModelSettingsChange(newIDs: [String]) {
-        guard !newIDs.isEmpty, let current = selectedModel, current.model.isEmpty else { return }
-        let resolved = modelSettings.getModel(with: conversationViewModel?.conversation?.id)
-        if let resolved, !resolved.model.isEmpty {
-            selectedModel = resolved
+
+    private func persistSelection(_ selection: ComposerModelSelection) {
+        guard let key = loadedStateKey else { return }
+        try? workspaceStore.localStateStore.updateState(for: key) { state in
+            state.modelSelectionMode = selection.mode
+            state.composerSelectionVersion = ConversationLocalState.currentComposerSelectionVersion
+            switch selection.mode {
+            case .followDefault:
+                state.selectedModelID = nil
+                state.reasoningEffort = nil
+            case .explicit:
+                state.selectedModelID = selection.model?.model
+                state.reasoningEffort = selection.model?.reasoningEffort?.rawValue
+            }
         }
     }
-    
-    func handleViewModelModelChange(oldModel: UnifiedModel, newModel: UnifiedModel) {
-        guard oldModel != newModel, newModel != selectedModel else { return }
-        selectModel(newModel.model, reasoningEffort: newModel.reasoningEffort)
+
+    // MARK: - Model Settings Change Handling
+
+    func handleModelSettingsChange(newIDs: [String]) {
+        guard let key = loadedStateKey,
+              let state = try? workspaceStore.localStateStore.state(for: key),
+              state.composerSelectionVersion != ConversationLocalState.currentComposerSelectionVersion else { return }
+        let selection = modelSettings.composerSelection(
+            selectedModelID: state.selectedModelID,
+            storedMode: state.modelSelectionMode,
+            storedVersion: state.composerSelectionVersion,
+            reasoningEffort: state.reasoningEffort
+        )
+        applySelection(selection)
+        persistSelection(selection)
     }
     
     // MARK: - Turn Running

@@ -41,6 +41,11 @@ struct TurnProjectionCache {
     private var turnMergedNodes: [String: [ExecutionNode]] = [:]
     /// Turn UID → last projected ConversationTurn.
     private var cachedTurns: [String: ConversationTurn] = [:]
+    /// Turn UID → wall-clock boundaries used by the last projection. A change
+    /// (e.g. the terminal `turn_finished` timestamp arriving for a turn whose
+    /// content did not change) must re-project the turn even though its blocks
+    /// are byte-identical.
+    private var projectedWallClock: [String: TurnWallClock] = [:]
     /// Turn UID → content version (bumped only when the turn's content changes).
     private var contentVersions: [String: UInt64] = [:]
     /// Node ID → last projected ExecutionNode (per-node projection cache).
@@ -61,10 +66,11 @@ struct TurnProjectionCache {
     /// changed-node set. First call (or after `reset`) performs a full seed.
     mutating func project(
         graph: inout ExecutionGraph,
-        isLive: Bool
+        isLive: Bool,
+        wallClock: [String: TurnWallClock] = [:]
     ) -> (timeline: [ExecutionNode], turns: [ConversationTurn]) {
         if !isSeeded {
-            return seed(graph: &graph, isLive: isLive)
+            return seed(graph: &graph, isLive: isLive, wallClock: wallClock)
         }
 
         let changed = graph.consumeChangedNodeIDs()
@@ -120,7 +126,10 @@ struct TurnProjectionCache {
 
         // 4. Re-project only dirty turns.
         for uid in dirtyTurnIDs {
-            reprojectTurn(uid, graph: graph, isLive: isLive, isLastTurn: uid == currentLastUID)
+            reprojectTurn(
+                uid, graph: graph, isLive: isLive,
+                isLastTurn: uid == currentLastUID, wallClock: wallClock
+            )
         }
 
         // 5. Assemble. Turns may have become empty (all nodes removed) — filter.
@@ -140,6 +149,7 @@ struct TurnProjectionCache {
         nodeToTurn.removeAll()
         turnMergedNodes.removeAll()
         cachedTurns.removeAll()
+        projectedWallClock.removeAll()
         contentVersions.removeAll()
         nodeProjections.removeAll()
         nodeProjectionRevisions.removeAll()
@@ -155,7 +165,8 @@ struct TurnProjectionCache {
     /// `TimelineProjection.projectNodes + projectTurns` (see tests).
     private mutating func seed(
         graph: inout ExecutionGraph,
-        isLive: Bool
+        isLive: Bool,
+        wallClock: [String: TurnWallClock] = [:]
     ) -> (timeline: [ExecutionNode], turns: [ConversationTurn]) {
         _ = graph.consumeChangedNodeIDs()
 
@@ -175,7 +186,10 @@ struct TurnProjectionCache {
 
         let currentLastUID = orderedTurnUIDs.last
         for uid in orderedTurnUIDs {
-            reprojectTurn(uid, graph: graph, isLive: isLive, isLastTurn: uid == currentLastUID)
+            reprojectTurn(
+                uid, graph: graph, isLive: isLive,
+                isLastTurn: uid == currentLastUID, wallClock: wallClock
+            )
         }
 
         lastProjectedLastTurnUID = currentLastUID
@@ -196,7 +210,8 @@ struct TurnProjectionCache {
         _ uid: String,
         graph: ExecutionGraph,
         isLive: Bool,
-        isLastTurn: Bool
+        isLastTurn: Bool,
+        wallClock: [String: TurnWallClock] = [:]
     ) {
         let nodeIDs = turnNodeIDs[uid] ?? []
         let nodes: [ExecutionNode] = nodeIDs.compactMap { nodeID in
@@ -215,12 +230,21 @@ struct TurnProjectionCache {
         let merged = timelineProjection.applyMerge(nodes)
         turnMergedNodes[uid] = merged
 
+        // Wall clock is keyed by the protocol turn id (the merged nodes carry
+        // it), not by the local projection UID.
+        let serverTurnID = merged.first?.turnID ?? ""
+        let clock = wallClock[serverTurnID]
+        let clockChanged = projectedWallClock[uid] != clock
+        projectedWallClock[uid] = clock
+
         let newTurn = timelineProjection.buildTurn(
             nodes: merged,
-            isLive: isLive && isLastTurn
+            isLive: isLive && isLastTurn,
+            wallClock: clock
         )
         let oldVersion = contentVersions[uid] ?? 0
-        if let cached = cachedTurns[uid],
+        if !clockChanged,
+           let cached = cachedTurns[uid],
            cached.withContentVersion(oldVersion) == newTurn.withContentVersion(oldVersion) {
             // Content identical — keep the cached turn and its version so the
             // Web differ can skip it in O(1).

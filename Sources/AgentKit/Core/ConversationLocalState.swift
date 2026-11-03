@@ -240,9 +240,32 @@ public struct ComposerDraft: Codable, Sendable, Equatable {
     }
 }
 
+/// What the Composer will send with the next turn.
+///
+/// This is input intent, not an execution record. `resolved_model` and
+/// `actual_model` describe what a completed Turn used and must never be written
+/// back into this selection.
+public enum ComposerModelSelectionMode: String, Codable, Sendable {
+    /// Omit `model` from the request and let the Runtime resolve its own default.
+    case followDefault = "follow_default"
+    /// Send the user's explicit model (and reasoning override) with the request.
+    case explicit
+}
+
 public struct ConversationLocalState: Codable, Sendable, Equatable {
+    /// Bump when the meaning of `modelSelectionMode` changes. Versioned explicit
+    /// choices are trusted; unversioned explicit values came from older,
+    /// ambiguous migration paths and must be normalized once.
+    public static let currentComposerSelectionVersion = 1
+
     public var composerDraft: ComposerDraft
     public var selectedModelID: String?
+    /// Input-model intent. Nil means the state predates explicit mode tracking;
+    /// callers must run the compatibility migration instead of inferring intent
+    /// from `selectedModelID` alone.
+    public var modelSelectionMode: ComposerModelSelectionMode?
+    /// Version of the persisted selection semantics. Nil = legacy/ambiguous.
+    public var composerSelectionVersion: Int?
     /// User-picked reasoning effort override (raw value of `ModelReasoningEffort`)
     /// for the currently selected model. Nil = use the model's own default
     /// (`UnifiedModelDescriptor.reasoningEffort`).
@@ -257,6 +280,8 @@ public struct ConversationLocalState: Codable, Sendable, Equatable {
     public init(
         composerDraft: ComposerDraft = ComposerDraft(),
         selectedModelID: String? = nil,
+        modelSelectionMode: ComposerModelSelectionMode? = nil,
+        composerSelectionVersion: Int? = nil,
         reasoningEffort: String? = nil,
         recentModelIDs: [String] = [],
         lastReadSequence: Int64 = 0,
@@ -267,6 +292,8 @@ public struct ConversationLocalState: Codable, Sendable, Equatable {
     ) {
         self.composerDraft = composerDraft
         self.selectedModelID = selectedModelID
+        self.modelSelectionMode = modelSelectionMode
+        self.composerSelectionVersion = composerSelectionVersion
         self.reasoningEffort = reasoningEffort
         self.recentModelIDs = recentModelIDs
         self.lastReadSequence = lastReadSequence
@@ -277,7 +304,8 @@ public struct ConversationLocalState: Codable, Sendable, Equatable {
     }
 
     private enum CodingKeys: String, CodingKey {
-        case composerDraft, selectedModelID, reasoningEffort, recentModelIDs, lastReadSequence
+        case composerDraft, selectedModelID, modelSelectionMode, composerSelectionVersion
+        case reasoningEffort, recentModelIDs, lastReadSequence
         case lastSeenTerminalSequence, lastNotifiedTerminalSequence
         case lastNotifiedApprovalSequence, updatedAt
     }
@@ -286,6 +314,8 @@ public struct ConversationLocalState: Codable, Sendable, Equatable {
         let values = try decoder.container(keyedBy: CodingKeys.self)
         composerDraft = try values.decodeIfPresent(ComposerDraft.self, forKey: .composerDraft) ?? ComposerDraft()
         selectedModelID = try values.decodeIfPresent(String.self, forKey: .selectedModelID)
+        modelSelectionMode = try values.decodeIfPresent(ComposerModelSelectionMode.self, forKey: .modelSelectionMode)
+        composerSelectionVersion = try values.decodeIfPresent(Int.self, forKey: .composerSelectionVersion)
         reasoningEffort = try values.decodeIfPresent(String.self, forKey: .reasoningEffort)
         recentModelIDs = try values.decodeIfPresent([String].self, forKey: .recentModelIDs) ?? []
         lastReadSequence = try values.decodeIfPresent(Int64.self, forKey: .lastReadSequence) ?? 0
@@ -591,8 +621,20 @@ public final class SQLiteConversationLocalStateStore: ConversationLocalStateStor
     ) -> ConversationLocalState {
         guard var session else { return draft }
         session.composerDraft = draft.composerDraft
-        session.selectedModelID = draft.selectedModelID ?? session.selectedModelID
-        session.reasoningEffort = draft.reasoningEffort ?? session.reasoningEffort
+        if let mode = draft.modelSelectionMode {
+            session.modelSelectionMode = mode
+            session.composerSelectionVersion = draft.composerSelectionVersion
+            if mode == .followDefault {
+                session.selectedModelID = nil
+                session.reasoningEffort = nil
+            } else {
+                session.selectedModelID = draft.selectedModelID ?? session.selectedModelID
+                session.reasoningEffort = draft.reasoningEffort
+            }
+        } else {
+            session.selectedModelID = draft.selectedModelID ?? session.selectedModelID
+            session.reasoningEffort = draft.reasoningEffort ?? session.reasoningEffort
+        }
         session.recentModelIDs = unique(draft.recentModelIDs + session.recentModelIDs)
         session.lastReadSequence = max(session.lastReadSequence, draft.lastReadSequence)
         session.lastSeenTerminalSequence = max(session.lastSeenTerminalSequence, draft.lastSeenTerminalSequence)
@@ -663,8 +705,20 @@ public final class InMemoryConversationLocalStateStore: ConversationLocalStateSt
             if let draft = values[draftKey] {
                 var session = values[.session(sessionID)] ?? ConversationLocalState()
                 session.composerDraft = draft.composerDraft
-                session.selectedModelID = draft.selectedModelID ?? session.selectedModelID
-                session.reasoningEffort = draft.reasoningEffort ?? session.reasoningEffort
+                if let mode = draft.modelSelectionMode {
+                    session.modelSelectionMode = mode
+                    session.composerSelectionVersion = draft.composerSelectionVersion
+                    if mode == .followDefault {
+                        session.selectedModelID = nil
+                        session.reasoningEffort = nil
+                    } else {
+                        session.selectedModelID = draft.selectedModelID ?? session.selectedModelID
+                        session.reasoningEffort = draft.reasoningEffort
+                    }
+                } else {
+                    session.selectedModelID = draft.selectedModelID ?? session.selectedModelID
+                    session.reasoningEffort = draft.reasoningEffort ?? session.reasoningEffort
+                }
                 var seen = Set<String>()
                 session.recentModelIDs = (draft.recentModelIDs + session.recentModelIDs).filter {
                     seen.insert($0).inserted

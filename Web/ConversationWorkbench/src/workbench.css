@@ -848,6 +848,93 @@ summary:active {
   white-space: nowrap;
 }
 
+/* L1 process fold — a finished turn shows its answer; the work that produced
+   it collapses into one quiet line above it (Codex turn summary). */
+.turn-process {
+  margin: 0 0 10px;
+}
+
+/* Live turn header (Codex): one running clock above the flat transcript.
+   Not selectable — it is state, not content. */
+.turn-live-header {
+  display: flex;
+  align-items: center;
+  margin: 0 0 10px;
+  padding-bottom: 8px;
+  border-bottom: 1px solid var(--border);
+  color: var(--secondary);
+  font-size: 12px;
+  line-height: 1.4;
+  font-variant-numeric: tabular-nums;
+  user-select: none;
+  -webkit-user-select: none;
+}
+
+.turn-live-elapsed {
+  font-weight: 500;
+  letter-spacing: 0.01em;
+}
+
+.turn-process-summary {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  max-width: 100%;
+  padding: 3px 2px;
+  color: var(--secondary);
+  font-size: 12px;
+  line-height: 1.4;
+  cursor: pointer;
+  user-select: none;
+  -webkit-user-select: none;
+  list-style: none;
+}
+
+.turn-process-summary::-webkit-details-marker {
+  display: none;
+}
+
+.turn-process-summary::marker {
+  content: "";
+}
+
+.turn-process-summary:hover .turn-process-label {
+  color: var(--text);
+}
+
+.turn-process-label {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.turn-process .disclosure-chevron {
+  transition: transform 120ms ease;
+}
+
+.turn-process[open] > .turn-process-summary > .disclosure-chevron {
+  transform: rotate(90deg);
+}
+
+.turn-process-body {
+  margin: 6px 0 4px;
+  padding-inline-start: 12px;
+  border-inline-start: 1px solid var(--border);
+  opacity: 0.92;
+}
+
+.turn-process-body > .turn-block:last-child {
+  margin-bottom: 0;
+}
+
+.turn-timestamp {
+  margin-inline-start: auto;
+  align-self: center;
+  color: var(--secondary);
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+}
+
 .turn-footer {
   display: flex;
   flex-wrap: wrap;

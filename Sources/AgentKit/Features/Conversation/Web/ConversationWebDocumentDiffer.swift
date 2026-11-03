@@ -286,6 +286,15 @@ enum ConversationWebDocumentDiffer {
             && lhs.shareActionID == rhs.shareActionID
             && lhs.assetsActionID == rhs.assetsActionID
             && lhs.assetCount == rhs.assetCount
+            // Turn-level wall clock + trajectory/fork entries are metadata too:
+            // a late server timestamp must reach the renderer without a full
+            // turn replace.
+            && lhs.elapsedText == rhs.elapsedText
+            && lhs.finishedAtClock == rhs.finishedAtClock
+            && lhs.startedAtMilliseconds == rhs.startedAtMilliseconds
+            && lhs.trajectoryActionID == rhs.trajectoryActionID
+            && lhs.forkActionID == rhs.forkActionID
+            && lhs.invocations == rhs.invocations
     }
 
     private static func canPatchBlockShape(

@@ -16,6 +16,8 @@ struct OlderHistoryPageResult: Sendable {
     let oldestSeq: Int
     let hasMoreOlder: Bool
     let isIncomplete: Bool
+    /// Server-stamped turn boundaries across every page folded into this batch.
+    let turnWallClock: [String: TurnWallClock]
 }
 
 enum ConversationHistoryPager {
@@ -25,6 +27,7 @@ enum ConversationHistoryPager {
     ) async throws -> OlderHistoryPageResult {
         var cursor = before
         var events: [AgentEvent] = []
+        var wallClock: [String: TurnWallClock] = [:]
         var finalBatch: AgentEventBatch?
         repeat {
             try Task.checkCancellation()
@@ -33,6 +36,9 @@ enum ConversationHistoryPager {
                 throw RuntimeHTTPError.invalidResponse
             }
             events.insert(contentsOf: batch.events, at: 0)
+            for (turnID, clock) in batch.turnWallClock {
+                wallClock[turnID] = (wallClock[turnID] ?? TurnWallClock()).merging(clock)
+            }
             cursor = oldest
             finalBatch = batch
             if !batch.turnFragment || !batch.hasMoreOlder { break }
@@ -42,7 +48,8 @@ enum ConversationHistoryPager {
             events: events, oldestSeq: cursor,
             hasMoreOlder: finalBatch.hasMoreOlder,
             isIncomplete: finalBatch.turnFragment && !finalBatch.hasMoreOlder
-                || finalBatch.replayTruncated && !finalBatch.hasMoreOlder
+                || finalBatch.replayTruncated && !finalBatch.hasMoreOlder,
+            turnWallClock: wallClock
         )
     }
 }
@@ -196,6 +203,20 @@ public final class ConversationViewModel {
     /// 每个对话独立跟踪自己的模型，不是全局设置。
     public var selectedModel: UnifiedModel
 
+    /// Observed execution identity; never writes the next-input model selection.
+    public private(set) var modelIdentity = ConversationModelIdentity()
+
+    /// Next-send intent mirrored from the Composer for display only. The
+    /// authoritative copy lives in local state; this property never derives from
+    /// Runtime events.
+    public private(set) var composerSelectionMode: ComposerModelSelectionMode = .followDefault
+    public private(set) var composerSelectedModelID: String?
+
+    func applyComposerSelection(_ selection: ComposerModelSelection) {
+        composerSelectionMode = selection.mode
+        composerSelectedModelID = selection.model?.model
+    }
+
     private let client: RuntimeClient
     private var channel: (any RuntimeSessionChannel)?
     private let turnCoordinator: ConversationTurnCoordinator?
@@ -337,6 +358,9 @@ public final class ConversationViewModel {
         if isDifferentConversation {
             inFlightClientToolCallIDs.removeAll()
             completedClientToolCallIDs.removeAll()
+            modelIdentity = ConversationModelIdentity()
+            composerSelectionMode = .followDefault
+            composerSelectedModelID = nil
         }
         self.snapshot = .empty(sessionID: conversation.id)
         detailFetchTask?.cancel()
@@ -737,8 +761,9 @@ public final class ConversationViewModel {
             historyMayBeIncomplete = batch.replayTruncated && !hasMoreOlderHistory
 
             // v2: import into engine (replays through reducer → projects timeline)
-            await engine.importHistory(batch.events)
+            await engine.importHistory(batch.events, wallClock: batch.turnWallClock)
             for event in batch.events {
+                modelIdentity.apply(event)
                 if case .turnAccepted(let turnID, let requestID, _) = event,
                    let requestID {
                     handleSubmissionAccepted(requestID: requestID, turnID: turnID)
@@ -769,7 +794,7 @@ public final class ConversationViewModel {
             oldestHistorySeq = result.oldestSeq
             hasMoreOlderHistory = result.hasMoreOlder
             historyMayBeIncomplete = result.isIncomplete
-            await engine.importOlderHistory(result.events)
+            await engine.importOlderHistory(result.events, wallClock: result.turnWallClock)
             for timelineExtension in timelineExtensions {
                 await timelineExtension.handleOlderHistory(result.events)
             }
@@ -828,14 +853,7 @@ public final class ConversationViewModel {
             completedClientToolCallIDs.insert(callID)
         }
         
-        if case .modelRequest(let turnID, let invocationID, let request) = event {
-            if let provider = request.provider, !provider.isEmpty {
-                let model = UnifiedModel(providerID: provider, wireModelID: request.modelName ?? "", reasoningEffort: ModelReasoningEffort(rawValue: request.reasoningEffort ?? ""))
-                selectedModel = model
-            } else {
-                self.selectedModel = UnifiedModel(model: request.modelName ?? "", reasoningEffort: nil)
-            }
-        }
+        modelIdentity.apply(event)
     }
 
     private func observeSubmission(_ ticket: AgentInputSubmissionTicket) async {

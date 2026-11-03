@@ -47,6 +47,15 @@ struct ConversationWebDocument: Codable, Equatable, Sendable {
         /// 按轮 Fork 入口（`conversation_fork_through_turn_v1`）。Present only when
         /// the Runtime advertises the capability and the turn is not live.
         let forkActionID: String?
+        /// Wall-clock duration of the turn ("24分40秒"). Nil while live or when
+        /// the timestamps are unknown — drives the collapsed process summary.
+        let elapsedText: String?
+        /// `HH:mm` the turn ended, rendered next to the turn actions.
+        let finishedAtClock: String?
+        /// Epoch milliseconds the turn started. While the turn is live the
+        /// renderer ticks "已处理 8分15秒" from this anchor; the value is also
+        /// present after completion but unused then.
+        var startedAtMilliseconds: Int64? = nil
     }
 
     /// P8.9 — one model invocation rendered as a card (request shape → usage → thinking).
@@ -491,7 +500,10 @@ enum ConversationWebDocumentBuilder {
             },
             forkActionID: (!supportsForkThroughTurn || turn.isLive) ? nil : registerAction.map {
                 $0(.transcript(turnID: turn.id, action: .forkConversation(turnID: turn.id)))
-            }
+            },
+            elapsedText: turn.formattedDuration,
+            finishedAtClock: turn.finishedAtClock,
+            startedAtMilliseconds: turn.startedAtMilliseconds
         )
     }
 
@@ -746,7 +758,7 @@ enum ConversationWebDocumentBuilder {
                 id: id,
                 kind: .system,
                 text: payload.text,
-                title: payload.kind.rawValue,
+                title: payload.metadata["type"] == "cancelled" ? nil : payload.kind.rawValue,
                 status: payload.kind == .error ? "failed" : nil,
                 elapsed: nil,
                 tools: [],

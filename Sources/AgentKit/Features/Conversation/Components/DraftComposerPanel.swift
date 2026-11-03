@@ -18,8 +18,11 @@ import ClientToolProtocol
 private struct IOSModelPickerSheet: View {
     let groups: [ComposerModelGroup]
     let ungroupedModelIDs: [String]
+    let selectionMode: ComposerModelSelectionMode
     let selectedModel: UnifiedModel?
+    let runtimeDefaultTitle: String?
     let displayName: (String) -> String
+    let onSelectDefault: () -> Void
     let onSelect: (String) -> Void
 
     @Environment(\.dismiss) private var dismiss
@@ -27,6 +30,20 @@ private struct IOSModelPickerSheet: View {
     var body: some View {
         NavigationStack {
             List {
+                if let runtimeDefaultTitle {
+                    Button {
+                        onSelectDefault()
+                        dismiss()
+                    } label: {
+                        HStack {
+                            Text(runtimeDefaultTitle)
+                            Spacer()
+                            if selectionMode == .followDefault {
+                                Image(systemName: "checkmark")
+                            }
+                        }
+                    }
+                }
                 if groups.isEmpty {
                     ForEach(ungroupedModelIDs, id: \.self) { modelID in
                         modelRow(modelID)
@@ -54,7 +71,7 @@ private struct IOSModelPickerSheet: View {
             HStack {
                 Text(displayName(modelID))
                 Spacer()
-                if selectedModel?.model == modelID {
+                if selectionMode == .explicit, selectedModel?.model == modelID {
                     Image(systemName: "checkmark")
                 }
             }
@@ -81,13 +98,13 @@ struct DraftComposerPanel: View {
     let isDraft: Bool
     let isTurnRunning: Bool
     let onStop: (() -> Void)?
-    let onSend: (_ text: String, _ model: UnifiedModel, _ assets: [UserAssetRef]) async -> Bool
+    let onSend: (_ text: String, _ model: UnifiedModel?, _ assets: [UserAssetRef]) async -> Bool
     let onAddAttachment: (() -> Void)?
     let onModelChange: ((String) -> Void)?
     
     @State private var vm: DraftComposerPanelViewModel?
     
-    init(workspaceStore: WorkspaceStore, modelSettings: ModelSettingsStore, viewModel: ConversationViewModel?, draftRevision: Int = 0, placeholder: String, isEnabled: Bool, isDraft: Bool, isTurnRunning: Bool = false, onStop: (() -> Void)? = nil, onSend: @escaping (_: String, _: UnifiedModel, _: [UserAssetRef]) async -> Bool, onAddAttachment: (() -> Void)? = nil, onModelChange: ((String) -> Void)? = nil) {
+    init(workspaceStore: WorkspaceStore, modelSettings: ModelSettingsStore, viewModel: ConversationViewModel?, draftRevision: Int = 0, placeholder: String, isEnabled: Bool, isDraft: Bool, isTurnRunning: Bool = false, onStop: (() -> Void)? = nil, onSend: @escaping (_: String, _: UnifiedModel?, _: [UserAssetRef]) async -> Bool, onAddAttachment: (() -> Void)? = nil, onModelChange: ((String) -> Void)? = nil) {
         self.workspaceStore = workspaceStore
         self.modelSettings = modelSettings
         self.viewModel = viewModel
@@ -191,10 +208,11 @@ struct DraftComposerPanel: View {
             }
         }
         .onChange(of: viewModel?.conversation?.id) { _, _ in
-            guard let newVM = viewModel else { return }
-            let newModel = newVM.selectedModel
-            guard newModel != vm.selectedModel else { return }
-            vm.handleViewModelModelChange(oldModel: vm.selectedModel ?? UnifiedModel(model: "", reasoningEffort: nil), newModel: newModel)
+            vm.restoreLocalState()
+            vm.refreshContext()
+        }
+        .onChange(of: viewModel?.modelIdentity.resolvedModel) { _, newValue in
+            vm.adoptResolvedModelIfNeeded(resolvedModel: newValue)
         }
         .modifier(DraftComposerSurfaceModifier())
         .modifier(ComposerAlertsModifier(vm: vm))
@@ -206,13 +224,18 @@ struct DraftComposerPanel: View {
             IOSModelPickerSheet(
                 groups: vm.modelGroups,
                 ungroupedModelIDs: vm.modelGroups.isEmpty ? vm.modelSettings.availableModelIDs : [],
+                selectionMode: vm.selectionMode,
                 selectedModel: vm.selectedModel,
+                runtimeDefaultTitle: vm.showsRuntimeDefaultEntry
+                    ? String(
+                        format: AgentKitLocalized.string("composer.model_follow_default_format"),
+                        vm.modelSettings.selectionDisplayName(for: vm.modelSettings.runtimeDefaultModelID)
+                    )
+                    : nil,
                 displayName: { vm.modelSettings.displayName(for: $0) },
+                onSelectDefault: { vm.selectRuntimeDefault() },
                 onSelect: { modelID in
-                    let resolved = vm.modelSettings.getModel(with: viewModel?.conversation?.id)
-                    if let resolved, !resolved.model.isEmpty {
-                        vm.selectModel(modelID, reasoningEffort: resolved.reasoningEffort)
-                    }
+                    vm.selectModel(modelID, reasoningEffort: nil)
                 }
             )
             .presentationDetents([.medium, .height(260)])
@@ -322,7 +345,7 @@ struct DraftComposerPanel: View {
                         vm.isIOSModelPickerPresented = true
                     } label: {
                         HStack(spacing: 5) {
-                            Text(vm.modelSettings.selectionDisplayName(for: vm.selectedModel?.model ?? ""))
+                            Text(vm.modelButtonTitle)
                                 .font(.system(size: 13, weight: .semibold))
                                 .lineLimit(1)
                             Image(systemName: "chevron.up")
@@ -342,6 +365,19 @@ struct DraftComposerPanel: View {
                     .accessibilityLabel(AgentKitLocalized.string("composer.select_model"))
 #else
                     Menu {
+                        if vm.showsRuntimeDefaultEntry {
+                            Button {
+                                vm.selectRuntimeDefault()
+                            } label: {
+                                HStack {
+                                    Text(vm.runtimeDefaultTitle)
+                                    if vm.selectionMode == .followDefault {
+                                        Image(systemName: "checkmark")
+                                    }
+                                }
+                            }
+                            Divider()
+                        }
                         if vm.modelGroups.isEmpty {
                             ForEach(vm.modelSettings.availableModelIDs, id: \.self) { modelID in
                                 modelMenuEntry(modelID, vm: vm)
@@ -363,7 +399,7 @@ struct DraftComposerPanel: View {
                             Image(systemName: "brain.head.profile")
                                 .font(.system(size: 9, weight: .semibold))
                         } else {
-                            Text(vm.modelSettings.selectionDisplayName(for: vm.selectedModel?.model ?? ""))
+                            Text(vm.modelButtonTitle)
                                 .font(.system(size: 13, weight: .medium))
                                 .lineLimit(1)
                                 .frame(maxWidth: 55)
@@ -572,7 +608,7 @@ struct DraftComposerPanel: View {
         } label: {
             HStack {
                 Text(vm.modelSettings.displayName(for: modelID))
-                if modelID == vm.selectedModel?.model {
+                if vm.isExplicitModelSelected(modelID) {
                     Image(systemName: "checkmark")
                 }
             }
@@ -602,7 +638,7 @@ struct DraftComposerPanel: View {
         } label: {
             HStack {
                 Text(vm.modelSettings.displayName(for: modelID))
-                if modelID == vm.selectedModel?.model {
+                if vm.isExplicitModelSelected(modelID) {
                     Image(systemName: "checkmark")
                 }
             }
