@@ -15,12 +15,11 @@ import SwiftUI
 public struct TurnTimelineView: View {
     let snapshot: RuntimeSnapshot
     let timelineExtensions: [any TimelineExtension]
-    /// Stable conversation identity. The native macOS timeline uses this to
-    /// distinguish a newly opened conversation from a streaming update.
+    /// Stable conversation identity. The Web renderer uses this to distinguish
+    /// a newly opened conversation from a streaming update.
     let conversationID: String?
     /// Stable workspace root from the resident conversation model.
     let workspaceRoot: URL?
-    let rendererMode: ConversationRendererMode
     let isVisible: Bool
     /// Height of the floating bottom bar in the macOS layout. The timeline pins
     /// its newest content just above this bar; the scroll range still extends
@@ -35,7 +34,6 @@ public struct TurnTimelineView: View {
         timelineExtensions: [any TimelineExtension] = [],
         conversationID: String? = nil,
         workspaceRoot: URL? = nil,
-        rendererMode: ConversationRendererMode = .auto,
         isVisible: Bool = true,
         bottomInset: CGFloat = 0,
         onReachedTop: (@MainActor () -> Void)? = nil
@@ -44,7 +42,6 @@ public struct TurnTimelineView: View {
         self.timelineExtensions = timelineExtensions
         self.conversationID = conversationID
         self.workspaceRoot = workspaceRoot
-        self.rendererMode = rendererMode
         self.isVisible = isVisible
         self.bottomInset = bottomInset
         self.onReachedTop = onReachedTop
@@ -60,10 +57,21 @@ public struct TurnTimelineView: View {
 
     public var body: some View {
         #if os(macOS)
-        switch didWebRendererFail ? .native : rendererMode.resolved(
-            hasLegacyTimelineExtensions: hasLegacyTimelineExtensions
-        ) {
-        case .web:
+        // macOS is committed to the Web renderer: ConversationWebWorkbenchView
+        // is the only timeline. `didWebRendererFail` is not a mode switch — it
+        // latches only when the renderer cannot start at all (shell failed to
+        // load, bridge protocol mismatch, repeated render failures), where the
+        // AppKit timeline is the last resort instead of a blank pane.
+        if didWebRendererFail {
+            MacNativeChatTimeline(
+                snapshot: snapshot,
+                timelineExtensions: timelineExtensions,
+                conversationID: conversationID,
+                workspaceRoot: workspaceRoot,
+                bottomInset: bottomInset,
+                onReachedTop: onReachedTop
+            )
+        } else {
             ConversationWebWorkbenchView(
                 snapshot: snapshot,
                 conversationID: conversationID,
@@ -84,17 +92,6 @@ public struct TurnTimelineView: View {
                 )
                 .frame(minWidth: 640, minHeight: 480)
             }
-        case .native, .auto:
-            // AppKit owns the native scroll container. TurnView itself remains
-            // unchanged, preserving the TextKit behavior reference and rollback.
-            MacNativeChatTimeline(
-                snapshot: snapshot,
-                timelineExtensions: timelineExtensions,
-                conversationID: conversationID,
-                workspaceRoot: workspaceRoot,
-                bottomInset: bottomInset,
-                onReachedTop: onReachedTop
-            )
         }
         #else
         FollowingScrollView(
@@ -146,10 +143,6 @@ public struct TurnTimelineView: View {
     }
 
     #if os(macOS)
-    private var hasLegacyTimelineExtensions: Bool {
-        timelineExtensions.contains { !($0 is any WebTimelineExtension) }
-    }
-
     private var webExtensionContributions: [String: [TimelineWebContribution]] {
         var result: [String: [TimelineWebContribution]] = [:]
         for turn in snapshot.turns {

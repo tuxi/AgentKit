@@ -181,9 +181,6 @@ public final class WorkspaceStore {
     /// Host-owned Timeline additions. AgentKit does not interpret their state.
     private let timelineExtensions: [any TimelineExtension]
 
-    /// Renderer rollout policy injected by the host.
-    public let conversationRendererMode: ConversationRendererMode
-
     /// Host 注入的 auth 恢复钩子，透传给每个 ConversationViewModel。
     private let onAuthExpired: (@MainActor () async -> Void)?
 
@@ -342,7 +339,6 @@ public final class WorkspaceStore {
         usesEmbeddedRuntime: Bool = true,
         toolRegistry: ToolRegistry = ToolRegistry(),
         timelineExtensions: [any TimelineExtension] = [],
-        conversationRendererMode: ConversationRendererMode = .auto,
         onAuthExpired: (@MainActor () async -> Void)? = nil,
         localStateStore: any ConversationLocalStateStore = SQLiteConversationLocalStateStore.shared,
         userAssetPicker: UserAssetPicking? = nil,
@@ -376,7 +372,6 @@ public final class WorkspaceStore {
         self.projects = projects
         self.toolRegistry = toolRegistry
         self.timelineExtensions = timelineExtensions
-        self.conversationRendererMode = conversationRendererMode
         self.onAuthExpired = onAuthExpired
         self.listViewModel = ConversationListViewModel(client: client, usesEmbeddedRuntime: usesEmbeddedRuntime)
         let resolvedAttentionStore = attentionReadStore
@@ -406,7 +401,6 @@ public final class WorkspaceStore {
             usesEmbeddedRuntime: dependencies.usesEmbeddedRuntime,
             toolRegistry: dependencies.toolRegistry,
             timelineExtensions: dependencies.timelineExtensions,
-            conversationRendererMode: dependencies.conversationRendererMode,
             onAuthExpired: dependencies.onAuthExpired,
             localStateStore: dependencies.localStateStore,
             userAssetPicker: dependencies.userAssetPicker,

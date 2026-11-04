@@ -1193,21 +1193,6 @@ final class ConversationWebDocumentTests: XCTestCase {
         _ = webView
     }
 
-    func testRendererRolloutPolicyIsConservative() {
-        XCTAssertEqual(
-            ConversationRendererMode.auto.resolved(hasLegacyTimelineExtensions: false),
-            .web
-        )
-        XCTAssertEqual(
-            ConversationRendererMode.auto.resolved(hasLegacyTimelineExtensions: true),
-            .native
-        )
-        XCTAssertEqual(
-            ConversationRendererMode.web.resolved(hasLegacyTimelineExtensions: true),
-            .native
-        )
-    }
-
     @MainActor
     func testBundledShellLoadsFromPrivateSchemeAndHandshakes() async throws {
         let ready = expectation(description: "Web renderer handshake")

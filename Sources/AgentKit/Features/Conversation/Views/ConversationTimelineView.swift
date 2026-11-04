@@ -11,7 +11,6 @@ import SwiftUI
 
 public struct ConversationTimelineView: View {
     
-    @Environment(WorkspaceStore.self) private var store
     let viewModel: ConversationViewModel
     let isVisible: Bool
     let bottomInset: CGFloat
@@ -28,7 +27,6 @@ public struct ConversationTimelineView: View {
             timelineExtensions: viewModel.timelineExtensions,
             conversationID: viewModel.conversation?.id,
             workspaceRoot: viewModel.workspaceRootURL,
-            rendererMode: store.conversationRendererMode,
             isVisible: isVisible,
             bottomInset: bottomInset,
             onReachedTop: { Task { await viewModel.loadOlderHistory() } }
