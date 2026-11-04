@@ -1957,8 +1957,15 @@ function TurnChangesCard({
   const sorted = [...changes.files].sort(
     (a, b) => b.added + b.removed - (a.added + a.removed),
   );
-  const visible = expanded ? sorted : sorted.slice(0, CHANGE_PREVIEW_LIMIT);
-  const hiddenCount = sorted.length - CHANGE_PREVIEW_LIMIT;
+  const previewCount = Math.min(sorted.length, CHANGE_PREVIEW_LIMIT);
+  const visible = expanded ? sorted : sorted.slice(0, previewCount);
+  // `filesChanged` is the full-turn count; `files` may have been clipped by the
+  // Runtime (200). Fold math therefore runs on the list we actually hold, and the
+  // files the Runtime never sent get their own note — otherwise a 250-file turn
+  // reads "已编辑 250 个文件" above "再显示 197 个文件" and the numbers stop adding
+  // up (3 + 197 ≠ 250).
+  const hiddenCount = sorted.length - previewCount;
+  const withheldCount = Math.max(0, changes.filesChanged - sorted.length);
 
   return (
     <section
@@ -2004,6 +2011,11 @@ function TurnChangesCard({
             {expanded ? "›" : "⌄"}
           </span>
         </button>
+      ) : null}
+      {withheldCount > 0 && (expanded || hiddenCount <= 0) ? (
+        <p className="turn-changes-note">
+          另有 {withheldCount} 个文件未列出
+        </p>
       ) : null}
     </section>
   );

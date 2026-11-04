@@ -1895,6 +1895,117 @@ final class ConversationWebDocumentTests: XCTestCase {
         _ = webView
     }
 
+    /// The Runtime clips `files` at 200 but keeps `filesChanged` at the full turn
+    /// count, so the card must not derive its fold from the header number: a
+    /// 250-file turn holds 200 rows, and the missing 50 need their own note or the
+    /// card reads "已编辑 250 个文件" above "再显示 197 个文件" (3 + 197 ≠ 250).
+    func testChangeCardExplainsFilesTheRuntimeWithheld() async throws {
+        let ready = expectation(description: "Web renderer handshake")
+        let acknowledged = expectation(description: "Web document acknowledgement")
+        let probe = ConversationWebBridgeProbe(ready: ready)
+        probe.expectAcknowledgement(revision: 1, expectation: acknowledged)
+        let configuration = WKWebViewConfiguration()
+        configuration.websiteDataStore = .nonPersistent()
+        configuration.setURLSchemeHandler(
+            ConversationWebSchemeHandler(),
+            forURLScheme: ConversationWebSchemeHandler.scheme
+        )
+        configuration.userContentController.add(probe, name: "agentkitWorkbench")
+
+        let webView = WKWebView(
+            frame: .init(x: 0, y: 0, width: 480, height: 640),
+            configuration: configuration
+        )
+        webView.load(URLRequest(url: ConversationWebSchemeHandler.indexURL))
+        await fulfillment(of: [ready], timeout: 5)
+
+        let registry = ConversationWebActionRegistry()
+        let startedAt = Date(timeIntervalSince1970: 1_700_000_000)
+        // 200 rows on the wire, 250 files counted: the shape the Runtime ships
+        // once a turn touches more than its clip limit.
+        let files = (0..<200).map { index in
+            TurnChanges.FileChange(path: "Sources/File\(index).swift", added: 200 - index,
+                                   removed: 0, status: .modified)
+        }
+        let changes = TurnChanges(
+            files: files,
+            filesChanged: 250, addedLines: 20_100, removedLines: 0
+        )
+        let turn = ConversationTurn(
+            id: "turn-clipped",
+            userPrompt: MessageNodePayload(role: .user, text: "rename the package"),
+            blocks: [
+                .text(id: "final-clipped",
+                      MessageNodePayload(role: .assistant, text: "Renamed the package.")),
+            ],
+            footer: nil,
+            isLive: false,
+            startedAt: startedAt,
+            finishedAt: startedAt.addingTimeInterval(90),
+            changes: changes
+        )
+        let fixture = RuntimeSnapshot(timeline: [], turns: [turn], generation: 1)
+        let document = ConversationWebDocumentBuilder.build(
+            snapshot: fixture,
+            conversationID: "fixture",
+            revision: 1,
+            registerAction: registry.register
+        )
+        let payload = try JSONEncoder().encode(
+            ConversationWebDocumentDiffer.reset(document)
+        ).base64EncodedString()
+        _ = try await webView.evaluateJavaScript(
+            "window.AgentKitWorkbench.applyUpdateBase64('\(payload)')"
+        )
+        await fulfillment(of: [acknowledged], timeout: 5)
+        try await Task.sleep(for: .milliseconds(30))
+
+        let collapsed = try await webView.evaluateJavaScript(
+            """
+            (() => {
+              const card = document.querySelector('.turn-changes');
+              return {
+                title: card?.querySelector('.turn-changes-title')?.textContent ?? null,
+                rows: card?.querySelectorAll('.turn-changes-row').length ?? -1,
+                more: card?.querySelector('.turn-changes-more')?.textContent ?? null,
+                note: card?.querySelector('.turn-changes-note')?.textContent ?? null,
+              };
+            })()
+            """
+        ) as? [String: Any]
+
+        XCTAssertEqual(collapsed?["title"] as? String, "已编辑 250 个文件")
+        XCTAssertEqual(collapsed?["rows"] as? Int, 3)
+        // 197 of the shipped rows stay folded; the withheld 50 are not offered
+        // here because the client cannot render them.
+        XCTAssertEqual(collapsed?["more"] as? String, "再显示 197 个文件⌄")
+        XCTAssertNil(collapsed?["note"] as? String, "the note only shows once the shipped rows are unfolded")
+
+        _ = try await webView.evaluateJavaScript(
+            "document.querySelector('.turn-changes-more').click()"
+        )
+        try await Task.sleep(for: .milliseconds(20))
+        let expanded = try await webView.evaluateJavaScript(
+            """
+            (() => {
+              const card = document.querySelector('.turn-changes');
+              return {
+                rows: card?.querySelectorAll('.turn-changes-row').length ?? -1,
+                note: card?.querySelector('.turn-changes-note')?.textContent ?? null,
+                more: card?.querySelector('.turn-changes-more')?.textContent ?? null,
+              };
+            })()
+            """
+        ) as? [String: Any]
+
+        XCTAssertEqual(expanded?["rows"] as? Int, 200)
+        XCTAssertEqual(expanded?["note"] as? String, "另有 50 个文件未列出")
+        XCTAssertEqual(expanded?["more"] as? String, "收起›")
+
+        configuration.userContentController.removeScriptMessageHandler(forName: "agentkitWorkbench")
+        _ = webView
+    }
+
     /// Codex parity: a running turn stays flat, but carries one live clock on
     /// top ("已处理 8分15秒"). It must tick without a Runtime snapshot.
     func testLiveTurnShowsProcessingClockAboveFlatTranscript() async throws {

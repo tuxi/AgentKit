@@ -1063,6 +1063,15 @@ summary:active {
   font-size: 10px;
 }
 
+/* Footer note for files the Runtime clipped out of the wire list (200 max).
+   It sits where a row would, so the totals still add up visually. */
+.turn-changes-note {
+  margin: 0;
+  padding: 0 12px 8px;
+  color: var(--secondary);
+  font-size: 12px;
+}
+
 .turn-footer {
   display: flex;
   flex-wrap: wrap;
