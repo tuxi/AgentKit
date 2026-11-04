@@ -367,16 +367,47 @@ turn_finished / turn_failed / turn_cancelled 顶层 diffstat
 - 文案**不加「主流程」限定**：服务端已把 workflow / 子代理的写入冒泡进同一份统计。
   但嵌套路径目前只有服务端单测覆盖（4 个 `TestFluxWorkflowTool*` 集成测试在 HEAD 上就是红的）；
   若真机发现子任务写入漏计，先把文案退回「编辑 N 个文件（不含子任务）」。
-- **答案下方有变更卡**（`TurnChangesCard`）：`已编辑 N 个文件` + `+A -R`，最多列 4 个文件
-  （按 added+removed 降序），其余折进「再显示 N 个文件」。卡片在折叠区**之外** ——
+- **答案下方有变更卡**（`TurnChangesCard`）：`已编辑 N 个文件` + `+A -R`，最多列 3 个文件
+  （按 added+removed 降序，对齐 Codex），其余折进「再显示 N 个文件」。卡片在折叠区**之外** ——
   改了哪些文件属于结果，不属于过程。`撤销` / `查看变更` 未接（需要 daemon 的 revert 与 diff 面板）。
+- **折叠数不能拿 `filesChanged` 减 3**：列表被截到 200 条时，标题仍是全量、可展开的只有手上这些，
+  所以折叠数按 `files.length` 算；服务端没发来的那部分单独一行「另有 N 个文件未列出」，
+  在展开后才出现。否则 250 个文件的轮次会出现「已编辑 250 个文件」配「再显示 197 个文件」（3+197≠250）。
 - **缓存失效不能只靠节点 revision**：diffstat 可能搭在**不触碰任何节点**的终态事件上到达
   （空回答的 failed turn），所以 `ExecutionGraph` 带 `turnChangesRevision`，投影层只比较这个数。
+
+### iOS（SwiftUI，2026-11）
+
+iOS 侧没有走 Web 渲染器，用 SwiftUI 复刻同一套语义；**没有新增任何协议/模型字段** ——
+`ConversationTurn` 是两端共用的，`startedAt/finishedAt/formattedDuration/changes` 和
+`turnIsExecuting` 早已就位，iOS 只补视图：
+
+| 元素 | 实现 | 数据 |
+| --- | --- | --- |
+| 折叠头 `用时 … · 编辑 N 个文件 ›` | `TurnProcessHeader`（整行可点，44pt 命中区） | `processSummaryLabel` |
+| 兜底头 `查看执行过程 ›` | 老历史没有 wall clock，没有兜底就会「过程被折叠且没有入口」 | `processHeaderLabel(hasProcess:)` |
+| 进行中 `已处理 8分15秒` | `LiveTurnHeader` + 叶子视图 `LiveDurationLabel` | `turn.startedAt` 本地 tick |
+| 变更卡 `已编辑 N 个文件 +A -R` | `TurnChangesCardView`：3 行预览 + 展开 | `TurnChanges.preview(limit:)` |
+| 底部时间戳 | `bottomRow` 补 `HH:mm` | `finishedAtClock` |
+
+不变量（与 Web 逐条对应，测试在 `TurnDisplaySplitTests`）：
+
+- **折叠规则用同一份数据**：`ConversationTurn.displaySplit` 是 Web `splitTurnForDisplay` 的 Swift 版
+  —— 最后一个非空 text 之前的算过程，失败块（failed tool / `system(error)` / 失败的
+  childStream・workflow）提到答案侧，纯工具轮只折非失败块。
+- **live 不折**：`isLive` 时 `process` 为空，全部平铺，只有计时头。
+- **tick 只重画一行**：`TimelineView` 放在 `LiveDurationLabel` 这个叶子视图里。macOS 那条
+  「禁用 TimelineView」的注释是 TextKit 特有的（会重置 NSTextView 选区），SwiftUI 块布局没有这个问题；
+  若把 TimelineView 包在整轮上，等于每秒重建一次 transcript。
+- **卡片账要对得上**：折叠计算移进 `TurnChanges.preview(limit:)`，
+  保证 `rows + hiddenCount + withheldCount == filesChanged`；排序按 `added+removed` 降序、
+  同分按 path 升序（Swift 的 `sorted(by:)` 不稳定，同分不排序会让行在重绘时乱跳）。
+- **折叠状态不持久化**：`@State`，默认折叠，与 Web 的 `<details>` 一致。
 
 ### 尚未做
 
 - `撤销` / `查看变更`：前者要 daemon 支持 revert，后者要按文件打开 diff 面板，都还没接。
-- iOS native 渲染（`AgentResponseView`）未做 L1，待 macOS 验证稳定后跟进。
+- 会话级变更胶囊（Codex 输入框上方的「3 个文件 +153 -2」）：跨轮汇总，语义（全会话/当天）未定，暂不做。
 
 ---
 

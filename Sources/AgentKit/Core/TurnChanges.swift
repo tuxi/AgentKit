@@ -78,6 +78,38 @@ public struct TurnChanges: Sendable, Equatable {
         guard filesChanged > 0 else { return nil }
         return "编辑 \(filesChanged) 个文件"
     }
+
+    /// One page of the change card, with the two counts a fold needs.
+    public struct Preview: Sendable, Equatable {
+        /// Rows to render, largest change first.
+        public let rows: [FileChange]
+        /// Shipped rows that stay behind "再显示 N 个文件".
+        public let hiddenCount: Int
+        /// Files the Runtime never sent because it clips the list — these need a
+        /// "另有 N 个文件未列出" line, they can never be unfolded.
+        public let withheldCount: Int
+    }
+
+    /// Fold math for the change card. It lives here, next to the data, because
+    /// `rows.count + hiddenCount + withheldCount` must always equal
+    /// `filesChanged` — a card whose parts don't add up is what this guards.
+    ///
+    /// Ties are broken by path so the order is deterministic: `sorted(by:)` is
+    /// not stable in Swift, and rows that reshuffle between renders look like
+    /// the turn is still running.
+    public func preview(limit: Int) -> Preview {
+        let ordered = files.sorted { lhs, rhs in
+            let lhsSize = lhs.added + lhs.removed
+            let rhsSize = rhs.added + rhs.removed
+            return lhsSize == rhsSize ? lhs.path < rhs.path : lhsSize > rhsSize
+        }
+        let shown = max(0, min(limit, ordered.count))
+        return Preview(
+            rows: Array(ordered.prefix(shown)),
+            hiddenCount: ordered.count - shown,
+            withheldCount: max(0, filesChanged - ordered.count)
+        )
+    }
 }
 
 // MARK: - Wire decoding

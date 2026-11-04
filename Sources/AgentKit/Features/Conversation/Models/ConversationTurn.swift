@@ -99,17 +99,7 @@ public struct ConversationTurn: Identifiable, Sendable, Equatable {
     /// Matches the Codex turn summary ("用时 24分40秒").
     public var formattedDuration: String? {
         guard let seconds = elapsedSeconds else { return nil }
-        if seconds < 60 {
-            return "\(seconds)秒"
-        }
-        if seconds < 3600 {
-            let minutes = seconds / 60
-            let rest = seconds % 60
-            return rest == 0 ? "\(minutes)分" : "\(minutes)分\(rest)秒"
-        }
-        let hours = seconds / 3600
-        let minutes = (seconds % 3600) / 60
-        return minutes == 0 ? "\(hours)小时" : "\(hours)小时\(minutes)分"
+        return TurnDurationText.string(seconds: seconds)
     }
 
     /// `HH:mm` of the moment the turn ended — the timestamp Codex puts under a

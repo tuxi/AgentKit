@@ -14,6 +14,9 @@ import SwiftUI
 /// replacing the TextKit NSAttributedString approach used on macOS.
 struct AgentResponseView: View {
     let turn: ConversationTurn
+    /// Blocks to render. A finished turn passes only the visible half of its
+    /// split while the process fold is closed; live turns pass everything.
+    let blocks: [TurnBlock]
     @Binding var documentState: TranscriptDocumentState
     let onAction: (TranscriptAction) -> Void
 
@@ -47,7 +50,7 @@ struct AgentResponseView: View {
     private var visibleBlocks: [TurnBlock] {
         var rendered: [TurnBlock] = []
         var previousFailed = false
-        for block in turn.blocks {
+        for block in blocks {
             // Suppress system blocks that immediately follow a failed tool
             if previousFailed, case .system = block {
                 previousFailed = false

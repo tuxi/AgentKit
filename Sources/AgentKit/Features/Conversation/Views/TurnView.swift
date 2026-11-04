@@ -17,6 +17,10 @@ struct TurnView: View, Equatable {
     @Environment(WorkspaceStore.self) private var store
     @Environment(\.openURL) private var openURL
     @State private var documentState = TranscriptDocumentState()
+    /// Process fold for a finished turn. Per-view state on purpose: collapsed by
+    /// default, not persisted across launches (the Web `<details>` behaves the
+    /// same way).
+    @State private var isProcessExpanded = false
 
     /// With `.equatable()` at the call site, SwiftUI skips body entirely for
     /// turns whose content didn't change — the common case while another turn
@@ -53,8 +57,13 @@ struct TurnView: View, Equatable {
     #if os(iOS)
     /// iOS: SwiftUI block-based layout — user prompt as standalone bubble,
     /// each turn block as its own view, no TextKit NSAttributedString.
+    ///
+    /// Codex parity: a finished turn folds its process behind one header line
+    /// ("用时 24分40秒 · 编辑 3 个文件"), a running turn stays flat under a ticking
+    /// clock, and the files the turn wrote sit under the answer.
     private var iosBody: some View {
-        VStack(alignment: .leading, spacing: 6) {
+        let split = turn.displaySplit
+        return VStack(alignment: .leading, spacing: 6) {
             // User-attached images / files
             if let prompt = turn.userPrompt,
                !prompt.userAssets.isEmpty || !prompt.localAssets.isEmpty {
@@ -71,12 +80,27 @@ struct TurnView: View, Equatable {
             if let userPrompt = turn.userPrompt, !userPrompt.text.isEmpty {
                 UserPromptBubble(prompt: userPrompt)
             }
+            if turn.isLive {
+                LiveTurnHeader(startedAt: turn.startedAt)
+            } else if let label = turn.processHeaderLabel(hasProcess: split.hasProcess) {
+                TurnProcessHeader(
+                    label: label,
+                    isFoldable: split.hasProcess,
+                    isExpanded: $isProcessExpanded
+                )
+            }
             // Agent response blocks rendered as typed SwiftUI views
             AgentResponseView(
                 turn: turn,
+                blocks: isProcessExpanded ? split.allBlocks : split.answer,
                 documentState: $documentState,
                 onAction: handleTranscriptAction
             )
+
+            if let changes = turn.changes, !changes.isEmpty {
+                TurnChangesCardView(changes: changes)
+                    .padding(.top, 4)
+            }
 
             if !turn.todos.isEmpty {
                 TodoPanel(todos: turn.todos, isLive: turn.isLive)
@@ -147,7 +171,8 @@ struct TurnView: View, Equatable {
         // session, which hid the button until you reloaded into history).
         let canCopy = !copyText.isEmpty && !isAnswerStreaming
         let assets = turnAssets
-        if canCopy || !assets.isEmpty {
+        let clock = turn.isLive ? nil : turn.finishedAtClock
+        if canCopy || !assets.isEmpty || clock != nil {
             HStack(spacing: 12) {
                 if canCopy {
                     TurnCopyButton(text: copyText)
@@ -173,6 +198,13 @@ struct TurnView: View, Equatable {
                 // Fork 按钮
                 forkButton
                 Spacer()
+                // Completion clock, the timestamp Codex puts under an answer.
+                if let clock {
+                    Text(clock)
+                        .font(.caption2)
+                        .foregroundStyle(.tertiary)
+                        .monospacedDigit()
+                }
             }
             .padding(.top, 2)
         }
