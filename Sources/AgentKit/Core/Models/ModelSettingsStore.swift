@@ -39,9 +39,17 @@ public final class ModelSettingsStore {
     // MARK: - Private
 
     private static let lastModelKey = "code_agent.model.last_selected"
+    private static let knownModelDisplayNamesKey = "code_agent.model.known_display_names.v1"
 
     private let defaults: UserDefaults
     private let localStateStore: any ConversationLocalStateStore
+
+    /// Secret-free tombstones for models referenced by historical sessions: the
+    /// name a model had while its connection existed. A removed connection must
+    /// not turn its stable ID (or its `provider/wire` composite) into
+    /// user-facing text — the composer would otherwise show
+    /// `provider.company-production.model.deepseek-v4-flash`.
+    private var knownModelDisplayNames: [String: String] = [:]
 
     /// 最后一次选择模型（跨对话，用于新对话默认值）
     public private(set) var lastSelectedModel: UnifiedModel?
@@ -88,6 +96,8 @@ public final class ModelSettingsStore {
                 DLLog(error)
             }
         }
+        self.knownModelDisplayNames =
+            defaults.dictionary(forKey: Self.knownModelDisplayNamesKey) as? [String: String] ?? [:]
     }
 
     private func persistLastSelected() {
@@ -134,6 +144,16 @@ public final class ModelSettingsStore {
         _ models: [UnifiedModelDescriptor],
         defaultModelID: String?
     ) {
+        // Remember the readable name while the connection is still live: once a
+        // model disappears from the catalog its stable ID can only be decoded,
+        // not translated.
+        for model in models {
+            knownModelDisplayNames[model.id] = model.displayName
+            if knownModelDisplayNames[model.wireModelID] == nil {
+                knownModelDisplayNames[model.wireModelID] = model.displayName
+            }
+        }
+        defaults.set(knownModelDisplayNames, forKey: Self.knownModelDisplayNamesKey)
         unifiedModels = models
         unifiedDefaultModelID = defaultModelID.flatMap { requested in
             models.contains(where: { $0.id == requested }) ? requested : nil
@@ -348,13 +368,18 @@ public final class ModelSettingsStore {
     }
 
     /// 模型的 display name（用于 UI）。
+    /// 优先取 catalog 的可读名，其次取历史墓碑，最后才退化成从稳定 ID 解出的 wire 名——
+    /// 稳定 ID（`provider.X.model.Y`）绝不能出现在 UI 上。
     public func displayName(for modelID: String) -> String {
         if let unifiedModels {
             if let model = unifiedModels.first(where: { $0.id == modelID }) {
-               return model.model
+                return model.displayName
+            }
+            if let known = knownModelDisplayNames[modelID], !known.isEmpty {
+                return known
             }
             if let identity = UnifiedModelDescriptor.parseRuntimeAlias(modelID) {
-                return identity.wireModelID
+                return knownModelDisplayNames[identity.wireModelID] ?? identity.wireModelID
             }
         }
         if let model = gatewayModels?.first(where: { $0.id == modelID }) {

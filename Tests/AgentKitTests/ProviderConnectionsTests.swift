@@ -111,7 +111,10 @@ final class ProviderConnectionsTests: XCTestCase {
         let catalog = try XCTUnwrap(model["catalog"] as? [String: Any])
 
         XCTAssertEqual(catalog["connection_id"] as? String, "company-production")
-        XCTAssertEqual(catalog["provider_id"] as? String, "openai-compatible")
+        // `provider_id` is the connection identity that prefixes the unified
+        // model ID (`<providerID>/<wireModelID>`) — the Runtime uses it as the
+        // provider name. It is NOT the wire protocol kind (`openai-compatible`).
+        XCTAssertEqual(catalog["provider_id"] as? String, "company-production")
         XCTAssertEqual(catalog["connection_display_name"] as? String, "company-production")
         XCTAssertEqual(catalog["display_name"] as? String, "Qwen3 Coder")
         XCTAssertEqual(catalog["supports_tools"] as? Bool, true)

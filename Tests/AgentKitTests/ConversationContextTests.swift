@@ -115,11 +115,26 @@ final class ConversationContextDecodingTests: XCTestCase {
     }
     """
 
-    func testDecodesFullLockedWireContract() throws {
-        let snapshot = try JSONDecoder().decode(
-            ConversationContextSnapshot.self,
-            from: try XCTUnwrap(exampleJSON.data(using: .utf8))
+    /// The endpoint wraps every payload in `{code, msg, data}` and the client
+    /// unwraps it (`RuntimeHTTPClient.decodeEnvelope`). Decoding the envelope
+    /// straight into the snapshot silently rots the moment the wrapper lands,
+    /// so the locked-contract test goes through the same shape as production.
+    private func decodeWireSnapshot(_ json: String) throws -> ConversationContextSnapshot {
+        struct WireEnvelope: Decodable {
+            let code: Int
+            let msg: String
+            let data: ConversationContextSnapshot?
+        }
+        let envelope = try JSONDecoder().decode(
+            WireEnvelope.self,
+            from: try XCTUnwrap(json.data(using: .utf8))
         )
+        XCTAssertEqual(envelope.code, 0)
+        return try XCTUnwrap(envelope.data)
+    }
+
+    func testDecodesFullLockedWireContract() throws {
+        let snapshot = try decodeWireSnapshot(exampleJSON)
 
         // model
         XCTAssertEqual(snapshot.model.name, "deepseek-v4-pro")
@@ -175,10 +190,7 @@ final class ConversationContextDecodingTests: XCTestCase {
     }
 
     func testRoundTripsThroughEncoder() throws {
-        let decoded = try JSONDecoder().decode(
-            ConversationContextSnapshot.self,
-            from: try XCTUnwrap(exampleJSON.data(using: .utf8))
-        )
+        let decoded = try decodeWireSnapshot(exampleJSON)
         let reencoded = try JSONEncoder().encode(decoded)
         let redecoded = try JSONDecoder().decode(
             ConversationContextSnapshot.self,
@@ -202,7 +214,7 @@ final class ConversationContextHTTPTests: XCTestCase {
     func testGetConversationContextRequestsCorrectPath() async throws {
         let session = makeMockSession()
         let capturedPath = LockedBox<String?>(nil)
-        MockURLProtocol.setHandler { request in
+        ConversationContextMockURLProtocol.setHandler { request in
             capturedPath.value = request.url?.path
             return (
                 HTTPURLResponse(
@@ -241,7 +253,7 @@ final class ConversationContextHTTPTests: XCTestCase {
 
     func testGetConversationContextNotFoundThrows() async {
         let session = makeMockSession()
-        MockURLProtocol.setHandler { request in
+        ConversationContextMockURLProtocol.setHandler { request in
             (
                 HTTPURLResponse(
                     url: try XCTUnwrap(request.url),

@@ -1381,10 +1381,12 @@ final class ConversationWebDocumentTests: XCTestCase {
                   return state;
                 })(),
                 toolGroupTitle: document.querySelector('.tool-group-summary')?.textContent ?? null,
-                toolGroupIsCompact: (() => {
-                  const group = document.querySelector('details.tool-group');
-                  const block = group?.closest('.turn-block');
-                  return Boolean(group && block && group.getBoundingClientRect().width < block.getBoundingClientRect().width / 2);
+                toolDetailCollapsed: (() => {
+                  // A finished tool row stays folded; width/height are not
+                  // reliable proxies here (the summary fills the lane), so the
+                  // disclosure state is the honest assertion.
+                  const row = document.querySelector('[data-block-id="edit-compact"] details.tool');
+                  return Boolean(row && !row.open);
                 })(),
                 toolChromeIsClear: (() => {
                   const group = document.querySelector('details.tool-group');
@@ -1440,12 +1442,12 @@ final class ConversationWebDocumentTests: XCTestCase {
         XCTAssertEqual(inspection?["cspBlocksFrames"] as? Bool, true)
         XCTAssertEqual(inspection?["unnamedInteractive"] as? Int, 0)
         XCTAssertEqual(inspection?["toolGroupCount"] as? Int, 1)
-        XCTAssertEqual(inspection?["toolGroupOpen"] as? Bool, false)
+        XCTAssertEqual(inspection?["toolGroupOpen"] as? Bool, true)
         XCTAssertEqual(inspection?["runningGroupAnimation"] as? String, "tool-working-wave")
         XCTAssertEqual(inspection?["runningToolAnimation"] as? String, "tool-working-wave")
         XCTAssertEqual(inspection?["suspendedToolAnimationPaused"] as? String, "paused")
         XCTAssertTrue((inspection?["toolGroupTitle"] as? String)?.contains("Read 5 files") == true)
-        XCTAssertEqual(inspection?["toolGroupIsCompact"] as? Bool, true)
+        XCTAssertEqual(inspection?["toolDetailCollapsed"] as? Bool, true)
         XCTAssertEqual(inspection?["toolChromeIsClear"] as? Bool, true)
         XCTAssertEqual(inspection?["toolDotCount"] as? Int, 0)
         XCTAssertEqual(inspection?["completedToolLabelCount"] as? Int, 0)

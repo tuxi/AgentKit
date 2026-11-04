@@ -858,6 +858,10 @@ final class MultiConversationTests: XCTestCase {
             )
         )
         store.listViewModel.prepend(conversation)
+        // The Runtime owns both partitions; seed them so archive/restore move the
+        // record server-side too. Without it the fake archives nothing and the
+        // post-restore list refresh answers with an empty page.
+        client.setConversationLists(active: [conversation], archived: [])
         await store.refreshRuntimeState()
         store.selectedConversation = conversation
         try await Task.sleep(for: .milliseconds(25))
@@ -1618,7 +1622,11 @@ private final class MultiSessionRuntimeClient: RuntimeClient, @unchecked Sendabl
     }
 
     func createConversation(workspacePath: String) async throws -> ConversationRef {
-        ConversationRef(id: UUID().uuidString, workspacePath: workspacePath)
+        // A real Runtime lists what it created; the fake must too, otherwise a
+        // post-commit list refresh looks like a deletion and drops the selection.
+        let ref = ConversationRef(id: UUID().uuidString, workspacePath: workspacePath)
+        activeConversations.insert(ref, at: 0)
+        return ref
     }
     func cloneRepo(request: PublicGitCloneRequest) async throws -> ClonedRepo {
         cloneRequests.append(request)
@@ -1630,7 +1638,7 @@ private final class MultiSessionRuntimeClient: RuntimeClient, @unchecked Sendabl
         let id = UUID().uuidString
         if let worktree = request.worktree, worktree.managed {
             let path = request.workspacePath + "/.codeagent/worktrees/test-managed-a31f"
-            return ConversationRef(
+            let ref = ConversationRef(
                 id: id,
                 workspacePath: path,
                 name: worktree.suggestedName,
@@ -1645,14 +1653,18 @@ private final class MultiSessionRuntimeClient: RuntimeClient, @unchecked Sendabl
                     state: "ready"
                 )
             )
+            activeConversations.insert(ref, at: 0)
+            return ref
         }
-        return ConversationRef(
+        let ref = ConversationRef(
             id: id,
             workspacePath: request.workspacePath,
             executionPolicy: request.executionPolicy?.rawValue,
             workspaceID: request.workspaceID,
             baseWorkspaceID: request.baseWorkspaceID
         )
+        activeConversations.insert(ref, at: 0)
+        return ref
     }
     func listConversations() async throws -> [ConversationRef] { activeConversations }
 
