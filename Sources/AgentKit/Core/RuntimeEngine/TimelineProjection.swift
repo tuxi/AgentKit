@@ -85,7 +85,8 @@ public struct TimelineProjection: Sendable {
     ///   node timestamps are used, which is correct for the live stream but
     ///   compresses to near-zero on a burst replay.
     func buildTurn(nodes: [ExecutionNode], isLive: Bool,
-                   wallClock: TurnWallClock? = nil) -> ConversationTurn {
+                   wallClock: TurnWallClock? = nil,
+                   changes: TurnChanges? = nil) -> ConversationTurn {
         // Unique, stable id = first node's id (the user node, created once).
         // Never the raw turn_id, which can collide across a server restart.
         let turnUID = nodes.first?.id ?? UUID().uuidString
@@ -313,7 +314,8 @@ public struct TimelineProjection: Sendable {
         return ConversationTurn(id: turnUID, userPrompt: userPrompt,
                                 blocks: blocks, plans: plans, todos: todos,
                                 footer: footer, isLive: isLive, invocations: invocations,
-                                startedAt: startedAt, finishedAt: finishedAt)
+                                startedAt: startedAt, finishedAt: finishedAt,
+                                changes: changes)
     }
 
     /// Collapse adjacent assistant-text blocks when one is a prefix of the other.

@@ -43,11 +43,12 @@ public struct ExecutionReducer: Sendable {
                 graph: &graph
             )
 
-        case .turnFinished(let turnID, let text, let textAnnotations):
+        case .turnFinished(let turnID, let text, let textAnnotations, let changes):
             return handleTurnFinished(
                 turnID: turnID,
                 text: text,
                 textAnnotations: textAnnotations,
+                changes: changes,
                 ts: ts,
                 graph: &graph
             )
@@ -55,20 +56,21 @@ public struct ExecutionReducer: Sendable {
         case .turnPaused, .turnResumed:
             return []
 
-        case .turnFailed(let turnID, let text, let err, let errorCode):
+        case .turnFailed(let turnID, let text, let err, let errorCode, let changes):
             return handleTurnFailed(
                 turnID: turnID,
                 text: text,
                 err: err,
                 errorCode: errorCode,
+                changes: changes,
                 ts: ts,
                 graph: &graph
             )
 
-        case .turnCancelled(let turnID, let reason):
+        case .turnCancelled(let turnID, let reason, let changes):
             return handleTurnCancelled(
                 turnID: turnID ?? internalState.currentTurnID ?? "",
-                reason: reason, ts: ts,
+                reason: reason, changes: changes, ts: ts,
                 graph: &graph
             )
 
@@ -346,6 +348,7 @@ public struct ExecutionReducer: Sendable {
         turnID: String,
         text: String,
         textAnnotations: [AgentTextAnnotation],
+        changes: TurnChanges?,
         ts: TimeInterval,
         graph: inout ExecutionGraph
     ) -> [NodeID] {
@@ -415,6 +418,9 @@ public struct ExecutionReducer: Sendable {
             }
             internalState.streamingThinking = ""
         }
+        // 4. Record what the turn wrote. Keyed by the protocol turn id — the
+        //    projection layer looks it up with the same id its nodes carry.
+        graph.setTurnChanges(changes, for: turnID)
         internalState.currentTurnID = nil
         return []
     }
@@ -427,6 +433,7 @@ public struct ExecutionReducer: Sendable {
         text: String?,
         err: String?,
         errorCode: String?,
+        changes: TurnChanges?,
         ts: TimeInterval,
         graph: inout ExecutionGraph
     ) -> [NodeID] {
@@ -465,6 +472,8 @@ public struct ExecutionReducer: Sendable {
         internalState.lastNodeOfKind[.assistantMessage] = nil
         internalState.lastNodeOfKind[.thinking] = nil
         internalState.activeToolCallIDs = []
+        // A failed turn keeps the writes that did land before it died.
+        graph.setTurnChanges(changes, for: resolvedTurnID)
         internalState.currentTurnID = nil
         return changed
     }
@@ -488,6 +497,7 @@ public struct ExecutionReducer: Sendable {
     private mutating func handleTurnCancelled(
         turnID: String,
         reason: String?,
+        changes: TurnChanges?,
         ts: TimeInterval,
         graph: inout ExecutionGraph
     ) -> [NodeID] {
@@ -503,6 +513,7 @@ public struct ExecutionReducer: Sendable {
         internalState.lastNodeOfKind[.assistantMessage] = nil
         internalState.lastNodeOfKind[.thinking] = nil
         internalState.activeToolCallIDs = []
+        graph.setTurnChanges(changes, for: turnID)
         internalState.currentTurnID = nil
         let nodeID = "\(turnID)_cancelled"
         if graph.nodes[nodeID] == nil {

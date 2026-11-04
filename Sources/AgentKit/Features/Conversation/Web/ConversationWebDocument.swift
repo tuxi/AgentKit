@@ -24,6 +24,36 @@ struct ConversationWebDocument: Codable, Equatable, Sendable {
         let status: String
     }
 
+    /// What a turn wrote to disk, as reported by the Runtime (`diffstat`).
+    /// Mirrors the core `TurnChanges` but only carries what the renderer needs.
+    struct WebTurnChanges: Codable, Equatable, Sendable {
+        struct File: Codable, Equatable, Sendable {
+            let path: String
+            let added: Int
+            let removed: Int
+            let status: String
+        }
+        /// Capped by the Runtime (200). May be shorter than `filesChanged`.
+        let files: [File]
+        let filesChanged: Int
+        let addedLines: Int
+        let removedLines: Int
+        /// "编辑 3 个文件" — appended to the collapsed turn summary.
+        let summary: String?
+
+        init?(_ changes: TurnChanges?) {
+            guard let changes, !changes.isEmpty else { return nil }
+            self.files = changes.files.map {
+                File(path: $0.path, added: $0.added,
+                     removed: $0.removed, status: $0.status.rawValue)
+            }
+            self.filesChanged = changes.filesChanged
+            self.addedLines = changes.addedLines
+            self.removedLines = changes.removedLines
+            self.summary = changes.summaryLabel
+        }
+    }
+
     struct Turn: Codable, Equatable, Sendable {
         let id: String
         let userPrompt: String?
@@ -56,6 +86,9 @@ struct ConversationWebDocument: Codable, Equatable, Sendable {
         /// renderer ticks "已处理 8分15秒" from this anchor; the value is also
         /// present after completion but unused then.
         var startedAtMilliseconds: Int64? = nil
+        /// What this turn wrote. Nil when the Runtime reported no diffstat —
+        /// absence means "unknown", never "edited 0 files".
+        var changes: WebTurnChanges? = nil
     }
 
     /// P8.9 — one model invocation rendered as a card (request shape → usage → thinking).
@@ -503,7 +536,8 @@ enum ConversationWebDocumentBuilder {
             },
             elapsedText: turn.formattedDuration,
             finishedAtClock: turn.finishedAtClock,
-            startedAtMilliseconds: turn.startedAtMilliseconds
+            startedAtMilliseconds: turn.startedAtMilliseconds,
+            changes: ConversationWebDocument.WebTurnChanges(turn.changes)
         )
     }
 

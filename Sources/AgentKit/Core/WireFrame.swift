@@ -114,6 +114,11 @@ struct WireFrame: Decodable {
     // v1.3: workflow 嵌套对象（workflow_* 事件）
     let workflow: WireWorkflow?
 
+    /// `turn_finished` / `turn_failed` / `turn_cancelled` 的 `diffstat`
+    /// （code-agent `docs/turn-diffstat-v1.md`）。无变更时服务端整字段省略，
+    /// 老事件也没有它 —— 缺失一律按「未知」处理，不渲染「编辑 0 个文件」。
+    let diffstat: WireDiffStat?
+
     enum CodingKeys: String, CodingKey {
         case type, kind, at, step, id, server, seq
         case text, observation, output, assets, failure, err, error, ratio, todos, chunk
@@ -175,6 +180,51 @@ struct WireFrame: Decodable {
         case filePath = "file_path"
         case question
         case workflow
+        case diffstat
+    }
+}
+
+// MARK: - Turn diffstat
+
+/// `diffstat` 载荷（code-agent `docs/turn-diffstat-v1.md` §2）。
+/// `files` 可能被服务端截断到 200 条，而三个汇总值始终是全轮真实值。
+struct WireDiffStat: Decodable {
+    let files: [WireDiffFile]
+    let filesChanged: Int?
+    let addedLines: Int?
+    let removedLines: Int?
+
+    enum CodingKeys: String, CodingKey {
+        case files
+        case filesChanged = "files_changed"
+        case addedLines = "added_lines"
+        case removedLines = "removed_lines"
+    }
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        // 容错解码：一个字段坏掉不该让整帧失败 —— 这一轮的回答比统计更重要。
+        files = (try? container.decode([WireDiffFile].self, forKey: .files)) ?? []
+        filesChanged = (try? container.decodeIfPresent(Int.self, forKey: .filesChanged)) ?? nil
+        addedLines = (try? container.decodeIfPresent(Int.self, forKey: .addedLines)) ?? nil
+        removedLines = (try? container.decodeIfPresent(Int.self, forKey: .removedLines)) ?? nil
+    }
+}
+
+struct WireDiffFile: Decodable {
+    let path: String
+    let added: Int?
+    let removed: Int?
+    let status: String?
+
+    enum CodingKeys: String, CodingKey { case path, added, removed, status }
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        path = (try? container.decode(String.self, forKey: .path)) ?? ""
+        added = (try? container.decodeIfPresent(Int.self, forKey: .added)) ?? nil
+        removed = (try? container.decodeIfPresent(Int.self, forKey: .removed)) ?? nil
+        status = (try? container.decodeIfPresent(String.self, forKey: .status)) ?? nil
     }
 }
 

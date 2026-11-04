@@ -150,7 +150,7 @@ final class UserAssetsProtocolTests: XCTestCase {
             from: fixtureData("turn_failed_asset_unavailable.json")
         )
         let event = try XCTUnwrap(AgentEvent.from(wire: wire))
-        guard case .turnFailed(let turnID, _, let message, let errorCode) = event else {
+        guard case .turnFailed(let turnID, _, let message, let errorCode, _) = event else {
             return XCTFail("Expected turn_failed")
         }
         XCTAssertEqual(turnID, "turn_user_asset_001")

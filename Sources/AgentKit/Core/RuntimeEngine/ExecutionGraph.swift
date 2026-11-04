@@ -57,6 +57,28 @@ public struct ExecutionGraph: Sendable {
     public private(set) var nodeOrder: [NodeID] = []
     private var nodeOrderIndex: [NodeID: Int] = [:]
 
+    /// Per-turn file change summary, keyed by **protocol** turn id (the value
+    /// carried on the terminal event, not the projection UID). Written by the
+    /// terminal reducer case, read by the projection layer. It describes the
+    /// whole turn, so it cannot live on a single node.
+    public private(set) var turnChanges: [String: TurnChanges] = [:]
+
+    /// Bumped on every `setTurnChanges` call. The incremental projection layer
+    /// compares this single number instead of diffing the whole map on every
+    /// snapshot — a turn's diffstat arrives without necessarily touching any of
+    /// its nodes (a failed turn with no message and nothing left running), so
+    /// node revisions alone are not a sufficient dirty signal.
+    public private(set) var turnChangesRevision: UInt64 = 0
+
+    /// Records what a turn wrote. Ignored when the report is empty: absence
+    /// means "unknown", which is not the same as "wrote nothing".
+    public mutating func setTurnChanges(_ changes: TurnChanges?, for turnID: String) {
+        guard let changes, !changes.isEmpty, !turnID.isEmpty else { return }
+        guard turnChanges[turnID] != changes else { return }
+        turnChanges[turnID] = changes
+        turnChangesRevision &+= 1
+    }
+
     public init() {}
 
     // MARK: - Mutations

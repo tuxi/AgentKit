@@ -935,6 +935,134 @@ summary:active {
   font-variant-numeric: tabular-nums;
 }
 
+/* Codex-parity change card under a finished answer: "已编辑 4 个文件 +416 -0"
+   with the file list. Rendered outside the process fold — the files a turn
+   touched are part of the result, not part of the trace. */
+.turn-changes {
+  --diff-add: light-dark(rgb(23 128 61), rgb(106 200 132));
+  --diff-del: light-dark(rgb(190 40 40), rgb(255 122 122));
+  margin: 12px 0 0;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: color-mix(in srgb, var(--text) 4%, transparent);
+  overflow: hidden;
+}
+
+.turn-changes-head {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 12px;
+}
+
+.turn-changes-icon {
+  display: grid;
+  place-items: center;
+  flex: 0 0 auto;
+  width: 26px;
+  height: 26px;
+  border-radius: 7px;
+  background: var(--subtle);
+  color: var(--secondary);
+  font-size: 14px;
+  font-weight: 600;
+  line-height: 1;
+}
+
+.turn-changes-heading {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  min-width: 0;
+}
+
+.turn-changes-title {
+  color: var(--text);
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.turn-changes-totals {
+  display: flex;
+  gap: 6px;
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+}
+
+.turn-changes-list {
+  margin: 0;
+  padding: 2px 0 6px;
+  border-top: 1px solid var(--border);
+  list-style: none;
+}
+
+.turn-changes-row {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 6px 12px;
+  font-size: 12.5px;
+}
+
+.turn-changes-row:hover {
+  background: var(--hover-fill);
+}
+
+.turn-changes-path {
+  min-width: 0;
+  overflow: hidden;
+  color: var(--text);
+  font-family: ui-monospace, SFMono-Regular, "SF Mono", Menlo, monospace;
+  font-size: 12px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.turn-changes-delta {
+  display: flex;
+  flex: 0 0 auto;
+  gap: 6px;
+  font-variant-numeric: tabular-nums;
+}
+
+.diff-add {
+  color: var(--diff-add);
+}
+
+.diff-del {
+  color: var(--diff-del);
+}
+
+.diff-none {
+  color: var(--secondary);
+}
+
+.turn-changes-more {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  width: 100%;
+  padding: 8px 12px;
+  border: 0;
+  border-top: 1px solid var(--border);
+  background: transparent;
+  color: var(--secondary);
+  font: inherit;
+  font-size: 12.5px;
+  text-align: left;
+  cursor: pointer;
+}
+
+.turn-changes-more:hover {
+  background: var(--hover-fill);
+  color: var(--text);
+}
+
+.turn-changes-more-chevron {
+  font-size: 10px;
+}
+
 .turn-footer {
   display: flex;
   flex-wrap: wrap;

@@ -605,7 +605,7 @@ final class TranscriptDocumentTests: XCTestCase {
         """.data(using: .utf8)!
 
         let wire = try JSONDecoder().decode(WireFrame.self, from: data)
-        guard case .turnFinished(let turnID, let text, let annotations) = AgentEvent.from(wire: wire) else {
+        guard case .turnFinished(let turnID, let text, let annotations, _) = AgentEvent.from(wire: wire) else {
             return XCTFail("Expected turn_finished event")
         }
 

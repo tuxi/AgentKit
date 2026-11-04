@@ -1770,6 +1770,131 @@ final class ConversationWebDocumentTests: XCTestCase {
         _ = webView
     }
 
+    /// The folded header appends what the Runtime reported the turn wrote, and
+    /// the answer is followed by a Codex-style change card. No qualifier on the
+    /// count — the Runtime folds writes made inside workflow nodes into it.
+    func testFoldedHeaderAppendsDiffStatSummary() async throws {
+        let ready = expectation(description: "Web renderer handshake")
+        let acknowledged = expectation(description: "Web document acknowledgement")
+        let probe = ConversationWebBridgeProbe(ready: ready)
+        probe.expectAcknowledgement(revision: 1, expectation: acknowledged)
+        let configuration = WKWebViewConfiguration()
+        configuration.websiteDataStore = .nonPersistent()
+        configuration.setURLSchemeHandler(
+            ConversationWebSchemeHandler(),
+            forURLScheme: ConversationWebSchemeHandler.scheme
+        )
+        configuration.userContentController.add(probe, name: "agentkitWorkbench")
+
+        let webView = WKWebView(
+            frame: .init(x: 0, y: 0, width: 480, height: 640),
+            configuration: configuration
+        )
+        webView.load(URLRequest(url: ConversationWebSchemeHandler.indexURL))
+        await fulfillment(of: [ready], timeout: 5)
+
+        let registry = ConversationWebActionRegistry()
+        let startedAt = Date(timeIntervalSince1970: 1_700_000_000)
+        // Six files so the card's three-row preview and its "再显示" expander are
+        // both exercised; sizes descend so the order is deterministic.
+        let changes = TurnChanges(
+            files: [
+                TurnChanges.FileChange(path: "Sources/A.swift", added: 96,
+                                       removed: 0, status: .modified),
+                TurnChanges.FileChange(path: "Sources/B.swift", added: 22,
+                                       removed: 3, status: .modified),
+                TurnChanges.FileChange(path: "Sources/C.swift", added: 10,
+                                       removed: 0, status: .added),
+                TurnChanges.FileChange(path: "Sources/D.swift", added: 5,
+                                       removed: 0, status: .modified),
+                TurnChanges.FileChange(path: "Sources/E.swift", added: 2,
+                                       removed: 0, status: .modified),
+                TurnChanges.FileChange(path: "Sources/F.swift", added: 1,
+                                       removed: 0, status: .deleted),
+            ],
+            filesChanged: 6, addedLines: 136, removedLines: 3
+        )
+        let turn = ConversationTurn(
+            id: "turn-diff",
+            userPrompt: MessageNodePayload(role: .user, text: "add the counter"),
+            blocks: [
+                .thinking(id: "think-diff", ThinkingNodePayload(text: "two files")),
+                .text(id: "final-diff",
+                      MessageNodePayload(role: .assistant, text: "Added the counter.")),
+            ],
+            footer: nil,
+            isLive: false,
+            startedAt: startedAt,
+            finishedAt: startedAt.addingTimeInterval(1_480),
+            changes: changes
+        )
+        let fixture = RuntimeSnapshot(timeline: [], turns: [turn], generation: 1)
+        let document = ConversationWebDocumentBuilder.build(
+            snapshot: fixture,
+            conversationID: "fixture",
+            revision: 1,
+            registerAction: registry.register
+        )
+        let payload = try JSONEncoder().encode(
+            ConversationWebDocumentDiffer.reset(document)
+        ).base64EncodedString()
+        _ = try await webView.evaluateJavaScript(
+            "window.AgentKitWorkbench.applyUpdateBase64('\(payload)')"
+        )
+        await fulfillment(of: [acknowledged], timeout: 5)
+        try await Task.sleep(for: .milliseconds(30))
+
+        let inspection = try await webView.evaluateJavaScript(
+            """
+            (() => {
+              const card = document.querySelector('.turn-changes');
+              const answer = document.querySelector('[data-block-id="final-diff"]');
+              return {
+                summary: document.querySelector('details.turn-process .turn-process-label')?.textContent ?? '',
+                hasCard: Boolean(card),
+                title: card?.querySelector('.turn-changes-title')?.textContent ?? null,
+                totals: card?.querySelector('.turn-changes-totals')?.textContent ?? null,
+                rows: [...(card?.querySelectorAll('.turn-changes-row') ?? [])]
+                  .map((row) => [
+                    row.querySelector('.turn-changes-path')?.textContent,
+                    row.querySelector('.turn-changes-delta')?.textContent,
+                  ]),
+                more: card?.querySelector('.turn-changes-more')?.textContent ?? null,
+                afterAnswer: answer && card
+                  ? Boolean(answer.compareDocumentPosition(card) & Node.DOCUMENT_POSITION_FOLLOWING)
+                  : null,
+                insideFold: card ? Boolean(card.closest('.turn-process')) : null,
+              };
+            })()
+            """
+        ) as? [String: Any]
+
+        XCTAssertEqual(inspection?["summary"] as? String, "用时 24分40秒 · 编辑 6 个文件")
+        XCTAssertEqual(inspection?["hasCard"] as? Bool, true)
+        XCTAssertEqual(inspection?["title"] as? String, "已编辑 6 个文件")
+        XCTAssertEqual(inspection?["totals"] as? String, "+136-3")
+        XCTAssertEqual((inspection?["rows"] as? [[String]])?.count, 3, "preview shows 3 files")
+        XCTAssertEqual((inspection?["rows"] as? [[String]])?.first?.first, "Sources/A.swift")
+        XCTAssertEqual((inspection?["rows"] as? [[String]])?.first?.last, "+96")
+        XCTAssertEqual(inspection?["more"] as? String, "再显示 3 个文件⌄")
+        // The card belongs to the result, not to the folded trace.
+        XCTAssertEqual(inspection?["afterAnswer"] as? Bool, true)
+        XCTAssertEqual(inspection?["insideFold"] as? Bool, false)
+
+        // Expanding reveals the remaining rows.
+        _ = try await webView.evaluateJavaScript(
+            "document.querySelector('.turn-changes-more').click()"
+        )
+        try await Task.sleep(for: .milliseconds(20))
+        let rowCount = try await webView.evaluateJavaScript(
+            "document.querySelectorAll('.turn-changes-row').length"
+        ) as? Int
+        XCTAssertEqual(rowCount, 6)
+
+        configuration.userContentController.removeScriptMessageHandler(forName: "agentkitWorkbench")
+        _ = webView
+    }
+
     /// Codex parity: a running turn stays flat, but carries one live clock on
     /// top ("已处理 8分15秒"). It must tick without a Runtime snapshot.
     func testLiveTurnShowsProcessingClockAboveFlatTranscript() async throws {

@@ -295,6 +295,10 @@ enum ConversationWebDocumentDiffer {
             && lhs.trajectoryActionID == rhs.trajectoryActionID
             && lhs.forkActionID == rhs.forkActionID
             && lhs.invocations == rhs.invocations
+            // The diffstat arrives on the terminal event, potentially after the
+            // turn was already painted: it must trigger an updateTurn, otherwise
+            // the folded header never gains "· 编辑 3 个文件".
+            && lhs.changes == rhs.changes
     }
 
     private static func canPatchBlockShape(

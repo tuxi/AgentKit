@@ -31,16 +31,41 @@ public enum AgentEvent: Sendable {
         localAssets: [LocalUserAssetRef] = []
     )
     /// `turn_finished`：当前 turn 结束。
-    case turnFinished(turnID: String, text: String, textAnnotations: [AgentTextAnnotation])
+    /// `changes` 是服务端给出的本轮文件变更统计（`diffstat`）；老事件没有它，为 nil。
+    case turnFinished(turnID: String, text: String,
+                      textAnnotations: [AgentTextAnnotation],
+                      changes: TurnChanges?)
+
+    /// 兼容构造：没有 diffstat 的 turn_finished（历史事件、测试夹具）。
+    static func turnFinished(turnID: String, text: String,
+                             textAnnotations: [AgentTextAnnotation]) -> AgentEvent {
+        .turnFinished(turnID: turnID, text: text,
+                      textAnnotations: textAnnotations, changes: nil)
+    }
+
     /// `turn_paused`：当前 turn 已 checkpoint 并暂停，等待 ResumeSession。
     case turnPaused(turnID: String?, text: String?, err: String?)
     /// `turn_resumed`：服务端已接受 ResumeSession 并开始续跑。
     case turnResumed(turnID: String?, text: String?)
     /// `turn_failed`：turn 进入不可恢复失败终态。
     /// `errorCode` 来自结构化 `error.code`（开放集合，如 `auth_expired`），未知 code 按普通失败处理。
-    case turnFailed(turnID: String?, text: String?, err: String?, errorCode: String?)
+    case turnFailed(turnID: String?, text: String?, err: String?, errorCode: String?,
+                    changes: TurnChanges?)
+
+    /// 兼容构造：没有 diffstat 的 turn_failed。
+    static func turnFailed(turnID: String?, text: String?, err: String?,
+                           errorCode: String?) -> AgentEvent {
+        .turnFailed(turnID: turnID, text: text, err: err,
+                    errorCode: errorCode, changes: nil)
+    }
+
     /// Third authoritative terminal state; mutually exclusive with finished/failed.
-    case turnCancelled(turnID: String?, reason: String?)
+    case turnCancelled(turnID: String?, reason: String?, changes: TurnChanges?)
+
+    /// 兼容构造：没有 diffstat 的 turn_cancelled。
+    static func turnCancelled(turnID: String?, reason: String?) -> AgentEvent {
+        .turnCancelled(turnID: turnID, reason: reason, changes: nil)
+    }
 
     // ── 模型 ──
     case modelStarted(turnID: String?, invocationID: String?)
@@ -281,7 +306,8 @@ extension AgentEvent {
             return .turnFinished(
                 turnID: turnID ?? "",
                 text: wire.text ?? "",
-                textAnnotations: wire.textAnnotations ?? []
+                textAnnotations: wire.textAnnotations ?? [],
+                changes: wire.diffstat.map(TurnChanges.init(wire:))
             )
 
         case "turn_paused", "turn.paused":
@@ -294,18 +320,24 @@ extension AgentEvent {
             if wire.error?.code == "cancelled" {
                 return .turnCancelled(
                     turnID: turnID,
-                    reason: wire.error?.message ?? wire.err ?? wire.text
+                    reason: wire.error?.message ?? wire.err ?? wire.text,
+                    changes: wire.diffstat.map(TurnChanges.init(wire:))
                 )
             }
             return .turnFailed(
                 turnID: turnID,
                 text: wire.text,
                 err: wire.err ?? wire.error?.message,
-                errorCode: wire.error?.code
+                errorCode: wire.error?.code,
+                changes: wire.diffstat.map(TurnChanges.init(wire:))
             )
 
         case "turn_cancelled", "turn.cancelled":
-            return .turnCancelled(turnID: turnID, reason: wire.cancelledReason ?? wire.reason ?? wire.text)
+            return .turnCancelled(
+                turnID: turnID,
+                reason: wire.cancelledReason ?? wire.reason ?? wire.text,
+                changes: wire.diffstat.map(TurnChanges.init(wire:))
+            )
 
         case "model_started":
             return .modelStarted(turnID: turnID, invocationID: wire.invocationId)

@@ -136,6 +136,17 @@ export interface ConversationWebTurn {
   /// Epoch milliseconds the turn started. The live turn ticks
   /// "已处理 8分15秒" from this anchor; ignored once the turn finished.
   startedAtMilliseconds?: number;
+  /// What this turn wrote (Runtime `diffstat`). Absent when the Runtime
+  /// reported nothing — absence means "unknown", never "edited 0 files".
+  changes?: {
+    /// Capped by the Runtime (200); may be shorter than `filesChanged`.
+    files: { path: string; added: number; removed: number; status: string }[];
+    filesChanged: number;
+    addedLines: number;
+    removedLines: number;
+    /// "编辑 3 个文件" — built in Swift so iOS and Web cannot drift apart.
+    summary?: string;
+  };
 }
 
 export interface ConversationWebExtensionNode {

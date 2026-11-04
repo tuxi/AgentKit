@@ -1931,9 +1931,95 @@ function splitTurnForDisplay(turn: ConversationWebTurn): {
 
 /// The collapsed header: "用时 24分40秒". Once the server reports a turn
 /// diffstat this becomes "用时 24分40秒 · 编辑 3 个文件".
+/// How many files the change card shows before "再显示 N 个文件" (Codex shows 3).
+const CHANGE_PREVIEW_LIMIT = 3;
+
+function statusWord(status: string): string {
+  if (status === "added") return "新增";
+  if (status === "deleted") return "删除";
+  return "修改";
+}
+
+/// Codex-parity card under the answer: "已编辑 4 个文件 +416 -0" plus the file
+/// list. The counts come from the Runtime, not from counting tool calls, so
+/// writes made inside workflow nodes are included. `files` may be truncated
+/// (200) — the header therefore uses `filesChanged`, never `files.length`.
+function TurnChangesCard({
+  turnID,
+  changes,
+}: {
+  turnID: string;
+  changes: NonNullable<ConversationWebTurn["changes"]>;
+}) {
+  const [expanded, setExpanded] = useState(false);
+  // Largest change first, so a long tail collapses behind the fold. Stable for
+  // equal sizes, which keeps the order from jumping between renders.
+  const sorted = [...changes.files].sort(
+    (a, b) => b.added + b.removed - (a.added + a.removed),
+  );
+  const visible = expanded ? sorted : sorted.slice(0, CHANGE_PREVIEW_LIMIT);
+  const hiddenCount = sorted.length - CHANGE_PREVIEW_LIMIT;
+
+  return (
+    <section
+      className="turn-changes"
+      data-selection-id={`turn:${turnID}:changes`}
+      aria-label="本轮编辑的文件"
+    >
+      <header className="turn-changes-head">
+        <span className="turn-changes-icon" aria-hidden="true">±</span>
+        <div className="turn-changes-heading">
+          <span className="turn-changes-title">已编辑 {changes.filesChanged} 个文件</span>
+          <span className="turn-changes-totals">
+            <span className="diff-add">+{changes.addedLines}</span>
+            <span className="diff-del">-{changes.removedLines}</span>
+          </span>
+        </div>
+      </header>
+      {visible.length ? (
+        <ul className="turn-changes-list">
+          {visible.map((file) => (
+            <li className="turn-changes-row" key={file.path}>
+              <span className="turn-changes-path" title={file.path}>{file.path}</span>
+              <span className="turn-changes-delta">
+                {file.added ? <span className="diff-add">+{file.added}</span> : null}
+                {file.removed ? <span className="diff-del">-{file.removed}</span> : null}
+                {!file.added && !file.removed ? (
+                  <span className="diff-none">{statusWord(file.status)}</span>
+                ) : null}
+              </span>
+            </li>
+          ))}
+        </ul>
+      ) : null}
+      {hiddenCount > 0 ? (
+        <button
+          type="button"
+          className="turn-changes-more interactive"
+          data-focus-id={`turn-changes-more:${turnID}`}
+          onClick={() => setExpanded((value) => !value)}
+        >
+          {expanded ? "收起" : `再显示 ${hiddenCount} 个文件`}
+          <span className="turn-changes-more-chevron" aria-hidden="true">
+            {expanded ? "›" : "⌄"}
+          </span>
+        </button>
+      ) : null}
+    </section>
+  );
+}
+
 function processSummaryLabel(turn: ConversationWebTurn): string {
   const parts: string[] = [];
   if (turn.elapsedText) parts.push(`用时 ${turn.elapsedText}`);
+  // "编辑 3 个文件" comes from the Runtime's per-turn diffstat. No qualifier:
+  // the Runtime already folds writes made inside workflow nodes into its own
+  // count, so this number covers the whole turn.
+  const changed = turn.changes?.summary
+    ?? (turn.changes && turn.changes.filesChanged > 0
+      ? `编辑 ${turn.changes.filesChanged} 个文件`
+      : null);
+  if (changed) parts.push(changed);
   return parts.length ? parts.join(" · ") : "查看执行过程";
 }
 
@@ -2198,6 +2284,9 @@ const Turn = memo(function Turn({
               </details>
             ) : null}
             {renderBlocks(answer)}
+            {turn.changes ? (
+              <TurnChangesCard turnID={turn.id} changes={turn.changes} />
+            ) : null}
           </>
         )}
         {!turn.isLive && (turn.copyActionID || turn.shareActionID || turn.assetsActionID || turn.finishedAtClock) ? (

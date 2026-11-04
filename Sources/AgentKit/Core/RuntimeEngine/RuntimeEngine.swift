@@ -394,7 +394,7 @@ public actor RuntimeEngine {
             activeTurnID = turnID
             recordWallClock(turnID: turnID, startedAt: _turnStartedAt, finishedAt: nil)
         }
-        if case .turnFinished(let turnID, _, _) = event {
+        if case .turnFinished(let turnID, _, _, _) = event {
             _turnStartedAt = nil
             _modelStartedAt = nil
             _modelRetryState = nil
@@ -406,14 +406,14 @@ public actor RuntimeEngine {
             _modelStartedAt = nil
             _modelRetryState = nil
         }
-        if case .turnFailed(let turnID, _, _, _) = event {
+        if case .turnFailed(let turnID, _, _, _, _) = event {
             _turnStartedAt = nil
             _modelStartedAt = nil
             _modelRetryState = nil
             recordTerminalWallClock(turnID: turnID)
             activeTurnID = nil
         }
-        if case .turnCancelled(let turnID, _) = event {
+        if case .turnCancelled(let turnID, _, _) = event {
             _turnStartedAt = nil
             _modelStartedAt = nil
             _modelRetryState = nil

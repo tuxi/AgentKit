@@ -59,6 +59,13 @@ struct TurnProjectionCache {
     /// Cached assembled timeline (rebuilt only when a turn changed).
     private var assembledTimeline: [ExecutionNode]?
     private var isSeeded = false
+    /// Protocol turn id → projection UID, learned while projecting. Needed to
+    /// map a turn-level diffstat (keyed by protocol id) back onto its turn.
+    private var uidByServerTurnID: [String: String] = [:]
+    /// `graph.turnChangesRevision` at last projection. A diffstat can arrive on
+    /// a terminal event that touches no node at all, so node revisions alone do
+    /// not dirty the turn.
+    private var projectedChangesRevision: UInt64 = 0
 
     // MARK: - API
 
@@ -124,6 +131,19 @@ struct TurnProjectionCache {
             lastProjectedIsLive = isLive
         }
 
+        // 2.5 Turn-level diffstat arrived. It is stamped by the terminal reducer
+        //     case, which may not touch a single node, so it needs its own dirty
+        //     signal. Cheap: only fires when the revision actually moved.
+        if graph.turnChangesRevision != projectedChangesRevision {
+            projectedChangesRevision = graph.turnChangesRevision
+            for serverTurnID in graph.turnChanges.keys {
+                if let uid = uidByServerTurnID[serverTurnID] { dirtyTurnIDs.insert(uid) }
+            }
+            // A brand-new finished turn may not be mapped yet on the very first
+            // projection after it appeared.
+            if let current = currentLastUID { dirtyTurnIDs.insert(current) }
+        }
+
         // 4. Re-project only dirty turns.
         for uid in dirtyTurnIDs {
             reprojectTurn(
@@ -156,6 +176,8 @@ struct TurnProjectionCache {
         lastProjectedLastTurnUID = nil
         lastProjectedIsLive = false
         assembledTimeline = nil
+        uidByServerTurnID.removeAll()
+        projectedChangesRevision = 0
         isSeeded = false
     }
 
@@ -194,6 +216,7 @@ struct TurnProjectionCache {
 
         lastProjectedLastTurnUID = currentLastUID
         lastProjectedIsLive = isLive
+        projectedChangesRevision = graph.turnChangesRevision
         isSeeded = true
 
         let turns = orderedTurnUIDs.compactMap { cachedTurns[$0] }.filter { !$0.isEmpty }
@@ -233,6 +256,7 @@ struct TurnProjectionCache {
         // Wall clock is keyed by the protocol turn id (the merged nodes carry
         // it), not by the local projection UID.
         let serverTurnID = merged.first?.turnID ?? ""
+        if !serverTurnID.isEmpty { uidByServerTurnID[serverTurnID] = uid }
         let clock = wallClock[serverTurnID]
         let clockChanged = projectedWallClock[uid] != clock
         projectedWallClock[uid] = clock
@@ -240,7 +264,8 @@ struct TurnProjectionCache {
         let newTurn = timelineProjection.buildTurn(
             nodes: merged,
             isLive: isLive && isLastTurn,
-            wallClock: clock
+            wallClock: clock,
+            changes: graph.turnChanges[serverTurnID]
         )
         let oldVersion = contentVersions[uid] ?? 0
         if !clockChanged,

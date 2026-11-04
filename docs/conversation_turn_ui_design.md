@@ -340,11 +340,42 @@ live 和 history 都必须遵守。含义：
 
 回归用例：`Tests/AgentKitTests/TurnLivenessTests.swift`。
 
+### 变更统计（`diffstat`，2026-11）
+
+折叠头在 `用时` 之后追加服务端给出的本轮文件变更数：`用时 24分40秒 · 编辑 3 个文件`。
+数字来自 Runtime，不是客户端数工具调用 —— 写类工具只回散文（`Patch applied successfully.`），
+而 workflow 节点 / 子代理里的写入根本不进客户端事件流。
+契约见 `code-agent/docs/turn-diffstat-v1.md`。
+
+```
+turn_finished / turn_failed / turn_cancelled 顶层 diffstat
+  → WireFrame.diffstat → TurnChanges.init(wire:)
+  → AgentEvent.turnFinished/turnFailed/turnCancelled(changes:)
+  → ExecutionReducer: graph.setTurnChanges(_:for:)（键是协议 turn id）
+  → TurnProjectionCache: turnChangesRevision 变化 → 重投影该轮
+  → ConversationTurn.changes → ConversationWebDocument.Turn.changes
+  → processSummaryLabel(): "用时 … · 编辑 N 个文件"
+```
+
+不变量：
+
+- **缺失 = 未知，不是 0。** 没有 diffstat（老事件、纯读轮次）时头部只显示 `用时`；
+  `WebTurnChanges` 用可失败 init 把空值折成 nil，前端不会出现「编辑 0 个文件」。
+- **`filesChanged` 才是文件数**，`files` 可能被服务端截到 200 条，两者不等价。
+- **只认终态**：`turn_paused` 不带 diffstat（暂停后恢复会再发一份完整的，
+  提前发会让用户先后看到两个不同数字）。
+- 文案**不加「主流程」限定**：服务端已把 workflow / 子代理的写入冒泡进同一份统计。
+  但嵌套路径目前只有服务端单测覆盖（4 个 `TestFluxWorkflowTool*` 集成测试在 HEAD 上就是红的）；
+  若真机发现子任务写入漏计，先把文案退回「编辑 N 个文件（不含子任务）」。
+- **答案下方有变更卡**（`TurnChangesCard`）：`已编辑 N 个文件` + `+A -R`，最多列 4 个文件
+  （按 added+removed 降序），其余折进「再显示 N 个文件」。卡片在折叠区**之外** ——
+  改了哪些文件属于结果，不属于过程。`撤销` / `查看变更` 未接（需要 daemon 的 revert 与 diff 面板）。
+- **缓存失效不能只靠节点 revision**：diffstat 可能搭在**不触碰任何节点**的终态事件上到达
+  （空回答的 failed turn），所以 `ExecutionGraph` 带 `turnChangesRevision`，投影层只比较这个数。
+
 ### 尚未做
 
-- 「· 编辑 3 个文件」依赖服务端 `turn_finished` 的 diffstat（当前事件无该字段；
-  `apply_patch` 只返回 "Patch applied successfully."，客户端无法从输出统计）。
-  契约落定后在 `ConversationWebDocument.Turn` 加 `changes` 并在 `processSummaryLabel` 追加即可。
+- `撤销` / `查看变更`：前者要 daemon 支持 revert，后者要按文件打开 diff 面板，都还没接。
 - iOS native 渲染（`AgentResponseView`）未做 L1，待 macOS 验证稳定后跟进。
 
 ---

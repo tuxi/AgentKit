@@ -41,12 +41,18 @@ public struct ConversationTurn: Identifiable, Sendable, Equatable {
     /// Wall-clock end of the turn (`turn_finished` / failed / cancelled).
     /// Nil while the turn is still streaming.
     public let finishedAt: Date?
+    /// What the turn wrote, as reported by the Runtime on the terminal event.
+    /// Nil for turns that wrote nothing, and for every event recorded before
+    /// the Runtime started emitting `diffstat` — absence means "unknown", never
+    /// "edited 0 files".
+    public let changes: TurnChanges?
 
     public init(id: String, userPrompt: MessageNodePayload?,
                 blocks: [TurnBlock], plans: [TurnPlan] = [], todos: [TodoItem] = [],
                 footer: TurnStats?, isLive: Bool, invocations: [ModelInvocation] = [],
                 contentVersion: UInt64 = 0,
-                startedAt: Date? = nil, finishedAt: Date? = nil) {
+                startedAt: Date? = nil, finishedAt: Date? = nil,
+                changes: TurnChanges? = nil) {
         self.id = id
         self.userPrompt = userPrompt
         self.blocks = blocks
@@ -58,6 +64,7 @@ public struct ConversationTurn: Identifiable, Sendable, Equatable {
         self.contentVersion = contentVersion
         self.startedAt = startedAt
         self.finishedAt = finishedAt
+        self.changes = changes
     }
 
     /// Nothing worth rendering — skip (e.g. a stray leading run with only
@@ -72,7 +79,8 @@ public struct ConversationTurn: Identifiable, Sendable, Equatable {
         ConversationTurn(
             id: id, userPrompt: userPrompt, blocks: blocks, plans: plans,
             todos: todos, footer: footer, isLive: isLive, invocations: invocations,
-            contentVersion: version, startedAt: startedAt, finishedAt: finishedAt
+            contentVersion: version, startedAt: startedAt, finishedAt: finishedAt,
+            changes: changes
         )
     }
 

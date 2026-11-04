@@ -838,7 +838,7 @@ public final class ConversationViewModel {
         forwardWorkflowEvent(event)
 
         // auth_expired → Host 恢复流程（刷新 token → Reconfigure Runtime）
-        if case .turnFailed(_, _, _, let errorCode) = event,
+        if case .turnFailed(_, _, _, let errorCode, _) = event,
            errorCode == "auth_expired" {
             await recoverFromAuthExpiry()
         }
@@ -978,7 +978,7 @@ public final class ConversationViewModel {
             if let sessionID = conversation?.id {
                 Task { await turnCoordinator?.markActive(sessionID: sessionID) }
             }
-        case .turnFinished(let turnID, _, _):
+        case .turnFinished(let turnID, _, _, _):
             // 只处理当前 turn 的终态事件，防止超时兜底后旧 turn 事件覆盖新 turn 状态。
             // turnID 为空字符串时视为 nil（wire 层 turnID ?? "" 的遗留行为）。
             let eventTurnID = turnID.isEmpty ? nil : turnID
@@ -1003,7 +1003,7 @@ public final class ConversationViewModel {
         case .turnResumed:
             lifecycleStatus = "resuming"
             pausedAt = nil
-        case .turnFailed(let turnID, _, _, _):
+        case .turnFailed(let turnID, _, _, _, _):
             guard turnID == currentTurnID || turnID == nil || currentTurnID == nil else { return }
             cancelTimeoutTask?.cancel()
             cancelTimeoutTask = nil
@@ -1015,7 +1015,7 @@ public final class ConversationViewModel {
             currentTurnID = nil
             releaseTurnPermit()
             shouldRefreshActivity = true
-        case .turnCancelled(let turnID, _):
+        case .turnCancelled(let turnID, _, _):
             guard turnID == currentTurnID || turnID == nil || currentTurnID == nil else { return }
             cancelTimeoutTask?.cancel()
             cancelTimeoutTask = nil

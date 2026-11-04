@@ -295,7 +295,7 @@ final class LifecycleProtocolTests: XCTestCase {
         let failed = try decodeEvent("""
         { "kind": "turn_failed", "turn_id": "turn_1", "err": "permanent" }
         """)
-        guard case .turnFailed(let failedID, _, let err, let code) = failed else {
+        guard case .turnFailed(let failedID, _, let err, let code, _) = failed else {
             XCTFail("Expected turnFailed")
             return
         }
@@ -316,7 +316,7 @@ final class LifecycleProtocolTests: XCTestCase {
           }
         }
         """)
-        guard case .turnFailed(let turnID, _, let err, let code) = failed else {
+        guard case .turnFailed(let turnID, _, let err, let code, _) = failed else {
             XCTFail("Expected turnFailed")
             return
         }
@@ -357,7 +357,7 @@ final class LifecycleProtocolTests: XCTestCase {
         let cancelled = try decodeEvent("""
         { "kind": "turn_cancelled", "turn_id": "turn_7", "reason": "user_requested" }
         """)
-        guard case .turnCancelled(let cancelledID, let reason) = cancelled else {
+        guard case .turnCancelled(let cancelledID, let reason, _) = cancelled else {
             return XCTFail("Expected turnCancelled")
         }
         XCTAssertEqual(cancelledID, "turn_7")
@@ -366,7 +366,7 @@ final class LifecycleProtocolTests: XCTestCase {
         let legacyCancelled = try decodeEvent("""
         { "kind": "turn_failed", "turn_id": "turn_8", "error": { "code": "cancelled", "message": "cancelled by user" } }
         """)
-        guard case .turnCancelled(let legacyID, _) = legacyCancelled else {
+        guard case .turnCancelled(let legacyID, _, _) = legacyCancelled else {
             return XCTFail("Expected legacy cancelled failure to map to turnCancelled")
         }
         XCTAssertEqual(legacyID, "turn_8")
