@@ -73,6 +73,27 @@ final class TurnWallClockTests: XCTestCase {
         XCTAssertNil(running.finishedAtClock)
     }
 
+    func testFinishedClockUsesLocalDayAndIncludesHistoricalDate() throws {
+        var calendar = Calendar(identifier: .gregorian)
+        calendar.timeZone = try XCTUnwrap(TimeZone(secondsFromGMT: 8 * 3600))
+        let now = try XCTUnwrap(calendar.date(from: DateComponents(
+            year: 2026, month: 11, day: 4, hour: 0, minute: 10
+        )))
+        func clock(year: Int, month: Int, day: Int, hour: Int, minute: Int) throws -> String? {
+            let end = try XCTUnwrap(calendar.date(from: DateComponents(
+                year: year, month: month, day: day, hour: hour, minute: minute
+            )))
+            return ConversationTurn(
+                id: "t", userPrompt: nil, blocks: [], footer: nil, isLive: false,
+                finishedAt: end
+            ).finishedAtClock(relativeTo: now, calendar: calendar)
+        }
+        XCTAssertEqual(try clock(year: 2026, month: 11, day: 4, hour: 0, minute: 5), "00:05")
+        XCTAssertEqual(try clock(year: 2026, month: 11, day: 3, hour: 23, minute: 59), "11月3日 23:59")
+        XCTAssertEqual(try clock(year: 2026, month: 10, day: 18, hour: 20, minute: 20), "10月18日 20:20")
+        XCTAssertEqual(try clock(year: 2025, month: 10, day: 18, hour: 20, minute: 20), "2025年10月18日 20:20")
+    }
+
     // MARK: - Projection
 
     private func reduce(_ events: [AgentEvent]) -> ExecutionGraph {

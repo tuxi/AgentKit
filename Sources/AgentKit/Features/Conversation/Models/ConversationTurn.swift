@@ -102,15 +102,48 @@ public struct ConversationTurn: Identifiable, Sendable, Equatable {
         return TurnDurationText.string(seconds: seconds)
     }
 
+    /// The model that produced this turn's final answer — the model name of the
+    /// last invocation's request envelope (`model_request`, v1.4). Nil for
+    /// streams that predate the event; renders as an absent badge, never "unknown".
+    public var modelName: String? {
+        invocations.last?.request?.modelName
+    }
+
+    /// Runtime's namespaced route preserves the configured provider alias,
+    /// which can differ from the provider protocol (e.g. openai_compatible).
+    public var modelRoute: String? {
+        guard let invocation = invocations.last else { return nil }
+        if let route = invocation.modelRoute, !route.isEmpty { return route }
+        if let route = invocation.request?.selection?.modelRoute, !route.isEmpty { return route }
+        guard let model = modelName else { return nil }
+        guard let provider = invocation.request?.provider, !provider.isEmpty else { return model }
+        return model.hasPrefix("\(provider)/") ? model : "\(provider)/\(model)"
+    }
+
     /// `HH:mm` of the moment the turn ended — the timestamp Codex puts under a
-    /// completed answer.
+    /// completed answer. Turns from an earlier day carry their calendar date
+    /// ("10月18日 20:20"); a different year keeps the year ("2025年10月18日 20:20").
     public var finishedAtClock: String? {
-        guard let finishedAt else { return nil }
         var calendar = Calendar(identifier: .gregorian)
         calendar.timeZone = .current
+        return finishedAtClock(relativeTo: Date(), calendar: calendar)
+    }
+
+    func finishedAtClock(relativeTo now: Date, calendar: Calendar) -> String? {
+        guard let finishedAt else { return nil }
         let parts = calendar.dateComponents([.hour, .minute], from: finishedAt)
         guard let hour = parts.hour, let minute = parts.minute else { return nil }
-        return String(format: "%02d:%02d", hour, minute)
+        let clock = String(format: "%02d:%02d", hour, minute)
+        guard !calendar.isDate(finishedAt, inSameDayAs: now) else { return clock }
+        let day = calendar.dateComponents([.year, .month, .day], from: finishedAt)
+        let thisYear = calendar.component(.year, from: now)
+        let dayText: String
+        if let year = day.year, year != thisYear {
+            dayText = "\(year)年\(day.month ?? 0)月\(day.day ?? 0)日"
+        } else {
+            dayText = "\(day.month ?? 0)月\(day.day ?? 0)日"
+        }
+        return "\(dayText) \(clock)"
     }
 
     /// Start of the turn as epoch milliseconds. The Web renderer anchors the
@@ -184,6 +217,7 @@ public struct ModelInvocation: Identifiable, Sendable, Equatable {
     public let index: Int
     /// Request envelope (since v1.4). Nil for streams that predate `model_request`.
     public var request: ModelRequestInfo?
+    public var modelRoute: String? = nil
     /// Tools this invocation actually executed, in arrival order, deduplicated.
     /// Aggregated from `tool` nodes stamped with the same `invocation_id`.
     public var executedTools: [String]

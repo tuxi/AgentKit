@@ -2078,6 +2078,185 @@ function LiveTurnHeader({
   );
 }
 
+/// Codex-style completed-turn actions bar: [copy] [share] [···] on the left,
+/// token totals / model badge / timestamp on the right. Rendered only after
+/// the turn finishes — a streaming turn shows nothing here.
+function TurnActionsBar({ turn }: { turn: ConversationWebTurn }) {
+  const [menuOpen, setMenuOpen] = useState(false);
+  const footer = turn.footer;
+  const modelTitle = turn.modelRoute || turn.model;
+
+  useEffect(() => {
+    if (!menuOpen) return;
+    const closeOnEscape = (event: KeyboardEvent) => {
+      if (event.key === "Escape") setMenuOpen(false);
+    };
+    window.addEventListener("keydown", closeOnEscape);
+    return () => window.removeEventListener("keydown", closeOnEscape);
+  }, [menuOpen]);
+
+  const menuItems: Array<{
+    key: string;
+    label: string;
+    value?: string;
+    actionID?: string;
+    focusID?: string;
+  }> = [];
+  if (turn.trajectoryActionID) {
+    menuItems.push({
+      key: "trajectory",
+      label: "查看轨迹",
+      value: "›",
+      actionID: turn.trajectoryActionID,
+      focusID: `turn-trajectory:${turn.id}`,
+    });
+  }
+  if (footer?.contextTokens) {
+    menuItems.push({ key: "context", label: "上下文", value: footer.contextTokens });
+  }
+  if (footer && footer.invocationCount > 1) {
+    menuItems.push({
+      key: "invocations",
+      label: "模型调用",
+      value: `${footer.invocationCount} 次 · ${footer.elapsed}`,
+    });
+  }
+  if (turn.assetsActionID) {
+    menuItems.push({
+      key: "assets",
+      label: "附件",
+      value: `${turn.assetCount} 个`,
+      actionID: turn.assetsActionID,
+      focusID: `turn-assets:${turn.id}`,
+    });
+  }
+  const hasMenu = menuItems.length > 0;
+
+  const hasTokens = Boolean(footer?.totalTokens);
+  if (
+    !turn.copyActionID && !turn.shareActionID && !hasMenu
+    && !hasTokens && !turn.model && !turn.finishedAtClock
+  ) {
+    return null;
+  }
+
+  const tokenTitle = footer
+    ? `${footer.totalTokens}${footer.cachedTokens ? `\n（缓存 ${footer.cachedTokens}）` : ""}`
+    : undefined;
+
+  return (
+    <div className="turn-actions" aria-label="Turn actions">
+      {turn.copyActionID ? (
+        <button
+          type="button"
+          className="turn-actions-icon interactive"
+          data-focus-id={`turn-copy:${turn.id}`}
+          aria-label="拷贝本轮"
+          title="拷贝本轮"
+          onClick={() => dispatchAction(turn.copyActionID!)}
+        >
+          <svg width="15" height="15" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.4" aria-hidden="true">
+            <rect x="5.5" y="5.5" width="8" height="8" rx="1.5" />
+            <path d="M10.5 5.5v-2a1.5 1.5 0 0 0-1.5-1.5H4A1.5 1.5 0 0 0 2.5 3.5v5A1.5 1.5 0 0 0 4 10h1.5" />
+          </svg>
+        </button>
+      ) : null}
+      {turn.shareActionID ? (
+        <button
+          type="button"
+          className="turn-actions-icon interactive"
+          data-focus-id={`turn-share:${turn.id}`}
+          aria-label="分享本轮"
+          title="分享本轮"
+          onClick={() => dispatchAction(turn.shareActionID!)}
+        >
+          <svg width="15" height="15" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.4" aria-hidden="true">
+            <path d="M9.5 3.5 14 7.5l-4.5 4v-2.6C6 8.9 3.8 10 2.5 12.5c0-4 2.5-6.6 7-7V3.5Z" />
+          </svg>
+        </button>
+      ) : null}
+      {hasMenu ? (
+        <div className="turn-actions-menu-anchor">
+          <button
+            type="button"
+            className="turn-actions-icon interactive"
+            data-focus-id={`turn-more:${turn.id}`}
+            aria-label="更多操作"
+            aria-expanded={menuOpen}
+            title="更多操作"
+            onClick={() => setMenuOpen((open) => !open)}
+          >
+            <svg width="15" height="15" viewBox="0 0 16 16" fill="currentColor" aria-hidden="true">
+              <circle cx="3" cy="8" r="1.2" />
+              <circle cx="8" cy="8" r="1.2" />
+              <circle cx="13" cy="8" r="1.2" />
+            </svg>
+          </button>
+          {menuOpen ? (
+            <>
+              <div
+                className="turn-actions-menu-backdrop"
+                onClick={() => setMenuOpen(false)}
+              />
+              <div className="turn-actions-menu" role="menu" aria-label="更多操作">
+                {menuItems.map((item) =>
+                  item.actionID ? (
+                    <button
+                      key={item.key}
+                      type="button"
+                      role="menuitem"
+                      className="turn-actions-menu-item interactive"
+                      data-focus-id={item.focusID}
+                      onClick={() => {
+                        setMenuOpen(false);
+                        dispatchAction(item.actionID!);
+                      }}
+                    >
+                      <span>{item.label}</span>
+                      <span className="turn-actions-menu-value">{item.value}</span>
+                    </button>
+                  ) : (
+                    <div key={item.key} role="menuitem" className="turn-actions-menu-item">
+                      <span>{item.label}</span>
+                      <span className="turn-actions-menu-value">{item.value}</span>
+                    </div>
+                  ),
+                )}
+              </div>
+            </>
+          ) : null}
+        </div>
+      ) : null}
+
+      <div className="turn-actions-metadata">
+        {hasTokens ? (
+          <span className="turn-actions-stat" title={tokenTitle}>
+            <svg width="11" height="11" viewBox="0 0 12 12" fill="none" stroke="currentColor" strokeWidth="1.3" aria-hidden="true" className="turn-actions-stat-gem">
+              <path d="M6 1.2 10.8 6 6 10.8 1.2 6Z" />
+            </svg>
+            <span className="turn-actions-stat-value">{footer!.totalTokens}</span>
+          </span>
+        ) : null}
+        {turn.model ? (
+          <span
+            className="turn-actions-model"
+            title={modelTitle}
+          >
+            <svg width="13" height="13" viewBox="0 0 14 14" fill="none" stroke="currentColor" strokeWidth="1.3" aria-hidden="true">
+              <circle cx="7" cy="7" r="5.6" />
+              <path d="m4.6 7.2 1.7 1.7 3.1-3.6" />
+            </svg>
+            <span>{turn.model}</span>
+          </span>
+        ) : null}
+        {turn.finishedAtClock ? (
+          <span className="turn-timestamp">{turn.finishedAtClock}</span>
+        ) : null}
+      </div>
+    </div>
+  );
+}
+
 const Turn = memo(function Turn({
   turn,
   conversationID,
@@ -2085,7 +2264,6 @@ const Turn = memo(function Turn({
   turn: ConversationWebTurn;
   conversationID: string;
 }) {
-  const footer = turn.footer;
   const headingID = `turn-heading-${turn.id}`;
   const localAssets = turn.localAssets ?? [];
   useSyncExternalStore(
@@ -2126,31 +2304,9 @@ const Turn = memo(function Turn({
       </div>
     ));
 
-  // Token/context accounting is internal telemetry, not content: it lives at
-  // the bottom of the folded process body instead of under the answer.
-  const footerNode = footer ? (
-    <footer className="turn-footer" data-selection-id={`turn:${turn.id}:footer`}>
-      <span>{footer.totalTokens} tokens</span>
-      {footer.usageUnits ? <span>{footer.usageUnits} units</span> : null}
-      {footer.cachedTokens ? (
-        <span className="turn-footer-cached">缓存 {footer.cachedTokens}</span>
-      ) : null}
-      <span>{footer.elapsed}</span>
-      {footer.invocationCount ? <span>{footer.invocationCount}x</span> : null}
-      {footer.contextTokens ? <span>ctx {footer.contextTokens}</span> : null}
-      {turn.trajectoryActionID ? (
-        <button
-          type="button"
-          className="turn-footer-trajectory"
-          data-focus-id={`turn-trajectory:${turn.id}`}
-          onClick={() => dispatchAction(turn.trajectoryActionID!)}
-          title="查看本轮调用轨迹"
-        >
-          轨迹 ›
-        </button>
-      ) : null}
-    </footer>
-  ) : null;
+  // Token/context accounting moved out of the folded process body: it is a
+  // property of the turn's result, so the completed-turn actions bar carries
+  // the totals and the "···" menu holds the details.
 
   const todoNode = turn.todos.length ? (
     <TodoPanel todos={turn.todos} turnID={turn.id} isLive={turn.isLive} />
@@ -2272,11 +2428,10 @@ const Turn = memo(function Turn({
             <LiveTurnHeader startedAtMilliseconds={turn.startedAtMilliseconds} />
             {renderBlocks(turn.blocks)}
             {todoNode}
-            {footerNode}
           </>
         ) : (
           <>
-            {process.length || todoNode || footerNode ? (
+            {process.length || todoNode ? (
               <details
                 className="turn-process"
                 data-disclosure-id={`turn-process:${turn.id}`}
@@ -2291,7 +2446,6 @@ const Turn = memo(function Turn({
                 <div className="turn-process-body">
                   {renderBlocks(process)}
                   {todoNode}
-                  {footerNode}
                 </div>
               </details>
             ) : null}
@@ -2299,38 +2453,9 @@ const Turn = memo(function Turn({
             {turn.changes ? (
               <TurnChangesCard turnID={turn.id} changes={turn.changes} />
             ) : null}
+            <TurnActionsBar turn={turn} />
           </>
         )}
-        {!turn.isLive && (turn.copyActionID || turn.shareActionID || turn.assetsActionID || turn.finishedAtClock) ? (
-          <div className="turn-actions" aria-label="Turn actions">
-            {turn.copyActionID ? (
-              <ActionButton
-                actionID={turn.copyActionID}
-                focusID={`turn-copy:${turn.id}`}
-                tooltip="Copy turn"
-              >Copy</ActionButton>
-            ) : null}
-            {turn.shareActionID ? (
-              <ActionButton
-                actionID={turn.shareActionID}
-                focusID={`turn-share:${turn.id}`}
-                tooltip="Share turn"
-              >Share</ActionButton>
-            ) : null}
-            {turn.assetsActionID ? (
-              <ActionButton
-                actionID={turn.assetsActionID}
-                focusID={`turn-assets:${turn.id}`}
-                tooltip="Show turn assets"
-              >
-                Assets {turn.assetCount}
-              </ActionButton>
-            ) : null}
-            {turn.finishedAtClock ? (
-              <span className="turn-timestamp">{turn.finishedAtClock}</span>
-            ) : null}
-          </div>
-        ) : null}
       </div>
       {turn.extensionNodes.map((node) => (
         <div

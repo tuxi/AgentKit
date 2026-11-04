@@ -7,6 +7,17 @@ public struct ModelSelectionIdentity: Decodable, Sendable, Equatable {
     public let actualModel: String?
     public let provider: String?
 
+    /// Pair the concrete served model with the configured provider alias.
+    /// The resolved route is authoritative for that alias; `provider` on a
+    /// request can instead name an adapter protocol.
+    var modelRoute: String? {
+        guard let actualModel, !actualModel.isEmpty else { return resolvedModel }
+        let routeParts = resolvedModel?.split(separator: "/", maxSplits: 1) ?? []
+        let alias = routeParts.count == 2 ? String(routeParts[0]) : provider
+        guard let alias, !alias.isEmpty else { return actualModel }
+        return actualModel.hasPrefix("\(alias)/") ? actualModel : "\(alias)/\(actualModel)"
+    }
+
     enum CodingKeys: String, CodingKey {
         case requestedModel = "requested_model"
         case resolvedModel = "resolved_model"

@@ -299,6 +299,8 @@ enum ConversationWebDocumentDiffer {
             // turn was already painted: it must trigger an updateTurn, otherwise
             // the folded header never gains "· 编辑 3 个文件".
             && lhs.changes == rhs.changes
+            && lhs.model == rhs.model
+            && lhs.modelRoute == rhs.modelRoute
     }
 
     private static func canPatchBlockShape(

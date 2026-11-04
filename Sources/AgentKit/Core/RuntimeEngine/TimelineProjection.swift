@@ -239,6 +239,7 @@ public struct TimelineProjection: Sendable {
                         let invID = p.metadata["invocationID"] ?? node.invocationID
                         if let invID, !invID.isEmpty {
                             upsertInvocation(invID) { inv in
+                                inv.modelRoute = p.metadata["modelRoute"] ?? inv.modelRoute
                                 inv.promptTokens = prompt ?? inv.promptTokens
                                 inv.completionTokens = p.metadata["completionTokens"].flatMap(Int.init) ?? inv.completionTokens
                                 inv.totalTokens = p.metadata["totalTokens"].flatMap(Int.init) ?? inv.totalTokens
@@ -261,6 +262,7 @@ public struct TimelineProjection: Sendable {
                             upsertInvocation(invID) { inv in
                                 let toolChoice: JSONValue? = p.metadata["toolChoice"]
                                     .flatMap { try? JSONDecoder().decode(JSONValue.self, from: Data($0.utf8)) }
+                                inv.modelRoute = p.metadata["modelRoute"] ?? inv.modelRoute
                                 inv.request = ModelRequestInfo(
                                     modelName: p.metadata["model"],
                                     provider: p.metadata["provider"],

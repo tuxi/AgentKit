@@ -147,6 +147,10 @@ export interface ConversationWebTurn {
     /// "编辑 3 个文件" — built in Swift so iOS and Web cannot drift apart.
     summary?: string;
   };
+  /// The model that produced the final answer (`model_request`, v1.4).
+  /// Absent for streams that predate the event — the badge is omitted.
+  model?: string;
+  modelRoute?: string;
 }
 
 export interface ConversationWebExtensionNode {

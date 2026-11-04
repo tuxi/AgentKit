@@ -1735,7 +1735,8 @@ final class ConversationWebDocumentTests: XCTestCase {
                 answerVisible: answer ? answer.getBoundingClientRect().height > 0 : false,
                 timestamp: document.querySelector('.turn-timestamp')?.textContent ?? null,
                 blockCount: document.querySelectorAll('.turn-block').length,
-                footerInProcess: Boolean(process?.querySelector('.turn-footer'))
+                footerInProcess: Boolean(process?.querySelector('.turn-footer')),
+                hasActionsBar: Boolean(document.querySelector('.turn-actions'))
               };
             })()
             """
@@ -1750,6 +1751,193 @@ final class ConversationWebDocumentTests: XCTestCase {
         XCTAssertEqual(inspection?["timestamp"] as? String, foldable.finishedAtClock)
         // No block is dropped by the fold — only moved.
         XCTAssertEqual(inspection?["blockCount"] as? Int, 3)
+        // Token telemetry no longer renders inside the fold — the finished
+        // turn shows the Codex-style actions bar instead.
+        XCTAssertEqual(inspection?["footerInProcess"] as? Bool, false)
+        XCTAssertEqual(inspection?["hasActionsBar"] as? Bool, true)
+
+        configuration.userContentController.removeScriptMessageHandler(forName: "agentkitWorkbench")
+        _ = webView
+    }
+
+    /// The user-visible contract behind the completed-turn actions bar: the
+    /// moment a live turn flips to finished — through the exact patch pipeline
+    /// the workbench runs (acknowledged live document → finished snapshot →
+    /// differ) — the bar must appear in the SAME update, with the copy/share
+    /// icons, token totals with cache tooltip, model badge and the timestamp. It
+    /// must never wait for the next turn or an app restart.
+    func testFinishPatchRevealsActionsBarImmediately() async throws {
+        try await assertFinishPatchRevealsActionsBar(includeStats: true)
+    }
+
+    func testFinishPatchWithoutUsageRevealsActionsBarImmediately() async throws {
+        try await assertFinishPatchRevealsActionsBar(includeStats: false)
+    }
+
+    private func assertFinishPatchRevealsActionsBar(includeStats: Bool) async throws {
+        let ready = expectation(description: "Web renderer handshake")
+        let firstAcknowledged = expectation(description: "Live document acknowledged")
+        let finishAcknowledged = expectation(description: "Finish patch acknowledged")
+        let probe = ConversationWebBridgeProbe(ready: ready)
+        probe.expectAcknowledgement(revision: 1, expectation: firstAcknowledged)
+        probe.expectAcknowledgement(revision: 2, expectation: finishAcknowledged)
+        let configuration = WKWebViewConfiguration()
+        configuration.websiteDataStore = .nonPersistent()
+        configuration.setURLSchemeHandler(
+            ConversationWebSchemeHandler(),
+            forURLScheme: ConversationWebSchemeHandler.scheme
+        )
+        configuration.userContentController.add(probe, name: "agentkitWorkbench")
+
+        let webView = WKWebView(
+            frame: .init(x: 0, y: 0, width: 320, height: 640),
+            configuration: configuration
+        )
+        webView.load(URLRequest(url: ConversationWebSchemeHandler.indexURL))
+        await fulfillment(of: [ready], timeout: 5)
+
+        let startedAt = Date(timeIntervalSince1970: 1_700_000_000)
+        let request = ModelRequestInfo(
+            modelName: includeStats ? "deepseek-v4.1-flash" : "deepseek/deepseek-v4.1-flash",
+            provider: includeStats ? "opencode-go" : "openrouter",
+            reasoningEffort: nil
+        )
+        func liveTurn() -> ConversationTurn {
+            ConversationTurn(
+                id: "turn-live",
+                userPrompt: MessageNodePayload(role: .user, text: "hi"),
+                blocks: [
+                    .text(id: "text-1", MessageNodePayload(role: .assistant, text: "Working…", isStreaming: true))
+                ],
+                // model_finished can deliver usage before turn_finished.
+                footer: TurnStats(contextTokens: 1_000, totalTokens: 1_200,
+                                  elapsedMs: 1_000, invocationCount: 1),
+                isLive: true,
+                invocations: [ModelInvocation(id: "inv1", index: 1, request: request)],
+                startedAt: startedAt
+            )
+        }
+        let registry = ConversationWebActionRegistry()
+        registry.beginRevision(1)
+        let liveDocument = ConversationWebDocumentBuilder.build(
+            snapshot: RuntimeSnapshot(timeline: [], turns: [liveTurn()], generation: 1),
+            conversationID: "fixture",
+            revision: 1,
+            registerAction: registry.register
+        )
+        registry.finishRevision(
+            retaining: ConversationWebDocumentBuilder.actionTokens(in: liveDocument)
+        )
+        let resetPayload = try JSONEncoder().encode(
+            ConversationWebDocumentDiffer.reset(liveDocument)
+        ).base64EncodedString()
+        _ = try await webView.evaluateJavaScript(
+            "window.AgentKitWorkbench.applyUpdateBase64('\(resetPayload)')"
+        )
+        await fulfillment(of: [firstAcknowledged], timeout: 5)
+
+        // Before finishing, the streaming turn must NOT show the bar.
+        try await Task.sleep(for: .milliseconds(20))
+        let liveState = try await webView.evaluateJavaScript(
+            "({ actions: Boolean(document.querySelector('.turn-actions')) })"
+        ) as? [String: Any]
+        XCTAssertEqual(liveState?["actions"] as? Bool, false, "streaming turns render no actions bar")
+
+        // Finish the turn the way the workbench does: same snapshot content,
+        // isLive flipped, footer stats and wall clock stamped in.
+        let finishedTurn = ConversationTurn(
+            id: "turn-live",
+            userPrompt: MessageNodePayload(role: .user, text: "hi"),
+            blocks: [
+                .text(id: "text-1", MessageNodePayload(role: .assistant, text: "Done.", isStreaming: false))
+            ],
+            footer: includeStats ? TurnStats(
+                contextTokens: 14_500_000,
+                totalTokens: 15_414_100,
+                elapsedMs: 41_000,
+                invocationCount: 3,
+                cachedContextTokens: 14_179_200
+            ) : nil,
+            isLive: false,
+            invocations: [ModelInvocation(
+                id: "inv1", index: 1, request: request,
+                promptTokens: 9_100, completionTokens: 3_200, totalTokens: 12_300
+            )],
+            startedAt: startedAt,
+            finishedAt: startedAt.addingTimeInterval(41)
+        )
+        registry.beginRevision(2)
+        let finishedDocument = ConversationWebDocumentBuilder.build(
+            snapshot: RuntimeSnapshot(timeline: [], turns: [finishedTurn], generation: 2),
+            conversationID: "fixture",
+            revision: 2,
+            registerAction: registry.register
+        )
+        registry.finishRevision(
+            retaining: ConversationWebDocumentBuilder.actionTokens(in: finishedDocument)
+        )
+        let update = try XCTUnwrap(ConversationWebDocumentDiffer.update(
+            from: liveDocument,
+            to: finishedDocument
+        ))
+        let patchPayload = try JSONEncoder().encode(update).base64EncodedString()
+        _ = try await webView.evaluateJavaScript(
+            "window.AgentKitWorkbench.applyUpdateBase64('\(patchPayload)')"
+        )
+        await fulfillment(of: [finishAcknowledged], timeout: 5)
+        try await Task.sleep(for: .milliseconds(20))
+
+        let inspection = try await webView.evaluateJavaScript(
+            """
+            (() => {
+              const bar = document.querySelector('.turn-actions');
+              return {
+                hasBar: Boolean(bar),
+                copy: Boolean(bar?.querySelector('[data-focus-id^="turn-copy:"]')),
+                share: Boolean(bar?.querySelector('[data-focus-id^="turn-share:"]')),
+                more: Boolean(bar?.querySelector('[data-focus-id^="turn-more:"]')),
+                stat: bar?.querySelector('.turn-actions-stat-value')?.textContent ?? null,
+                tokenTitle: bar?.querySelector('.turn-actions-stat')?.getAttribute('title') ?? null,
+                modelTitle: bar?.querySelector('.turn-actions-model')?.getAttribute('title') ?? null,
+                overflows: document.documentElement.scrollWidth > window.innerWidth,
+                model: bar?.querySelector('.turn-actions-model')?.textContent ?? null,
+                timestamp: bar?.querySelector('.turn-timestamp')?.textContent ?? null
+              };
+            })()
+            """
+        ) as? [String: Any]
+
+        XCTAssertEqual(inspection?["hasBar"] as? Bool, true)
+        XCTAssertEqual(inspection?["copy"] as? Bool, true)
+        XCTAssertEqual(inspection?["share"] as? Bool, true)
+        XCTAssertEqual(inspection?["more"] as? Bool, true, "the trajectory remains accessible")
+        if includeStats {
+            XCTAssertEqual(inspection?["stat"] as? String, "15414.1K")
+            XCTAssertEqual(inspection?["tokenTitle"] as? String, "15414.1K\n（缓存 14179.2K）")
+        } else {
+            XCTAssertTrue(inspection?["stat"] is NSNull)
+            XCTAssertTrue(inspection?["tokenTitle"] is NSNull)
+        }
+        XCTAssertEqual(inspection?["model"] as? String, request.modelName)
+        XCTAssertEqual(inspection?["modelTitle"] as? String, includeStats
+            ? "opencode-go/deepseek-v4.1-flash" : "openrouter/deepseek/deepseek-v4.1-flash")
+        XCTAssertEqual(inspection?["overflows"] as? Bool, false)
+        XCTAssertEqual(inspection?["timestamp"] as? String, finishedTurn.finishedAtClock)
+
+        _ = try await webView.evaluateJavaScript(
+            "document.querySelector('[data-focus-id^=\"turn-more:\"]').click()"
+        )
+        try await Task.sleep(for: .milliseconds(30))
+        let menuAbove = try await webView.evaluateJavaScript(
+            """
+            (() => {
+              const menu = document.querySelector('.turn-actions-menu')?.getBoundingClientRect();
+              const button = document.querySelector('[data-focus-id^="turn-more:"]')?.getBoundingClientRect();
+              return Boolean(menu && button && menu.height > 0 && menu.bottom <= button.top);
+            })()
+            """
+        ) as? Bool
+        XCTAssertEqual(menuAbove, true, "the last turn's menu opens upward, away from the composer")
 
         configuration.userContentController.removeScriptMessageHandler(forName: "agentkitWorkbench")
         _ = webView

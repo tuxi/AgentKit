@@ -89,6 +89,10 @@ struct ConversationWebDocument: Codable, Equatable, Sendable {
         /// What this turn wrote. Nil when the Runtime reported no diffstat —
         /// absence means "unknown", never "edited 0 files".
         var changes: WebTurnChanges? = nil
+        /// The model that produced the final answer (`model_request`, v1.4).
+        /// Nil for old streams — the badge is omitted, never "unknown".
+        var model: String? = nil
+        var modelRoute: String? = nil
     }
 
     /// P8.9 — one model invocation rendered as a card (request shape → usage → thinking).
@@ -489,12 +493,13 @@ enum ConversationWebDocumentBuilder {
             },
             footer: turn.footer.map {
                 ConversationWebDocument.Footer(
-                    totalTokens: $0.formattedTotalTokens,
+                    totalTokens: String(format: "%.1fK", Double($0.totalTokens) / 1_000),
                     contextTokens: $0.contextTokens > 0 ? $0.formattedContextTokens : nil,
                     usageUnits: $0.hasUsageUnits ? $0.formattedUsageUnits : nil,
                     elapsed: $0.formattedElapsed,
                     invocationCount: $0.invocationCount,
-                    cachedTokens: $0.hasCachedTokens ? $0.formattedCachedTokens : nil
+                    cachedTokens: $0.hasCachedTokens
+                        ? String(format: "%.1fK", Double($0.cachedContextTokens) / 1_000) : nil
                 )
             },
             isLive: turn.isLive,
@@ -537,7 +542,9 @@ enum ConversationWebDocumentBuilder {
             elapsedText: turn.formattedDuration,
             finishedAtClock: turn.finishedAtClock,
             startedAtMilliseconds: turn.startedAtMilliseconds,
-            changes: ConversationWebDocument.WebTurnChanges(turn.changes)
+            changes: ConversationWebDocument.WebTurnChanges(turn.changes),
+            model: turn.modelName,
+            modelRoute: turn.modelRoute
         )
     }
 

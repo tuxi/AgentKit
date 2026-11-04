@@ -136,13 +136,13 @@ public struct ExecutionReducer: Sendable {
                                       ts: ts, graph: &graph)
 
         case .modelFinished(let turnID, let promptTokens, let completionTokens, let totalTokens,
-                            let billingUnits, let elapsedMs, let invocationID, let err, let cachedPromptTokens, _):
+                            let billingUnits, let elapsedMs, let invocationID, let err, let cachedPromptTokens, let selection):
             return handleModelFinished(turnID: turnID ?? internalState.currentTurnID ?? "",
                                        promptTokens: promptTokens, completionTokens: completionTokens,
                                        totalTokens: totalTokens, billingUnits: billingUnits,
                                        invocationID: invocationID ?? internalState.currentInvocationID,
                                        elapsedMs: elapsedMs,
-                                       err: err, cachedPromptTokens: cachedPromptTokens,
+                                       err: err, cachedPromptTokens: cachedPromptTokens, selection: selection,
                                        ts: ts, graph: &graph)
 
         case .modelRequest(let turnID, let invocationID, let request):
@@ -863,6 +863,7 @@ public struct ExecutionReducer: Sendable {
                                                completionTokens: Int?, totalTokens: Int?,
                                                billingUnits: Int64?, invocationID: String?, elapsedMs: Int?,
                                                err: String?, cachedPromptTokens: Int? = nil,
+                                               selection: ModelSelectionIdentity? = nil,
                                                ts: TimeInterval,
                                                graph: inout ExecutionGraph) -> [NodeID] {
         // Finalize the thinking block from this model invocation.
@@ -904,6 +905,7 @@ public struct ExecutionReducer: Sendable {
         let text = parts.isEmpty ? "Model finished" : "Model finished: \(parts.joined(separator: ", "))"
 
         var metadata: [String: String] = ["phase": "finished"]
+        metadata["modelRoute"] = selection?.modelRoute
         if let tokens = promptTokens { metadata["promptTokens"] = String(tokens) }
         if let tokens = completionTokens { metadata["completionTokens"] = String(tokens) }
         if let tokens = totalTokens { metadata["totalTokens"] = String(tokens) }
@@ -934,6 +936,7 @@ public struct ExecutionReducer: Sendable {
         let text = parts.isEmpty ? "Model request" : "Model request: \(parts.joined(separator: ", "))"
 
         var metadata: [String: String] = ["phase": "request"]
+        metadata["modelRoute"] = request.selection?.modelRoute
         if let invocationID {
             metadata["invocationID"] = invocationID
         }

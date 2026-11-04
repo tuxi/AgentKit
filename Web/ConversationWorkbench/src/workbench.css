@@ -928,7 +928,6 @@ summary:active {
 }
 
 .turn-timestamp {
-  margin-inline-start: auto;
   align-self: center;
   color: var(--secondary);
   font-size: 11px;
@@ -1072,40 +1071,139 @@ summary:active {
   font-size: 12px;
 }
 
-.turn-footer {
+/* Codex-style completed-turn actions bar. Left: icon actions and the "···"
+   menu; right: token totals, model badge, timestamp. Streaming turns render
+   none of this — the bar appears the moment the turn finishes. */
+.turn-actions {
   display: flex;
+  align-items: center;
+  gap: 2px;
   flex-wrap: wrap;
-  gap: 6px 10px;
-  margin-top: 12px;
+  min-width: 0;
+  min-height: 26px;
+  margin-top: 6px;
   color: var(--secondary);
-  font-size: 11px;
-  user-select: text;
 }
 
-.turn-footer-cached {
-  color: var(--warning);
-}
-
-.turn-footer-trajectory {
+.turn-actions-icon {
   appearance: none;
   border: none;
   background: transparent;
+  width: 26px;
+  height: 26px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 6px;
   padding: 0;
-  margin: 0;
-  color: var(--accent);
-  font: inherit;
+  color: inherit;
   cursor: pointer;
 }
 
-.turn-footer-trajectory:hover {
-  text-decoration: underline;
+.turn-actions-icon:hover {
+  background: var(--hover-fill);
 }
 
-.turn-actions {
+.turn-actions-icon:active {
+  background: var(--pressed-fill);
+}
+
+.turn-actions-metadata {
   display: flex;
-  gap: 4px;
-  min-height: 24px;
-  margin-top: 3px;
+  flex: 1 1 auto;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 6px 12px;
+  min-width: 0;
+  margin-inline-start: auto;
+}
+
+.turn-actions-stat {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  font-size: 12px;
+  white-space: nowrap;
+}
+
+.turn-actions-stat-gem {
+  opacity: 0.7;
+}
+
+.turn-actions-stat-value {
+  font-variant-numeric: tabular-nums;
+}
+
+.turn-actions-model {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  font-size: 12px;
+  overflow-wrap: anywhere;
+  min-width: 0;
+  color: var(--secondary);
+}
+
+.turn-actions-model svg {
+  flex-shrink: 0;
+}
+
+.turn-actions-menu-anchor {
+  position: relative;
+  display: inline-flex;
+}
+
+.turn-actions-menu-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 40;
+}
+
+.turn-actions-menu {
+  position: absolute;
+  bottom: calc(100% + 4px);
+  left: 0;
+  z-index: 41;
+  max-height: min(320px, 60vh);
+  overflow-y: auto;
+  min-width: 200px;
+  padding: 4px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--background);
+  box-shadow: 0 6px 20px rgb(0 0 0 / 14%);
+}
+
+.turn-actions-menu-item {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 7px 10px;
+  border-radius: 6px;
+  font-size: 12px;
+  color: var(--text);
+}
+
+button.turn-actions-menu-item {
+  appearance: none;
+  border: none;
+  background: transparent;
+  width: 100%;
+  font: inherit;
+  text-align: start;
+  cursor: pointer;
+}
+
+button.turn-actions-menu-item:hover {
+  background: var(--hover-fill);
+}
+
+.turn-actions-menu-value {
+  color: var(--secondary);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
 }
 
 .turn-extension {
