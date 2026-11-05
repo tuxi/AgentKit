@@ -114,8 +114,9 @@ enum ToolTranscriptPresenter {
         let tools = group.tools.map(presentation(for:))
         return ToolTranscriptGroupPresentation(
             callID: group.id,
-            summary: groupSummary(for: tools),
-            statusTone: groupStatusTone(for: tools),
+            summary: group.isActivityGroup ? activitySummary(for: group, tools: tools) : groupSummary(for: tools),
+            statusTone: group.isThinking && !tools.contains(where: { $0.statusTone == .failed })
+                ? .running : groupStatusTone(for: tools),
             tools: tools
         )
     }
@@ -412,7 +413,7 @@ enum ToolTranscriptPresenter {
     }
 
     private static func statusTone(for tool: ToolNodePayload) -> ToolTranscriptStatusTone {
-        if tool.isAutoApproved { return .autoApproved }
+        if tool.isAutoApproved, tool.status != .running, tool.status != .failed { return .autoApproved }
         switch tool.status {
         case .running: return .running
         case .completed: return .completed
@@ -422,7 +423,7 @@ enum ToolTranscriptPresenter {
     }
 
     private static func statusText(for tool: ToolNodePayload) -> String? {
-        if tool.isAutoApproved { return "auto" }
+        if tool.isAutoApproved, tool.status != .running, tool.status != .failed { return "auto" }
         switch tool.status {
         case .running:
             return "running"
@@ -476,6 +477,33 @@ enum ToolTranscriptPresenter {
         case .session: return count == 1 ? "session action" : "session actions"
         case .other: return count == 1 ? "tool" : "tools"
         }
+    }
+
+    private static func activitySummary(for group: ToolGroup, tools: [ToolTranscriptPresentation]) -> String {
+        var labels: [String] = []
+        for tool in group.tools {
+            // Only known tool names establish an activity category. In
+            // particular, shell text never establishes a test/verification result.
+            let label: String
+            switch tool.toolName.lowercased().replacingOccurrences(of: "-", with: "_") {
+            case "read_file", "read_files", "view_file": label = "读取文件"
+            case "list_directory", "list_files", "ls": label = "列出目录"
+            case "grep", "rg", "search_code", "search_files", "file_search": label = "搜索代码"
+            case "write_file": label = "写入文件"
+            case "create_file": label = "创建文件"
+            case "edit_file", "apply_patch", "patch_file", "replace_in_file": label = "修改文件"
+            case "run_command", "exec_command", "bash", "shell", "terminal": label = "运行命令"
+            default: label = tool.toolName
+            }
+            if !labels.contains(label) { labels.append(label) }
+        }
+        var parts = [labels.joined(separator: "、"), "\(tools.count) 次调用"]
+        let running = group.tools.filter { $0.status == .running }.count
+        let failed = group.tools.filter { $0.status == .failed }.count
+        if running > 0 { parts.append("\(running) 运行中") }
+        if group.isThinking { parts.append("思考中") }
+        if failed > 0 { parts.append("\(failed) 失败") }
+        return parts.joined(separator: " · ")
     }
 
     private static func groupSummary(for tools: [ToolTranscriptPresentation]) -> String {

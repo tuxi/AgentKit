@@ -1335,17 +1335,32 @@ function TodoPanel({
  * The returned `open` value is fully controlled: the summary click handler
  * preventDefaults the native toggle so the browser never fights React.
  */
+// Keep disclosure preferences on the turn, so moving its process blocks under
+// the elapsed-time fold at completion does not discard their user state.
+const TurnDisclosureContext = React.createContext<{
+  scope: string;
+  expanded: Record<string, boolean>;
+  setExpanded: React.Dispatch<React.SetStateAction<Record<string, boolean>>>;
+} | null>(null);
+
 function useStreamingDisclosure(
   streaming: boolean,
+  disclosureID: string,
 ): { open: boolean; onSummaryClick: (event: React.MouseEvent<HTMLElement>) => void } {
-  const [userExpanded, setUserExpanded] = useState(false);
+  const [localExpanded, setLocalExpanded] = useState(false);
+  const context = React.useContext(TurnDisclosureContext);
+  const key = `${context?.scope}:${disclosureID}`;
+  const userExpanded = context ? context.expanded[key] ?? false : localExpanded;
   const onSummaryClick = (event: React.MouseEvent<HTMLElement>) => {
     if (!window.getSelection()?.isCollapsed) {
       event.preventDefault();
       return;
     }
     event.preventDefault();
-    if (!streaming) setUserExpanded((value) => !value);
+    if (!streaming) {
+      if (context) context.setExpanded((values) => ({ ...values, [key]: !values[key] }));
+      else setLocalExpanded((value) => !value);
+    }
   };
   return { open: streaming || userExpanded, onSummaryClick };
 }
@@ -1398,7 +1413,7 @@ function useTailFollow(
 function Tool({ tool }: { tool: ConversationWebTool }): React.JSX.Element {
   const statusText = visibleExecutionStatus(tool.status, tool.statusText);
   // Auto-expand while the tool runs; collapse when it finishes.
-  const { open, onSummaryClick } = useStreamingDisclosure(tool.status === "running");
+  const { open, onSummaryClick } = useStreamingDisclosure(tool.status === "running", `tool:${tool.id}`);
   // While the tool runs, follow the newest log lines inside the bounded output
   // frame; scrolling up to read pauses the follow until the user returns to
   // the bottom (see useTailFollow).
@@ -1597,7 +1612,7 @@ function VerifiedBlock({ block }: { block: ConversationWebBlock }): React.JSX.El
 
 function ThinkingBlock({ block }: { block: ConversationWebBlock }): React.JSX.Element | null {
   // Auto-expand while the model is streaming; collapse when it finishes.
-  const { open, onSummaryClick } = useStreamingDisclosure(block.status === "streaming");
+  const { open, onSummaryClick } = useStreamingDisclosure(block.status === "streaming", `thinking:${block.id}`);
   const streaming = block.status === "streaming";
   const [scrollPanel, setScrollPanel] = useState<HTMLDivElement | null>(null);
 
@@ -1643,8 +1658,10 @@ function ThinkingBlock({ block }: { block: ConversationWebBlock }): React.JSX.El
 
 function ToolGroupBlock({ block }: { block: ConversationWebBlock }): React.JSX.Element {
   const statusText = visibleExecutionStatus(block.status);
-  // Auto-expand while any tool in the group is running; collapse when done.
-  const { open, onSummaryClick } = useStreamingDisclosure(block.status === "running");
+  // Activity disclosure is user controlled throughout streaming and completion.
+  const { open, onSummaryClick } = useStreamingDisclosure(!block.activityOrder && block.status === "running", `group:${block.id}`);
+  const tools = new Map(block.tools.map((tool) => [`tool:${tool.id}`, tool]));
+  const thinking = new Map((block.activityThinking ?? []).map((item) => [`thinking:${item.id}`, item]));
   return (
     <details
       className="tool-group"
@@ -1663,7 +1680,12 @@ function ToolGroupBlock({ block }: { block: ConversationWebBlock }): React.JSX.E
         <span className="disclosure-chevron" aria-hidden="true">›</span>
       </summary>
       <div className="tool-group-tools">
-        {block.tools.map((tool) => <Tool key={tool.id} tool={tool} />)}
+        {open ? (block.activityOrder ?? block.tools.map((tool) => `tool:${tool.id}`)).map((id) => {
+          const tool = tools.get(id);
+          if (tool) return <Tool key={id} tool={tool} />;
+          const thought = thinking.get(id);
+          return thought ? <ThinkingBlock key={id} block={thought} /> : null;
+        }) : null}
       </div>
     </details>
   );
@@ -1680,14 +1702,10 @@ const Block = memo(function Block({
     case "thinking":
       return <ThinkingBlock block={block} />;
     case "toolGroup":
-      if (block.tools.length > 1) {
-        return <ToolGroupBlock block={block} />;
-      }
-      return (
-        <section className="tool-group" data-status={block.status}>
-          {block.tools.map((tool) => <Tool key={tool.id} tool={tool} />)}
-        </section>
-      );
+      if (block.activityOrder || block.tools.length > 1) return <ToolGroupBlock block={block} />;
+      return <section className="tool-group" data-status={block.status}>
+        {block.tools.map((tool) => <Tool key={tool.id} tool={tool} />)}
+      </section>;
     case "artifact":
       return (
         <section className="artifact-block">
@@ -1887,10 +1905,12 @@ function CollapsibleUserPrompt({
   );
 }
 
-/// A failed tool / errored system event is never hidden by the process fold —
-/// an error the user cannot see is worse than a noisy timeline.
+/// Standalone legacy errors stay outside the fold. Activity failures are
+/// counted on the always-visible process header while the activity is folded.
 function isFailureBlock(block: ConversationWebBlock): boolean {
-  return block.status === "failed" || block.status === "cancelled";
+  // Activity failures stay inside the group and are counted in the outer
+  // process header, which remains visible while the whole process is folded.
+  return !block.activityOrder && (block.status === "failed" || block.status === "cancelled");
 }
 
 /// L1 split: everything before the last non-empty answer block is "process",
@@ -1913,8 +1933,8 @@ function splitTurnForDisplay(turn: ConversationWebTurn): {
     }
   }
 
-  // Tool-only turn (step limit, cancel, pure action): fold the work but keep
-  // every failure outside so the turn never becomes an empty shell.
+  // Tool-only turn: fold the work, surfacing activity failures in the header
+  // and keeping standalone legacy errors outside as before.
   if (answerIndex < 0) {
     return {
       process: turn.blocks.filter((block) => !isFailureBlock(block)),
@@ -2265,6 +2285,12 @@ const Turn = memo(function Turn({
   conversationID: string;
 }) {
   const headingID = `turn-heading-${turn.id}`;
+  const [expandedDisclosures, setExpandedDisclosures] = useState<Record<string, boolean>>({});
+  const disclosureContext = React.useMemo(() => ({
+    scope: conversationID,
+    expanded: expandedDisclosures,
+    setExpanded: setExpandedDisclosures,
+  }), [conversationID, expandedDisclosures]);
   const localAssets = turn.localAssets ?? [];
   useSyncExternalStore(
     subscribeLocalAssetURLs,
@@ -2291,6 +2317,8 @@ const Turn = memo(function Turn({
   // produced it folds into one "用时 …" disclosure. Nothing is ever hidden
   // while the turn is still streaming.
   const { process, answer } = splitTurnForDisplay(turn);
+  const failedProcessCalls = process.reduce((count, block) =>
+    count + block.tools.filter((tool) => tool.status === "failed").length, 0);
 
   const renderBlocks = (blocks: ConversationWebBlock[]) =>
     blocks.map((block) => (
@@ -2422,6 +2450,7 @@ const Turn = memo(function Turn({
       {turn.userPrompt ? (
         <CollapsibleUserPrompt turnID={turn.id} text={turn.userPrompt} />
       ) : null}
+      <TurnDisclosureContext.Provider value={disclosureContext}>
       <div className="assistant-lane">
         {turn.isLive ? (
           <>
@@ -2441,6 +2470,7 @@ const Turn = memo(function Turn({
                   data-focus-id={`turn-process:${turn.id}`}
                 >
                   <span className="turn-process-label">{processSummaryLabel(turn)}</span>
+                  {failedProcessCalls > 0 ? <span className="tool-status" data-tone="failed">{failedProcessCalls} 次失败</span> : null}
                   <span className="disclosure-chevron" aria-hidden="true">›</span>
                 </summary>
                 <div className="turn-process-body">
@@ -2448,6 +2478,10 @@ const Turn = memo(function Turn({
                   {todoNode}
                 </div>
               </details>
+            ) : (turn.elapsedText || turn.changes?.summary || (turn.changes?.filesChanged ?? 0) > 0) ? (
+              <div className="turn-process-summary">
+                <span className="turn-process-label">{processSummaryLabel(turn)}</span>
+              </div>
             ) : null}
             {renderBlocks(answer)}
             {turn.changes ? (
@@ -2457,6 +2491,7 @@ const Turn = memo(function Turn({
           </>
         )}
       </div>
+      </TurnDisclosureContext.Provider>
       {turn.extensionNodes.map((node) => (
         <div
           className="turn-extension"

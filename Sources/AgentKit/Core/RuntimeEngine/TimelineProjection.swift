@@ -92,7 +92,9 @@ public struct TimelineProjection: Sendable {
         let turnUID = nodes.first?.id ?? UUID().uuidString
         var userPrompt: MessageNodePayload?
         var blocks: [TurnBlock] = []
-        var pendingTools: [ToolNodePayload] = []
+        var pendingActivity: [ToolGroup.Entry] = []
+        var activityAnchor: String?
+        var previousTurnID: String?
         var plans: [TurnPlan] = []
         var todos: [TodoItem] = []
         var contextTokens = 0, totalTokens = 0, usageUnits: Int64 = 0, footerElapsed = 0, footerCount = 0
@@ -134,24 +136,40 @@ public struct TimelineProjection: Sendable {
             }
         )
 
-        func flushTools() {
-            guard let first = pendingTools.first else { return }
-            blocks.append(.toolGroup(ToolGroup(id: first.callID, tools: pendingTools)))
-            pendingTools.removeAll()
+        func flushActivity() {
+            guard !pendingActivity.isEmpty, let anchor = activityAnchor else { return }
+            if pendingActivity.contains(where: { if case .tool = $0 { return true }; return false }) {
+                // First entry identity never depends on tool count, status or invocation.
+                blocks.append(.toolGroup(ToolGroup(id: "activity:\(turnUID):\(anchor)", entries: pendingActivity)))
+            } else {
+                for entry in pendingActivity {
+                    if case .thinking(let id, let payload) = entry {
+                        blocks.append(.thinking(id: id, payload))
+                    }
+                }
+            }
+            pendingActivity.removeAll()
+            activityAnchor = nil
         }
 
         for node in nodes {
+            // Partial history can omit a user prompt at a turn boundary.
+            // Never let an activity bridge two server turns in that case.
+            if let previousTurnID, previousTurnID != node.turnID { flushActivity() }
+            previousTurnID = node.turnID
             switch node.kind {
             case .message(let p) where p.role == .user:
                 userPrompt = p
             case .message(let p):
-                flushTools()
+                // Empty streaming placeholders are not visible narration boundaries.
+                guard !p.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { continue }
+                flushActivity()
                 blocks.append(.text(id: node.id, p))
             case .thinking(let p):
-                // Model reasoning/thinking content — a separate collapsible card,
-                // NOT assistant narration. Distinct from the spoken reply (text).
-                flushTools()
-                blocks.append(.thinking(id: node.id, p))
+                // Reasoning stays in arrival order inside activity; without a
+                // tool it remains a standalone thinking card when flushed.
+                if pendingActivity.isEmpty { activityAnchor = node.id }
+                pendingActivity.append(.thinking(id: node.id, p))
                 // Fold the authoritative snapshot into its invocation (REPLACE:
                 // later non-empty thinking wins — matches the reducer's segment
                 // finalize semantics).
@@ -173,11 +191,6 @@ public struct TimelineProjection: Sendable {
                 if entryCardCallIDs.contains(p.callID) {
                     continue
                 }
-                // Group only consecutive SAME-NAME tools, so a run renders as
-                // "read_file ×4" then "grep" rather than one mixed blob.
-                if let last = pendingTools.last, last.toolName != p.toolName {
-                    flushTools()
-                }
                 // P8.9 — fold the executed tool into its invocation (arrival
                 // order, dedup). Skipped for propose_plan / entry cards above,
                 // matching the timeline's render decisions 1:1.
@@ -188,24 +201,25 @@ public struct TimelineProjection: Sendable {
                         }
                     }
                 }
-                pendingTools.append(p)
+                if pendingActivity.isEmpty { activityAnchor = node.id }
+                pendingActivity.append(.tool(p))
             case .artifact(let p):
-                flushTools()
+                flushActivity()
                 blocks.append(.artifact(id: node.id, p.node))
             case .childStream(let p):
                 // 子流入口卡：内嵌在 turn card 中的折叠卡片（Claude Code 式）。
-                flushTools()
+                flushActivity()
                 blocks.append(.childStream(id: node.id, p))
             case .workflow(let p):
                 // Workflow DAG 入口卡（v1.3）。
-                flushTools()
+                flushActivity()
                 blocks.append(.workflow(id: node.id, p))
             case .todo(let items):
                 // A checklist is the state summary for its owning turn. Keep
                 // only the latest revision and render it at that turn's bottom.
                 todos = items
             case .plan(let plan):
-                flushTools()
+                flushActivity()
                 if let index = plans.firstIndex(where: { $0.id == plan.id }) {
                     plans[index] = plan
                 } else {
@@ -291,12 +305,12 @@ public struct TimelineProjection: Sendable {
                     break
                 } else {
                     // observation / reflection / context events / error / subagent / approval.
-                    flushTools()
+                    flushActivity()
                     blocks.append(.system(id: node.id, p))
                 }
             }
         }
-        flushTools()
+        flushActivity()
         blocks = mergeAdjacentNarration(blocks)
 
         let footer = sawFinished
@@ -384,10 +398,9 @@ public struct TimelineProjection: Sendable {
 
         case .toolCall(let payload):
             let status: ToolNodeStatus = {
-                if payload.isAutoApproved { return .autoApproved }
                 switch graphNode.status {
                 case .running: return .running
-                case .completed: return .completed
+                case .completed: return payload.isAutoApproved ? .autoApproved : .completed
                 case .failed: return .failed
                 default: return .completed
                 }

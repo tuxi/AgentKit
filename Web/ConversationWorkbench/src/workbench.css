@@ -413,9 +413,8 @@ summary:active {
 
 .tool-group-title {
   min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+  overflow-wrap: anywhere;
+  white-space: normal;
 }
 
 .tool-group-tools {

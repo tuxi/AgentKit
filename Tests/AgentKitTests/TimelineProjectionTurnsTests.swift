@@ -320,11 +320,11 @@ final class TimelineProjectionTurnsTests: XCTestCase {
         XCTAssertEqual(tags(turns[0].blocks), ["tools"])
         guard case .toolGroup(let g) = turns[0].blocks[0] else { return XCTFail("expected group") }
         XCTAssertEqual(g.tools.count, 2)
-        XCTAssertEqual(g.summary, "read_file ×2")
+        XCTAssertEqual(g.summary, "读取文件 · 2 次调用")
     }
 
-    // A run of different-name tools splits into same-name groups.
-    func testToolsSplitBySameNameRuns() {
+    // Different tool types share one activity until visible narration.
+    func testMixedToolsShareActivity() {
         let turn = "t1"
         let graph = reduce([
             .turnStarted(turnID: turn, text: "q"),
@@ -339,13 +339,13 @@ final class TimelineProjectionTurnsTests: XCTestCase {
             .toolFinished(turnID: turn, callID: "c4", result: result("c4", "read_file")),
         ])
         let turns = TimelineProjection().projectTurns(graph, isLive: false)
-        // read_file ×2 | grep | read_file → 3 groups.
-        XCTAssertEqual(tags(turns[0].blocks), ["tools", "tools", "tools"])
+        // read_file ×2 | grep | read_file → one ordered activity.
+        XCTAssertEqual(tags(turns[0].blocks), ["tools"])
         let summaries = turns[0].blocks.compactMap { block -> String? in
             if case .toolGroup(let g) = block { return g.summary }
             return nil
         }
-        XCTAssertEqual(summaries, ["read_file ×2", "grep", "read_file"])
+        XCTAssertEqual(summaries, ["读取文件、搜索代码 · 4 次调用"])
     }
 
     // A restarted server can REUSE turn_id within one session. Turns must still

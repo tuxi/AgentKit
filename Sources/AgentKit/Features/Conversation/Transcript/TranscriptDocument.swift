@@ -159,13 +159,10 @@ enum TurnTranscriptBuilder {
         state: TranscriptDocumentState,
         to builder: inout TranscriptAttributedBuilder
     ) {
-        if group.tools.count > 1 {
-            appendMergedToolGroup(group, state: state, to: &builder)
-            return
-        }
-
-        for tool in group.tools {
+        if !group.isActivityGroup, group.tools.count == 1, let tool = group.tools.first {
             appendSingleTool(tool, state: state, to: &builder)
+        } else {
+            appendMergedToolGroup(group, state: state, to: &builder)
         }
     }
 
@@ -184,7 +181,13 @@ enum TurnTranscriptBuilder {
             action: .toggleTool(callID: expansionID)
         )
         if expanded {
-            for tool in group.tools {
+            for entry in group.entries {
+                if case .thinking(let id, let payload) = entry {
+                    builder.appendThinkingCard(id: id, payload: payload,
+                        isExpanded: payload.isStreaming || state.expandedThinkingIDs.contains(id))
+                    continue
+                }
+                guard case .tool(let tool) = entry else { continue }
                 let toolPresentation = ToolTranscriptPresenter.presentation(for: tool)
                 let toolExpanded = state.expandedToolIDs.contains(tool.callID)
                 builder.appendToolRow(

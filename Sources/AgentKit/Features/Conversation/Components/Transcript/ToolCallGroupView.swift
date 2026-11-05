@@ -10,7 +10,7 @@
 import SwiftUI
 import ClientToolProtocol
 
-/// Renders a group of same-name tool calls as an expandable block.
+/// Renders ordered tool and thinking activity with user-controlled disclosure.
 struct ToolCallGroupView: View {
     let group: ToolGroup
     @Binding var documentState: TranscriptDocumentState
@@ -31,7 +31,7 @@ struct ToolCallGroupView: View {
                         .font(.caption)
                     Text(group.summary)
                         .font(.caption.weight(.medium))
-                        .lineLimit(1)
+                        .fixedSize(horizontal: false, vertical: true)
                     statusBadge
                     Image(systemName: isExpanded ? "chevron.up" : "chevron.down")
                         .font(.caption2)
@@ -46,8 +46,18 @@ struct ToolCallGroupView: View {
             if isExpanded {
                 Divider()
                     .padding(.horizontal, 10)
-                ForEach(group.tools, id: \.callID) { tool in
-                    toolDetailView(tool)
+                ForEach(group.entries) { entry in
+                    switch entry {
+                    case .tool(let tool):
+                        Text(ToolTranscriptPresenter.presentation(for: tool).title)
+                            .font(.caption.weight(.medium))
+                            .padding(.horizontal, 10)
+                        toolDetailView(tool)
+                    case .thinking(let id, let payload):
+                        ThinkingCardView(id: id, payload: payload,
+                            isExpanded: documentState.expandedThinkingIDs.contains(id),
+                            onToggle: { onAction(.toggleThinking(id: id)) })
+                    }
                 }
             }
         }
@@ -62,7 +72,7 @@ struct ToolCallGroupView: View {
     @ViewBuilder
     private var statusBadge: some View {
         let statuses = Set(group.tools.map(\.status))
-        if statuses.contains(.running) {
+        if statuses.contains(.running) || group.isThinking {
             HStack(spacing: 3) {
                 ProgressView()
                     .scaleEffect(0.5)

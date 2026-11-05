@@ -2607,6 +2607,122 @@ final class ConversationWebDocumentTests: XCTestCase {
         configuration.userContentController.removeScriptMessageHandler(forName: "agentkitWorkbench")
         _ = webView
     }
+    func testActivityDisclosurePreservesOrderAndStateThroughPatchesAndPaging() async throws {
+        let ready = expectation(description: "activity Web ready")
+        let probe = ConversationWebBridgeProbe(ready: ready)
+        let configuration = WKWebViewConfiguration()
+        configuration.websiteDataStore = .nonPersistent()
+        configuration.setURLSchemeHandler(ConversationWebSchemeHandler(), forURLScheme: ConversationWebSchemeHandler.scheme)
+        configuration.userContentController.add(probe, name: "agentkitWorkbench")
+        defer { configuration.userContentController.removeScriptMessageHandler(forName: "agentkitWorkbench") }
+        let webView = WKWebView(frame: .init(x: 0, y: 0, width: 900, height: 700), configuration: configuration)
+        webView.load(URLRequest(url: ConversationWebSchemeHandler.indexURL))
+        await fulfillment(of: [ready], timeout: 5)
+
+        let startedAt = Date().addingTimeInterval(-48)
+        func document(_ revision: Int, expanded: Bool, live: Bool, older: Bool = false, answerOnly: Bool = false) -> ConversationWebDocument {
+            let read = ToolNodePayload(callID: "read", toolName: "read_file", args: .object(["path": .string("App.swift")]),
+                                       status: expanded ? .completed : .running, output: "private long output")
+            var entries: [ToolGroup.Entry] = [.tool(read)]
+            if expanded {
+                entries += [.thinking(id: "thought", .init(text: "Search references before editing", isStreaming: false)),
+                            .tool(.init(callID: "search", toolName: "grep", args: nil, status: .failed, output: "failure details"))]
+            }
+            let turn = ConversationTurn(id: "activity-turn", userPrompt: .init(role: .user, text: "Investigate App.swift"), blocks: answerOnly ? [.text(id: "after", .init(role: .assistant, text: "Here are the findings."))] : [
+                .text(id: "before", .init(role: .assistant, text: "I will inspect the file.")),
+                .toolGroup(.init(id: "activity", entries: entries)),
+                .text(id: "after", .init(role: .assistant, text: "Here are the findings."))], footer: nil, isLive: live, startedAt: startedAt,
+                finishedAt: live ? nil : startedAt.addingTimeInterval(48))
+            let preceding = ConversationTurn(id: "older", userPrompt: .init(role: .user, text: "Earlier turn"), blocks: [], footer: nil, isLive: false)
+            return ConversationWebDocumentBuilder.build(snapshot: RuntimeSnapshot(timeline: [], turns: older ? [preceding, turn] : [turn]),
+                                                         conversationID: "activity-fixture", revision: UInt64(revision))
+        }
+        func apply(_ update: ConversationWebUpdate, revision: Int) async throws {
+            let acknowledged = expectation(description: "activity revision \(revision)")
+            probe.expectAcknowledgement(revision: revision, expectation: acknowledged)
+            let payload = try JSONEncoder().encode(update).base64EncodedString()
+            _ = try await webView.evaluateJavaScript("window.AgentKitWorkbench.applyUpdateBase64('\(payload)')")
+            await fulfillment(of: [acknowledged], timeout: 5)
+            try await Task.sleep(for: .milliseconds(40))
+        }
+        let initial = document(1, expanded: false, live: true)
+        try await apply(ConversationWebDocumentDiffer.reset(initial), revision: 1)
+        let collapsed = try await webView.evaluateJavaScript("document.querySelector('.tool-group').open === false && document.querySelectorAll('.tool-summary').length === 0") as? Bool
+        XCTAssertEqual(collapsed, true, "running activity starts compact and does not mount output")
+        let hasLiveClock = try await webView.evaluateJavaScript("document.querySelector('.turn-live-header') !== null") as? Bool
+        XCTAssertEqual(hasLiveClock, true)
+        _ = try await webView.evaluateJavaScript("document.querySelector('.tool-group-summary').click()")
+        try await Task.sleep(for: .milliseconds(20))
+        let completed = document(2, expanded: true, live: false)
+        try await apply(try XCTUnwrap(ConversationWebDocumentDiffer.update(from: initial, to: completed)), revision: 2)
+        let inspection = try await webView.evaluateJavaScript("""
+            (() => {
+              const group = document.querySelector('.tool-group');
+              window.activityElement = group;
+              const process = document.querySelector('.turn-process');
+              const answer = document.querySelector('[data-block-id="after"]');
+              return { open: group.open, title: group.querySelector('summary').textContent,
+                processOpen: process?.open, groupInProcess: !!group.closest('.turn-process'),
+                processLabel: process?.querySelector('.turn-process-label')?.textContent,
+                failed: process?.querySelector('[data-tone="failed"]')?.textContent,
+                answerInProcess: !!answer?.closest('.turn-process'),
+                answerVisible: answer?.getBoundingClientRect().height > 0,
+                order: [...group.querySelector('.tool-group-tools').children].map(e => e.className),
+                blocks: [...document.querySelectorAll('.turn-block')].map(e => e.dataset.blockId) };
+            })()
+            """) as? [String: Any]
+        XCTAssertEqual(inspection?["open"] as? Bool, true, "inner group preference survives completion")
+        XCTAssertEqual(inspection?["processOpen"] as? Bool, false)
+        XCTAssertEqual(inspection?["groupInProcess"] as? Bool, true)
+        XCTAssertEqual(inspection?["processLabel"] as? String, "用时 48秒")
+        XCTAssertEqual(inspection?["failed"] as? String, "1 次失败")
+        XCTAssertEqual(inspection?["answerInProcess"] as? Bool, false)
+        XCTAssertEqual(inspection?["answerVisible"] as? Bool, true)
+        XCTAssertTrue((inspection?["title"] as? String)?.contains("1 失败") == true)
+        XCTAssertEqual(inspection?["blocks"] as? [String], ["before", "activity", "after"])
+        let order = try XCTUnwrap(inspection?["order"] as? [String])
+        XCTAssertEqual(order.count, 3)
+        XCTAssertTrue(order[1].contains("thinking-block"))
+        let foldedSnapshot = try await webView.takeSnapshot(configuration: nil)
+        if let data = foldedSnapshot.tiffRepresentation, let bitmap = NSBitmapImageRep(data: data),
+           let png = bitmap.representation(using: .png, properties: [:]) {
+            try png.write(to: URL(fileURLWithPath: "/tmp/agentkit-turn-folded.png"))
+        }
+        // Opening elapsed time exposes intermediate steps and the nested activity.
+        _ = try await webView.evaluateJavaScript("document.querySelector('.turn-process-summary').click()")
+        try await Task.sleep(for: .milliseconds(20))
+        let processVisible = try await webView.evaluateJavaScript("document.querySelector('.tool-group').getBoundingClientRect().height > 0") as? Bool
+        XCTAssertEqual(processVisible, true)
+        let paged = document(3, expanded: true, live: false, older: true)
+        try await apply(try XCTUnwrap(ConversationWebDocumentDiffer.update(from: completed, to: paged)), revision: 3)
+        let preserved = try await webView.evaluateJavaScript("document.querySelector('.tool-group') === window.activityElement && window.activityElement.open") as? Bool
+        XCTAssertEqual(preserved, true)
+        // A reconnect can send a full reset for the same conversation. Stable
+        // turn/block keys must retain the mounted disclosure and its user state.
+        let reconnected = document(4, expanded: true, live: false, older: true)
+        try await apply(ConversationWebDocumentDiffer.reset(reconnected), revision: 4)
+        let retainedAfterReset = try await webView.evaluateJavaScript("document.querySelector('.tool-group') === window.activityElement && window.activityElement.open") as? Bool
+        XCTAssertEqual(retainedAfterReset, true)
+        let snapshot = try await webView.takeSnapshot(configuration: nil)
+        if let data = snapshot.tiffRepresentation, let bitmap = NSBitmapImageRep(data: data),
+           let png = bitmap.representation(using: .png, properties: [:]) {
+            try png.write(to: URL(fileURLWithPath: "/tmp/agentkit-activity-expanded.png"))
+        }
+        _ = try await webView.evaluateJavaScript("document.querySelector('.tool-group-summary').click()")
+        try await Task.sleep(for: .milliseconds(20))
+        let hidden = try await webView.evaluateJavaScript("document.querySelectorAll('.tool-summary').length === 0") as? Bool
+        XCTAssertEqual(hidden, true)
+        let answerOnly = document(5, expanded: false, live: false, answerOnly: true)
+        try await apply(try XCTUnwrap(ConversationWebDocumentDiffer.update(from: reconnected, to: answerOnly)), revision: 5)
+        let answerOnlyHeader = try await webView.evaluateJavaScript("""
+            (() => ({ label: document.querySelector('.turn-process-label')?.textContent,
+              foldable: !!document.querySelector('details.turn-process'),
+              answerVisible: document.querySelector('[data-block-id="after"]').getBoundingClientRect().height > 0 }))()
+            """) as? [String: Any]
+        XCTAssertEqual(answerOnlyHeader?["label"] as? String, "用时 48秒")
+        XCTAssertEqual(answerOnlyHeader?["foldable"] as? Bool, false)
+        XCTAssertEqual(answerOnlyHeader?["answerVisible"] as? Bool, true)
+    }
     #endif
 }
 

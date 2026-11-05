@@ -52,6 +52,8 @@ export interface ConversationWebBlock {
   status?: string;
   elapsed?: string;
   tools: ConversationWebTool[];
+  activityOrder?: string[];
+  activityThinking?: ConversationWebBlock[];
   childStreamKind?: "task" | "job";
   actionID?: string;
   actionTooltip?: string;

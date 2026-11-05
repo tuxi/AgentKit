@@ -45,7 +45,7 @@ struct TurnProcessHeader: View {
                 Text(label)
                     .font(.footnote)
                     .foregroundStyle(.secondary)
-                    .lineLimit(1)
+                    .fixedSize(horizontal: false, vertical: true)
                 if isFoldable {
                     Image(systemName: "chevron.right")
                         .font(.system(size: 10, weight: .semibold))

@@ -160,10 +160,11 @@ struct ConversationWebDocument: Codable, Equatable, Sendable {
         let actionTooltip: String?
         let inlineActions: [InlineAction]
         let codeCopyActionIDs: [String]
-        /// Present only for system blocks: the raw `SystemNodeKind` (e.g.
-        /// "contextCompact", "preMutation", "verified"). The renderer uses this
-        /// to pick a kind-specific presentation; absent/other kinds render as a
-        /// plain system aside.
+        /// Ordered references into tools and activityThinking. Nil denotes the
+        /// legacy tool-only presentation, preserving compatibility for callers.
+        var activityOrder: [String]? = nil
+        var activityThinking: [Block]? = nil
+        /// Raw SystemNodeKind; absent/other kinds render as a plain system aside.
         var systemKind: String? = nil
         /// Present only for system blocks: kind-specific flags and values from
         /// the graph node payload (e.g. `ineffective`, token counts).
@@ -763,14 +764,24 @@ enum ConversationWebDocumentBuilder {
                 kind: .toolGroup,
                 text: nil,
                 title: groupPresentation.summary,
-                status: aggregateStatus(group.tools),
+                status: group.isThinking && !group.tools.contains(where: { $0.status == .failed })
+                    ? "running" : aggregateStatus(group.tools),
                 elapsed: nil,
                 tools: tools,
                 childStreamKind: nil,
                 actionID: nil,
                 actionTooltip: nil,
                 inlineActions: [],
-                codeCopyActionIDs: []
+                codeCopyActionIDs: [],
+                activityOrder: group.isActivityGroup ? group.entries.map(\.id) : nil,
+                activityThinking: group.entries.compactMap { entry in
+                    guard case .thinking(let id, let payload) = entry else { return nil }
+                    return .init(id: id, kind: .thinking, text: payload.text,
+                                 title: payload.isStreaming ? "Thinking…" : "Thought",
+                                 status: payload.isStreaming ? "streaming" : nil,
+                                 elapsed: nil, tools: [], childStreamKind: nil,
+                                 actionID: nil, actionTooltip: nil, inlineActions: [], codeCopyActionIDs: [])
+                }
             )
 
         case .artifact(let id, let artifact):

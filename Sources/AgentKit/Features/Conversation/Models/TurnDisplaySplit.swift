@@ -49,6 +49,13 @@ extension TurnBlock {
         }
     }
 
+    /// New activity groups fold as a whole; their failures are surfaced in the
+    /// always-visible turn header. Legacy error rows keep their existing placement.
+    var staysOutsideProcess: Bool {
+        if case .toolGroup(let group) = self, group.isActivityGroup { return false }
+        return isFailure
+    }
+
     /// Only spoken answer text counts as "the answer": thinking, tools and
     /// artifacts stay on the process side even when they trail the reply.
     public var isAnswerText: Bool {
@@ -71,19 +78,19 @@ extension ConversationTurn {
             break
         }
 
-        // Tool-only turn (step limit, cancel, pure action): fold the work but
-        // keep every failure outside so the turn never becomes an empty shell.
+        // Tool-only turn: fold the work. Activity failures remain visible in
+        // the header count; standalone legacy errors keep their existing rows.
         guard let answerIndex else {
             return TurnDisplaySplit(
-                process: blocks.filter { !$0.isFailure },
-                answer: blocks.filter(\.isFailure)
+                process: blocks.filter { !$0.staysOutsideProcess },
+                answer: blocks.filter(\.staysOutsideProcess)
             )
         }
 
         let leading = blocks[..<answerIndex]
         return TurnDisplaySplit(
-            process: leading.filter { !$0.isFailure },
-            answer: leading.filter(\.isFailure) + blocks[answerIndex...]
+            process: leading.filter { !$0.staysOutsideProcess },
+            answer: leading.filter(\.staysOutsideProcess) + blocks[answerIndex...]
         )
     }
 
@@ -93,6 +100,11 @@ extension ConversationTurn {
         var parts: [String] = []
         if let duration = formattedDuration { parts.append("用时 \(duration)") }
         if let changes = changes?.summaryLabel { parts.append(changes) }
+        let failed = displaySplit.process.reduce(0) { count, block in
+            guard case .toolGroup(let group) = block else { return count }
+            return count + group.tools.filter { $0.status == .failed }.count
+        }
+        if failed > 0 { parts.append("\(failed) 次失败") }
         return parts.isEmpty ? nil : parts.joined(separator: " · ")
     }
 

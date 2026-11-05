@@ -330,20 +330,46 @@ public enum TurnBlock: Identifiable, Sendable, Equatable {
 
 // MARK: - ToolGroup
 
-/// A run of consecutive same-name tool calls, rendered as one stable, compact
-/// block (eager merge): completed tools fold into a count, the running one shows
-/// a single inline status line, details on tap. See ToolGroupView.
+/// Presentation-only activity between visible narration or standalone entry cards.
+/// Entries retain arrival order across model invocations; tools remains a
+/// compatibility view for action lookup, assets and failure handling.
 public struct ToolGroup: Identifiable, Sendable, Equatable {
-    public let id: String                  // = first tool's callID
-    public let tools: [ToolNodePayload]
+    public enum Entry: Identifiable, Sendable, Equatable {
+        case tool(ToolNodePayload)
+        case thinking(id: String, ThinkingNodePayload)
+
+        public var id: String {
+            switch self {
+            case .tool(let tool): return "tool:\(tool.callID)"
+            case .thinking(let id, _): return "thinking:\(id)"
+            }
+        }
+    }
+
+    public let id: String
+    public let entries: [Entry]
+    public let isActivityGroup: Bool
+    public var isThinking: Bool {
+        entries.contains { if case .thinking(_, let payload) = $0 { return payload.isStreaming }; return false }
+    }
+    public var tools: [ToolNodePayload] {
+        entries.compactMap { if case .tool(let tool) = $0 { return tool }; return nil }
+    }
 
     public init(id: String, tools: [ToolNodePayload]) {
         self.id = id
-        self.tools = tools
+        self.entries = tools.map(Entry.tool)
+        self.isActivityGroup = false
     }
 
-    /// Collapsed label: "grep" / "read_file ×3".
+    public init(id: String, entries: [Entry]) {
+        self.id = id
+        self.entries = entries
+        self.isActivityGroup = true
+    }
+
     public var summary: String {
+        if isActivityGroup { return ToolTranscriptPresenter.groupPresentation(for: self).summary }
         guard let first = tools.first else { return "" }
         return tools.count == 1 ? first.toolName : "\(first.toolName) ×\(tools.count)"
     }
