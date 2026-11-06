@@ -116,6 +116,7 @@ public final class CodeAgentSessionChannel: RuntimeSessionChannel, @unchecked Se
     }
 
     public func cancelTurn() async { socket?.cancelTurn() }
+    public func cancelTurn(turnID: String) async { socket?.cancelTurn(turnID: turnID) }
 
     public func disconnect() async {
         socket?.disconnect()
@@ -129,6 +130,7 @@ public final class CodeAgentSessionChannel: RuntimeSessionChannel, @unchecked Se
     static func flags(from capabilities: [String]) -> AgentCapabilityFlags {
         let values = Set(capabilities)
         var flags = AgentCapabilityFlags.default
+        if values.contains("background_job_notifications_v1") { flags.insert(.backgroundContinuation) }
         if values.contains("client_tool_execution") {
             flags.insert(.clientToolExecution)
         }

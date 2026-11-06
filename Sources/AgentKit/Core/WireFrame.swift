@@ -77,6 +77,7 @@ struct WireFrame: Decodable {
     /// v1.2 §5.1：`turn_failed` 结构化错误 `{code, message}`。`code` 是开放集合（如 `auth_expired`）。
     let error: WireErrorDetail?
     let executor: String?           // v1.1: "server" | "client" (tool_started)
+    let background: BackgroundContinuationStatus?
     let capabilities: [String]?     // v1.1: hello 帧声明的能力列表
     let invocationId: String?       // v1.2: 同一个模型调用产生的所有事件共享此 ID
     let turnStatus: String?         // v1.2 lifecycle status
@@ -120,7 +121,7 @@ struct WireFrame: Decodable {
     let diffstat: WireDiffStat?
 
     enum CodingKeys: String, CodingKey {
-        case type, kind, at, step, id, server, seq
+        case type, kind, at, step, id, server, seq, background
         case text, observation, output, assets, failure, err, error, ratio, todos, chunk
         case ineffective
         case userAssets = "user_assets"
@@ -486,6 +487,13 @@ struct OutgoingSendMessage: Encodable {
 /// 出站：取消当前 turn。
 struct OutgoingCancelTurn: Encodable {
     let type = "cancel_turn"
+    var turnID: String? = nil
+    enum CodingKeys: String, CodingKey { case type; case turnID = "turn_id" }
+}
+
+struct OutgoingClientCapabilities: Encodable {
+    let type = "client_capabilities"
+    let capabilities: [String]
 }
 
 /// 出站：审批回复（v1.2 三态：decision + scope）。

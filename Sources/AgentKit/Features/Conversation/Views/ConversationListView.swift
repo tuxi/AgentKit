@@ -981,6 +981,10 @@ private struct ConversationRow: View {
                 statusLabel("待审批", systemImage: "hand.raised.fill", color: .orange)
             case .waitingForClientTool:
                 statusLabel("等待客户端", systemImage: "desktopcomputer", color: .secondary)
+            case .waitingForBackground:
+                statusLabel("等待后台结果", systemImage: "hourglass", color: .secondary)
+            case .backgroundNeedsAttention:
+                statusLabel("需要处理", systemImage: "exclamationmark.circle", color: .orange)
             case .paused:
                 Label("已暂停", systemImage: "pause.circle.fill")
                     .font(.caption2.weight(.medium))

@@ -42,6 +42,7 @@ public struct RuntimeSnapshot: Sendable {
     public let planState: PlanState
     /// Active model retry state (ephemeral, live-only).
     public let modelRetrying: ModelRetryState?
+    public let backgroundContinuation: BackgroundContinuationStatus?
   
     public init(timeline: [ExecutionNode],
                 turns: [ConversationTurn] = [],
@@ -55,7 +56,8 @@ public struct RuntimeSnapshot: Sendable {
                 modelStartedAt: Date? = nil,
                 turnStartedAt: Date? = nil,
                 planState: PlanState = .none,
-                modelRetrying: ModelRetryState? = nil) {
+                modelRetrying: ModelRetryState? = nil,
+                backgroundContinuation: BackgroundContinuationStatus? = nil) {
         self.timeline = timeline
         self.turns = turns
         self.pendingApproval = pendingApprovals.first
@@ -71,6 +73,7 @@ public struct RuntimeSnapshot: Sendable {
         self.turnStartedAt = turnStartedAt
         self.planState = planState
         self.modelRetrying = modelRetrying
+        self.backgroundContinuation = backgroundContinuation
     }
 
     /// Empty snapshot for initial state.
@@ -242,6 +245,7 @@ public actor RuntimeEngine {
     /// Identity of the in-flight turn. Needed because cancel_turn is allowed
     /// to finish without a corresponding terminal event.
     private var activeTurnID: String?
+    private var backgroundTracker = BackgroundContinuationTracker()
 
     /// Latest plan state-machine state (`plan_state_changed`).
     private var _planState: PlanState = .none
@@ -288,6 +292,11 @@ public actor RuntimeEngine {
     /// Ingest a v1 AgentEvent from the wire.
     /// Persist → Reduce → Project → Notify UI (coalesced).
     public func ingest(_ event: AgentEvent) {
+        let backgroundAccepted = backgroundTracker.reduce(event)
+        if case .backgroundContinuation(let info) = event {
+            guard backgroundAccepted else { return }
+            applyBackgroundLifecycle(info)
+        }
         if capturesLeadingTail {
             if case .turnStarted = event {
                 capturesLeadingTail = false
@@ -363,25 +372,7 @@ public actor RuntimeEngine {
                 )
             }
         }
-        // Track model stats from model_finished + clear thinking timer + clear retry state
-        if case .modelFinished(_, let promptTokens, let completionTokens, let totalTokens,
-                               let billingUnits, let elapsedMs, let invocationID, _, _, _) = event {
-            _modelStartedAt = nil
-            _modelRetryState = nil  // Clear retry state on model finish (success)
-            if invocationID == nil || countedInvocationIDs.insert(invocationID!).inserted {
-                let invocationTokens = totalTokens ?? ((promptTokens ?? 0) + (completionTokens ?? 0))
-                var stats = _modelStats ?? ModelStats()
-                stats.contextTokens = promptTokens ?? stats.contextTokens
-                stats.totalTokens += invocationTokens
-                if let billingUnits {
-                    stats.usageUnits += billingUnits
-                    stats.hasUsageUnits = true
-                }
-                stats.invocationCount += 1
-                stats.elapsedMs += elapsedMs ?? 0
-                _modelStats = stats
-            }
-        }
+        trackModelFinished(event)
         // Turn lifecycle: a turn is "active" from turn_started to turn_finished.
         // Drives the live working indicator (and its turn-level timer).
         if case .turnStarted(let turnID, _, _, _) = event {
@@ -475,6 +466,16 @@ public actor RuntimeEngine {
         pendingTodoToolUpdates.removeAll()
         canonicalTodoRevision = 0
         for event in events {
+            let accepted = backgroundTracker.reduce(event)
+            if case .backgroundContinuation(let info) = event {
+                guard accepted else { continue }
+                applyBackgroundLifecycle(info)
+            }
+            if case .turnStarted = event {
+                _modelStats = nil
+                countedInvocationIDs.removeAll()
+            }
+            trackModelFinished(event)
             let todoFallback = trackTodoState(event)
             let _ = reducer.reduce(event, into: &graph)
             if let todoFallback {
@@ -531,6 +532,7 @@ public actor RuntimeEngine {
             }
             if case .turnResumed = event {
                 _modelStats = nil
+                countedInvocationIDs.removeAll()
                 _modelStartedAt = nil
                 _modelRetryState = nil
                 _turnStartedAt = Date()
@@ -811,6 +813,42 @@ public actor RuntimeEngine {
         yieldSnapshot()
     }
 
+    // Live and replayed invocations use the same accounting and deduplication.
+    private func trackModelFinished(_ event: AgentEvent) {
+        // Track model stats from model_finished + clear thinking timer + clear retry state
+        if case .modelFinished(_, let promptTokens, let completionTokens, let totalTokens,
+                               let billingUnits, let elapsedMs, let invocationID, _, _, _) = event {
+            _modelStartedAt = nil
+            _modelRetryState = nil  // Clear retry state on model finish (success)
+            if invocationID == nil || countedInvocationIDs.insert(invocationID!).inserted {
+                let invocationTokens = totalTokens ?? ((promptTokens ?? 0) + (completionTokens ?? 0))
+                var stats = _modelStats ?? ModelStats()
+                stats.contextTokens = promptTokens ?? stats.contextTokens
+                stats.totalTokens += invocationTokens
+                if let billingUnits {
+                    stats.usageUnits += billingUnits
+                    stats.hasUsageUnits = true
+                }
+                stats.invocationCount += 1
+                stats.elapsedMs += elapsedMs ?? 0
+                _modelStats = stats
+            }
+        }
+    }
+
+    private func applyBackgroundLifecycle(_ info: BackgroundContinuationStatus) {
+        _modelStartedAt = nil
+        _modelRetryState = nil
+        if info.isTerminal {
+            activeTurnID = nil
+            _turnStartedAt = nil
+        } else {
+            activeTurnID = info.turnID
+            // Resume does not reset model usage or the logical turn's wall clock.
+            _turnStartedAt = info.state == "resuming" ? Date() : nil
+        }
+    }
+
     // MARK: - Private
 
     private func setContinuation(_ c: AsyncStream<RuntimeSnapshot>.Continuation) {
@@ -854,7 +892,8 @@ public actor RuntimeEngine {
             modelStartedAt: _modelStartedAt,
             turnStartedAt: _turnStartedAt,
             planState: _planState,
-            modelRetrying: _modelRetryState
+            modelRetrying: _modelRetryState,
+            backgroundContinuation: backgroundTracker.current
         )
     }
 

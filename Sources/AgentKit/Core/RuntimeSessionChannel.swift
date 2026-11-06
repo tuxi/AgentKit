@@ -25,11 +25,14 @@ public protocol RuntimeSessionChannel: Sendable {
     func sendPlanApproval(id: String, approved: Bool) async
     func sendAskUserResponse(id: String, selected: [String], notes: String?) async
     func cancelTurn() async
+    func cancelTurn(turnID: String) async
     func disconnect() async
     func capabilities() async -> AgentCapabilityFlags
 }
 
 public extension RuntimeSessionChannel {
+    /// A targeted stop must never become an untargeted stop on an old channel.
+    func cancelTurn(turnID: String) async {}
     /// Source-compatible fallback for third-party channels. CodeAgentSessionChannel
     /// overrides this with durable pending submission semantics.
     func submit(input: AgentInput) async -> AgentInputSubmissionTicket {

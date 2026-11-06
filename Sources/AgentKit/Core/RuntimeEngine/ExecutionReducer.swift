@@ -53,7 +53,7 @@ public struct ExecutionReducer: Sendable {
                 graph: &graph
             )
 
-        case .turnPaused, .turnResumed:
+        case .turnPaused, .turnResumed, .backgroundContinuation:
             return []
 
         case .turnFailed(let turnID, let text, let err, let errorCode, let changes):

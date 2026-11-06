@@ -14,6 +14,8 @@ public enum ConversationActivityState: String, Sendable, Equatable {
     case running
     case waitingForApproval
     case waitingForClientTool
+    case waitingForBackground
+    case backgroundNeedsAttention
     case paused
     case succeeded
     case failed
@@ -201,6 +203,8 @@ public final class ConversationSupervisor {
                 }
                 return .running
             case "cancelling": return .connecting
+            case "waiting_background": return .waitingForBackground
+            case "background_needs_attention": return .backgroundNeedsAttention
             case "paused": return .paused
             case "done", "failed", "cancelled":
                 guard selectedSessionID != sessionID else { return .idle }
@@ -226,6 +230,8 @@ public final class ConversationSupervisor {
             case "waiting_client_tool": return .waitingForClientTool
             case "queued", "accepted": return .queued
             case "running", "resuming": return .running
+            case "waiting_background": return .waitingForBackground
+            case "background_needs_attention": return .backgroundNeedsAttention
             case "paused": return .paused
             default: break
             }
@@ -248,6 +254,8 @@ public final class ConversationSupervisor {
         }
 
         switch conversation.turnStatus {
+        case "waiting_background": return .waitingForBackground
+        case "background_needs_attention": return .backgroundNeedsAttention
         case "running", "resuming": return .running
         case "paused": return .paused
         case "failed": return .failed
@@ -309,7 +317,7 @@ public final class ConversationSupervisor {
 
     private func shouldRetainLiveChannel(sessionID: String) -> Bool {
         guard let activity = runtimeActivities[sessionID] else { return false }
-        return ["accepted", "queued", "running", "resuming", "waiting_approval", "waiting_client_tool"].contains(activity.state)
+        return ["accepted", "queued", "running", "resuming", "waiting_background", "background_needs_attention", "waiting_approval", "waiting_client_tool"].contains(activity.state)
             || (activity.pendingApprovalCount ?? 0) > 0 || (activity.pendingClientToolCount ?? 0) > 0
     }
 
@@ -433,7 +441,7 @@ public final class ConversationSupervisor {
         activityMonitoringTask = Task { [weak self] in
             while !Task.isCancelled {
                 guard let hasLiveWork = self?.runtimeActivities.values.contains(where: {
-                    ["accepted", "queued", "running", "resuming", "waiting_approval", "waiting_client_tool"].contains($0.state)
+                    ["accepted", "queued", "running", "resuming", "waiting_background", "background_needs_attention", "waiting_approval", "waiting_client_tool"].contains($0.state)
                         || ($0.pendingApprovalCount ?? 0) > 0 || ($0.pendingClientToolCount ?? 0) > 0
                 }) else { return }
                 try? await Task.sleep(for: hasLiveWork ? .seconds(3) : .seconds(20))
@@ -557,7 +565,7 @@ public final class ConversationSupervisor {
 
     private func isActiveState(_ state: String?) -> Bool {
         guard let state else { return false }
-        return ["accepted", "queued", "running", "resuming", "waiting_approval", "waiting_client_tool", "paused"].contains(state)
+        return ["accepted", "queued", "running", "resuming", "waiting_background", "background_needs_attention", "waiting_approval", "waiting_client_tool", "paused"].contains(state)
     }
 
     public var pendingApprovals: [PendingConversationApproval] {

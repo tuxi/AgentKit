@@ -695,7 +695,7 @@ public final class WorkspaceStore {
         case .idle, .succeeded, .failed, .cancelled:
             return true
         case .connecting, .queued, .running, .waitingForApproval,
-             .waitingForClientTool, .paused:
+             .waitingForClientTool, .waitingForBackground, .backgroundNeedsAttention, .paused:
             return false
         }
     }

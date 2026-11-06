@@ -373,6 +373,12 @@ public struct ConversationDetailView: View {
             //            WorkspaceChipBar()
             //            #endif
             
+            if let status = vm.snapshot.backgroundContinuation, status.isWaiting {
+                BackgroundContinuationBanner(status: status, isCancelling: vm.isCancelling) {
+                    Task { await vm.cancelTurn() }
+                }
+            }
+
             BackgroundJobsEntry(model: vm.backgroundJobs) { job in
                 store.showInspector(.childStream(.init(childID: job.jobID, kind: .job,
                     title: BackgroundJobPresentation.summary(job.command, text: .init()))))
@@ -383,12 +389,12 @@ public struct ConversationDetailView: View {
                 modelSettings: modelSettings,
                 viewModel: vm,
                 placeholder: placeholder(vm: vm, isPaused: isPaused, isArchived: isArchived),
-                isEnabled: !isArchived && !vm.isTurnActive //  && !isPaused
+                isEnabled: !isArchived && (!vm.isTurnActive || vm.canSendDuringBackgroundWait) //  && !isPaused
                 && vm.snapshot.pendingAskUser == nil
                 && vm.snapshot.pendingApproval == nil
                 && vm.snapshot.pendingPlanApproval == nil,
                 isDraft: false,
-                isTurnRunning: vm.isTurnActive,
+                isTurnRunning: vm.isTurnActive && !vm.canSendDuringBackgroundWait,
                 onStop: { Task { await vm.cancelTurn() } },
                 onSend: { text, model, assets in
                     let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)

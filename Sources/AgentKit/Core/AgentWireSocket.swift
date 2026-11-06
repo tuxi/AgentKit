@@ -320,6 +320,11 @@ public final class AgentWireSocket: @unchecked Sendable {
         send(outgoing: OutgoingCancelTurn())
     }
 
+    public func cancelTurn(turnID: String) {
+        guard !turnID.isEmpty, serverCapabilities.contains("background_job_notifications_v1") else { return }
+        send(outgoing: OutgoingCancelTurn(turnID: turnID))
+    }
+
     /// 向服务端注册客户端工具。在握手完成后调用。
     public func sendRegisterTools(_ tools: [ClientToolInfo]) {
         let outgoing = OutgoingRegisterTools(
@@ -378,6 +383,10 @@ public final class AgentWireSocket: @unchecked Sendable {
             // §5.8-8：每次握手（首连 + 自动重连）都先补缺口再放行直播帧。
             // 首连覆盖「历史 GET 与 WS attach 之间」的窗口；重连覆盖断线期间的缺口。
             startBackfill()
+            if case .conversation = streamKind,
+               serverCapabilities.contains("background_job_notifications_v1") {
+                send(outgoing: OutgoingClientCapabilities(capabilities: ["background_job_notifications_v1"]))
+            }
             let supportsImageInput = serverCapabilities.contains("image_input")
             Task { [weak self] in
                 guard let self else { return }
@@ -392,6 +401,9 @@ public final class AgentWireSocket: @unchecked Sendable {
                 }
             }
             // hello 帧是内部握手，不暴露给 UI
+
+        case "background_continuation_ready":
+            handleEventFrame(frame: frame)
 
         case "approval_request":
             guard let request = ApprovalRequest.from(wire: frame) else { return }

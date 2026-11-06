@@ -76,6 +76,11 @@ public final class ConversationViewModel {
 
     /// Current turn ID (from turn_started) — used by cancelTurn.
     private var currentTurnID: String?
+    private var backgroundTracker = BackgroundContinuationTracker()
+    public var canSendDuringBackgroundWait: Bool {
+        backgroundTracker.current?.isWaiting == true && !isCancelling
+            && !isAwaitingTurnAcceptance && !isLocallyQueued
+    }
 
     // ── Session identity ──
 
@@ -98,7 +103,7 @@ public final class ConversationViewModel {
 
     public var isTurnActive: Bool {
         isLocallyQueued || isAwaitingTurnAcceptance
-            || ["accepted", "queued", "running", "resuming", "cancelling"].contains(lifecycleStatus)
+            || ["accepted", "queued", "running", "resuming", "cancelling", "waiting_background", "background_needs_attention"].contains(lifecycleStatus)
     }
 
     var requiresControlChannelRetention: Bool {
@@ -170,6 +175,11 @@ public final class ConversationViewModel {
             lifecycleStatus = activity.state
             queueReason = nil
             queuePosition = nil
+        case "waiting_background", "background_needs_attention":
+            lifecycleStatus = activity.state
+            currentTurnID = activity.turnID ?? currentTurnID
+            queueReason = nil; queuePosition = nil
+            releaseTurnPermit()
         case "paused":
             lifecycleStatus = "paused"
             queueReason = nil
@@ -375,6 +385,7 @@ public final class ConversationViewModel {
         oldestHistorySeq = nil
         loadedWorkflowEvents = []
         currentTurnID = nil
+        backgroundTracker = BackgroundContinuationTracker()
         detail = nil
         // 仅在尚无任何生命周期状态时，用 ConversationRef.turnStatus 兜底。
         // refreshActivitySnapshot() 已在 connect() 之前通过 applyRuntimeActivity
@@ -670,7 +681,7 @@ public final class ConversationViewModel {
     ///
     /// turn 仍在客户端排队时直接出队；已提交到 Runtime 的 turn 发送 cancel_turn
     /// 控制帧后进入 "cancelling" 状态等待 Runtime 确认，不再乐观清空 lifecycle。
-    /// 如果 Runtime 在 15 秒内未回复 turn_cancelled 事件，超时兜底清理状态。
+    /// 支持目标取消的 Runtime 未确认时保留待处理状态，不伪造已停止。
     public func cancelTurn() async {
         if let queuedTicket {
             turnDispatchTask?.cancel()
@@ -682,14 +693,21 @@ public final class ConversationViewModel {
         }
         cancelTimeoutTask?.cancel()
         let turnIDBeingCancelled = currentTurnID
-        await engine?.cancelActiveTurn()
-        await channel?.cancelTurn()
+        let targeted = await channel?.capabilities().contains(.backgroundContinuation) == true
+        guard currentTurnID == turnIDBeingCancelled else { return }
+        if targeted {
+            guard let turnIDBeingCancelled, !turnIDBeingCancelled.isEmpty else { return }
+            await channel?.cancelTurn(turnID: turnIDBeingCancelled)
+        } else {
+            await engine?.cancelActiveTurn()
+            await channel?.cancelTurn()
+        }
         Task { await backgroundJobs.refresh() }
 
         // await 是挂起点：streamTask 可能已处理了 turn_finished/turn_failed/
         // turn_cancelled，把 lifecycle 置为终态。只有仍在可取消状态时才继续。
-        let cancellableStates: Set<String?> = ["accepted", "queued", "running", "resuming", nil]
-        guard cancellableStates.contains(lifecycleStatus) else { return }
+        let cancellableStates: Set<String?> = ["accepted", "queued", "running", "resuming", "waiting_background", "background_needs_attention", nil]
+        guard currentTurnID == turnIDBeingCancelled, cancellableStates.contains(lifecycleStatus) else { return }
 
         lifecycleStatus = "cancelling"
         pausedAt = nil
@@ -699,6 +717,13 @@ public final class ConversationViewModel {
             guard let self,
                   self.lifecycleStatus == "cancelling",
                   self.currentTurnID == turnIDBeingCancelled else { return }
+            if targeted {
+                // Absence of an acknowledgement is not proof of cancellation.
+                self.lifecycleStatus = "background_needs_attention"
+                self.releaseTurnPermit()
+                self.onActivityInvalidated?()
+                return
+            }
             // 超时兜底：Runtime 未及时回复，强制视为已取消
             self.lifecycleStatus = "cancelled"
             self.currentTurnID = nil
@@ -780,6 +805,7 @@ public final class ConversationViewModel {
             // v2: import into engine (replays through reducer → projects timeline)
             await engine.importHistory(batch.events, wallClock: batch.turnWallClock)
             for event in batch.events {
+                backgroundTracker.reduce(event)
                 modelIdentity.apply(event)
                 if case .turnAccepted(let turnID, let requestID, _) = event,
                    let requestID {
@@ -789,6 +815,8 @@ public final class ConversationViewModel {
                 forwardWorkflowEvent(event)
             }
         }
+        if let info = backgroundTracker.current { updateLifecycle(from: .backgroundContinuation(info)) }
+        else { currentTurnID = backgroundTracker.activeTurnID ?? currentTurnID }
         return sinceCursor
     }
 
@@ -969,9 +997,24 @@ public final class ConversationViewModel {
     }
 
     private func updateLifecycle(from event: AgentEvent) {
+        let accepted = backgroundTracker.reduce(event)
+        if case .backgroundContinuation = event, !accepted { return }
+        if case .turnAccepted = event, !accepted { return }
         var shouldRefreshActivity = false
         switch event {
+        case .backgroundContinuation(let info):
+            currentTurnID = info.isTerminal ? nil : info.turnID
+            lifecycleStatus = info.state == "resuming" ? "resuming"
+                : info.state == "needs_attention" ? "background_needs_attention"
+                : info.state == "finished" ? "done"
+                : info.state == "stopped" ? "cancelled" : "waiting_background"
+            isAwaitingTurnAcceptance = false
+            queueReason = nil; queuePosition = nil
+            if info.isWaiting || info.isTerminal { releaseTurnPermit() }
+            else if let sessionID = conversation?.id { Task { await turnCoordinator?.markActive(sessionID: sessionID) } }
+            shouldRefreshActivity = true
         case .turnAccepted(let turnID, let requestID, _):
+            if !turnID.isEmpty { currentTurnID = turnID }
             isAwaitingTurnAcceptance = false
             lifecycleStatus = "accepted"
             queueReason = nil
@@ -1018,7 +1061,7 @@ public final class ConversationViewModel {
             shouldRefreshActivity = true
         case .turnPaused:
             isAwaitingTurnAcceptance = false
-            lifecycleStatus = "paused"
+            lifecycleStatus = backgroundTracker.current == nil ? "paused" : "background_needs_attention"
             queueReason = nil
             queuePosition = nil
             pausedAt = Date()

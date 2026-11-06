@@ -77,6 +77,7 @@ public struct AgentCapabilityFlags: OptionSet, Sendable {
     public static let conversationListPagination = AgentCapabilityFlags(rawValue: 1 << 22)
 
     public static let backgroundJobControl = AgentCapabilityFlags(rawValue: 1 << 23)
+    public static let backgroundContinuation = AgentCapabilityFlags(rawValue: 1 << 24)
 
     // MARK: - Presets
 
