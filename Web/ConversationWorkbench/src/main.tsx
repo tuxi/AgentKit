@@ -1488,6 +1488,24 @@ function RawToolDetails({ tool }: { tool: ConversationWebTool }): React.JSX.Elem
   );
 }
 
+// Draw known tool glyphs at a consistent optical size instead of relying on
+// platform font metrics (the search character is especially small on macOS).
+function ToolActionIcon({ glyph }: { glyph: string }): React.JSX.Element {
+  const paths: Record<string, React.ReactNode> = {
+    "⌕": <><circle cx="10.5" cy="10.5" r="6.5" /><path d="m15.5 15.5 5 5" /></>,
+    "□": <><path d="M14 3H5v18h14V8zM14 3v5h5" /><path d="M8 12h8M8 16h6" /></>,
+    "≡": <><path d="M3 6h7l2 2h9v12H3z" /></>,
+    "+": <><path d="M12 4v16M4 12h16" /></>,
+    "±": <><path d="m4 16-1 5 5-1L20 8l-4-4zM13 7l4 4" /></>,
+    "$": <><rect x="3" y="4" width="18" height="16" rx="2" /><path d="m7 9 3 3-3 3M13 15h4" /></>,
+    "◇": <><path d="m12 3 9 9-9 9-9-9z" /></>,
+  };
+  return <span className="tool-action-icon" aria-hidden="true">
+    <span className="visually-hidden">{glyph}</span>
+    {paths[glyph] ? <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.75" strokeLinecap="round" strokeLinejoin="round">{paths[glyph]}</svg> : glyph}
+  </span>;
+}
+
 function Tool({ tool }: { tool: ConversationWebTool }): React.JSX.Element {
   const statusText = visibleExecutionStatus(tool.status, tool.statusText);
   // Auto-expand while the tool runs; collapse when it finishes.
@@ -1509,7 +1527,7 @@ function Tool({ tool }: { tool: ConversationWebTool }): React.JSX.Element {
         data-focus-id={`tool:${tool.id}`}
         onClick={onSummaryClick}
       >
-        {tool.icon ? <span className="tool-action-icon" aria-hidden="true">{tool.icon}</span> : null}
+        {tool.icon ? <ToolActionIcon glyph={tool.icon} /> : null}
         <span className="tool-title">{tool.name}</span>
         {tool.changeSummary ? <ChangeSummary value={tool.changeSummary} /> : null}
         {tool.detail ? <span className="tool-detail-summary">{tool.detail}</span> : null}

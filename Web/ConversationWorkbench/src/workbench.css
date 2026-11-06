@@ -482,10 +482,19 @@ summary:active {
 }
 
 .tool-action-icon {
-  flex: 0 0 auto;
-  width: 14px;
-  text-align: center;
+  display: inline-flex;
+  flex: 0 0 1.15em;
+  align-items: center;
+  justify-content: center;
+  width: 1.15em;
+  height: 1.15em;
   line-height: 1;
+}
+
+.tool-action-icon > svg {
+  display: block;
+  width: 100%;
+  height: 100%;
 }
 
 .tool-detail-summary,
