@@ -250,6 +250,14 @@ public final class CodeAgentTransport: AgentTransport, CodingTaskReading, Coding
         try await http.runtimeCapabilities()
     }
 
+    public func backgroundJobRuntimeIdentity() async throws -> String { try await http.backgroundJobRuntimeIdentity() }
+    public func listBackgroundJobs(conversationID: String, runtimeIdentity: String) async throws -> [BackgroundJobSnapshot] {
+        try await http.listBackgroundJobs(conversationID: conversationID, runtimeIdentity: runtimeIdentity)
+    }
+    public func cancelBackgroundJob(conversationID: String, owner: BackgroundJobOwner, runtimeIdentity: String) async throws -> BackgroundJobSnapshot {
+        try await http.cancelBackgroundJob(conversationID: conversationID, owner: owner, runtimeIdentity: runtimeIdentity)
+    }
+
     public func listWorkspaceGitBranches(workspacePath: String) async throws -> WorkspaceGitBranchResult {
         try await http.listWorkspaceGitBranches(workspacePath: workspacePath)
     }
@@ -822,6 +830,14 @@ public final class DefaultAgentClient: RuntimeClient, CodingTaskReading, CodingT
 
     public func runtimeCapabilities() async throws -> RuntimeCapabilitySnapshot {
         try await transport.runtimeCapabilities()
+    }
+
+    public func backgroundJobRuntimeIdentity() async throws -> String { try await transport.backgroundJobRuntimeIdentity() }
+    public func listBackgroundJobs(conversationID: String, runtimeIdentity: String) async throws -> [BackgroundJobSnapshot] {
+        try await transport.listBackgroundJobs(conversationID: conversationID, runtimeIdentity: runtimeIdentity)
+    }
+    public func cancelBackgroundJob(conversationID: String, owner: BackgroundJobOwner, runtimeIdentity: String) async throws -> BackgroundJobSnapshot {
+        try await transport.cancelBackgroundJob(conversationID: conversationID, owner: owner, runtimeIdentity: runtimeIdentity)
     }
 
     public func listWorkspaceGitBranches(workspacePath: String) async throws -> WorkspaceGitBranchResult {

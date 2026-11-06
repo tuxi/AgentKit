@@ -30,6 +30,20 @@ final class ConversationWebDocumentTests: XCTestCase {
         XCTAssertEqual(update.patch?.forcePinToBottom, false)
     }
 
+    func testActiveWaitHasNoEmptyRunningResultCard() throws {
+        let wait = ToolNodePayload(callID: "wait", toolName: "job_wait",
+            args: .object(["job_id": .string("j1")]), status: .running)
+        let group = ToolGroup(id: "activity", entries: [.tool(wait)], isCollecting: true)
+        let turn = ConversationTurn(id: "t", userPrompt: nil, blocks: [.toolGroup(group)], footer: nil, isLive: true)
+        let doc = ConversationWebDocumentBuilder.build(snapshot: .init(timeline: [], turns: [turn]), conversationID: "wait-ui")
+        let tool = try XCTUnwrap(doc.turns.first?.blocks.first?.tools.first)
+        XCTAssertNil(tool.command)
+        XCTAssertNil(tool.output)
+        XCTAssertNil(tool.outcomeText, "waiting belongs on the tool row, not an empty result card")
+        XCTAssertEqual(tool.statusText, ToolTranscriptText().text("waiting"))
+        XCTAssertEqual(doc.turns.first?.blocks.first?.status, "running", "presentation cannot change execution state")
+    }
+
     func testResultCardUsesExecutionFactsAndKeepsRawArgumentsAvailable() throws {
         let secret = "curl --token private-fixture-value example.com"
         let tools: [ToolNodePayload] = [
@@ -2307,6 +2321,78 @@ final class ConversationWebDocumentTests: XCTestCase {
         _ = webView
     }
 
+    func testStreamingContentAppearsWithoutAnimationOrPlaybackTimerCallbacks() async throws {
+        let ready = expectation(description: "background streaming ready")
+        let probe = ConversationWebBridgeProbe(ready: ready)
+        let configuration = WKWebViewConfiguration()
+        configuration.websiteDataStore = .nonPersistent()
+        configuration.setURLSchemeHandler(ConversationWebSchemeHandler(), forURLScheme: ConversationWebSchemeHandler.scheme)
+        configuration.userContentController.add(probe, name: "agentkitWorkbench")
+        defer { configuration.userContentController.removeScriptMessageHandler(forName: "agentkitWorkbench") }
+        let webView = WKWebView(frame: .init(x: 0, y: 0, width: 760, height: 500), configuration: configuration)
+        webView.load(URLRequest(url: ConversationWebSchemeHandler.indexURL))
+        await fulfillment(of: [ready], timeout: 5)
+        // Model the playback callbacks being delayed in a background window.
+        // Native updates/React commits/acknowledgements remain operational.
+        _ = try await webView.evaluateJavaScript(
+            """
+            window.requestAnimationFrame = () => 0;
+            const originalTimeout = window.setTimeout.bind(window);
+            window.setTimeout = (callback, delay, ...args) => delay === 50
+              ? 0 : originalTimeout(callback, delay, ...args);
+            void 0;
+            """
+        )
+        func document(_ revision: UInt64, thought: String, answer: String) -> ConversationWebDocument {
+            let turn = ConversationTurn(id: "background-turn", userPrompt: .init(role: .user, text: "Inspect"),
+                blocks: [.thinking(id: "background-thought", .init(text: thought, isStreaming: true)),
+                         .text(id: "background-answer", .init(role: .assistant, text: answer, isStreaming: true))],
+                footer: nil, isLive: true)
+            return ConversationWebDocumentBuilder.build(snapshot: .init(timeline: [], turns: [turn]),
+                conversationID: "background-rendering", revision: revision)
+        }
+        func apply(_ update: ConversationWebUpdate, revision: Int) async throws {
+            let acknowledged = expectation(description: "background revision \(revision)")
+            probe.expectAcknowledgement(revision: revision, expectation: acknowledged)
+            let payload = try JSONEncoder().encode(update).base64EncodedString()
+            _ = try await webView.evaluateJavaScript("window.AgentKitWorkbench.applyUpdateBase64('\(payload)')")
+            await fulfillment(of: [acknowledged], timeout: 5)
+        }
+        func displayed(_ selector: String) async throws -> String {
+            try await webView.evaluateJavaScript("document.querySelector('\(selector)')?.textContent ?? ''") as? String ?? ""
+        }
+        let first = document(1, thought: "Checking build symbols", answer: "Inspecting the binary")
+        try await apply(ConversationWebDocumentDiffer.reset(first), revision: 1)
+        let initialThought = try await displayed(".thinking-scroll-content")
+        let initialAnswer = try await displayed("[data-selection-id=\"block:background-answer\"]")
+        XCTAssertFalse(initialThought.isEmpty, "a received thinking block must not wait for an animation callback")
+        XCTAssertFalse(initialAnswer.isEmpty, "streaming answers need the same guarantee")
+        let second = document(2, thought: "Checking build symbols and file offsets", answer: "Inspecting the binary headers")
+        try await apply(try XCTUnwrap(ConversationWebDocumentDiffer.update(from: first, to: second)), revision: 2)
+        let updatedThought = try await displayed(".thinking-scroll-content")
+        let updatedAnswer = try await displayed("[data-selection-id=\"block:background-answer\"]")
+        XCTAssertGreaterThan(updatedThought.count, initialThought.count, "new snapshots advance without activating the window")
+        XCTAssertGreaterThan(updatedAnswer.count, initialAnswer.count)
+        XCTAssertTrue("Checking build symbols and file offsets".hasPrefix(updatedThought))
+        // Authoritative rewrites must not leave stale text while clocks are stalled.
+        let rewritten = document(3, thought: "Different analysis", answer: "Different answer")
+        try await apply(try XCTUnwrap(ConversationWebDocumentDiffer.update(from: second, to: rewritten)), revision: 3)
+        let replacedThought = try await displayed(".thinking-scroll-content")
+        XCTAssertFalse(replacedThought.isEmpty)
+        XCTAssertTrue("Different analysis".hasPrefix(replacedThought))
+        // Hidden conversation tabs still pause. Resuming must also advance
+        // synchronously, since the window's playback clocks may remain stalled.
+        _ = try await webView.evaluateJavaScript("window.AgentKitWorkbench.setSuspended(true)")
+        let hidden = document(4, thought: "Different analysis with more evidence", answer: "Different answer with evidence")
+        try await apply(try XCTUnwrap(ConversationWebDocumentDiffer.update(from: rewritten, to: hidden)), revision: 4)
+        let suspendedThought = try await displayed(".thinking-scroll-content")
+        XCTAssertEqual(suspendedThought, replacedThought)
+        _ = try await webView.evaluateJavaScript("window.AgentKitWorkbench.setSuspended(false)")
+        try await Task.sleep(for: .milliseconds(20))
+        let resumedThought = try await displayed(".thinking-scroll-content")
+        XCTAssertGreaterThan(resumedThought.count, suspendedThought.count)
+    }
+
     func testStreamingMarkdownPlaysProgressivelyAndFlushesFinalText() async throws {
         let ready = expectation(description: "Typewriter renderer handshake")
         let streamingAcknowledgement = expectation(description: "Streaming target accepted")
@@ -2635,14 +2721,14 @@ final class ConversationWebDocumentTests: XCTestCase {
         let webView = WKWebView(frame: .init(x: 0, y: 0, width: 700, height: 600), configuration: configuration)
         webView.load(URLRequest(url: ConversationWebSchemeHandler.indexURL))
         await fulfillment(of: [ready], timeout: 5)
-        func document(_ revision: UInt64, count: Int) -> ConversationWebDocument {
+        func document(_ revision: UInt64, count: Int, waiting: Bool = false) -> ConversationWebDocument {
             let command = "python3 - <<'PY'\nprint('build')\nPY"
             let job = ChildStreamNodePayload(kind: .job, childID: "j1", title: command, status: .running)
             let run = ToolNodePayload(callID: "run", toolName: "run_command", args: .object(["command": .string("pwd")]), status: .completed)
             let waits = (1...count).map { index -> ToolGroup.Entry in
                 var wait = ToolNodePayload(callID: "wait-\(index)", toolName: "job_wait",
-                    args: .object(["job_id": .string("j1")]), status: .completed,
-                    output: "still running", elapsedMs: 1_000)
+                    args: .object(["job_id": .string("j1")]), status: waiting ? .running : .completed,
+                    output: waiting ? "" : "still running", elapsedMs: 1_000)
                 wait.backgroundJobCommand = command
                 return .tool(wait)
             }
@@ -2691,6 +2777,18 @@ final class ConversationWebDocumentTests: XCTestCase {
         XCTAssertEqual(inspection?["jobStatus"] as? String, "running")
         XCTAssertEqual(inspection?["jobTitle"] as? String, ToolTranscriptText().text("job.run", ToolTranscriptText().text("job.python")))
         XCTAssertEqual(inspection?["waitTime"] as? String, ToolTranscriptText().text("job.wait.elapsed", "1.0s"))
+        let active = document(3, count: 1, waiting: true)
+        try await apply(try XCTUnwrap(ConversationWebDocumentDiffer.update(from: updated, to: active)), revision: 3)
+        let cleanWait = try await webView.evaluateJavaScript("""
+            (() => {
+              const group = document.querySelector('.tool-group');
+              const wait = group?.querySelector('.tool[data-status="running"]');
+              return !!wait && !wait.querySelector('.tool-result-card')
+                && !group.querySelector(':scope > summary .tool-status')
+                && !!wait.querySelector('.tool-status');
+            })()
+            """) as? Bool
+        XCTAssertEqual(cleanWait, true, "keep one wait-row status without a redundant group badge or empty card")
         let snapshot = try await webView.takeSnapshot(configuration: nil)
         if let data = snapshot.tiffRepresentation, let bitmap = NSBitmapImageRep(data: data),
            let png = bitmap.representation(using: .png, properties: [:]) {

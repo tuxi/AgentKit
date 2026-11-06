@@ -76,6 +76,8 @@ public struct AgentCapabilityFlags: OptionSet, Sendable {
     public static let historyPagination = AgentCapabilityFlags(rawValue: 1 << 21)
     public static let conversationListPagination = AgentCapabilityFlags(rawValue: 1 << 22)
 
+    public static let backgroundJobControl = AgentCapabilityFlags(rawValue: 1 << 23)
+
     // MARK: - Presets
 
     /// CodeAgent v1 默认能力集。

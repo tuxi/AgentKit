@@ -48,6 +48,17 @@ public struct RuntimeEnvironment: Sendable {
         self.originProvider = originProvider
     }
 
+    /// Control operations reject unsupported provider paths before normalizing.
+    /// Public Runtime origins have always been root-only; silently dropping a
+    /// dynamic provider's base path would collapse two distinct control scopes.
+    var jobControlOrigin: URL? {
+        get async throws {
+            guard let raw = await originProvider() else { return nil }
+            try RuntimeServerEndpointClassifier.validateOrigin(raw)
+            return Self.normalizedOrigin(raw)
+        }
+    }
+
     // MARK: - Properties (lazy via provider)
 
     public var host: String {

@@ -20,6 +20,25 @@ enum BackgroundJobPresentation {
         return id
     }
 
+    // This describes one returned wait, never the current state of its Job.
+    static func waitReturnText(for tool: ToolNodePayload, text: ToolTranscriptText) -> String? {
+        guard operation(tool.toolName) == "wait", tool.status != .running,
+              tool.status != .failed, let jobID = jobID(for: tool),
+              tool.output.utf8.count <= 1_000_000 else { return nil }
+        var output = tool.output.trimmingCharacters(in: .whitespacesAndNewlines)
+        if output.hasPrefix("[observation]"), let separator = output.range(of: "\n---\n") {
+            output = String(output[separator.upperBound...])
+        }
+        guard let data = output.data(using: .utf8),
+              let value = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+              value["job_id"] as? String == jobID,
+              let status = value["status"] as? String,
+              ["running", "exited", "failed", "canceled"].contains(status) else { return nil }
+        // An inconsistent successful status cannot override a nonzero result.
+        if status == "exited", let exit = value["exit_code"] as? NSNumber, exit.intValue != 0 { return nil }
+        return text.text("job.wait.return." + status)
+    }
+
     static func waitRuns(in entries: [ToolGroup.Entry]) -> [[ToolGroup.Entry]] {
         var runs: [[ToolGroup.Entry]] = []
         var previousJobID: String?

@@ -368,6 +368,7 @@ public struct ChildStreamPayload: Sendable {
     public var exitCode: Int?
     /// job 专用：被主动取消（`text=="canceled"`），样式上区别于失败。
     public var canceled: Bool
+    public var isUnavailable: Bool = false
     /// job 专用：任务总耗时（`job_finished.elapsed_ms`）。
     public var elapsedMs: Int?
     /// 输出累积（`job_output` 分块；只在子流自己的 graph 里增长）。

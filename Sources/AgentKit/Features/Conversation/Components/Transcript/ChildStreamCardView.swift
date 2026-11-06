@@ -88,6 +88,9 @@ struct ChildStreamCardView: View {
                 .font(.caption2)
                 .foregroundStyle(.red)
                 .labelStyle(.titleAndIcon)
+        case .unavailable:
+            Label(ToolTranscriptText().text("jobs.unavailable"), systemImage: "questionmark.circle")
+                .foregroundStyle(.secondary)
         case .canceled:
             Label("已取消", systemImage: "stop.circle.fill")
                 .font(.caption2)

@@ -232,7 +232,8 @@ enum ToolTranscriptPresenter {
         return ToolTranscriptPresentation(
             callID: tool.callID, family: .other, statusTone: statusTone(for: tool),
             statusText: operation == "wait" && tool.status == .running
-                ? text.text("waiting") : statusText(for: tool, locale: text.locale),
+                ? text.text("waiting") : BackgroundJobPresentation.waitReturnText(for: tool, text: text)
+                ?? statusText(for: tool, locale: text.locale),
             title: text.text("job." + operation), detail: detail,
             elapsed: tool.elapsedMs.map { operation == "wait"
                 ? text.text("job.wait.elapsed", formatElapsed($0)) : formatElapsed($0) },
@@ -568,7 +569,7 @@ enum ToolTranscriptPresenter {
                 && BackgroundJobPresentation.jobID(for: $0) != nil }
         var parts = repeatedWaits ? [text.text("job.wait.count", tools.count)]
             : [labels.joined(separator: text.text("activity.separator")), text.text(tools.count == 1 ? "calls.one" : "calls.many", tools.count)]
-        let running = group.tools.filter { $0.status == .running }.count
+        let running = group.tools.filter { $0.status == .running && BackgroundJobPresentation.operation($0.toolName) != "wait" }.count
         let failed = group.tools.filter { $0.status == .failed }.count
         if running > 0 { parts.append(text.text("count.running", running)) }
         if group.isThinking { parts.append(text.text("activity.thinking")) }

@@ -373,6 +373,11 @@ public struct ConversationDetailView: View {
             //            WorkspaceChipBar()
             //            #endif
             
+            BackgroundJobsEntry(model: vm.backgroundJobs) { job in
+                store.showInspector(.childStream(.init(childID: job.jobID, kind: .job,
+                    title: BackgroundJobPresentation.summary(job.command, text: .init()))))
+            }
+
             DraftComposerPanel(
                 workspaceStore: store,
                 modelSettings: modelSettings,

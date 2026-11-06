@@ -1097,7 +1097,8 @@ function streamingPresentationBlock(
 /// The renderer acknowledges the latest target immediately, while this local
 /// player reveals one lightweight active block at a stable cadence. Completed
 /// Markdown blocks are committed once; the growing tail never reparses on a
-/// timer. Playback and parsing both pause during scrolling or text selection.
+/// timer. Each snapshot advances synchronously, without depending on either
+/// clock. Playback and parsing both pause during scrolling or text selection.
 function StreamingMarkdown({
   block,
 }: {
@@ -1112,10 +1113,66 @@ function StreamingMarkdown({
   const [committedBlock, setCommittedBlock] = useState<ConversationWebBlock>(() =>
     streamingPresentationBlock(block, ""));
 
+  const lastAdvanceAt = useRef(performance.now());
+  const advancePlayback = useRef<(now: number, ensureProgress: boolean) => void>(() => {});
+  advancePlayback.current = (now, ensureProgress) => {
+    const target = targetBlock.current.text ?? "";
+    let current = visibleText.current;
+
+    if (!target.startsWith(current)) {
+      const retainedLength = commonPrefixLength(current, target);
+      current = target.slice(0, retainedLength);
+      visibleText.current = current;
+      if (retainedLength < markdownScanner.current.scannedOffset) {
+        markdownScanner.current = newStableMarkdownScanner();
+        advanceStableMarkdownPrefix(current, markdownScanner.current);
+      }
+      if (!current.startsWith(committedText.current)) {
+        committedText.current = "";
+        setCommittedBlock(streamingPresentationBlock(targetBlock.current, ""));
+      }
+      setVisibleVersion((version) => version + 1);
+    }
+
+    const userOwnsViewport = viewportController.isInteractionActive()
+      || hasActiveTextSelection();
+    if (!userOwnsViewport
+        && (ensureProgress || now - lastAdvanceAt.current >= streamingFrameMilliseconds)
+        && current.length < target.length) {
+      const backlog = target.length - current.length;
+      // Small backlogs read like typing; large batches catch up quickly
+      // without making the UI wait seconds behind the model.
+      const step = Math.min(backlog, Math.max(2, Math.ceil(backlog * 0.22)));
+      current = target.slice(0, current.length + step);
+      visibleText.current = current;
+      lastAdvanceAt.current = now;
+      setVisibleVersion((version) => version + 1);
+    }
+
+    const stableLength = advanceStableMarkdownPrefix(
+      visibleText.current,
+      markdownScanner.current,
+    );
+    const nextCommittedText = visibleText.current.slice(0, stableLength);
+    if (!userOwnsViewport && committedText.current !== nextCommittedText) {
+      committedText.current = nextCommittedText;
+      setCommittedBlock(streamingPresentationBlock(
+        targetBlock.current,
+        nextCommittedText,
+      ));
+    }
+  };
+
+  // A received snapshot must paint content even if an inactive WKWebView is
+  // delaying both animation frames and playback timers. Advance in the data
+  // commit itself; the local clock only smooths the remaining backlog.
+  useLayoutEffect(() => {
+    if (!workbenchSuspended) advancePlayback.current(performance.now(), true);
+  }, [block.text]);
+
   useEffect(() => {
     let frame: number | undefined;
     let fallback: number | undefined;
-    let lastAdvanceAt = performance.now();
 
     const cancelScheduledTick = () => {
       if (frame !== undefined) window.cancelAnimationFrame(frame);
@@ -1135,58 +1192,14 @@ function StreamingMarkdown({
     };
     const tick = (now: number) => {
       cancelScheduledTick();
-      const target = targetBlock.current.text ?? "";
-      let current = visibleText.current;
-
-      if (!target.startsWith(current)) {
-        const retainedLength = commonPrefixLength(current, target);
-        current = target.slice(0, retainedLength);
-        visibleText.current = current;
-        if (retainedLength < markdownScanner.current.scannedOffset) {
-          markdownScanner.current = newStableMarkdownScanner();
-          advanceStableMarkdownPrefix(current, markdownScanner.current);
-        }
-        if (!current.startsWith(committedText.current)) {
-          committedText.current = "";
-          setCommittedBlock(streamingPresentationBlock(targetBlock.current, ""));
-        }
-        setVisibleVersion((version) => version + 1);
-      }
-
-      const userOwnsViewport = viewportController.isInteractionActive()
-        || hasActiveTextSelection();
-      if (!userOwnsViewport
-          && now - lastAdvanceAt >= streamingFrameMilliseconds
-          && current.length < target.length) {
-        const backlog = target.length - current.length;
-        // Small backlogs read like typing; large batches catch up quickly
-        // without making the UI wait seconds behind the model.
-        const step = Math.min(backlog, Math.max(2, Math.ceil(backlog * 0.22)));
-        current = target.slice(0, current.length + step);
-        visibleText.current = current;
-        lastAdvanceAt = now;
-        setVisibleVersion((version) => version + 1);
-      }
-
-      const stableLength = advanceStableMarkdownPrefix(
-        visibleText.current,
-        markdownScanner.current,
-      );
-      const nextCommittedText = visibleText.current.slice(0, stableLength);
-      if (!userOwnsViewport && committedText.current !== nextCommittedText) {
-        committedText.current = nextCommittedText;
-        setCommittedBlock(streamingPresentationBlock(
-          targetBlock.current,
-          nextCommittedText,
-        ));
-      }
-
+      advancePlayback.current(now, false);
       scheduleTick();
     };
     const handleSuspensionChange = () => {
       if (workbenchSuspended) {
         cancelScheduledTick();
       } else if (frame === undefined && fallback === undefined) {
+        advancePlayback.current(performance.now(), true);
         scheduleTick();
       }
     };
@@ -1696,7 +1709,9 @@ function ThinkingBlock({ block }: { block: ConversationWebBlock }): React.JSX.El
 }
 
 function ToolGroupBlock({ block }: { block: ConversationWebBlock }): React.JSX.Element {
-  const statusText = visibleExecutionStatus(block.status, block.statusText);
+  // Activity titles already contain running/thinking/failure counts. The
+  // individual rows describe whether a call is executing or waiting.
+  const statusText = block.activityOrder ? undefined : visibleExecutionStatus(block.status, block.statusText);
   // Only the activity still accepting entries defaults open. Untouched groups
   // close when sealed; explicit user choices survive growth and completion.
   const { open, onSummaryClick } = useStreamingDisclosure(
@@ -1815,7 +1830,7 @@ const Block = memo(function Block({
         </aside>
       );
     case "childStream":
-      const childStatus = visibleExecutionStatus(block.status);
+      const childStatus = block.statusText ?? visibleExecutionStatus(block.status);
       return (
         <section
           className={block.actionID ? "interactive child-stream" : "child-stream"}

@@ -2,10 +2,11 @@ import XCTest
 @testable import AgentKit
 
 final class BackgroundJobPresentationTests: XCTestCase {
-    private func wait(_ id: String, job: String? = "job-1", name: String = "job_wait") -> ToolNodePayload {
+    private func wait(_ id: String, job: String? = "job-1", name: String = "job_wait",
+                      status: ToolNodeStatus = .completed, output: String = "still running") -> ToolNodePayload {
         .init(callID: id, toolName: name,
-              args: job.map { .object(["job_id": .string($0)]) }, status: .completed,
-              output: "still running", elapsedMs: 1_000)
+              args: job.map { .object(["job_id": .string($0)]) }, status: status,
+              output: output, elapsedMs: 1_000)
     }
 
     func testJobOperationsAreLocalizedWithoutGuessingUnknownTools() {
@@ -17,6 +18,29 @@ final class BackgroundJobPresentationTests: XCTestCase {
         }
         XCTAssertNil(BackgroundJobPresentation.operation("mcp_job_wait"))
         XCTAssertEqual(ToolTranscriptPresenter.presentation(for: wait("w"), locale: "en").title, "Wait for background task")
+    }
+
+    func testWaitReturnUsesRecordedStatusWithoutCompletingTheJob() {
+        let text = ToolTranscriptText(locale: "zh-Hans")
+        let expected = ["running": "本次等待结束，后台任务仍在运行", "exited": "后台任务已完成",
+                        "failed": "后台任务失败", "canceled": "后台任务已取消"]
+        for (status, message) in expected {
+            let output = "[observation] ok\n---\n{\"job_id\":\"job-1\",\"status\":\"\(status)\"}"
+            let tool = wait("w", output: output)
+            XCTAssertEqual(BackgroundJobPresentation.waitReturnText(for: tool, text: text), message)
+            XCTAssertEqual(ToolTranscriptPresenter.presentation(for: tool, locale: "zh-Hans").statusText, message)
+            let active = wait("w", status: .running, output: output)
+            XCTAssertNil(BackgroundJobPresentation.waitReturnText(for: active, text: text))
+        }
+        for output in ["still running", "{}", "{\"job_id\":\"other\",\"status\":\"exited\"}",
+                       "{\"job_id\":\"job-1\",\"status\":\"exited\",\"exit_code\":2}"] {
+            let tool = wait("w", output: output)
+            XCTAssertNil(BackgroundJobPresentation.waitReturnText(for: tool, text: text))
+        }
+        let active = wait("active", status: .running, output: "")
+        let group = ToolGroup(id: "g", entries: [.tool(active)], isCollecting: true)
+        XCTAssertEqual(ToolTranscriptPresenter.groupPresentation(for: group, locale: "zh-Hans").summary,
+                       "等待后台任务 · 1 次调用")
     }
 
     func testScriptPreviewRetainsNoBodyAndDoesNotInventPurpose() {

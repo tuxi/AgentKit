@@ -136,6 +136,7 @@ public struct RuntimeCapabilitySnapshot: Codable, Sendable, Equatable {
         if capabilities["public_git_clone_v1"] == true { flags.insert(.publicGitClone) }
         if capabilities["workspace_git_branch_v1"] == true { flags.insert(.workspaceGitBranch) }
         if capabilities["conversation_fork_through_turn_v1"] == true { flags.insert(.conversationForkThroughTurn) }
+        if capabilities["background_job_control_v1"] == true { flags.insert(.backgroundJobControl) }
         if capabilities["history_pagination"] == true { flags.insert(.historyPagination) }
         if capabilities["conversation_list_pagination_v1"] == true { flags.insert(.conversationListPagination) }
         return flags

@@ -561,7 +561,7 @@ private struct TranscriptAttributedBuilder {
             switch payload.status {
             case .running: return .running
             case .failed: return .failed
-            case .completed, .canceled: return .completed
+            case .completed, .canceled, .unavailable: return .completed
             }
         }()
 
@@ -577,6 +577,7 @@ private struct TranscriptAttributedBuilder {
                 return "failed"
             case .canceled: return "canceled"
             case .completed: return "done"
+            case .unavailable: return ToolTranscriptText().text("jobs.unavailable")
             }
         }()
 

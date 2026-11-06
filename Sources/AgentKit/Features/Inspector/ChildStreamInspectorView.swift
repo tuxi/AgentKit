@@ -84,14 +84,14 @@ public final class ChildStreamViewModel {
                 guard !Task.isCancelled else { return }
                 if !self.isFinished {
                     self.lastError = "子流在收到终态事件前意外结束"
-                    self.completionStatus = .failed
+                    self.completionStatus = self.selection.kind == .job ? .unavailable : .failed
                     self.isFinished = true
                 }
             } catch is CancellationError {
                 return
             } catch {
                 self.lastError = error.localizedDescription
-                self.completionStatus = .failed
+                self.completionStatus = self.selection.kind == .job ? .unavailable : .failed
                 self.isFinished = true
             }
             await self.engine.markFinished()
@@ -258,6 +258,9 @@ struct ChildStreamContentView: View {
             Label(failedLabel, systemImage: "xmark.circle.fill")
                 .font(.caption)
                 .foregroundStyle(.red)
+        case .unavailable:
+            Label(ToolTranscriptText().text("jobs.unavailable"), systemImage: "questionmark.circle")
+                .foregroundStyle(.secondary)
         case .canceled:
             Label("已取消", systemImage: "minus.circle.fill")
                 .font(.caption)
@@ -286,6 +289,7 @@ struct ChildStreamContentView: View {
         case .running: return .orange
         case .completed: return .green
         case .failed: return .red
+        case .unavailable: return .gray
         case .canceled: return .gray
         }
     }

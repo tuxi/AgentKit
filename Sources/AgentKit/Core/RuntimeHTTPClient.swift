@@ -639,6 +639,52 @@ struct RuntimeHTTPClient: Sendable {
         return try decodeEnvelope(ConversationForkResponse.self, from: data)
     }
 
+    func backgroundJobRuntimeIdentity() async throws -> String {
+        guard let url = try await environment.jobControlOrigin else { throw RuntimeHTTPError.runtimeNotStarted }
+        return Self.jobAuthority(url)
+    }
+
+    private static func jobAuthority(_ url: URL) -> String {
+        var parts = URLComponents(url: url, resolvingAgainstBaseURL: false)!
+        parts.path = ""; parts.query = nil; parts.fragment = nil
+        return parts.string ?? ""
+    }
+
+    private func validateJobScope(_ request: URLRequest, identity: String) async throws {
+        guard let url = request.url, Self.jobAuthority(url) == identity,
+              try await backgroundJobRuntimeIdentity() == identity else { throw BackgroundJobControlError.runtimeChanged }
+    }
+
+    func listBackgroundJobs(conversationID: String, runtimeIdentity: String) async throws -> [BackgroundJobSnapshot] {
+        guard !conversationID.isEmpty else { throw BackgroundJobControlError.invalidOwner }
+        let request = try await buildRequest("GET", pathComponents: "v1/conversations", conversationID, "jobs", timeout: 10)
+        try await validateJobScope(request, identity: runtimeIdentity)
+        let (data, response) = try await session.data(for: request)
+        try validateHTTP(response, data: data)
+        try await validateJobScope(request, identity: runtimeIdentity)
+        let jobs = try decodeEnvelope(BackgroundJobListPayload.self, from: data).jobs
+        guard Set(jobs.map(\.jobID)).count == jobs.count, jobs.allSatisfy({
+            $0.sessionID == conversationID && !$0.jobID.isEmpty && !$0.turnID.isEmpty && !$0.callID.isEmpty && $0.durationMs >= 0
+        }) else { throw BackgroundJobControlError.invalidSnapshot }
+        return jobs
+    }
+
+    func cancelBackgroundJob(conversationID: String, owner: BackgroundJobOwner, runtimeIdentity: String) async throws -> BackgroundJobSnapshot {
+        guard !conversationID.isEmpty, !owner.jobID.isEmpty, !owner.turnID.isEmpty, !owner.callID.isEmpty else {
+            throw BackgroundJobControlError.invalidOwner
+        }
+        let body = BackgroundJobCancelRequest(turn_id: owner.turnID, call_id: owner.callID)
+        let request = try await buildRequest("POST", pathComponents: "v1/conversations", conversationID, "jobs", owner.jobID, "cancel", body: body, timeout: 10)
+        try await validateJobScope(request, identity: runtimeIdentity)
+        let (data, response) = try await session.data(for: request)
+        try validateHTTP(response, data: data)
+        try await validateJobScope(request, identity: runtimeIdentity)
+        let job = try decodeEnvelope(BackgroundJobCancelPayload.self, from: data).job
+        guard job.sessionID == conversationID, job.owner == owner, job.durationMs >= 0,
+              job.status.isTerminal || (job.status == .running && job.cancelRequested) else { throw BackgroundJobControlError.invalidSnapshot }
+        return job
+    }
+
     /// `GET /v1/jobs/{id}/events[?since=N]` — 后台 job 子流 backlog。
     func getJobEvents(jobID: String, since: Int = 0) async throws -> [WireFrame] {
         let queryItems = since > 0 ? [URLQueryItem(name: "since", value: String(since))] : nil

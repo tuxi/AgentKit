@@ -762,8 +762,42 @@ public actor RuntimeEngine {
         buildSnapshot()
     }
 
-    /// Apply the local terminal side of cancel_turn. The wire contract permits
-    /// the server to stop streaming without emitting turn_finished/turn_failed.
+    /// Registry snapshots reconcile both loaded history and the live graph.
+    /// Missing old jobs are unavailable, never fabricated terminal events.
+    public func reconcileBackgroundJobs(_ jobs: [BackgroundJobSnapshot]?) {
+        Self.reconcileJobs(jobs, graph: &graph)
+        Self.reconcileJobs(jobs, graph: &olderGraph)
+        refreshOlderProjection(isLive: turnIsExecuting && capturesLeadingTail)
+        yieldSnapshot()
+    }
+
+    private static func reconcileJobs(_ jobs: [BackgroundJobSnapshot]?, graph: inout ExecutionGraph) {
+        for (_, var node) in graph.nodes {
+            guard case .childStream(var payload) = node.payload, payload.kind == .job else { continue }
+            let match = jobs?.first { $0.jobID == payload.childID && $0.turnID == node.turnID && $0.callID == payload.originCallID }
+            if let match {
+                if node.status != .running && !payload.isUnavailable && (node.status == .completed || node.status == .failed || node.status == .cancelled), match.status == .running { continue }
+                payload.isUnavailable = match.status == .unknown
+                payload.canceled = match.status == .canceled
+                payload.exitCode = match.exitCode
+                payload.elapsedMs = Int(clamping: match.durationMs)
+                payload.output = match.outputTail
+                switch match.status {
+                case .running: node.status = .running
+                case .exited: node.status = .completed
+                case .failed: node.status = .failed
+                case .canceled: node.status = .cancelled
+                case .unknown: node.status = .pending
+                }
+            } else if node.status == .running || payload.isUnavailable {
+                payload.isUnavailable = true
+                node.status = .pending
+            } else { continue }
+            node.payload = .childStream(payload)
+            graph.upsertNode(node)
+        }
+    }
+
     public func cancelActiveTurn() {
         guard let activeTurnID else { return }
         reducer.cancelActiveTurn(turnID: activeTurnID, graph: &graph)

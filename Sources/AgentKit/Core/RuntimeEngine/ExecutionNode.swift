@@ -210,6 +210,7 @@ public struct ChildStreamNodePayload: Sendable, Hashable {
 }
 
 public enum ChildStreamNodeStatus: String, Sendable, Hashable {
+    case unavailable
     case running
     case completed
     case failed

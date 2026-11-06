@@ -268,6 +268,7 @@ public final class ConversationViewModel {
         workflowStore: WorkflowStore? = nil
     ) {
         self.client = client
+        self.backgroundJobs = BackgroundJobsModel(client: client)
         self.toolRegistry = toolRegistry
         self.workspace = workspace
         self.selectedModel = model
@@ -279,6 +280,9 @@ public final class ConversationViewModel {
         self.onActivityInvalidated = onActivityInvalidated
         self.workflowStore = workflowStore
     }
+
+    /// Session-level job state survives Turn transitions.
+    let backgroundJobs: BackgroundJobsModel
 
     /// v1.3 — Workflow DAG 状态中心引用（由 WorkspaceStore 注入）。
     private let workflowStore: WorkflowStore?
@@ -355,6 +359,7 @@ public final class ConversationViewModel {
         isConnecting = true
         defer { isConnecting = false }
         self.conversation = conversation
+        backgroundJobs.select(conversation.id)
         if isDifferentConversation {
             inFlightClientToolCallIDs.removeAll()
             completedClientToolCallIDs.removeAll()
@@ -409,6 +414,10 @@ public final class ConversationViewModel {
         // Create engine for this session
         let eng = RuntimeEngine(sessionID: conversation.id)
         self.engine = eng
+        backgroundJobs.onSnapshot = { [weak self, weak eng] jobs in
+            guard let self, self.conversation?.id == conversation.id, let eng else { return }
+            await eng.reconcileBackgroundJobs(jobs)
+        }
 
         // Subscribe to state stream BEFORE importing history
         let stream = eng.stateStream()
@@ -416,6 +425,10 @@ public final class ConversationViewModel {
             for await snap in stream {
                 guard let self else { return }
                 self.snapshot = snap
+                self.backgroundJobs.hasHistoricalJobs = snap.timeline.contains { node in
+                    if case .childStream(let payload) = node.kind { return payload.kind == .job }
+                    return false
+                }
             }
         }
 
@@ -424,6 +437,7 @@ public final class ConversationViewModel {
         let sinceCursor = await fetchHistory(conversationID: conversation.id, engine: eng,
                                              limit: historyLimit ?? historyPageSize)
         guard !Task.isCancelled else { return }
+        Task { await backgroundJobs.refresh() }
         reconcileRuntimeActivityBaseline(historyCursor: sinceCursor)
         let pendingAtConnect = try? localStateStore.state(for: .session(conversation.id))?
             .composerDraft.pendingSubmission
@@ -456,6 +470,7 @@ public final class ConversationViewModel {
                 return
             }
             isConnected = true
+            Task { await backgroundJobs.refresh(rediscover: true) }
             await eng.markLive()
 
             streamTask = Task { [weak self] in
@@ -669,6 +684,7 @@ public final class ConversationViewModel {
         let turnIDBeingCancelled = currentTurnID
         await engine?.cancelActiveTurn()
         await channel?.cancelTurn()
+        Task { await backgroundJobs.refresh() }
 
         // await 是挂起点：streamTask 可能已处理了 turn_finished/turn_failed/
         // turn_cancelled，把 lifecycle 置为终态。只有仍在可取消状态时才继续。
@@ -730,6 +746,7 @@ public final class ConversationViewModel {
         channel = nil
         isConnected = false
         conversation = nil
+        backgroundJobs.select(nil)
     }
 
     // MARK: - History
@@ -795,6 +812,7 @@ public final class ConversationViewModel {
             hasMoreOlderHistory = result.hasMoreOlder
             historyMayBeIncomplete = result.isIncomplete
             await engine.importOlderHistory(result.events, wallClock: result.turnWallClock)
+            await engine.reconcileBackgroundJobs(backgroundJobs.canControl ? backgroundJobs.jobs : nil)
             for timelineExtension in timelineExtensions {
                 await timelineExtension.handleOlderHistory(result.events)
             }
@@ -834,6 +852,11 @@ public final class ConversationViewModel {
     private func handleEvent(_ event: AgentEvent, engine: RuntimeEngine) async {
         updateLifecycle(from: event)
         await engine.ingest(event)
+        switch event {
+        case .jobStarted, .jobFinished, .turnFinished, .turnFailed, .turnCancelled:
+            Task { await backgroundJobs.refresh() }
+        default: break
+        }
         await forwardToTimelineExtensions(event)
         forwardWorkflowEvent(event)
 

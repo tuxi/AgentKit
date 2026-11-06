@@ -441,6 +441,7 @@ public struct ExecutionReducer: Sendable {
         var changed: [NodeID] = []
 
         for (nodeID, var node) in graph.nodes where node.turnID == resolvedTurnID && node.status == .running {
+            if case .childStream(let child) = node.payload, child.kind == .job { continue }
             node.status = .failed
             node.timestamp = ts
             graph.upsertNode(node)
@@ -479,10 +480,11 @@ public struct ExecutionReducer: Sendable {
     }
 
     /// Locally cancelling a turn has no guaranteed terminal server event.
-    /// Stop all current nodes immediately so UI state does not depend on a
-    /// best-effort `cancel_turn` acknowledgement.
+    /// Stop current Turn work without claiming independent background jobs
+    /// terminated; only their own events or registry snapshots can confirm that.
     public mutating func cancelActiveTurn(turnID: String, graph: inout ExecutionGraph) {
         for (_, var node) in graph.nodes where node.turnID == turnID && node.status == .running {
+            if case .childStream(let child) = node.payload, child.kind == .job { continue }
             node.status = .cancelled
             graph.upsertNode(node)
         }
@@ -503,6 +505,7 @@ public struct ExecutionReducer: Sendable {
     ) -> [NodeID] {
         var changed: [NodeID] = []
         for (nodeID, var node) in graph.nodes where node.turnID == turnID && node.status == .running {
+            if case .childStream(let child) = node.payload, child.kind == .job { continue }
             node.status = .cancelled
             node.timestamp = ts
             graph.upsertNode(node)
@@ -1236,6 +1239,7 @@ public struct ExecutionReducer: Sendable {
             )
             return []
         }
+        payload.isUnavailable = false
         payload.result = result
         payload.exitCode = exitCode
         payload.canceled = canceled

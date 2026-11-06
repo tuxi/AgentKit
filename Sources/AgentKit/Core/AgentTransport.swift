@@ -42,6 +42,12 @@ public protocol AgentTransport: Sendable {
 
     /// Create an independently retained control channel for one session.
     func makeSessionChannel(sessionID: String) -> any RuntimeSessionChannel
+
+    /// Identity of the HTTP runtime origin. Every job read/write must stay pinned
+    /// to this origin; it must never retarget an old job after a runtime switch.
+    func backgroundJobRuntimeIdentity() async throws -> String
+    func listBackgroundJobs(conversationID: String, runtimeIdentity: String) async throws -> [BackgroundJobSnapshot]
+    func cancelBackgroundJob(conversationID: String, owner: BackgroundJobOwner, runtimeIdentity: String) async throws -> BackgroundJobSnapshot
     func runtimeCapabilities() async throws -> RuntimeCapabilitySnapshot
     func activitySnapshot() async throws -> RuntimeActivitySnapshot
     func activitySnapshot(sinceSequence: Int64?) async throws -> RuntimeActivitySnapshot
@@ -257,6 +263,10 @@ public protocol AgentTransport: Sendable {
 // MARK: - Default impls
 
 extension AgentTransport {
+    public func backgroundJobRuntimeIdentity() async throws -> String { throw RuntimeHTTPError.unsupported }
+    public func listBackgroundJobs(conversationID: String, runtimeIdentity: String) async throws -> [BackgroundJobSnapshot] { throw RuntimeHTTPError.unsupported }
+    public func cancelBackgroundJob(conversationID: String, owner: BackgroundJobOwner, runtimeIdentity: String) async throws -> BackgroundJobSnapshot { throw RuntimeHTTPError.unsupported }
+
     public func listConversationPage(archived: Bool, limit: Int, before: String?) async throws -> ConversationListPage {
         let values = try await (archived ? listArchivedConversations() : listConversations())
         return ConversationListPage(conversations: values)

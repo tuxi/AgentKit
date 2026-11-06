@@ -703,7 +703,7 @@ enum ConversationWebDocumentBuilder {
                 let resultFailed = tool.status == .failed || (tool.exitCode.map { $0 != 0 } ?? false)
                 let outcomeText: String? = resultFailed
                     ? tool.exitCode.map { ToolTranscriptText().text("failed.code", $0) } ?? ToolTranscriptText().text("failed")
-                    : tool.status == .running ? ToolTranscriptText().text("running")
+                    : tool.status == .running && BackgroundJobPresentation.operation(tool.toolName) != "wait" ? ToolTranscriptText().text("running")
                     : resultKind == "terminal" ? ToolTranscriptText().text("run.succeeded") : nil
                 let arguments = tool.args.flatMap(formattedJSON)
                 let output = tool.output.isEmpty ? nil : tool.output
@@ -891,7 +891,9 @@ enum ConversationWebDocumentBuilder {
                 },
                 actionTooltip: payload.childID,
                 inlineActions: [],
-                codeCopyActionIDs: []
+                codeCopyActionIDs: [],
+                statusText: payload.status == .unavailable ? ToolTranscriptText().text("jobs.unavailable")
+                    : payload.kind == .job && payload.status == .running ? ToolTranscriptText().text("jobs.status.running") : nil
             )
 
         case .workflow(let id, let payload):
