@@ -329,7 +329,7 @@ final class DraftComposerPanelViewModel {
         guard canSend else { return }
         let selection = modelSelection
 
-        let toSend = trimmed
+        let toSend = String(trimmed.prefix(100000))
         submittedTextSnapshot = toSend
         
         // Optimistic clear
