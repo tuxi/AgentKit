@@ -126,6 +126,11 @@ public struct TimelineProjection: Sendable {
         // 合并：入口卡为准，隐藏发起它的那张工具卡。用 `call_id` 关联（bracket 与工具卡
         // 共享，服务端 stamp，跨 live/回放稳定），比按 prompt 字符串更稳、多个同 prompt
         // 委派不退化。前台 `run_command`（无 job）call_id 不在此集合里，卡片照常保留。
+        let jobCommands = nodes.reduce(into: [String: String]()) { commands, node in
+            if case .childStream(let child) = node.kind, child.kind == .job {
+                commands[child.childID] = child.title
+            }
+        }
         let entryCardCallIDs: Set<String> = Set(
             nodes.compactMap { node -> String? in
                 switch node.kind {
@@ -178,7 +183,10 @@ public struct TimelineProjection: Sendable {
                         if !p.text.isEmpty { inv.thinkingText = p.text }
                     }
                 }
-            case .tool(let p):
+            case .tool(var p):
+                if let jobID = BackgroundJobPresentation.jobID(for: p) {
+                    p.backgroundJobCommand = jobCommands[jobID]
+                }
                 // `propose_plan` has a dedicated semantic Plan node. Keeping
                 // its raw tool row would show the same proposal twice.
                 let semanticToolName = p.toolName

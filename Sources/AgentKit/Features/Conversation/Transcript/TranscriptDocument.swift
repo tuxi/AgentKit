@@ -193,23 +193,29 @@ enum TurnTranscriptBuilder {
             action: .toggleTool(callID: expansionID, defaultExpanded: group.isCollecting)
         )
         if expanded {
-            for entry in group.entries {
-                if case .thinking(let id, let payload) = entry {
-                    builder.appendThinkingCard(id: id, payload: payload,
-                        isExpanded: payload.isStreaming || state.expandedThinkingIDs.contains(id))
+            let runs = BackgroundJobPresentation.waitRuns(in: group.entries)
+            for run in runs {
+                if runs.count > 1, run.count > 1, let first = run.first {
+                    appendMergedToolGroup(ToolGroup(id: "job-waits:\(first.id)", entries: run),
+                                          state: state, to: &builder)
                     continue
                 }
-                guard case .tool(let tool) = entry else { continue }
-                let toolPresentation = ToolTranscriptPresenter.presentation(for: tool)
-                let toolExpanded = state.expandedToolIDs.contains(tool.callID)
-                builder.appendToolRow(
-                    toolPresentation,
-                    expanded: toolExpanded,
-                    action: .toggleTool(callID: tool.callID),
-                    nested: true
-                )
-                if toolExpanded {
-                    appendExpandedTool(tool, presentation: toolPresentation, to: &builder)
+                for entry in run {
+                    if case .thinking(let id, let payload) = entry {
+                        builder.appendThinkingCard(id: id, payload: payload,
+                            isExpanded: payload.isStreaming || state.expandedThinkingIDs.contains(id))
+                        continue
+                    }
+                    guard case .tool(let tool) = entry else { continue }
+                    let toolPresentation = ToolTranscriptPresenter.presentation(for: tool)
+                    let toolExpanded = state.expandedToolIDs.contains(tool.callID)
+                    builder.appendToolRow(
+                        toolPresentation, expanded: toolExpanded,
+                        action: .toggleTool(callID: tool.callID), nested: true
+                    )
+                    if toolExpanded {
+                        appendExpandedTool(tool, presentation: toolPresentation, to: &builder)
+                    }
                 }
             }
         }
@@ -559,8 +565,8 @@ private struct TranscriptAttributedBuilder {
             }
         }()
 
-        let label = payload.kind == .task ? "Subagent" : "Job"
-        let summary = singleLineSummary(payload.title, limit: 60)
+        let label = payload.kind == .task ? "Subagent" : BackgroundJobPresentation.title(payload)
+        let summary = payload.kind == .job ? "" : singleLineSummary(payload.title, limit: 60)
         let statusText: String? = {
             switch payload.status {
             case .running: return "running"
@@ -584,10 +590,11 @@ private struct TranscriptAttributedBuilder {
             appendLinked("  \(statusText)", id: id, attributes: toolStatusTextAttributes(for: tone))
         }
         if let elapsed = payload.formattedElapsed {
-            appendLinked("  \(elapsed)", id: id, attributes: toolDetailAttributes)
+            let elapsedLabel = payload.kind == .job ? ToolTranscriptText().text("job.elapsed", elapsed) : elapsed
+            appendLinked("  \(elapsedLabel)", id: id, attributes: toolDetailAttributes)
         }
         appendLinked(" ›", id: id, attributes: toolChevronAttributes)
-        copyParts.append("\(label): \(summary)")
+        copyParts.append(summary.isEmpty ? label : "\(label): \(summary)")
 
         if payload.status != .running,
            let result = payload.result?.trimmingCharacters(in: .whitespacesAndNewlines),

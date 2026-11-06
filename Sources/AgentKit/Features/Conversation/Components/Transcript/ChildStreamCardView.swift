@@ -23,12 +23,12 @@ struct ChildStreamCardView: View {
                     .foregroundStyle(.blue)
 
                 VStack(alignment: .leading, spacing: 2) {
-                    Text(payload.kind == .task ? "Subagent" : "Background Job")
+                    Text(payload.kind == .task ? "Subagent" : BackgroundJobPresentation.title(payload))
                         .font(.caption2.weight(.semibold))
                         .foregroundStyle(.secondary)
                         .textCase(.uppercase)
 
-                    Text(payload.title)
+                    Text(payload.kind == .job ? payload.childID : payload.title)
                         .font(.caption.weight(.medium))
                         .lineLimit(1)
 

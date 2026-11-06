@@ -9,6 +9,7 @@ export type BlockKind =
   | "childStream";
 
 export interface ConversationWebTool {
+  backgroundJobID?: string;
   id: string;
   name: string;
   rawName?: string;

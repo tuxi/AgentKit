@@ -85,6 +85,8 @@ public struct ThinkingNodePayload: Sendable, Equatable {
 }
 
 public struct ToolNodePayload: Sendable, Equatable {
+    /// Related job command, supplied by projection using job_id; raw args remain intact.
+    public var backgroundJobCommand: String? = nil
     public let callID: String
     public let toolName: String
     public let args: JSONValue?

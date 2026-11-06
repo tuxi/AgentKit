@@ -2624,6 +2624,80 @@ final class ConversationWebDocumentTests: XCTestCase {
         configuration.userContentController.removeScriptMessageHandler(forName: "agentkitWorkbench")
         _ = webView
     }
+    func testBackgroundJobWaitGroupingPreservesRecordsAndRunningState() async throws {
+        let ready = expectation(description: "jobs ready")
+        let probe = ConversationWebBridgeProbe(ready: ready)
+        let configuration = WKWebViewConfiguration()
+        configuration.websiteDataStore = .nonPersistent()
+        configuration.setURLSchemeHandler(ConversationWebSchemeHandler(), forURLScheme: ConversationWebSchemeHandler.scheme)
+        configuration.userContentController.add(probe, name: "agentkitWorkbench")
+        defer { configuration.userContentController.removeScriptMessageHandler(forName: "agentkitWorkbench") }
+        let webView = WKWebView(frame: .init(x: 0, y: 0, width: 700, height: 600), configuration: configuration)
+        webView.load(URLRequest(url: ConversationWebSchemeHandler.indexURL))
+        await fulfillment(of: [ready], timeout: 5)
+        func document(_ revision: UInt64, count: Int) -> ConversationWebDocument {
+            let command = "python3 - <<'PY'\nprint('build')\nPY"
+            let job = ChildStreamNodePayload(kind: .job, childID: "j1", title: command, status: .running)
+            let run = ToolNodePayload(callID: "run", toolName: "run_command", args: .object(["command": .string("pwd")]), status: .completed)
+            let waits = (1...count).map { index -> ToolGroup.Entry in
+                var wait = ToolNodePayload(callID: "wait-\(index)", toolName: "job_wait",
+                    args: .object(["job_id": .string("j1")]), status: .completed,
+                    output: "still running", elapsedMs: 1_000)
+                wait.backgroundJobCommand = command
+                return .tool(wait)
+            }
+            let turn = ConversationTurn(id: "t", userPrompt: .init(role: .user, text: "Run a background build"),
+                blocks: [.childStream(id: "job", job), .toolGroup(.init(id: "activity",
+                    entries: [.tool(run)] + waits, isCollecting: true))], footer: nil, isLive: true)
+            return ConversationWebDocumentBuilder.build(snapshot: .init(timeline: [], turns: [turn]),
+                conversationID: "jobs", revision: revision)
+        }
+        func apply(_ update: ConversationWebUpdate, revision: Int) async throws {
+            let acknowledged = expectation(description: "job revision \(revision)")
+            probe.expectAcknowledgement(revision: revision, expectation: acknowledged)
+            let payload = try JSONEncoder().encode(update).base64EncodedString()
+            _ = try await webView.evaluateJavaScript("window.AgentKitWorkbench.applyUpdateBase64('\(payload)')")
+            await fulfillment(of: [acknowledged], timeout: 5)
+            try await Task.sleep(for: .milliseconds(40))
+        }
+        let initial = document(1, count: 2)
+        try await apply(ConversationWebDocumentDiffer.reset(initial), revision: 1)
+        _ = try await webView.evaluateJavaScript("document.querySelector('.job-wait-group > summary').click()")
+        let updated = document(2, count: 3)
+        try await apply(try XCTUnwrap(ConversationWebDocumentDiffer.update(from: initial, to: updated)), revision: 2)
+        let inspection = try await webView.evaluateJavaScript(
+            """
+            (() => {
+              const group = document.querySelector('.job-wait-group');
+              const job = document.querySelector('.child-stream');
+              return {
+                open: group?.open,
+                count: group?.querySelectorAll('.tool').length,
+                title: group?.querySelector('summary')?.textContent,
+                rawNamesInGroupTitle: document.querySelector('.tool-group-title')?.textContent.includes('job_wait'),
+                jobCount: document.querySelectorAll('.child-stream').length,
+                jobStatus: job?.dataset.status,
+                jobTitle: job?.querySelector('.child-stream-title')?.textContent,
+                waitTime: group?.querySelector('.tool-elapsed')?.textContent
+              };
+            })()
+            """
+        ) as? [String: Any]
+        XCTAssertEqual(inspection?["open"] as? Bool, true, "expansion survives new wait calls")
+        XCTAssertEqual(inspection?["count"] as? Int, 3, "every original wait record is retained")
+        XCTAssertTrue((inspection?["title"] as? String)?.contains(ToolTranscriptText().text("job.wait.count", 3)) == true)
+        XCTAssertEqual(inspection?["rawNamesInGroupTitle"] as? Bool, false)
+        XCTAssertEqual(inspection?["jobCount"] as? Int, 1)
+        XCTAssertEqual(inspection?["jobStatus"] as? String, "running")
+        XCTAssertEqual(inspection?["jobTitle"] as? String, ToolTranscriptText().text("job.run", ToolTranscriptText().text("job.python")))
+        XCTAssertEqual(inspection?["waitTime"] as? String, ToolTranscriptText().text("job.wait.elapsed", "1.0s"))
+        let snapshot = try await webView.takeSnapshot(configuration: nil)
+        if let data = snapshot.tiffRepresentation, let bitmap = NSBitmapImageRep(data: data),
+           let png = bitmap.representation(using: .png, properties: [:]) {
+            try png.write(to: URL(fileURLWithPath: "/tmp/agentkit-background-jobs.png"))
+        }
+    }
+
     func testActivityDisclosurePreservesOrderAndStateThroughPatchesAndPaging() async throws {
         let ready = expectation(description: "activity Web ready")
         let probe = ConversationWebBridgeProbe(ready: ready)
@@ -2776,9 +2850,10 @@ final class ConversationWebDocumentTests: XCTestCase {
         let sourceOutput = "40: int CPackReader::read() {\n41:   if (!header.valid()) return -1;\n42:   return readPayload();\n43: }\n"
             + (44..<100).map { "\($0): // fixture source line" }.joined(separator: "\n")
         let searchOutput = (1...6).map { "tools/ColladaConverter.cpp:\(650 + $0): ColladaConverter::convert(data);" }.joined(separator: "\n")
+        let runOutput = (651..<711).map { "tools/ColladaConverter.cpp:\($0): ColladaConverter::convert(data);" }.joined(separator: "\n")
         let tools: [ToolNodePayload] = [
             .init(callID: "read", toolName: "read_file", args: .object(["path": .string("src/CPackReader.cpp")]), status: .completed, output: sourceOutput),
-            command("search", "rg -n 'ColladaConverter' tools", searchOutput),
+            command("search", "rg -n 'ColladaConverter' tools", runOutput),
             command("view", "sed -n '40,90p' 'src/CPack Reader.cpp'"),
             command("find", "find tools -type f -name '*.cpp'"),
             command("hex", "xxd -l 64 data/model.bin"),
@@ -2792,7 +2867,8 @@ final class ConversationWebDocumentTests: XCTestCase {
         let group = ToolGroup(id: "semantic-activity", entries: entries)
         let start = Date().addingTimeInterval(-48)
         let turn = ConversationTurn(id: "semantic-turn", userPrompt: .init(role: .user, text: "工具语义展示预览（fixture）"), blocks: [
-            .toolGroup(group), .text(id: "answer", .init(role: .assistant, text: "演示结束，最终答案保持在用时折叠之外。"))],
+            .text(id: "intro", .init(role: .assistant, text: "我会先读取相关文件，再搜索引用并检查需要修改的位置。工具输出可以展开查看，原始参数保留在详情中。")),
+            .toolGroup(group), .text(id: "answer", .init(role: .assistant, text: "两项展示已优化：\n\n- 工具标题与用时采用一致的辅助字号，动作文字优先显示。\n- 工具内容使用紧凑的滚动卡片，状态和复制按钮保持可见。\n\n文件链接、复制与折叠保持原有行为。"))],
             footer: nil, isLive: false, startedAt: start, finishedAt: start.addingTimeInterval(48))
         let registry = ConversationWebActionRegistry()
         let document = ConversationWebDocumentBuilder.build(snapshot: .init(timeline: [], turns: [turn]), conversationID: "semantic-fixture", revision: 1, registerAction: registry.register)
@@ -2826,7 +2902,9 @@ final class ConversationWebDocumentTests: XCTestCase {
             (() => {
               const read = document.querySelector('[data-tool-id="read"] .tool-output-frame');
               const run = document.querySelector('[data-tool-id="search"]');
-              return { bounded: read.clientHeight <= 241 && read.scrollHeight > read.clientHeight,
+              return { bounded: read.clientHeight < 200 && read.scrollHeight > read.clientHeight,
+                combinedHeight: run.querySelector('.tool-result-card').getBoundingClientRect().height,
+                footerOutside: !run.querySelector('.tool-result-footer').closest('.tool-output-frame'),
                 raw: document.querySelectorAll('[data-scroll-id^="tool-input:"]').length,
                 source: read.textContent,
                 command: run.querySelector('.tool-command-text')?.textContent,
@@ -2838,6 +2916,8 @@ final class ConversationWebDocumentTests: XCTestCase {
             })()
             """) as? [String: Any]
         XCTAssertEqual(cards?["bounded"] as? Bool, true)
+        XCTAssertLessThan(cards?["combinedHeight"] as? Double ?? 999, 250, "command and long output share a compact viewport")
+        XCTAssertEqual(cards?["footerOutside"] as? Bool, true)
         XCTAssertEqual(cards?["raw"] as? Int, 0)
         XCTAssertEqual((cards?["source"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines), sourceOutput)
         XCTAssertEqual((cards?["command"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines), "rg -n 'ColladaConverter' tools")
@@ -2858,8 +2938,69 @@ final class ConversationWebDocumentTests: XCTestCase {
         let snapshot = try await webView.takeSnapshot(configuration: nil)
         if let data = snapshot.tiffRepresentation, let bitmap = NSBitmapImageRep(data: data),
            let png = bitmap.representation(using: .png, properties: [:]) {
-            try png.write(to: URL(fileURLWithPath: "/tmp/agentkit-tool-result-cards.png"))
+            try png.write(to: URL(fileURLWithPath: "/tmp/agentkit-detail-polish-light.png"))
         }
+        webView.appearance = NSAppearance(named: .darkAqua)
+        try await Task.sleep(for: .milliseconds(80))
+        let linkContrast = try await webView.evaluateJavaScript("""
+            (() => {
+              const values = color => color.match(/[0-9.]+/g).map(Number);
+              const base = values(getComputedStyle(document.documentElement).backgroundColor);
+              const fill = values(getComputedStyle(document.querySelector('.tool-result-card')).backgroundColor);
+              const alpha = fill[3] ?? 1;
+              const background = fill.slice(0, 3).map((c, i) => c * alpha + base[i] * (1 - alpha));
+              const foreground = values(getComputedStyle(document.querySelector('.tool-result-card a')).color);
+              const luminance = rgb => rgb.slice(0, 3).map(c => c / 255)
+                .map(c => c <= .04045 ? c / 12.92 : ((c + .055) / 1.055) ** 2.4)
+                .reduce((sum, c, i) => sum + c * [.2126, .7152, .0722][i], 0);
+              const light = luminance(foreground), dark = luminance(background);
+              return (Math.max(light, dark) + .05) / (Math.min(light, dark) + .05);
+            })()
+            """) as? Double
+        XCTAssertGreaterThanOrEqual(linkContrast ?? 0, 4.5, "file links stay readable after switching to dark appearance")
+        let darkSnapshot = try await webView.takeSnapshot(configuration: nil)
+        if let data = darkSnapshot.tiffRepresentation, let bitmap = NSBitmapImageRep(data: data),
+           let png = bitmap.representation(using: .png, properties: [:]) {
+            try png.write(to: URL(fileURLWithPath: "/tmp/agentkit-detail-polish-dark.png"))
+        }
+            // The shared command/output viewport still follows live output, yields
+        // while the user reads earlier lines, and resumes at the bottom.
+        func liveDocument(_ revision: UInt64, output: String) -> ConversationWebDocument {
+            let liveTool = ToolNodePayload(callID: "search", toolName: "run_command", args: tools[1].args,
+                                          status: .running, output: output)
+            let liveEntries = entries.map { entry -> ToolGroup.Entry in
+                if case .tool(let tool) = entry, tool.callID == "search" { return .tool(liveTool) }
+                return entry
+            }
+            let active = ToolGroup(id: group.id, entries: liveEntries, isCollecting: true)
+            let liveTurn = ConversationTurn(id: turn.id, userPrompt: turn.userPrompt,
+                blocks: [.toolGroup(active)], footer: nil, isLive: true, startedAt: start)
+            return ConversationWebDocumentBuilder.build(snapshot: .init(timeline: [], turns: [liveTurn]),
+                conversationID: "semantic-fixture", revision: revision, registerAction: registry.register)
+        }
+        func update(_ old: ConversationWebDocument, _ new: ConversationWebDocument) async throws {
+            let accepted = expectation(description: "polish streaming revision \(new.revision)")
+            probe.expectAcknowledgement(revision: Int(new.revision), expectation: accepted)
+            let update = try XCTUnwrap(ConversationWebDocumentDiffer.update(from: old, to: new))
+            let payload = try JSONEncoder().encode(update).base64EncodedString()
+            _ = try await webView.evaluateJavaScript("window.AgentKitWorkbench.applyUpdateBase64('\(payload)')")
+            await fulfillment(of: [accepted], timeout: 5)
+            try await Task.sleep(for: .milliseconds(60))
+        }
+        let live = liveDocument(2, output: runOutput)
+        try await update(document, live)
+        let atTail = try await webView.evaluateJavaScript("(() => { const f = document.querySelector('[data-tool-id=\"search\"] .tool-output-frame'); return f.scrollHeight - f.clientHeight - f.scrollTop < 2; })()") as? Bool
+        XCTAssertEqual(atTail, true)
+        _ = try await webView.evaluateJavaScript("(() => { const f = document.querySelector('[data-tool-id=\"search\"] .tool-output-frame'); f.scrollTop = 0; f.dispatchEvent(new Event('scroll')); })()")
+        let more = liveDocument(3, output: runOutput + "\nnew output while reading")
+        try await update(live, more)
+        let paused = try await webView.evaluateJavaScript("document.querySelector('[data-tool-id=\"search\"] .tool-output-frame').scrollTop") as? Double
+        XCTAssertEqual(paused ?? -1, 0, accuracy: 1)
+        _ = try await webView.evaluateJavaScript("(() => { const f = document.querySelector('[data-tool-id=\"search\"] .tool-output-frame'); f.scrollTop = f.scrollHeight; f.dispatchEvent(new Event('scroll')); })()")
+        let latest = liveDocument(4, output: runOutput + "\nnew output while reading\nlatest output")
+        try await update(more, latest)
+        let resumed = try await webView.evaluateJavaScript("(() => { const f = document.querySelector('[data-tool-id=\"search\"] .tool-output-frame'); return f.scrollHeight - f.clientHeight - f.scrollTop < 2; })()") as? Bool
+        XCTAssertEqual(resumed, true)
     }
     #endif
 }

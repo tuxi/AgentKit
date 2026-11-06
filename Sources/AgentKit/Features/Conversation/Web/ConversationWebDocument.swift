@@ -195,6 +195,7 @@ struct ConversationWebDocument: Codable, Equatable, Sendable {
         let dagEdges: Int?
         /// Action to open the workflow DAG detail (when workflow_id is present).
         let dagOpenActionID: String?
+        var backgroundJobID: String? = nil
         var rawName: String? = nil
         var icon: String? = nil
         var labels: [String: String]? = nil
@@ -782,6 +783,7 @@ enum ConversationWebDocumentBuilder {
                     dagNodes: dag?.nodes.count,
                     dagEdges: dag?.edges?.count,
                     dagOpenActionID: dagOpenActionID,
+                    backgroundJobID: BackgroundJobPresentation.jobID(for: tool),
                     rawName: tool.toolName,
                     icon: presentation.icon,
                     labels: ["input": ToolTranscriptText().text("input"), "output": ToolTranscriptText().text("output"),
@@ -789,7 +791,8 @@ enum ConversationWebDocumentBuilder {
                              "command": ToolTranscriptText().text("command"),
                              "rawDetails": ToolTranscriptText().text("raw.details"),
                              "copy": ToolTranscriptText().text("copy"),
-                             "copyOutput": ToolTranscriptText().text("copy.output")],
+                             "copyOutput": ToolTranscriptText().text("copy.output"),
+                             "waitGroup": ToolTranscriptText().text("job.wait.group")],
                     command: commandForCard,
                     commandActions: previousTool?.args == tool.args ? previousWebTool?.commandActions : commandForCard.map {
                         inlineActions(text: $0, annotations: [], turnID: turn.id,
@@ -874,9 +877,10 @@ enum ConversationWebDocumentBuilder {
                 // the parent DOM also keeps cross-turn selection and VoiceOver
                 // from traversing a duplicated, potentially very large result.
                 text: nil,
-                title: payload.title,
+                title: BackgroundJobPresentation.title(payload),
                 status: payload.status.rawValue,
-                elapsed: payload.formattedElapsed,
+                elapsed: payload.formattedElapsed.map { payload.kind == .job
+                    ? ToolTranscriptText().text("job.elapsed", $0) : $0 },
                 tools: [],
                 childStreamKind: payload.kind.rawValue,
                 actionID: registerAction.map {

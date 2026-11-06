@@ -113,8 +113,8 @@ enum ToolTranscriptPresenter {
         }
         // P8.7 — job_wait 是"阻塞等待后台任务"的专用工具，
         // 长时间 running 是常态，给专属文案避免被读成卡死。
-        if tool.toolName == "job_wait" {
-            return jobWaitPresentation(for: tool)
+        if let operation = BackgroundJobPresentation.operation(tool.toolName) {
+            return jobPresentation(for: tool, operation: operation, text: text)
         }
         // task 委派卡：prompt 含 "/" 会被通用路径缩写截成尾巴（"directories."），
         // 给专属形态。后端把 task_started bracket 接进父流后，childStream 入口卡
@@ -225,23 +225,18 @@ enum ToolTranscriptPresenter {
         return result
     }
 
-    private static func jobWaitPresentation(for tool: ToolNodePayload) -> ToolTranscriptPresentation {
-        let jobID: String? = {
-            if case .object(let dict)? = tool.args {
-                return dict["job_id"]?.stringValue.nilIfEmpty
-            }
-            return nil
-        }()
+    private static func jobPresentation(for tool: ToolNodePayload, operation: String,
+                                        text: ToolTranscriptText) -> ToolTranscriptPresentation {
+        let detail = tool.backgroundJobCommand.map { BackgroundJobPresentation.summary($0, text: text) }
+            ?? BackgroundJobPresentation.jobID(for: tool).map { ToolTranscriptText.bounded($0) }
         return ToolTranscriptPresentation(
-            callID: tool.callID,
-            family: .other,
-            statusTone: statusTone(for: tool),
-            statusText: tool.status == .running ? ToolTranscriptText().text("waiting") : statusText(for: tool),
-            title: "Waiting for background job",
-            detail: jobID,
-            elapsed: tool.elapsedMs.map(formatElapsed),
-            changeSummary: nil,
-            outputKind: .text
+            callID: tool.callID, family: .other, statusTone: statusTone(for: tool),
+            statusText: operation == "wait" && tool.status == .running
+                ? text.text("waiting") : statusText(for: tool, locale: text.locale),
+            title: text.text("job." + operation), detail: detail,
+            elapsed: tool.elapsedMs.map { operation == "wait"
+                ? text.text("job.wait.elapsed", formatElapsed($0)) : formatElapsed($0) },
+            changeSummary: nil, outputKind: .text
         )
     }
 
@@ -562,11 +557,17 @@ enum ToolTranscriptPresenter {
             default: key = nil
             }
             let isCommand = ["run_command", "exec_command", "bash", "shell", "terminal"].contains(tool.toolName.lowercased())
-            let label = isCommand ? text.text("activity.run")
-                : key.map { text.text("activity." + $0) } ?? ToolTranscriptText.bounded(tool.toolName)
+            let jobOperation = BackgroundJobPresentation.operation(tool.toolName)
+            let label = jobOperation.map { text.text("job." + $0) } ?? (isCommand ? text.text("activity.run")
+                : key.map { text.text("activity." + $0) } ?? ToolTranscriptText.bounded(tool.toolName))
             if !labels.contains(label) { labels.append(label) }
         }
-        var parts = [labels.joined(separator: text.text("activity.separator")), text.text(tools.count == 1 ? "calls.one" : "calls.many", tools.count)]
+        let repeatedWaits = group.entries.count == tools.count && tools.count > 1
+            && BackgroundJobPresentation.waitRuns(in: group.entries).count == 1
+            && group.tools.allSatisfy { BackgroundJobPresentation.operation($0.toolName) == "wait"
+                && BackgroundJobPresentation.jobID(for: $0) != nil }
+        var parts = repeatedWaits ? [text.text("job.wait.count", tools.count)]
+            : [labels.joined(separator: text.text("activity.separator")), text.text(tools.count == 1 ? "calls.one" : "calls.many", tools.count)]
         let running = group.tools.filter { $0.status == .running }.count
         let failed = group.tools.filter { $0.status == .failed }.count
         if running > 0 { parts.append(text.text("count.running", running)) }

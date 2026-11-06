@@ -1391,14 +1391,20 @@ function useTailFollow(
 
     const followThreshold = 8;
     let followTail = true;
+    let lastScrollTop = container.scrollTop;
     const pinToBottom = () => {
       if (!followTail) return;
       container.scrollTop = container.scrollHeight;
+      lastScrollTop = container.scrollTop;
     };
     const handleScroll = () => {
-      const distanceFromBottom =
-        container.scrollHeight - container.scrollTop - container.clientHeight;
-      followTail = distanceFromBottom <= followThreshold;
+      const top = container.scrollTop;
+      const distanceFromBottom = container.scrollHeight - top - container.clientHeight;
+      if (distanceFromBottom <= followThreshold) followTail = true;
+      // Appending output can enlarge the distance before ResizeObserver runs.
+      // Only an actual move upward pauses follow, not that layout-only gap.
+      else if (top < lastScrollTop - 1) followTail = false;
+      lastScrollTop = top;
     };
 
     pinToBottom();
@@ -1419,15 +1425,17 @@ function ToolResultCard({ tool, outputRef }: {
   if (!tool.command && !tool.output && !tool.outcomeText) return null;
   return (
     <div className="tool-result-card" data-kind={tool.resultKind}>
-      {tool.command ? <>
-        <div className="tool-card-caption">{tool.labels?.command}</div>
-        <pre className="tool-command-text" data-scroll-id={`tool-command:${tool.id}`}>
-          <code>{linkifiedActionText(tool.command, tool.commandActions ?? [])}</code>
-        </pre>
-      </> : null}
-      {tool.output ? (
+      {tool.command || tool.output ? (
         <div ref={outputRef} className="overflow-frame tool-output-frame" data-scroll-id={`tool-output:${tool.id}`}>
-          <pre><code>{linkifiedActionText(tool.output, tool.outputActions)}</code></pre>
+          <div className="tool-result-content-body">
+            {tool.command ? <>
+              <div className="tool-card-caption">{tool.labels?.command}</div>
+              <pre className="tool-command-text" data-scroll-id={`tool-command:${tool.id}`}>
+                <code>{linkifiedActionText(tool.command, tool.commandActions ?? [])}</code>
+              </pre>
+            </> : null}
+            {tool.output ? <pre><code>{linkifiedActionText(tool.output, tool.outputActions)}</code></pre> : null}
+          </div>
         </div>
       ) : null}
       {tool.outcomeText || tool.copyOutputActionID ? (
@@ -1696,6 +1704,22 @@ function ToolGroupBlock({ block }: { block: ConversationWebBlock }): React.JSX.E
   );
   const tools = new Map(block.tools.map((tool) => [`tool:${tool.id}`, tool]));
   const thinking = new Map((block.activityThinking ?? []).map((item) => [`thinking:${item.id}`, item]));
+  // Collapse only adjacent waits for the same explicit job_id. Narration,
+  // thinking, other tools and activity boundaries keep their original order.
+  const rows: Array<{ ids: string[]; jobID?: string }> = [];
+  for (const id of block.activityOrder ?? block.tools.map((tool) => `tool:${tool.id}`)) {
+    const tool = tools.get(id);
+    const jobID = tool?.rawName === "job_wait" ? tool.backgroundJobID : undefined;
+    const previous = rows.at(-1);
+    if (jobID && previous?.jobID === jobID) previous.ids.push(id);
+    else rows.push({ ids: [id], jobID });
+  }
+  const renderEntry = (id: string) => {
+    const tool = tools.get(id);
+    if (tool) return <Tool key={id} tool={tool} />;
+    const thought = thinking.get(id);
+    return thought ? <ThinkingBlock key={id} block={thought} /> : null;
+  };
   return (
     <details
       className="tool-group"
@@ -1714,11 +1738,23 @@ function ToolGroupBlock({ block }: { block: ConversationWebBlock }): React.JSX.E
         <span className="disclosure-chevron" aria-hidden="true">›</span>
       </summary>
       <div className="tool-group-tools">
-        {open ? (block.activityOrder ?? block.tools.map((tool) => `tool:${tool.id}`)).map((id) => {
-          const tool = tools.get(id);
-          if (tool) return <Tool key={id} tool={tool} />;
-          const thought = thinking.get(id);
-          return thought ? <ThinkingBlock key={id} block={thought} /> : null;
+        {open ? rows.map(({ ids }) => {
+          if (ids.length === 1) return renderEntry(ids[0]);
+          if (rows.length === 1) return <div key={ids[0]}>{ids.map(renderEntry)}</div>;
+          const first = tools.get(ids[0])!;
+          const waits = ids.map((id) => tools.get(id)!);
+          const status = waits.some((tool) => tool.status === "failed") ? "failed"
+            : waits.some((tool) => tool.status === "running") ? "running" : "completed";
+          return <details className="job-wait-group" key={ids[0]}
+            data-disclosure-id={`job-waits:${first.id}`} data-status={status}>
+            <summary className="interactive tool-group-summary" data-focus-id={`job-waits:${first.id}`}>
+              <span>{first.labels?.waitGroup?.replace("{count}", String(ids.length)) ?? `${first.name} · ${ids.length}`}</span>
+              {first.detail ? <span className="tool-detail-summary">{first.detail}</span> : null}
+              {status !== "completed" ? <span className="tool-status" data-tone={status}>{visibleExecutionStatus(status)}</span> : null}
+              <span className="disclosure-chevron" aria-hidden="true">›</span>
+            </summary>
+            {ids.map(renderEntry)}
+          </details>;
         }) : null}
       </div>
     </details>
@@ -1791,9 +1827,7 @@ const Block = memo(function Block({
           onClick={(event) => activateSelectableAction(event, block.actionID)}
           onKeyDown={(event) => activateSelectableAction(event, block.actionID)}
         >
-          <span className="child-stream-kind">
-            {block.childStreamKind === "job" ? "Job" : "Subagent"}
-          </span>
+          {block.childStreamKind !== "job" ? <span className="child-stream-kind">Subagent</span> : null}
           <span className="child-stream-title">{block.title}</span>
           {childStatus ? (
             <span className="tool-status" data-tone={block.status}>{childStatus}</span>
