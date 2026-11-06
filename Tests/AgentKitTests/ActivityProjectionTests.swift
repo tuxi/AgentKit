@@ -43,6 +43,29 @@ final class ActivityProjectionTests: XCTestCase {
         XCTAssertEqual(turn.processHeaderLabel(hasProcess: true), "用时 48秒 · 1 次失败")
     }
 
+    func testOnlyTrailingLiveActivityDefaultsOpenAndCompletionClosesIt() {
+        let nodes = [node("u", .message(.init(role: .user, text: "help"))),
+                     node("r", .tool(tool("read", "read_file")))]
+        let projection = TimelineProjection()
+        let active = projection.buildTurn(nodes: nodes, isLive: true)
+        guard case .toolGroup(let group) = active.blocks[0] else { return XCTFail("expected group") }
+        XCTAssertTrue(group.isCollecting, "between invocations it still accepts more tools")
+        let completed = projection.buildTurn(nodes: nodes, isLive: false)
+        guard case .toolGroup(let finished) = completed.blocks[0] else { return XCTFail("expected group") }
+        XCTAssertEqual(group.id, finished.id)
+        XCTAssertFalse(finished.isCollecting)
+        let narrated = projection.buildTurn(nodes: nodes + [node("text", .message(.init(role: .assistant, text: "Next step")))], isLive: true)
+        guard case .toolGroup(let sealed) = narrated.blocks[0] else { return XCTFail("expected group") }
+        XCTAssertFalse(sealed.isCollecting, "visible narration seals the activity")
+        var state = TranscriptDocumentState()
+        XCTAssertTrue(state.isToolExpanded(callID: group.id, defaultExpanded: group.isCollecting))
+        XCTAssertFalse(state.isToolExpanded(callID: group.id, defaultExpanded: finished.isCollecting))
+        state.toggleTool(callID: group.id, defaultExpanded: true)
+        XCTAssertFalse(state.isToolExpanded(callID: group.id, defaultExpanded: true), "manual collapse survives more live entries")
+        state.toggleTool(callID: group.id, defaultExpanded: true)
+        XCTAssertTrue(state.isToolExpanded(callID: group.id, defaultExpanded: false), "manual opening survives completion")
+    }
+
     func testFirstEntryIdentitySurvivesGrowthCompletionAndTurnIsolation() throws {
         let projection = TimelineProjection()
         let prefix = [node("u", .message(.init(role: .user, text: "help"))),
@@ -133,9 +156,9 @@ final class ActivityProjectionTests: XCTestCase {
         let expanded = TurnTranscriptBuilder.build(turn: turn,
             state: TranscriptDocumentState(expandedToolIDs: ["group:a"], expandedThinkingIDs: ["thought"]))
         let text = expanded.attributedString.string
-        let read = text.range(of: "Read")
+        let read = text.range(of: ToolTranscriptText().text("read.generic"), options: .backwards)
         let thought = text.range(of: "reasoning in between")
-        let search = text.range(of: "Search")
+        let search = text.range(of: ToolTranscriptText().text("search.generic"), options: .backwards)
         XCTAssertNotNil(read)
         XCTAssertNotNil(thought)
         XCTAssertNotNil(search)

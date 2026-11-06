@@ -1346,23 +1346,25 @@ const TurnDisclosureContext = React.createContext<{
 function useStreamingDisclosure(
   streaming: boolean,
   disclosureID: string,
+  userControlsDefault = false,
 ): { open: boolean; onSummaryClick: (event: React.MouseEvent<HTMLElement>) => void } {
-  const [localExpanded, setLocalExpanded] = useState(false);
+  const [localExpanded, setLocalExpanded] = useState<boolean | undefined>(undefined);
   const context = React.useContext(TurnDisclosureContext);
   const key = `${context?.scope}:${disclosureID}`;
-  const userExpanded = context ? context.expanded[key] ?? false : localExpanded;
+  const preference = context ? context.expanded[key] : localExpanded;
+  const open = userControlsDefault ? preference ?? streaming : streaming || (preference ?? false);
   const onSummaryClick = (event: React.MouseEvent<HTMLElement>) => {
     if (!window.getSelection()?.isCollapsed) {
       event.preventDefault();
       return;
     }
     event.preventDefault();
-    if (!streaming) {
-      if (context) context.setExpanded((values) => ({ ...values, [key]: !values[key] }));
-      else setLocalExpanded((value) => !value);
+    if (userControlsDefault || !streaming) {
+      if (context) context.setExpanded((values) => ({ ...values, [key]: !open }));
+      else setLocalExpanded(!open);
     }
   };
-  return { open: streaming || userExpanded, onSummaryClick };
+  return { open, onSummaryClick };
 }
 
 /**
@@ -1410,6 +1412,61 @@ function useTailFollow(
   }, [active, container]);
 }
 
+function ToolResultCard({ tool, outputRef }: {
+  tool: ConversationWebTool;
+  outputRef: (element: HTMLDivElement | null) => void;
+}): React.JSX.Element | null {
+  if (!tool.command && !tool.output && !tool.outcomeText) return null;
+  return (
+    <div className="tool-result-card" data-kind={tool.resultKind}>
+      {tool.command ? <>
+        <div className="tool-card-caption">{tool.labels?.command}</div>
+        <pre className="tool-command-text" data-scroll-id={`tool-command:${tool.id}`}>
+          <code>{linkifiedActionText(tool.command, tool.commandActions ?? [])}</code>
+        </pre>
+      </> : null}
+      {tool.output ? (
+        <div ref={outputRef} className="overflow-frame tool-output-frame" data-scroll-id={`tool-output:${tool.id}`}>
+          <pre><code>{linkifiedActionText(tool.output, tool.outputActions)}</code></pre>
+        </div>
+      ) : null}
+      {tool.outcomeText || tool.copyOutputActionID ? (
+        <div className="tool-result-footer">
+          {tool.outcomeText ? <span className="tool-result-outcome" data-tone={tool.outcomeTone}>
+            <span aria-hidden="true">{tool.outcomeTone === "completed" ? "✓" : tool.outcomeTone === "failed" ? "!" : "◷"}</span>
+            {tool.outcomeText}
+          </span> : null}
+          {tool.copyOutputActionID ? <ActionButton actionID={tool.copyOutputActionID}
+            focusID={`tool-output-copy:${tool.id}`} tooltip={tool.labels?.copyOutput}>
+            {tool.labels?.copy}
+          </ActionButton> : null}
+        </div>
+      ) : null}
+    </div>
+  );
+}
+
+function RawToolDetails({ tool }: { tool: ConversationWebTool }): React.JSX.Element {
+  const { open, onSummaryClick } = useStreamingDisclosure(false, `raw:${tool.id}`);
+  return (
+    <details className="tool-raw-details" open={open} data-disclosure-id={`tool-raw:${tool.id}`}>
+      <summary onClick={onSummaryClick} data-focus-id={`tool-raw:${tool.id}`}>
+        {tool.labels?.rawDetails ?? tool.rawName}
+        <span className="disclosure-chevron" aria-hidden="true">›</span>
+      </summary>
+      {open ? <>
+        {tool.rawName ? <section><h4>{tool.labels?.tool}</h4><code>{tool.rawName}</code></section> : null}
+        {tool.arguments ? <section>
+          <h4>{tool.labels?.input}</h4>
+          <div className="overflow-frame code-frame" data-scroll-id={`tool-input:${tool.id}`}>
+            <pre><code>{linkifiedActionText(tool.arguments, tool.argumentActions)}</code></pre>
+          </div>
+        </section> : null}
+      </> : null}
+    </details>
+  );
+}
+
 function Tool({ tool }: { tool: ConversationWebTool }): React.JSX.Element {
   const statusText = visibleExecutionStatus(tool.status, tool.statusText);
   // Auto-expand while the tool runs; collapse when it finishes.
@@ -1431,6 +1488,7 @@ function Tool({ tool }: { tool: ConversationWebTool }): React.JSX.Element {
         data-focus-id={`tool:${tool.id}`}
         onClick={onSummaryClick}
       >
+        {tool.icon ? <span className="tool-action-icon" aria-hidden="true">{tool.icon}</span> : null}
         <span className="tool-title">{tool.name}</span>
         {tool.changeSummary ? <ChangeSummary value={tool.changeSummary} /> : null}
         {tool.detail ? <span className="tool-detail-summary">{tool.detail}</span> : null}
@@ -1440,36 +1498,9 @@ function Tool({ tool }: { tool: ConversationWebTool }): React.JSX.Element {
         {tool.elapsed ? <span className="tool-elapsed">{tool.elapsed}</span> : null}
         <span className="disclosure-chevron" aria-hidden="true">›</span>
       </summary>
-      <div className="tool-detail">
-        {tool.arguments ? (
-          <section>
-            <h4>Input</h4>
-            <div className="overflow-frame code-frame" data-scroll-id={`tool-input:${tool.id}`}>
-              <pre><code>{linkifiedActionText(tool.arguments, tool.argumentActions)}</code></pre>
-            </div>
-          </section>
-        ) : null}
-        {tool.output ? (
-          <section>
-            <div className="detail-heading">
-              <h4>Output</h4>
-              {tool.copyOutputActionID ? (
-                <ActionButton
-                  actionID={tool.copyOutputActionID}
-                  focusID={`tool-output-copy:${tool.id}`}
-                  tooltip="Copy output"
-                >Copy</ActionButton>
-              ) : null}
-            </div>
-            <div
-              ref={setOutputFrame}
-              className="overflow-frame code-frame tool-output-frame"
-              data-scroll-id={`tool-output:${tool.id}`}
-            >
-              <pre><code>{linkifiedActionText(tool.output, tool.outputActions)}</code></pre>
-            </div>
-          </section>
-        ) : null}
+      {open ? <div className="tool-detail">
+        <ToolResultCard tool={tool} outputRef={setOutputFrame} />
+        <RawToolDetails tool={tool} />
         {tool.dagNodes ? (
           <section className="dag-summary-card">
             <div className="dag-summary-header">
@@ -1511,7 +1542,7 @@ function Tool({ tool }: { tool: ConversationWebTool }): React.JSX.Element {
             {asset.title}
           </ActionButton>
         ))}
-      </div>
+      </div> : null}
     </details>
   );
 }
@@ -1642,7 +1673,7 @@ function ThinkingBlock({ block }: { block: ConversationWebBlock }): React.JSX.El
         data-focus-id={`thinking:${block.id}`}
         onClick={onSummaryClick}
       >
-        <span className="thinking-label">{block.title ?? "Thinking"}</span>
+        <span className="thinking-label">{block.title}</span>
         <span className="disclosure-chevron" aria-hidden="true">›</span>
       </summary>
       <div className="thinking-body">
@@ -1657,9 +1688,12 @@ function ThinkingBlock({ block }: { block: ConversationWebBlock }): React.JSX.El
 }
 
 function ToolGroupBlock({ block }: { block: ConversationWebBlock }): React.JSX.Element {
-  const statusText = visibleExecutionStatus(block.status);
-  // Activity disclosure is user controlled throughout streaming and completion.
-  const { open, onSummaryClick } = useStreamingDisclosure(!block.activityOrder && block.status === "running", `group:${block.id}`);
+  const statusText = visibleExecutionStatus(block.status, block.statusText);
+  // Only the activity still accepting entries defaults open. Untouched groups
+  // close when sealed; explicit user choices survive growth and completion.
+  const { open, onSummaryClick } = useStreamingDisclosure(
+    block.activityOrder ? !!block.isCollecting : block.status === "running", `group:${block.id}`, !!block.activityOrder,
+  );
   const tools = new Map(block.tools.map((tool) => [`tool:${tool.id}`, tool]));
   const thinking = new Map((block.activityThinking ?? []).map((item) => [`thinking:${item.id}`, item]));
   return (
@@ -2470,7 +2504,7 @@ const Turn = memo(function Turn({
                   data-focus-id={`turn-process:${turn.id}`}
                 >
                   <span className="turn-process-label">{processSummaryLabel(turn)}</span>
-                  {failedProcessCalls > 0 ? <span className="tool-status" data-tone="failed">{failedProcessCalls} 次失败</span> : null}
+                  {failedProcessCalls > 0 ? <span className="tool-status" data-tone="failed">{turn.processFailureText ?? String(failedProcessCalls)}</span> : null}
                   <span className="disclosure-chevron" aria-hidden="true">›</span>
                 </summary>
                 <div className="turn-process-body">

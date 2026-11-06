@@ -100,12 +100,16 @@ extension ConversationTurn {
         var parts: [String] = []
         if let duration = formattedDuration { parts.append("用时 \(duration)") }
         if let changes = changes?.summaryLabel { parts.append(changes) }
+        if let failures = processFailureSummary { parts.append(failures) }
+        return parts.isEmpty ? nil : parts.joined(separator: " · ")
+    }
+
+    var processFailureSummary: String? {
         let failed = displaySplit.process.reduce(0) { count, block in
             guard case .toolGroup(let group) = block else { return count }
             return count + group.tools.filter { $0.status == .failed }.count
         }
-        if failed > 0 { parts.append("\(failed) 次失败") }
-        return parts.isEmpty ? nil : parts.joined(separator: " · ")
+        return failed > 0 ? ToolTranscriptText().text(failed == 1 ? "failures.one" : "failures.many", failed) : nil
     }
 
     /// Header text for the fold affordance. Facts when we have them, otherwise

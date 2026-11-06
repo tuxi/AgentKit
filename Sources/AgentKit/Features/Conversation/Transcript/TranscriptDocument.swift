@@ -21,7 +21,7 @@ private typealias PlatformFont = UIFont
 // MARK: - Transcript Actions
 
 enum TranscriptAction: Hashable {
-    case toggleTool(callID: String)
+    case toggleTool(callID: String, defaultExpanded: Bool = false)
     case toggleThinking(id: String)
     case openArtifact(callID: String)
     case openAsset(AssetReference)
@@ -38,10 +38,22 @@ struct TranscriptDocumentState: Hashable {
     var expandedToolIDs: Set<String> = []
     var expandedThinkingIDs: Set<String> = []
 
-    mutating func toggleTool(callID: String) {
-        if expandedToolIDs.contains(callID) {
+    /// Explicit negative choices are separate from the live default so a user
+    /// can close an active group without it reopening on the next event.
+    var collapsedToolIDs: Set<String> = []
+
+    func isToolExpanded(callID: String, defaultExpanded: Bool = false) -> Bool {
+        if expandedToolIDs.contains(callID) { return true }
+        if collapsedToolIDs.contains(callID) { return false }
+        return defaultExpanded
+    }
+
+    mutating func toggleTool(callID: String, defaultExpanded: Bool = false) {
+        if isToolExpanded(callID: callID, defaultExpanded: defaultExpanded) {
             expandedToolIDs.remove(callID)
+            collapsedToolIDs.insert(callID)
         } else {
+            collapsedToolIDs.remove(callID)
             expandedToolIDs.insert(callID)
         }
     }
@@ -172,13 +184,13 @@ enum TurnTranscriptBuilder {
         to builder: inout TranscriptAttributedBuilder
     ) {
         let expansionID = groupExpansionID(for: group)
-        let expanded = state.expandedToolIDs.contains(expansionID)
+        let expanded = state.isToolExpanded(callID: expansionID, defaultExpanded: group.isCollecting)
         let presentation = ToolTranscriptPresenter.groupPresentation(for: group)
 
         builder.appendToolGroupSummary(
             presentation,
             expanded: expanded,
-            action: .toggleTool(callID: expansionID)
+            action: .toggleTool(callID: expansionID, defaultExpanded: group.isCollecting)
         )
         if expanded {
             for entry in group.entries {
@@ -228,6 +240,7 @@ enum TurnTranscriptBuilder {
         presentation: ToolTranscriptPresentation,
         to builder: inout TranscriptAttributedBuilder
     ) {
+        builder.appendIndentedLabel(tool.toolName)
         if let artifact = tool.artifact {
             builder.appendIndentedLabel("Artifact")
             builder.appendActionLine(
@@ -240,7 +253,7 @@ enum TurnTranscriptBuilder {
             }
         }
         if let argsText = formattedArgs(tool.args) {
-            builder.appendIndentedLabel("Input")
+            builder.appendIndentedLabel(ToolTranscriptText().text("input"))
             builder.appendCode(argsText, language: "json")
         }
 
@@ -248,7 +261,7 @@ enum TurnTranscriptBuilder {
             if presentation.statusTone == .failed {
                 builder.appendToolFailureDetail(tool.output)
             } else {
-                builder.appendIndentedLabel("Output")
+                builder.appendIndentedLabel(ToolTranscriptText().text("output"))
                 switch presentation.outputKind {
                 case .diff:
                     builder.appendDiff(tool.output)
@@ -428,7 +441,7 @@ private struct TranscriptAttributedBuilder {
         let actionID = register(.toggleThinking(id: id))
         let block = makeBlock(.thinking)
         let indicator = isExpanded ? "⌄" : "›"
-        let label = payload.isStreaming ? "Thinking…" : "Thought"
+        let label = ToolTranscriptText().thinkingTitle(streaming: payload.isStreaming)
 
         // Header row — always visible, clickable to toggle.
         var headerAttrs = thinkingLabelAttributes

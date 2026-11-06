@@ -349,6 +349,9 @@ public struct ToolGroup: Identifiable, Sendable, Equatable {
     public let id: String
     public let entries: [Entry]
     public let isActivityGroup: Bool
+    /// The trailing activity of a live turn is still accepting entries, even
+    /// between model invocations when all current tools have finished.
+    public let isCollecting: Bool
     public var isThinking: Bool {
         entries.contains { if case .thinking(_, let payload) = $0 { return payload.isStreaming }; return false }
     }
@@ -360,12 +363,14 @@ public struct ToolGroup: Identifiable, Sendable, Equatable {
         self.id = id
         self.entries = tools.map(Entry.tool)
         self.isActivityGroup = false
+        self.isCollecting = false
     }
 
-    public init(id: String, entries: [Entry]) {
+    public init(id: String, entries: [Entry], isCollecting: Bool = false) {
         self.id = id
         self.entries = entries
         self.isActivityGroup = true
+        self.isCollecting = isCollecting
     }
 
     public var summary: String {

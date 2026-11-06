@@ -17,14 +17,14 @@ struct ToolCallGroupView: View {
     let onAction: (TranscriptAction) -> Void
 
     private var isExpanded: Bool {
-        documentState.expandedToolIDs.contains(group.id)
+        documentState.isToolExpanded(callID: group.id, defaultExpanded: group.isCollecting)
     }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
             // Collapsed header
             Button {
-                onAction(.toggleTool(callID: group.id))
+                onAction(.toggleTool(callID: group.id, defaultExpanded: group.isCollecting))
             } label: {
                 HStack(spacing: 6) {
                     Image(systemName: "wrench.and.screwdriver")
@@ -49,9 +49,18 @@ struct ToolCallGroupView: View {
                 ForEach(group.entries) { entry in
                     switch entry {
                     case .tool(let tool):
-                        Text(ToolTranscriptPresenter.presentation(for: tool).title)
-                            .font(.caption.weight(.medium))
-                            .padding(.horizontal, 10)
+                        let presentation = ToolTranscriptPresenter.presentation(for: tool)
+                        HStack(spacing: 6) {
+                            Image(systemName: presentation.systemImage)
+                            Text(presentation.title)
+                            if let changes = presentation.changeSummary { Text(changes) }
+                            if let status = presentation.statusText { Text(status) }
+                        }
+                        .font(.caption.weight(.medium))
+                        .padding(.horizontal, 10)
+                        if let detail = presentation.detail {
+                            Text(detail).font(.caption2).foregroundStyle(.secondary).padding(.horizontal, 10)
+                        }
                         toolDetailView(tool)
                     case .thinking(let id, let payload):
                         ThinkingCardView(id: id, payload: payload,
@@ -76,7 +85,7 @@ struct ToolCallGroupView: View {
             HStack(spacing: 3) {
                 ProgressView()
                     .scaleEffect(0.5)
-                Text("运行中")
+                Text(ToolTranscriptText().text("running"))
                     .font(.caption2)
             }
             .foregroundStyle(.orange)
@@ -99,9 +108,10 @@ struct ToolCallGroupView: View {
     @ViewBuilder
     private func toolDetailView(_ tool: ToolNodePayload) -> some View {
         VStack(alignment: .leading, spacing: 4) {
+            Text(tool.toolName).font(.caption2).foregroundStyle(.tertiary)
             // Args (if available)
             if let args = tool.args, !args.isEmpty {
-                Text("输入")
+                Text(ToolTranscriptText().text("input"))
                     .font(.caption2.weight(.semibold))
                     .foregroundStyle(.tertiary)
                 MarkdownRenderer(text: args.prettyPrinted, baseFont: .caption)
@@ -111,7 +121,7 @@ struct ToolCallGroupView: View {
                 if let dag = tryParseDAG(from: tool.output) {
                     workflowToolDAGView(dag: dag, toolName: tool.toolName)
                 } else {
-                    Text("输出")
+                    Text(ToolTranscriptText().text("output"))
                         .font(.caption2.weight(.semibold))
                         .foregroundStyle(.tertiary)
                         .padding(.top, 2)
@@ -123,7 +133,7 @@ struct ToolCallGroupView: View {
                 HStack(spacing: 4) {
                     Image(systemName: "exclamationmark.triangle.fill")
                         .font(.caption2)
-                    Text("工具执行失败")
+                    Text(ToolTranscriptText().text("failed"))
                         .font(.caption2)
                     if let code = tool.exitCode {
                         Text("(exit \(code))")

@@ -11,6 +11,14 @@ export type BlockKind =
 export interface ConversationWebTool {
   id: string;
   name: string;
+  rawName?: string;
+  icon?: string;
+  labels?: Record<string, string>;
+  command?: string;
+  commandActions?: InlineAction[];
+  resultKind?: "terminal" | "search" | "file" | "generic";
+  outcomeText?: string;
+  outcomeTone?: string;
   status: string;
   statusText?: string;
   detail?: string;
@@ -52,6 +60,8 @@ export interface ConversationWebBlock {
   status?: string;
   elapsed?: string;
   tools: ConversationWebTool[];
+  statusText?: string;
+  isCollecting?: boolean;
   activityOrder?: string[];
   activityThinking?: ConversationWebBlock[];
   childStreamKind?: "task" | "job";
@@ -133,6 +143,7 @@ export interface ConversationWebTurn {
   trajectoryActionID?: string;
   /// Wall-clock duration of the turn ("24分40秒"). Absent while live.
   elapsedText?: string;
+  processFailureText?: string;
   /// `HH:mm` the turn ended, rendered next to the turn actions.
   finishedAtClock?: string;
   /// Epoch milliseconds the turn started. The live turn ticks

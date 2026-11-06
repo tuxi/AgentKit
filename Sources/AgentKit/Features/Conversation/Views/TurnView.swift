@@ -255,8 +255,8 @@ struct TurnView: View, Equatable {
 
     private func handleTranscriptAction(_ action: TranscriptAction) {
         switch action {
-        case .toggleTool(let callID):
-            documentState.toggleTool(callID: callID)
+        case .toggleTool(let callID, let defaultExpanded):
+            documentState.toggleTool(callID: callID, defaultExpanded: defaultExpanded)
 
         case .toggleThinking(let id):
             documentState.toggleThinking(id: id)

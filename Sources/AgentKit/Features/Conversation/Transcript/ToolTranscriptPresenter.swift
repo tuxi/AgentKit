@@ -18,6 +18,30 @@ struct ToolTranscriptPresentation: Hashable {
     let changeSummary: String?
     let outputKind: ToolTranscriptOutputKind
 
+    /// Existing transcript glyphs / SF Symbols, shared by the Web and native rows.
+    var icon: String {
+        switch family {
+        case .read: return "□"
+        case .list: return "≡"
+        case .search: return "⌕"
+        case .create: return "+"
+        case .edit: return "±"
+        case .terminal: return "$"
+        default: return "◇"
+        }
+    }
+    var systemImage: String {
+        switch family {
+        case .read: return "doc.text"
+        case .list: return "folder"
+        case .search: return "magnifyingglass"
+        case .create: return "doc.badge.plus"
+        case .edit: return "pencil"
+        case .terminal: return "terminal"
+        default: return "wrench.and.screwdriver"
+        }
+    }
+
     var compactLine: String {
         var parts = [title]
         if let changeSummary {
@@ -78,7 +102,15 @@ enum ToolTranscriptOutputKind: Hashable {
 
 enum ToolTranscriptPresenter {
 
-    static func presentation(for tool: ToolNodePayload) -> ToolTranscriptPresentation {
+    static func presentation(for tool: ToolNodePayload, locale: String? = nil) -> ToolTranscriptPresentation {
+        let text = ToolTranscriptText(locale: locale)
+        if let summary = semanticSummary(for: tool, text: text) {
+            return ToolTranscriptPresentation(callID: tool.callID, family: summary.family,
+                statusTone: statusTone(for: tool), statusText: statusText(for: tool, locale: locale),
+                title: ToolTranscriptText.bounded(summary.title, limit: 180), detail: summary.detail,
+                elapsed: tool.elapsedMs.map(formatElapsed), changeSummary: changeSummary(for: tool),
+                outputKind: outputKind(for: tool, family: ["run_command", "exec_command", "bash", "shell", "terminal"].contains(tool.toolName.lowercased()) ? .terminal : summary.family))
+        }
         // P8.7 — job_wait 是"阻塞等待后台任务"的专用工具，
         // 长时间 running 是常态，给专属文案避免被读成卡死。
         if tool.toolName == "job_wait" {
@@ -93,7 +125,13 @@ enum ToolTranscriptPresenter {
         if let presentation = sessionPresentation(for: tool) {
             return presentation
         }
-        let family = family(for: tool)
+        // Do not infer file/search semantics from substrings in unknown or MCP names.
+        guard let family = legacyFamily(for: tool.toolName) else {
+            return ToolTranscriptPresentation(callID: tool.callID, family: .other,
+                statusTone: statusTone(for: tool), statusText: statusText(for: tool, locale: locale),
+                title: text.text("unknown", ToolTranscriptText.bounded(tool.toolName)), detail: nil,
+                elapsed: tool.elapsedMs.map(formatElapsed), changeSummary: changeSummary(for: tool), outputKind: .text)
+        }
         let target = targetValue(for: tool)
         let displayTarget = target.map(shortDisplayName)
 
@@ -110,15 +148,81 @@ enum ToolTranscriptPresenter {
         )
     }
 
-    static func groupPresentation(for group: ToolGroup) -> ToolTranscriptGroupPresentation {
-        let tools = group.tools.map(presentation(for:))
+    static func groupPresentation(for group: ToolGroup, locale: String? = nil) -> ToolTranscriptGroupPresentation {
+        let tools = group.tools.map { presentation(for: $0, locale: locale) }
         return ToolTranscriptGroupPresentation(
             callID: group.id,
-            summary: group.isActivityGroup ? activitySummary(for: group, tools: tools) : groupSummary(for: tools),
+            summary: group.isActivityGroup ? activitySummary(for: group, tools: tools, text: ToolTranscriptText(locale: locale)) : groupSummary(for: tools),
             statusTone: group.isThinking && !tools.contains(where: { $0.statusTone == .failed })
                 ? .running : groupStatusTone(for: tools),
             tools: tools
         )
+    }
+
+    /// Original command for the explicitly expanded result card. Unlike the
+    /// compact header this is full source data, matching the raw-arguments view.
+    static func commandValue(for tool: ToolNodePayload) -> String? {
+        let name = tool.toolName.lowercased().replacingOccurrences(of: "-", with: "_")
+        guard ["run_command", "exec_command", "bash", "shell", "terminal"].contains(name),
+              case .object(let args)? = tool.args else { return nil }
+        for key in ["command", "cmd"] {
+            if case .string(let value)? = args[key], !value.isEmpty { return value }
+        }
+        return nil
+    }
+
+    private static func semanticSummary(for tool: ToolNodePayload, text: ToolTranscriptText) -> ToolCommandPresentation.Summary? {
+        let name = tool.toolName.lowercased().replacingOccurrences(of: "-", with: "_")
+        let args: [String: JSONValue]
+        if case .object(let values)? = tool.args { args = values } else { args = [:] }
+        func value(_ keys: [String]) -> String? {
+            keys.lazy.compactMap { key -> String? in
+                guard case .string(let value)? = args[key], !value.isEmpty else { return nil }
+                return value
+            }.first
+        }
+        let family: ToolTranscriptFamily
+        let action: String
+        switch name {
+        case "read_file", "read_files", "view_file": family = .read; action = "read"
+        case "list_files", "list_directory", "list_dir": family = .list; action = "list"
+        case "grep", "rg", "search_code", "search_files", "file_search": family = .search; action = "search"
+        case "edit_file", "apply_patch", "patch_file", "replace_in_file": family = .edit; action = "edit"
+        case "write_file": family = .create; action = "write"
+        case "create_file": family = .create; action = "create"
+        case "run_command", "exec_command", "bash", "shell", "terminal":
+            let command = value(["command", "cmd"])
+            if let command, let summary = ToolCommandPresentation.summarize(command, text: text) { return summary }
+            return .init(family: .terminal, title: text.text("run"),
+                         detail: command.map { ToolCommandPresentation.preview($0, text: text) })
+        default: return nil
+        }
+        let path = value(["file_path", "path", "file", "directory"]) ?? tool.artifact?.path
+        let boundedPath = path.map { ToolTranscriptText.bounded($0) }
+        if family == .search {
+            let pattern = value(["pattern", "query", "search_term", "regex"])
+            return .init(family: family,
+                title: pattern.map { text.text("search", ToolTranscriptText.bounded($0)) } ?? text.text("search.generic"),
+                detail: boundedPath.map { text.text("scope", $0) })
+        }
+        let target = path.map { ToolTranscriptText.bounded(($0 as NSString).lastPathComponent) }
+        if family == .read, let target,
+           let start = positiveInteger(args["start_line"]), let end = positiveInteger(args["end_line"]), end >= start {
+            return .init(family: family, title: text.text("view.lines", target, start, end), detail: boundedPath)
+        }
+        return .init(family: family, title: target.map { text.text(action, $0) } ?? text.text(action + ".generic"),
+                     detail: path != target ? boundedPath : nil)
+    }
+
+    private static func positiveInteger(_ value: JSONValue?) -> Int? {
+        let result: Int?
+        switch value {
+        case .integer(let number): result = number
+        case .number(let number): result = Int(exactly: number)
+        default: result = nil
+        }
+        guard let result, result > 0, result <= 10_000_000 else { return nil }
+        return result
     }
 
     private static func jobWaitPresentation(for tool: ToolNodePayload) -> ToolTranscriptPresentation {
@@ -132,7 +236,7 @@ enum ToolTranscriptPresenter {
             callID: tool.callID,
             family: .other,
             statusTone: statusTone(for: tool),
-            statusText: tool.status == .running ? "waiting" : statusText(for: tool),
+            statusText: tool.status == .running ? ToolTranscriptText().text("waiting") : statusText(for: tool),
             title: "Waiting for background job",
             detail: jobID,
             elapsed: tool.elapsedMs.map(formatElapsed),
@@ -285,12 +389,7 @@ enum ToolTranscriptPresenter {
             }
             return "Workflow"
         }
-        if family == .terminal {
-            if let target, !target.isEmpty {
-                return "Run \(terminalCommandPrefix(target))"
-            }
-            return "Run command"
-        }
+        if family == .terminal { return ToolTranscriptText().text("run") }
         // download_file — show filename not URL.
         if tool.toolName == "download_file" {
             if let target, !target.isEmpty {
@@ -349,49 +448,18 @@ enum ToolTranscriptPresenter {
         }
     }
 
-    private static func family(for tool: ToolNodePayload) -> ToolTranscriptFamily {
-        let name = tool.toolName.lowercased()
-        // Agent self-orchestration — exact match before keyword rules.
-        // (todo_write contains "write" which would otherwise hit .create.)
+    private static func legacyFamily(for toolName: String) -> ToolTranscriptFamily? {
+        let name = toolName.lowercased()
         if TodoToolPayload.isTodoWriteTool(name) { return .todo }
-        if name == "enter_plan_mode" || name == "propose_plan" { return .plan }
-        if name == "plan_workflow" { return .workflow }
-        if name == "list_sessions" || name == "create_session" || name == "send_to_session" || name == "wait_sessions" || name == "read_session" {
-            return .session
+        switch name {
+        case "download_file": return .read
+        case "enter_plan_mode", "propose_plan": return .plan
+        case "plan_workflow": return .workflow
+        case "load_skill": return .skill
+        case "git_status", "git_diff", "git_log", "git_show", "git_branch", "git_commit", "git_add", "git_checkout", "git_fetch", "git_pull", "git_push": return .git
+        case "web_search", "web_fetch", "web_open", "web_browse", "web.search", "web.fetch": return .web
+        default: return nil
         }
-        // download_file — pulls external content, semantically read.
-        if name == "download_file" { return .read }
-        if name.contains("read") || name.contains("cat") || name.contains("view") || name.contains("open") || name.contains("get") {
-            return .read
-        }
-        if name.contains("list") || name.contains("ls") { 
-            return .list
-        }
-        if name.hasPrefix("web_") || name.hasPrefix("web.") {
-            return .web
-        }
-        if name.contains("grep") || name.contains("search") || name.contains("find") || name == "rg" {
-            return .search
-        }
-        if name.contains("write") || name.contains("create") || name.contains("new") {
-            return .create
-        }
-        if name.contains("edit") || name.contains("patch") || name.contains("apply") || name.contains("save") {
-            return .edit
-        }
-        if name.contains("bash") || name.contains("shell") || name.contains("exec") || name.contains("terminal") || name.contains("run") || name.contains("cmd") {
-            return .terminal
-        }
-        if name.contains("project_graph") {
-            return .projectGraph
-        }
-        if name.contains("git") {
-            return .git
-        }
-        if name.contains("load_skill") || name.contains("skill") {
-            return .skill
-        }
-        return .other
     }
 
     private static func targetValue(for tool: ToolNodePayload) -> String? {
@@ -422,20 +490,21 @@ enum ToolTranscriptPresenter {
         }
     }
 
-    private static func statusText(for tool: ToolNodePayload) -> String? {
-        if tool.isAutoApproved, tool.status != .running, tool.status != .failed { return "auto" }
+    private static func statusText(for tool: ToolNodePayload, locale: String? = nil) -> String? {
+        let text = ToolTranscriptText(locale: locale)
+        if tool.isAutoApproved, tool.status != .running, tool.status != .failed { return text.text("auto") }
         switch tool.status {
         case .running:
-            return "running"
+            return text.text("running")
         case .completed:
             return nil
         case .failed:
             if let exitCode = tool.exitCode {
-                return "failed \(exitCode)"
+                return text.text("failed.code", exitCode)
             }
-            return "failed"
+            return text.text("failed")
         case .autoApproved:
-            return "auto"
+            return text.text("auto")
         }
     }
 
@@ -479,30 +548,30 @@ enum ToolTranscriptPresenter {
         }
     }
 
-    private static func activitySummary(for group: ToolGroup, tools: [ToolTranscriptPresentation]) -> String {
+    private static func activitySummary(for group: ToolGroup, tools: [ToolTranscriptPresentation], text: ToolTranscriptText) -> String {
         var labels: [String] = []
-        for tool in group.tools {
-            // Only known tool names establish an activity category. In
-            // particular, shell text never establishes a test/verification result.
-            let label: String
-            switch tool.toolName.lowercased().replacingOccurrences(of: "-", with: "_") {
-            case "read_file", "read_files", "view_file": label = "读取文件"
-            case "list_directory", "list_files", "ls": label = "列出目录"
-            case "grep", "rg", "search_code", "search_files", "file_search": label = "搜索代码"
-            case "write_file": label = "写入文件"
-            case "create_file": label = "创建文件"
-            case "edit_file", "apply_patch", "patch_file", "replace_in_file": label = "修改文件"
-            case "run_command", "exec_command", "bash", "shell", "terminal": label = "运行命令"
-            default: label = tool.toolName
+        for (tool, presentation) in zip(group.tools, tools) {
+            let key: String?
+            switch presentation.family {
+            case .read: key = "read"
+            case .list: key = "list"
+            case .search: key = "search"
+            case .create: key = tool.toolName == "write_file" ? "write" : "create"
+            case .edit: key = "edit"
+            case .terminal: key = "run"
+            default: key = nil
             }
+            let isCommand = ["run_command", "exec_command", "bash", "shell", "terminal"].contains(tool.toolName.lowercased())
+            let label = isCommand ? text.text("activity.run")
+                : key.map { text.text("activity." + $0) } ?? ToolTranscriptText.bounded(tool.toolName)
             if !labels.contains(label) { labels.append(label) }
         }
-        var parts = [labels.joined(separator: "、"), "\(tools.count) 次调用"]
+        var parts = [labels.joined(separator: text.text("activity.separator")), text.text(tools.count == 1 ? "calls.one" : "calls.many", tools.count)]
         let running = group.tools.filter { $0.status == .running }.count
         let failed = group.tools.filter { $0.status == .failed }.count
-        if running > 0 { parts.append("\(running) 运行中") }
-        if group.isThinking { parts.append("思考中") }
-        if failed > 0 { parts.append("\(failed) 失败") }
+        if running > 0 { parts.append(text.text("count.running", running)) }
+        if group.isThinking { parts.append(text.text("activity.thinking")) }
+        if failed > 0 { parts.append(text.text("count.failed", failed)) }
         return parts.joined(separator: " · ")
     }
 
@@ -571,6 +640,7 @@ enum ToolTranscriptPresenter {
     }
 
     private static func changeSummary(for tool: ToolNodePayload) -> String? {
+        guard tool.status == .completed || tool.status == .autoApproved else { return nil }
         if let artifact = tool.artifact,
            case .diff(let payload) = artifact.content {
             return diffSummary(added: payload.addedLines, removed: payload.removedLines)
@@ -578,7 +648,9 @@ enum ToolTranscriptPresenter {
 
         // 只有真 diff 才逐行统计 — markdown 列表（"- item"）会被 +/- 前缀误判，
         // 曾把 task observation 里的 13 行列表渲染成 "+0 -13"。
-        guard looksLikeDiff(tool.output) else { return nil }
+        guard tool.output.contains("@@ -"),
+              tool.output.range(of: #"(?m)^@@ -[0-9]+(?:,[0-9]+)? \+[0-9]+(?:,[0-9]+)? @@"#,
+                                options: .regularExpression) != nil else { return nil }
         let counts = countDiffLines(tool.output)
         return diffSummary(added: counts.added, removed: counts.removed)
     }
@@ -609,19 +681,6 @@ enum ToolTranscriptPresenter {
             return String(value.prefix(49)) + "..."
         }
         return value
-    }
-
-    /// Extracts a compact command prefix from a full shell command string.
-    /// "git add file1 file2..." → "git add", "ls /some/path" → "ls".
-    private static func terminalCommandPrefix(_ command: String) -> String {
-        let tokens = command.split(separator: " ", omittingEmptySubsequences: true)
-        guard !tokens.isEmpty else { return command }
-        // For two-token git/docker/npm/cargo/etc subcommands, show both tokens.
-        let knownSub = Set(["git", "docker", "npm", "yarn", "cargo", "swift", "go", "rustc", "pip", "pip3", "brew", "bundle", "pod", "xcodebuild", "make", "cmake", "curl", "wget"])
-        if let first = tokens.first, knownSub.contains(String(first)), tokens.count >= 2 {
-            return "\(first) \(tokens[1])"
-        }
-        return String(tokens[0])
     }
 
     private static func titleize(_ name: String) -> String {

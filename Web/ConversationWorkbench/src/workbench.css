@@ -423,10 +423,13 @@ summary:active {
 
 .tool {
   display: block;
+  width: 100%;
 }
 
 .tool-summary {
-  display: inline-flex;
+  display: flex;
+  box-sizing: border-box;
+  width: 100%;
   max-width: 100%;
   align-items: center;
   gap: 6px;
@@ -442,6 +445,21 @@ summary:active {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+/* Preserve the action label; long command/path previews yield space first.
+   Bound long semantic titles so status, timing and disclosure remain reachable. */
+.tool-title {
+  flex: 0 0 auto;
+  max-width: 60%;
+}
+
+.tool-detail-summary {
+  flex: 0 1 auto;
+}
+
+.tool-action-icon {
+  flex: 0 0 auto;
 }
 
 .tool-detail-summary,
@@ -530,6 +548,81 @@ summary:active {
   border-radius: 999px;
   background: color-mix(in srgb, var(--secondary) 35%, transparent);
 }
+
+/* Expanded tools lead with their command/result, keeping transport JSON in an
+   optional inspector. Reuse the bounded output scroller and existing actions. */
+.tool-result-card {
+  margin: 6px 0 8px;
+  padding: 14px 16px;
+  border-radius: 16px;
+  background: var(--subtle);
+  color: var(--text);
+  min-width: 0;
+}
+
+.tool-card-caption {
+  margin-bottom: 8px;
+  color: var(--secondary);
+  font-size: 12px;
+}
+
+.tool-result-card pre,
+.tool-result-card pre code {
+  margin: 0;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  font: 13px/1.65 ui-monospace, "SFMono-Regular", Menlo, Monaco, monospace;
+  tab-size: 4;
+}
+
+.tool-command-text {
+  max-height: 200px;
+  overflow-y: auto;
+  margin-bottom: 8px !important;
+}
+
+.tool-result-card .tool-output-frame {
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+}
+
+.tool-result-card[data-kind="search"] pre,
+.tool-result-card[data-kind="search"] pre code {
+  font-family: -apple-system, BlinkMacSystemFont, sans-serif;
+}
+
+.tool-result-footer {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-top: 10px;
+  font-size: 12px;
+}
+
+.tool-result-outcome {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.tool-result-outcome[data-tone="failed"] { color: var(--danger); }
+.tool-result-outcome[data-tone="running"] { color: var(--secondary); }
+
+.tool-raw-details > summary {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 3px 0;
+  color: var(--secondary);
+  cursor: pointer;
+  font-size: 12px;
+  list-style: none;
+}
+
+.tool-raw-details > summary::-webkit-details-marker { display: none; }
+.tool-raw-details[open] > summary .disclosure-chevron { transform: rotate(90deg); }
 
 .action-button {
   appearance: none;

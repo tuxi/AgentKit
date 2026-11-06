@@ -136,11 +136,11 @@ public struct TimelineProjection: Sendable {
             }
         )
 
-        func flushActivity() {
+        func flushActivity(isCollecting: Bool = false) {
             guard !pendingActivity.isEmpty, let anchor = activityAnchor else { return }
             if pendingActivity.contains(where: { if case .tool = $0 { return true }; return false }) {
                 // First entry identity never depends on tool count, status or invocation.
-                blocks.append(.toolGroup(ToolGroup(id: "activity:\(turnUID):\(anchor)", entries: pendingActivity)))
+                blocks.append(.toolGroup(ToolGroup(id: "activity:\(turnUID):\(anchor)", entries: pendingActivity, isCollecting: isCollecting)))
             } else {
                 for entry in pendingActivity {
                     if case .thinking(let id, let payload) = entry {
@@ -310,7 +310,7 @@ public struct TimelineProjection: Sendable {
                 }
             }
         }
-        flushActivity()
+        flushActivity(isCollecting: isLive)
         blocks = mergeAdjacentNarration(blocks)
 
         let footer = sawFinished

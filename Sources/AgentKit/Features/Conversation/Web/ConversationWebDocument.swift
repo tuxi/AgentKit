@@ -93,6 +93,7 @@ struct ConversationWebDocument: Codable, Equatable, Sendable {
         /// Nil for old streams — the badge is omitted, never "unknown".
         var model: String? = nil
         var modelRoute: String? = nil
+        var processFailureText: String? = nil
     }
 
     /// P8.9 — one model invocation rendered as a card (request shape → usage → thinking).
@@ -162,6 +163,8 @@ struct ConversationWebDocument: Codable, Equatable, Sendable {
         let codeCopyActionIDs: [String]
         /// Ordered references into tools and activityThinking. Nil denotes the
         /// legacy tool-only presentation, preserving compatibility for callers.
+        var statusText: String? = nil
+        var isCollecting: Bool? = nil
         var activityOrder: [String]? = nil
         var activityThinking: [Block]? = nil
         /// Raw SystemNodeKind; absent/other kinds render as a plain system aside.
@@ -192,6 +195,14 @@ struct ConversationWebDocument: Codable, Equatable, Sendable {
         let dagEdges: Int?
         /// Action to open the workflow DAG detail (when workflow_id is present).
         let dagOpenActionID: String?
+        var rawName: String? = nil
+        var icon: String? = nil
+        var labels: [String: String]? = nil
+        var command: String? = nil
+        var commandActions: [InlineAction]? = nil
+        var resultKind: String? = nil
+        var outcomeText: String? = nil
+        var outcomeTone: String? = nil
     }
 
     struct InlineAction: Codable, Equatable, Sendable {
@@ -545,7 +556,8 @@ enum ConversationWebDocumentBuilder {
             startedAtMilliseconds: turn.startedAtMilliseconds,
             changes: ConversationWebDocument.WebTurnChanges(turn.changes),
             model: turn.modelName,
-            modelRoute: turn.modelRoute
+            modelRoute: turn.modelRoute,
+            processFailureText: turn.processFailureSummary
         )
     }
 
@@ -644,7 +656,7 @@ enum ConversationWebDocumentBuilder {
                 id: id,
                 kind: .thinking,
                 text: payload.text,
-                title: payload.isStreaming ? "Thinking…" : "Thought",
+                title: ToolTranscriptText().thinkingTitle(streaming: payload.isStreaming),
                 status: payload.isStreaming ? "streaming" : nil,
                 elapsed: nil,
                 tools: [],
@@ -679,6 +691,19 @@ enum ConversationWebDocumentBuilder {
                     ? previousWebTools[toolIndex]
                     : nil
                 let presentation = ToolTranscriptPresenter.presentation(for: tool)
+                let command = ToolTranscriptPresenter.commandValue(for: tool)
+                let commandForCard = command.map { value in
+                    value.utf8.count > 8192 || ToolCommandPresentation.hasSensitiveArguments(value)
+                        ? ToolCommandPresentation.preview(value, text: ToolTranscriptText()) : value
+                }
+                let resultKind: String = command != nil || presentation.family == .terminal ? "terminal"
+                    : presentation.family == .search ? "search"
+                    : [.read, .edit, .create].contains(presentation.family) ? "file" : "generic"
+                let resultFailed = tool.status == .failed || (tool.exitCode.map { $0 != 0 } ?? false)
+                let outcomeText: String? = resultFailed
+                    ? tool.exitCode.map { ToolTranscriptText().text("failed.code", $0) } ?? ToolTranscriptText().text("failed")
+                    : tool.status == .running ? ToolTranscriptText().text("running")
+                    : resultKind == "terminal" ? ToolTranscriptText().text("run.succeeded") : nil
                 let arguments = tool.args.flatMap(formattedJSON)
                 let output = tool.output.isEmpty ? nil : tool.output
                 // DAG detection for workflow tools (workflow_definition, etc.)
@@ -756,7 +781,23 @@ enum ConversationWebDocumentBuilder {
                     } ?? [],
                     dagNodes: dag?.nodes.count,
                     dagEdges: dag?.edges?.count,
-                    dagOpenActionID: dagOpenActionID
+                    dagOpenActionID: dagOpenActionID,
+                    rawName: tool.toolName,
+                    icon: presentation.icon,
+                    labels: ["input": ToolTranscriptText().text("input"), "output": ToolTranscriptText().text("output"),
+                             "tool": ToolTranscriptText().text("tool.name"),
+                             "command": ToolTranscriptText().text("command"),
+                             "rawDetails": ToolTranscriptText().text("raw.details"),
+                             "copy": ToolTranscriptText().text("copy"),
+                             "copyOutput": ToolTranscriptText().text("copy.output")],
+                    command: commandForCard,
+                    commandActions: previousTool?.args == tool.args ? previousWebTool?.commandActions : commandForCard.map {
+                        inlineActions(text: $0, annotations: [], turnID: turn.id,
+                                      assetIndex: assetIndex, registerAction: registerAction)
+                    },
+                    resultKind: resultKind,
+                    outcomeText: outcomeText,
+                    outcomeTone: resultFailed ? "failed" : tool.status == .running ? "running" : "completed"
                 )
             }
             return .init(
@@ -773,11 +814,13 @@ enum ConversationWebDocumentBuilder {
                 actionTooltip: nil,
                 inlineActions: [],
                 codeCopyActionIDs: [],
+                statusText: ToolTranscriptText().text(group.tools.contains(where: { $0.status == .failed }) ? "failed" : "running"),
+                isCollecting: group.isCollecting,
                 activityOrder: group.isActivityGroup ? group.entries.map(\.id) : nil,
                 activityThinking: group.entries.compactMap { entry in
                     guard case .thinking(let id, let payload) = entry else { return nil }
                     return .init(id: id, kind: .thinking, text: payload.text,
-                                 title: payload.isStreaming ? "Thinking…" : "Thought",
+                                 title: ToolTranscriptText().thinkingTitle(streaming: payload.isStreaming),
                                  status: payload.isStreaming ? "streaming" : nil,
                                  elapsed: nil, tools: [], childStreamKind: nil,
                                  actionID: nil, actionTooltip: nil, inlineActions: [], codeCopyActionIDs: [])

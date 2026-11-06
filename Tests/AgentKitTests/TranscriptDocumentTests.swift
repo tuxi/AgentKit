@@ -96,10 +96,10 @@ final class TranscriptDocumentTests: XCTestCase {
             status: .running
         )
 
-        XCTAssertEqual(ToolTranscriptPresenter.presentation(for: read).title, "Read App.swift")
-        XCTAssertEqual(ToolTranscriptPresenter.presentation(for: run).title, "Run swift test")
+        XCTAssertEqual(ToolTranscriptPresenter.presentation(for: read).title, ToolTranscriptText().text("read", "App.swift"))
+        XCTAssertEqual(ToolTranscriptPresenter.presentation(for: run).title, ToolTranscriptText().text("run"))
         XCTAssertEqual(ToolTranscriptPresenter.presentation(for: run).statusTone, .running)
-        XCTAssertEqual(ToolTranscriptPresenter.presentation(for: run).statusText, "running")
+        XCTAssertEqual(ToolTranscriptPresenter.presentation(for: run).statusText, ToolTranscriptText().text("running"))
     }
 
     func testToolPresenterNamesCrossSessionActions() {
@@ -159,7 +159,7 @@ final class TranscriptDocumentTests: XCTestCase {
         let sendPresentation = ToolTranscriptPresenter.presentation(for: send)
         XCTAssertEqual(sendPresentation.title, "Send to session")
         XCTAssertEqual(sendPresentation.detail, "session_abcde...: Confirm the API contract.")
-        XCTAssertEqual(sendPresentation.statusText, "running")
+        XCTAssertEqual(sendPresentation.statusText, ToolTranscriptText().text("running"))
 
         XCTAssertEqual(ToolTranscriptPresenter.presentation(for: wait).title, "Wait for sessions")
         XCTAssertEqual(ToolTranscriptPresenter.presentation(for: wait).detail, "2 targets")
@@ -175,10 +175,10 @@ final class TranscriptDocumentTests: XCTestCase {
             state: TranscriptDocumentState()
         )
 
-        XCTAssertTrue(transcript.attributedString.string.contains("Read App.swift"))
+        XCTAssertTrue(transcript.attributedString.string.contains(ToolTranscriptText().text("read", "App.swift")))
         XCTAssertFalse(transcript.attributedString.string.contains("secret output"))
         XCTAssertTrue(transcript.actions.values.contains(.toggleTool(callID: "c1")))
-        XCTAssertTrue(transcript.copyText.contains("Read App.swift"))
+        XCTAssertTrue(transcript.copyText.contains(ToolTranscriptText().text("read", "App.swift")))
     }
 
     func testExpandedToolIncludesArgsOutputAndArtifactAction() {
@@ -187,10 +187,10 @@ final class TranscriptDocumentTests: XCTestCase {
         let transcript = TurnTranscriptBuilder.build(turn: turn, state: state)
         let rendered = transcript.attributedString.string
 
-        XCTAssertTrue(rendered.contains("Input"))
+        XCTAssertTrue(rendered.contains(ToolTranscriptText().text("input")))
         XCTAssertTrue(rendered.contains("path"))
         XCTAssertTrue(rendered.contains("Sources\\/App.swift"))
-        XCTAssertTrue(rendered.contains("Output"))
+        XCTAssertTrue(rendered.contains(ToolTranscriptText().text("output")))
         XCTAssertTrue(rendered.contains("line 1\nline 2"))
         XCTAssertTrue(rendered.contains("Artifact"))
         XCTAssertTrue(transcript.actions.values.contains(.toggleTool(callID: "c1")))
@@ -220,8 +220,8 @@ final class TranscriptDocumentTests: XCTestCase {
         let rendered = transcript.attributedString.string
 
         XCTAssertTrue(rendered.contains("Read 2 files"))
-        XCTAssertTrue(rendered.contains("Read A.swift"))
-        XCTAssertTrue(rendered.contains("Read B.swift"))
+        XCTAssertTrue(rendered.contains(ToolTranscriptText().text("read", "A.swift")))
+        XCTAssertTrue(rendered.contains(ToolTranscriptText().text("read", "B.swift")))
         XCTAssertFalse(rendered.contains("a contents"))
         XCTAssertFalse(rendered.contains("b contents"))
     }
@@ -254,8 +254,8 @@ final class TranscriptDocumentTests: XCTestCase {
         )
         let rendered = transcript.attributedString.string
 
-        XCTAssertTrue(rendered.contains("running"))
-        XCTAssertTrue(rendered.contains("failed 1"))
+        XCTAssertTrue(rendered.contains(ToolTranscriptText().text("running")))
+        XCTAssertTrue(rendered.contains(ToolTranscriptText().text("failed.code", 1)))
         XCTAssertEqual(ToolTranscriptPresenter.presentation(for: running).statusTone, .running)
         XCTAssertEqual(ToolTranscriptPresenter.presentation(for: failed).statusTone, .failed)
     }
@@ -287,7 +287,7 @@ final class TranscriptDocumentTests: XCTestCase {
             state: TranscriptDocumentState()
         )
 
-        XCTAssertTrue(first.attributedString.string.contains("running"))
+        XCTAssertTrue(first.attributedString.string.contains(ToolTranscriptText().text("running")))
         XCTAssertTrue(first.attributedString.isEqual(to: second.attributedString))
     }
 

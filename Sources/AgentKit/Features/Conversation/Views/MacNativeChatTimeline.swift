@@ -1080,8 +1080,8 @@ private final class NativeTurnTableCellView: NSTableCellView {
 
     private func handle(_ action: TranscriptAction) {
         switch action {
-        case .toggleTool(let callID):
-            state.toggleTool(callID: callID)
+        case .toggleTool(let callID, let defaultExpanded):
+            state.toggleTool(callID: callID, defaultExpanded: defaultExpanded)
             rebuildTranscript()
             onStateChange?(state)
         case .toggleThinking(let id):
