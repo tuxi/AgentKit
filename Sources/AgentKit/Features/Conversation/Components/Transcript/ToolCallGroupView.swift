@@ -46,28 +46,42 @@ struct ToolCallGroupView: View {
             if isExpanded {
                 Divider()
                     .padding(.horizontal, 10)
+                ScrollView(.vertical) {
+                LazyVStack(alignment: .leading, spacing: 0) {
                 ForEach(group.entries) { entry in
                     switch entry {
                     case .tool(let tool):
-                        let presentation = ToolTranscriptPresenter.presentation(for: tool)
-                        HStack(spacing: 6) {
-                            Image(systemName: presentation.systemImage)
-                            Text(presentation.title)
-                            if let changes = presentation.changeSummary { Text(changes) }
-                            if let status = presentation.statusText { Text(status) }
+                        let presentation = ToolTranscriptPresenter.activityPresentation(for: tool)
+                        Button {
+                            onAction(.toggleTool(callID: tool.callID, defaultExpanded: false))
+                        } label: {
+                            HStack(spacing: 6) {
+                                Image(systemName: presentation.systemImage)
+                                Text(presentation.title).lineLimit(1)
+                                if let changes = presentation.changeSummary { Text(changes) }
+                                if let status = presentation.statusText { Text(status) }
+                                Image(systemName: documentState.isToolExpanded(callID: tool.callID, defaultExpanded: false) ? "chevron.up" : "chevron.down")
+                            }
+                            .font(.caption.weight(.medium))
+                            .padding(.horizontal, 10)
                         }
-                        .font(.caption.weight(.medium))
-                        .padding(.horizontal, 10)
+                        .buttonStyle(.plain)
                         if let detail = presentation.detail {
-                            Text(detail).font(.caption2).foregroundStyle(.secondary).padding(.horizontal, 10)
+                            Text(detail).font(.caption2).foregroundStyle(.secondary).lineLimit(1).padding(.horizontal, 10)
                         }
-                        toolDetailView(tool)
+                        if documentState.isToolExpanded(callID: tool.callID, defaultExpanded: false) {
+                            ScrollView(.vertical) { toolDetailView(tool) }
+                                .frame(maxHeight: 144)
+                        }
                     case .thinking(let id, let payload):
                         ThinkingCardView(id: id, payload: payload,
                             isExpanded: documentState.expandedThinkingIDs.contains(id),
                             onToggle: { onAction(.toggleThinking(id: id)) })
                     }
                 }
+                }
+                }
+                .frame(maxHeight: 320)
             }
         }
 //        .background(

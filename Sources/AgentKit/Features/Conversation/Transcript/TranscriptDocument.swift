@@ -207,7 +207,7 @@ enum TurnTranscriptBuilder {
                         continue
                     }
                     guard case .tool(let tool) = entry else { continue }
-                    let toolPresentation = ToolTranscriptPresenter.presentation(for: tool)
+                    let toolPresentation = ToolTranscriptPresenter.activityPresentation(for: tool)
                     let toolExpanded = state.expandedToolIDs.contains(tool.callID)
                     builder.appendToolRow(
                         toolPresentation, expanded: toolExpanded,

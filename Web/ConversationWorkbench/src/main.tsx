@@ -1423,10 +1423,17 @@ function useTailFollow(
     pinToBottom();
     container.addEventListener("scroll", handleScroll, { passive: true });
     const observer = new ResizeObserver(pinToBottom);
-    observer.observe(content);
+    const observeChildren = () => {
+      for (const child of container.children) observer.observe(child);
+      pinToBottom();
+    };
+    observeChildren();
+    const mutations = new MutationObserver(observeChildren);
+    mutations.observe(container, { childList: true, subtree: true, characterData: true });
     return () => {
       container.removeEventListener("scroll", handleScroll);
       observer.disconnect();
+      mutations.disconnect();
     };
   }, [active, container]);
 }
@@ -1735,6 +1742,8 @@ function ToolGroupBlock({ block }: { block: ConversationWebBlock }): React.JSX.E
   const { open, onSummaryClick } = useStreamingDisclosure(
     block.activityOrder ? !!block.isCollecting : block.status === "running", `group:${block.id}`, !!block.activityOrder,
   );
+  const [groupScroll, setGroupScroll] = useState<HTMLDivElement | null>(null);
+  useTailFollow(groupScroll, !!block.isCollecting && open);
   const tools = new Map(block.tools.map((tool) => [`tool:${tool.id}`, tool]));
   const thinking = new Map((block.activityThinking ?? []).map((item) => [`thinking:${item.id}`, item]));
   // Collapse only adjacent waits for the same explicit job_id. Narration,
@@ -1770,7 +1779,7 @@ function ToolGroupBlock({ block }: { block: ConversationWebBlock }): React.JSX.E
         ) : null}
         <span className="disclosure-chevron" aria-hidden="true">›</span>
       </summary>
-      <div className="tool-group-tools">
+      <div ref={setGroupScroll} className="tool-group-tools" tabIndex={open ? 0 : undefined} data-scroll-id={`tool-group:${block.id}`}>
         {open ? rows.map(({ ids }) => {
           if (ids.length === 1) return renderEntry(ids[0]);
           if (rows.length === 1) return <div key={ids[0]}>{ids.map(renderEntry)}</div>;

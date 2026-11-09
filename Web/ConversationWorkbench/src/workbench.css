@@ -442,6 +442,10 @@ summary:active {
 
 .tool-group-tools {
   margin: 4px 0 4px 12px;
+  max-height: min(320px, 45vh);
+  overflow-y: auto;
+  overscroll-behavior-y: auto;
+  scrollbar-width: thin;
 }
 
 .tool {

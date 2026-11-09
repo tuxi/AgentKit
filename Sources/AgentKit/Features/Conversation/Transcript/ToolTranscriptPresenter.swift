@@ -148,6 +148,19 @@ enum ToolTranscriptPresenter {
         )
     }
 
+    /// Status-aware wording for activity rows, without changing other tool surfaces.
+    static func activityPresentation(for tool: ToolNodePayload, locale: String? = nil) -> ToolTranscriptPresentation {
+        let base = presentation(for: tool, locale: locale)
+        if BackgroundJobPresentation.operation(tool.toolName) != nil { return base }
+        let text = ToolTranscriptText(locale: locale)
+        let state = tool.status == .running ? "active.running"
+            : (tool.status == .failed || (tool.exitCode.map { $0 != 0 } ?? false)) ? "active.failed" : "active.done"
+        let title = text.text(state, base.title)
+        return ToolTranscriptPresentation(callID: base.callID, family: base.family,
+            statusTone: base.statusTone, statusText: nil, title: title, detail: base.detail,
+            elapsed: base.elapsed, changeSummary: base.changeSummary, outputKind: base.outputKind)
+    }
+
     static func groupPresentation(for group: ToolGroup, locale: String? = nil) -> ToolTranscriptGroupPresentation {
         let tools = group.tools.map { presentation(for: $0, locale: locale) }
         return ToolTranscriptGroupPresentation(
@@ -545,36 +558,47 @@ enum ToolTranscriptPresenter {
     }
 
     private static func activitySummary(for group: ToolGroup, tools: [ToolTranscriptPresentation], text: ToolTranscriptText) -> String {
-        var labels: [String] = []
-        for (tool, presentation) in zip(group.tools, tools) {
-            let key: String?
-            switch presentation.family {
-            case .read: key = "read"
-            case .list: key = "list"
-            case .search: key = "search"
-            case .create: key = tool.toolName == "write_file" ? "write" : "create"
-            case .edit: key = "edit"
-            case .terminal: key = "run"
-            default: key = nil
-            }
-            let isCommand = ["run_command", "exec_command", "bash", "shell", "terminal"].contains(tool.toolName.lowercased())
-            let jobOperation = BackgroundJobPresentation.operation(tool.toolName)
-            let label = jobOperation.map { text.text("job." + $0) } ?? (isCommand ? text.text("activity.run")
-                : key.map { text.text("activity." + $0) } ?? ToolTranscriptText.bounded(tool.toolName))
-            if !labels.contains(label) { labels.append(label) }
+        func activityTitle(_ tool: ToolNodePayload) -> String {
+            let presentation = activityPresentation(for: tool, locale: text.locale)
+            let showDetail = presentation.family == .terminal || presentation.family == .search
+                || BackgroundJobPresentation.operation(tool.toolName) != nil
+            return [presentation.title, showDetail ? presentation.detail : nil]
+                .compactMap { $0 }.joined(separator: " · ")
         }
-        let repeatedWaits = group.entries.count == tools.count && tools.count > 1
-            && BackgroundJobPresentation.waitRuns(in: group.entries).count == 1
-            && group.tools.allSatisfy { BackgroundJobPresentation.operation($0.toolName) == "wait"
-                && BackgroundJobPresentation.jobID(for: $0) != nil }
-        var parts = repeatedWaits ? [text.text("job.wait.count", tools.count)]
-            : [labels.joined(separator: text.text("activity.separator")), text.text(tools.count == 1 ? "calls.one" : "calls.many", tools.count)]
-        let running = group.tools.filter { $0.status == .running && BackgroundJobPresentation.operation($0.toolName) != "wait" }.count
-        let failed = group.tools.filter { $0.status == .failed }.count
-        if running > 0 { parts.append(text.text("count.running", running)) }
-        if group.isThinking { parts.append(text.text("activity.thinking")) }
-        if failed > 0 { parts.append(text.text("count.failed", failed)) }
-        return parts.joined(separator: " · ")
+        let running = group.tools.filter { $0.status == .running }
+        if let current = running.last {
+            let title = activityTitle(current)
+            return running.count > 1 ? text.text("active.parallel", title, running.count - 1) : title
+        }
+        if group.isThinking { return text.text("thinking") }
+        // Between tool calls the activity can still accept entries, but no tool
+        // is running. Keep the most recent truthful status visible until the next call.
+        if group.isCollecting, let latest = group.tools.last { return activityTitle(latest) }
+
+        // Summarize only successful operations; report failures separately.
+        var families = Set<ToolTranscriptFamily>()
+        var hasCommand = false
+        var failed = 0
+        for (tool, presentation) in zip(group.tools, tools) {
+            if tool.status == .failed || (tool.exitCode.map { $0 != 0 } ?? false) {
+                failed += 1
+                continue
+            }
+            if ["run_command", "exec_command", "bash", "shell", "terminal"].contains(tool.toolName.lowercased()) {
+                hasCommand = true
+            } else {
+                families.insert(presentation.family)
+            }
+        }
+        var labels: [String] = []
+        for (family, key) in [(ToolTranscriptFamily.edit, "edit"), (.create, "create"),
+                              (.read, "read"), (.list, "list"), (.search, "search")] where families.remove(family) != nil {
+            labels.append(text.text("activity.done." + key))
+        }
+        if hasCommand || families.remove(.terminal) != nil { labels.append(text.text("activity.done.run")) }
+        if !families.isEmpty { labels.append(text.text("activity.done.other")) }
+        if failed > 0 { labels.append(text.text("count.failed", failed)) }
+        return labels.joined(separator: text.text("activity.separator"))
     }
 
     private static func groupSummary(for tools: [ToolTranscriptPresentation]) -> String {

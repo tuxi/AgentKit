@@ -691,7 +691,7 @@ enum ConversationWebDocumentBuilder {
                 let previousWebTool = toolIndex < previousWebTools.count
                     ? previousWebTools[toolIndex]
                     : nil
-                let presentation = ToolTranscriptPresenter.presentation(for: tool)
+                let presentation = group.isActivityGroup ? ToolTranscriptPresenter.activityPresentation(for: tool) : ToolTranscriptPresenter.presentation(for: tool)
                 let command = ToolTranscriptPresenter.commandValue(for: tool)
                 let commandForCard = command.map { value in
                     value.utf8.count > 8192 || ToolCommandPresentation.hasSensitiveArguments(value)

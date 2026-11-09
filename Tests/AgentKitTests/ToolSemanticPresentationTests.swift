@@ -9,6 +9,23 @@ final class ToolSemanticPresentationTests: XCTestCase {
         ToolTranscriptPresenter.presentation(for: tool("run_command", .object(["command": .string(command)])), locale: locale)
     }
 
+    func testActivityReportsCurrentActionAndCompletedSummary() {
+        let args: JSONValue = .object(["path": .string("src/ProjectStore.swift")])
+        let running = tool("read_file", args, status: .running)
+        let completed = tool("read_file", args)
+        XCTAssertEqual(ToolTranscriptPresenter.activityPresentation(for: running, locale: "zh-Hans").title, "正在读取 ProjectStore.swift")
+        XCTAssertEqual(ToolTranscriptPresenter.activityPresentation(for: completed, locale: "zh-Hans").title, "已读取 ProjectStore.swift")
+        let live = ToolGroup(id: "live", entries: [.tool(running)], isCollecting: true)
+        XCTAssertEqual(ToolTranscriptPresenter.groupPresentation(for: live, locale: "zh-Hans").summary, "正在读取 ProjectStore.swift")
+        let betweenCalls = ToolGroup(id: "live", entries: [.tool(completed)], isCollecting: true)
+        XCTAssertEqual(ToolTranscriptPresenter.groupPresentation(for: betweenCalls, locale: "zh-Hans").summary, "已读取 ProjectStore.swift")
+        let done = ToolGroup(id: "done", entries: [.tool(completed)])
+        XCTAssertEqual(ToolTranscriptPresenter.groupPresentation(for: done, locale: "zh-Hans").summary, "已读取文件")
+        let failed = tool("read_file", args, status: .failed)
+        let failureGroup = ToolGroup(id: "failed", entries: [.tool(failed)])
+        XCTAssertTrue(ToolTranscriptPresenter.groupPresentation(for: failureGroup, locale: "zh-Hans").summary.contains("失败"))
+    }
+
     func testStructuredActionsUseTargetsAndBothLanguages() {
         let args: JSONValue = .object(["path": .string("src/CPackReader.cpp")])
         let read = tool("read_file", args)
