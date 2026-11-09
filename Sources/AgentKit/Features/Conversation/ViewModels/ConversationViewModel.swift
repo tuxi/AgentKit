@@ -896,7 +896,7 @@ public final class ConversationViewModel {
 
         // P1: 拦截客户端工具执行
         if case .toolStarted(let turnID, let callID, let tool) = event,
-           tool.executor == .client {
+           tool.isClientExecutable {
             scheduleClientToolExecution(turnID: turnID, callID: callID, tool: tool)
         }
         if case .toolFinished(_, let callID, _) = event {

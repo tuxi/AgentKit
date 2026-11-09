@@ -11,6 +11,132 @@
 import Foundation
 import ClientToolProtocol
 
+// MARK: - Preview capabilities
+
+/// Canonical preview capability strings shared by runtime `hello`,
+/// `client_capabilities`, and `/v1/runtime/capabilities`.
+public enum PreviewCapability: String, Sendable, Hashable, CaseIterable {
+    case contract = "preview_contract_v1"
+    case interactiveHTML = "preview_interactive_html_v1"
+    case staticAsset = "preview_static_asset_v1"
+    case replay = "preview_replay_v1"
+}
+
+public enum PreviewCapabilityWarning: String, Sendable, Hashable, CaseIterable {
+    case contractUnavailable
+    case helloRuntimeMismatch
+    case runtimeInteractiveWithoutStatic
+    case clientInteractiveWithoutStatic
+    case replayUnavailable
+}
+
+/// Pure negotiation result for the four preview capabilities.
+///
+/// `hello` is the active-connection authority, while
+/// `/v1/runtime/capabilities` must agree with it. A preview flag absent from
+/// either source is never treated as available. Interactive HTML requires the
+/// static surface on both runtime and client; an invalid interactive-only
+/// advertisement degrades to static instead of being silently repaired into an
+/// interactive renderer.
+public struct PreviewCapabilityNegotiation: Sendable, Equatable {
+    public let hello: Set<PreviewCapability>
+    public let runtime: Set<PreviewCapability>
+    public let client: Set<PreviewCapability>
+    public let effective: Set<PreviewCapability>
+    public let helloRuntimeMismatch: Set<PreviewCapability>
+    public let warnings: Set<PreviewCapabilityWarning>
+
+    public init(
+        hello: [String],
+        runtime: [String],
+        client: AgentCapabilityFlags = .previewClient
+    ) {
+        self.init(
+            hello: Set(hello.compactMap(PreviewCapability.init(rawValue:))),
+            runtime: Set(runtime.compactMap(PreviewCapability.init(rawValue:))),
+            client: client.previewCapabilities
+        )
+    }
+
+    public init(hello: [String], runtime: [String], client: [String]) {
+        self.init(
+            hello: Set(hello.compactMap(PreviewCapability.init(rawValue:))),
+            runtime: Set(runtime.compactMap(PreviewCapability.init(rawValue:))),
+            client: Set(client.compactMap(PreviewCapability.init(rawValue:)))
+        )
+    }
+
+    public init(
+        hello: Set<PreviewCapability>,
+        runtime: Set<PreviewCapability>,
+        client: Set<PreviewCapability>
+    ) {
+        self.hello = hello
+        self.runtime = runtime
+        self.client = client
+        self.helloRuntimeMismatch = hello.symmetricDifference(runtime)
+
+        var effective = Set<PreviewCapability>()
+        var warnings = Set<PreviewCapabilityWarning>()
+        if !helloRuntimeMismatch.isEmpty {
+            warnings.insert(.helloRuntimeMismatch)
+        }
+
+        let contract = hello.contains(.contract) && runtime.contains(.contract)
+        if contract {
+            effective.insert(.contract)
+        } else {
+            warnings.insert(.contractUnavailable)
+        }
+
+        let runtimeInvalidInteractive = runtime.contains(.interactiveHTML)
+            && !runtime.contains(.staticAsset)
+        let clientInvalidInteractive = client.contains(.interactiveHTML)
+            && !client.contains(.staticAsset)
+        if runtimeInvalidInteractive { warnings.insert(.runtimeInteractiveWithoutStatic) }
+        if clientInvalidInteractive { warnings.insert(.clientInteractiveWithoutStatic) }
+
+        // Interactive implies static. Preserve the implied static surface for
+        // degraded presentation while withholding interactive rendering when
+        // either advertisement is invalid.
+        let runtimeStatic = runtime.contains(.staticAsset) || runtime.contains(.interactiveHTML)
+        let clientStatic = client.contains(.staticAsset) || client.contains(.interactiveHTML)
+        if contract && runtimeStatic && clientStatic {
+            effective.insert(.staticAsset)
+        }
+
+        if contract,
+           runtime.contains(.interactiveHTML), runtime.contains(.staticAsset),
+           client.contains(.interactiveHTML), client.contains(.staticAsset) {
+            effective.insert(.interactiveHTML)
+        }
+
+        if contract && hello.contains(.replay) && runtime.contains(.replay) && client.contains(.replay) {
+            effective.insert(.replay)
+        } else if contract {
+            warnings.insert(.replayUnavailable)
+        }
+
+        self.effective = effective
+        self.warnings = warnings
+    }
+
+    public var contractAvailable: Bool { effective.contains(.contract) }
+    public var interactiveAvailable: Bool { effective.contains(.interactiveHTML) }
+    public var staticAvailable: Bool { effective.contains(.staticAsset) }
+    public var replayAvailable: Bool { effective.contains(.replay) }
+    public var runtimeAdvertisementInvalid: Bool {
+        warnings.contains(.runtimeInteractiveWithoutStatic)
+    }
+    public var clientAdvertisementInvalid: Bool {
+        warnings.contains(.clientInteractiveWithoutStatic)
+    }
+
+    public var effectiveFlags: AgentCapabilityFlags {
+        AgentCapabilityFlags(previewCapabilities: effective)
+    }
+}
+
 // MARK: - AgentCapabilityFlags
 
 /// Backend runtime 能力声明。
@@ -75,9 +201,65 @@ public struct AgentCapabilityFlags: OptionSet, Sendable {
     public static let conversationForkThroughTurn = AgentCapabilityFlags(rawValue: 1 << 20)
     public static let historyPagination = AgentCapabilityFlags(rawValue: 1 << 21)
     public static let conversationListPagination = AgentCapabilityFlags(rawValue: 1 << 22)
-
     public static let backgroundJobControl = AgentCapabilityFlags(rawValue: 1 << 23)
     public static let backgroundContinuation = AgentCapabilityFlags(rawValue: 1 << 24)
+
+    /// Canonical preview.artifact.v1 capability flags.
+    public static let previewContractV1 = AgentCapabilityFlags(rawValue: 1 << 25)
+    public static let previewInteractiveHTMLV1 = AgentCapabilityFlags(rawValue: 1 << 26)
+    public static let previewStaticAssetV1 = AgentCapabilityFlags(rawValue: 1 << 27)
+    public static let previewReplayV1 = AgentCapabilityFlags(rawValue: 1 << 28)
+
+    /// Surfaces implemented by AgentKit's preview data plane.
+    public static let previewClient: AgentCapabilityFlags = [
+        .previewContractV1,
+        .previewInteractiveHTMLV1,
+        .previewStaticAssetV1,
+        .previewReplayV1,
+    ]
+
+    public init(previewCapabilities: Set<PreviewCapability>) {
+        var flags: AgentCapabilityFlags = []
+        for capability in previewCapabilities {
+            switch capability {
+            case .contract: flags.insert(.previewContractV1)
+            case .interactiveHTML: flags.insert(.previewInteractiveHTMLV1)
+            case .staticAsset: flags.insert(.previewStaticAssetV1)
+            case .replay: flags.insert(.previewReplayV1)
+            }
+        }
+        self = flags
+    }
+
+    public var previewCapabilities: Set<PreviewCapability> {
+        var result = Set<PreviewCapability>()
+        if contains(.previewContractV1) { result.insert(.contract) }
+        if contains(.previewInteractiveHTMLV1) { result.insert(.interactiveHTML) }
+        if contains(.previewStaticAssetV1) { result.insert(.staticAsset) }
+        if contains(.previewReplayV1) { result.insert(.replay) }
+        return result
+    }
+
+    public var previewWireNames: [String] {
+        PreviewCapability.allCases
+            .filter { previewCapabilities.contains($0) }
+            .map(\.rawValue)
+            .sorted()
+    }
+
+    public func replacingPreviewCapabilities(with capabilities: Set<PreviewCapability>) -> AgentCapabilityFlags {
+        var result = self
+        for flag in [
+            AgentCapabilityFlags.previewContractV1,
+            .previewInteractiveHTMLV1,
+            .previewStaticAssetV1,
+            .previewReplayV1,
+        ] {
+            result.remove(flag)
+        }
+        result.formUnion(AgentCapabilityFlags(previewCapabilities: capabilities))
+        return result
+    }
 
     // MARK: - Presets
 

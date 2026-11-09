@@ -139,7 +139,16 @@ public struct RuntimeCapabilitySnapshot: Codable, Sendable, Equatable {
         if capabilities["background_job_control_v1"] == true { flags.insert(.backgroundJobControl) }
         if capabilities["history_pagination"] == true { flags.insert(.historyPagination) }
         if capabilities["conversation_list_pagination_v1"] == true { flags.insert(.conversationListPagination) }
+        if capabilities[PreviewCapability.contract.rawValue] == true { flags.insert(.previewContractV1) }
+        if capabilities[PreviewCapability.interactiveHTML.rawValue] == true { flags.insert(.previewInteractiveHTMLV1) }
+        if capabilities[PreviewCapability.staticAsset.rawValue] == true { flags.insert(.previewStaticAssetV1) }
+        if capabilities[PreviewCapability.replay.rawValue] == true { flags.insert(.previewReplayV1) }
         return flags
+    }
+
+    /// Runtime capability names whose value is explicitly `true`.
+    public var enabledCapabilities: Set<String> {
+        Set(capabilities.compactMap { key, value in value ? key : nil })
     }
 
     public var allowsMultiSessionExecution: Bool {

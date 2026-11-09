@@ -20,6 +20,7 @@ public protocol RuntimeSessionChannel: Sendable {
     func send(input: AgentInput) async
     func submit(input: AgentInput) async -> AgentInputSubmissionTicket
     func registerTools(_ tools: [ClientToolInfo]) async
+    func registerTools(_ tools: [ClientToolRegistration]) async
     func sendApproval(id: String, approved: Bool) async
     func sendApproval(id: String, decision: String, scope: String?) async
     func sendPlanApproval(id: String, approved: Bool) async
@@ -31,6 +32,10 @@ public protocol RuntimeSessionChannel: Sendable {
 }
 
 public extension RuntimeSessionChannel {
+    /// Source-compatible fallback for third-party channels.
+    func registerTools(_ tools: [ClientToolRegistration]) async {
+        await registerTools(tools.map(\.clientToolInfo))
+    }
     /// A targeted stop must never become an untargeted stop on an old channel.
     func cancelTurn(turnID: String) async {}
     /// Source-compatible fallback for third-party channels. CodeAgentSessionChannel

@@ -118,6 +118,11 @@ public struct ExecutionReducer: Sendable {
                                       assets: result.assets,
                                       ts: ts, graph: &graph)
 
+        case .previewArtifact:
+            // Preview presentation is a first-class side channel and never
+            // mutates the tool/turn execution graph.
+            return []
+
         // ── Observation (previously ignored!) ──
         case .observed(let turnID, let callID, _, _, let observation, let failure):
             return handleObserved(turnID: turnID ?? internalState.currentTurnID ?? "",

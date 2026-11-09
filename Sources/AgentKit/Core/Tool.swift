@@ -17,7 +17,9 @@ public struct ToolCall: Sendable, Hashable {
     public let toolName: String
     /// 结构化 JSON 对象，如 `{"command": "git push"}`。
     public let toolArgs: JSONValue?
-    /// v1.1：工具执行位置。"server"（默认）| "client"。
+    /// Resolved execution location reported by `tool_started`: `server` or
+    /// `client`. `flex` is a registration declaration and must be resolved by
+    /// the runtime before a call is dispatched.
     public let executor: ToolExecutor
 
     public init(callID: String, toolName: String, toolArgs: JSONValue?, executor: ToolExecutor = .server) {
@@ -26,12 +28,74 @@ public struct ToolCall: Sendable, Hashable {
         self.toolArgs = toolArgs
         self.executor = executor
     }
+
+    /// The executor is executable only when the runtime supplied a concrete
+    /// server/client decision. A malformed `flex` call is never interpreted as
+    /// client execution.
+    public var resolvedExecutor: ToolExecutor? {
+        switch executor {
+        case .server, .client: return executor
+        case .flex: return nil
+        }
+    }
+
+    public var isClientExecutable: Bool { resolvedExecutor == .client }
 }
 
-/// 工具执行位置。
-public enum ToolExecutor: String, Sendable, Hashable {
+/// Tool execution location. `flex` is valid in registration declarations only;
+/// runtime `tool_started` events must report a resolved `server` or `client`.
+public enum ToolExecutor: String, Codable, Sendable, Hashable, CaseIterable {
     case server
     case client
+    case flex
+}
+
+/// Tool model exposure is orthogonal to execution.
+public enum ToolModelVisibility: String, Codable, Sendable, Hashable, CaseIterable {
+    case direct
+    case hidden
+}
+
+/// Client tool registration with the canonical visibility/executor dimensions.
+/// Legacy `ClientToolInfo` registrations map to `direct` + `client`.
+public struct ClientToolRegistration: Sendable, Hashable {
+    public let name: String
+    public let description: String
+    public let inputSchema: JSONValue?
+    public let modelVisibility: ToolModelVisibility
+    public let executor: ToolExecutor
+
+    public init(
+        name: String,
+        description: String,
+        inputSchema: JSONValue? = nil,
+        modelVisibility: ToolModelVisibility = .direct,
+        executor: ToolExecutor = .client
+    ) {
+        self.name = name
+        self.description = description
+        self.inputSchema = inputSchema
+        self.modelVisibility = modelVisibility
+        self.executor = executor
+    }
+
+    public init(
+        _ info: ClientToolInfo,
+        modelVisibility: ToolModelVisibility = .direct,
+        executor: ToolExecutor = .client
+    ) {
+        self.init(
+            name: info.name,
+            description: info.description,
+            inputSchema: info.inputSchema,
+            modelVisibility: modelVisibility,
+            executor: executor
+        )
+    }
+
+    public var clientToolInfo: ClientToolInfo {
+        ClientToolInfo(name: name, description: description, inputSchema: inputSchema)
+    }
 }
 
 // MARK: - ToolResult

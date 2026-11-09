@@ -237,9 +237,12 @@ public protocol AgentTransport: Sendable {
 
     // MARK: - Tool registration
 
-    /// 向服务端注册客户端可执行工具。
+    /// 向服务端注册客户端可执行工具（legacy source-compatible shape）。
     /// 应在连接建立后（handshake 完成后）尽快调用。
     func registerTools(_ tools: [ClientToolInfo]) async
+
+    /// Canonical registration with `model_visibility` and `executor`.
+    func registerTools(_ tools: [ClientToolRegistration]) async
 
     // MARK: - Capability discovery
 
@@ -263,6 +266,12 @@ public protocol AgentTransport: Sendable {
 // MARK: - Default impls
 
 extension AgentTransport {
+    /// Legacy transports preserve source compatibility with direct/client
+    /// defaults; CodeAgentTransport overrides this with the full binding.
+    public func registerTools(_ tools: [ClientToolRegistration]) async {
+        await registerTools(tools.map(\.clientToolInfo))
+    }
+
     public func backgroundJobRuntimeIdentity() async throws -> String { throw RuntimeHTTPError.unsupported }
     public func listBackgroundJobs(conversationID: String, runtimeIdentity: String) async throws -> [BackgroundJobSnapshot] { throw RuntimeHTTPError.unsupported }
     public func cancelBackgroundJob(conversationID: String, owner: BackgroundJobOwner, runtimeIdentity: String) async throws -> BackgroundJobSnapshot { throw RuntimeHTTPError.unsupported }

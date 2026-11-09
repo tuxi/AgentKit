@@ -239,6 +239,124 @@ struct RuntimeHTTPClient: Sendable {
         return try decodeEnvelope(RuntimeCapabilitySnapshot.self, from: data)
     }
 
+    // MARK: - Preview resources
+
+    /// Authenticated, redirect-free viewer fetch. The returned bytes are not
+    /// registered with any UI scheme until the caller validates them against
+    /// the artifact descriptor.
+    func resolvePreviewViewer(_ request: PreviewViewerRequest) async throws -> PreviewViewerResource {
+        guard previewPathComponentIsSafe(request.sessionID),
+              previewPathComponentIsSafe(request.artifactID),
+              request.revision > 0 else {
+            throw PreviewResourceError(code: "preview_invalid_artifact", message: "Preview viewer request is invalid.")
+        }
+        let requestURL = try await buildRequest(
+            "GET",
+            pathArray: [
+                "v1", "conversations", request.sessionID, "previews",
+                request.artifactID, "revisions", String(request.revision), "viewer",
+            ]
+        )
+        let (data, response) = try await session.data(for: requestURL)
+        guard let http = response as? HTTPURLResponse else {
+            throw RuntimeHTTPError.invalidResponse
+        }
+        guard http.statusCode == 200 else {
+            if let preview = PreviewHTTPError.decode(data: data, httpStatus: http.statusCode) {
+                throw RuntimeHTTPError.preview(preview)
+            }
+            throw RuntimeHTTPError.unexpectedStatus(
+                http.statusCode,
+                body: String(data: data, encoding: .utf8) ?? ""
+            )
+        }
+
+        let mimeType = http.value(forHTTPHeaderField: "Content-Type") ?? http.mimeType ?? ""
+        guard mimeType.lowercased() == "text/html; charset=utf-8" else {
+            throw PreviewResourceError(
+                code: "preview_viewer_mime_mismatch",
+                message: "Viewer MIME type is not trusted HTML."
+            )
+        }
+        guard data.count <= PreviewArtifact.maximumViewerBytes else {
+            throw PreviewResourceError(
+                code: "preview_viewer_too_large",
+                message: "Viewer exceeds the 2 MiB v1 limit."
+            )
+        }
+        return PreviewViewerResource(
+            sessionID: request.sessionID,
+            artifactID: request.artifactID,
+            revision: request.revision,
+            data: data,
+            statusCode: http.statusCode,
+            mimeType: mimeType,
+            sizeBytes: data.count,
+            sha256: PreviewRFC8785.sha256(data: data),
+            expiresAt: Self.previewExpiry(from: http)
+        )
+    }
+
+    /// Authenticated fallback/primary asset fetch for the same immutable
+    /// artifact revision.
+    func resolvePreviewAsset(_ request: PreviewAssetRequest) async throws -> PreviewAssetResource {
+        guard previewPathComponentIsSafe(request.sessionID),
+              previewPathComponentIsSafe(request.artifactID),
+              previewPathComponentIsSafe(request.assetID),
+              request.revision > 0 else {
+            throw PreviewResourceError(code: "preview_asset_unavailable", message: "Preview asset request is invalid.")
+        }
+        let requestURL = try await buildRequest(
+            "GET",
+            pathArray: [
+                "v1", "conversations", request.sessionID, "previews",
+                request.artifactID, "revisions", String(request.revision),
+                "assets", request.assetID, "content",
+            ]
+        )
+        let (data, response) = try await session.data(for: requestURL)
+        guard let http = response as? HTTPURLResponse else {
+            throw RuntimeHTTPError.invalidResponse
+        }
+        guard http.statusCode == 200 else {
+            if let preview = PreviewHTTPError.decode(data: data, httpStatus: http.statusCode) {
+                throw RuntimeHTTPError.preview(preview)
+            }
+            throw RuntimeHTTPError.unexpectedStatus(
+                http.statusCode,
+                body: String(data: data, encoding: .utf8) ?? ""
+            )
+        }
+        let mimeType = (http.value(forHTTPHeaderField: "Content-Type") ?? http.mimeType ?? "").lowercased()
+        guard ["image/png", "image/jpeg", "image/webp"].contains(mimeType) else {
+            throw PreviewResourceError(
+                code: "preview_security_violation",
+                message: "Preview asset MIME type is not allowlisted."
+            )
+        }
+        return PreviewAssetResource(
+            sessionID: request.sessionID,
+            artifactID: request.artifactID,
+            revision: request.revision,
+            assetID: request.assetID,
+            data: data,
+            statusCode: http.statusCode,
+            mimeType: mimeType,
+            sizeBytes: data.count,
+            sha256: PreviewRFC8785.sha256(data: data),
+            expiresAt: Self.previewExpiry(from: http)
+        )
+    }
+
+    private static func previewExpiry(from response: HTTPURLResponse) -> Date? {
+        guard let raw = response.value(forHTTPHeaderField: "Expires") else { return nil }
+        let formatter = DateFormatter()
+        formatter.locale = Locale(identifier: "en_US_POSIX")
+        formatter.timeZone = TimeZone(secondsFromGMT: 0)
+        formatter.dateFormat = "EEE',' dd MMM yyyy HH':'mm':'ss z"
+        return formatter.date(from: raw)
+    }
+
     func listWorkspaceGitBranches(workspacePath: String) async throws -> WorkspaceGitBranchResult {
         try await performWorkspaceGitBranchRequest(endpoint: "list", body: WorkspaceGitBranchListRequest(workspacePath: workspacePath))
     }
@@ -1186,6 +1304,7 @@ enum RuntimeHTTPError: Error {
     /// 当前 client/transport 不支持该能力（如 mock）。
     case unsupported
     case workspaceGit(WorkspaceGitBranchErrorPayload)
+    case preview(PreviewHTTPError)
 }
 
 extension RuntimeHTTPError: LocalizedError {
@@ -1198,6 +1317,7 @@ extension RuntimeHTTPError: LocalizedError {
         case .authenticationInvalid:  return "Runtime Server 访问凭证无效。"
         case .unsupported:       return "当前后端不支持该操作。"
         case .workspaceGit(let payload): return payload.message
+        case .preview(let error): return error.error.message
         case .unexpectedStatus(let code, let body):
             let msg = Self.extractMessage(from: body)
             return msg.isEmpty ? "请求失败（HTTP \(code)）。" : msg

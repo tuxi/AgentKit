@@ -102,6 +102,9 @@ public enum AgentEvent: Sendable {
     case toolStderr(turnID: String?, callID: String, chunk: String)
     case observed(turnID: String?, callID: String?, step: Int, toolName: String, observation: String?, failure: String?)
     case autoApproved(turnID: String?, toolName: String, toolArgs: JSONValue?, text: String?)
+    /// Complete preview artifact snapshot. Invalid artifacts remain events with
+    /// `error` set so only the preview block fails closed.
+    case previewArtifact(PreviewArtifactEvent)
 
     // ── Skill ──
     case skillLoaded(toolName: String, skillVersion: String?)
@@ -429,6 +432,9 @@ extension AgentEvent {
                 assets: wire.assets ?? []
             )
             return .toolFinished(turnID: turnID, callID: callID ?? "", result: result)
+
+        case "preview_artifact":
+            return .previewArtifact(PreviewArtifactEvent.from(wire: wire))
 
         case "observed":
             return .observed(

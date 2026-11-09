@@ -29,7 +29,7 @@ public final class CodeAgentSessionChannel: RuntimeSessionChannel, @unchecked Se
     private let credentialTarget: CredentialTarget
     private let trustPolicy: RuntimeServerTrustPolicy?
     private var socket: AgentWireSocket?
-    private var pendingTools: [ClientToolInfo] = []
+    private var pendingTools: [ClientToolRegistration] = []
     private let submissionCoordinator = AgentInputSubmissionCoordinator()
 
     init(
@@ -92,11 +92,15 @@ public final class CodeAgentSessionChannel: RuntimeSessionChannel, @unchecked Se
         return await socket.submit(input: input)
     }
 
-    public func registerTools(_ tools: [ClientToolInfo]) async {
+    public func registerTools(_ tools: [ClientToolRegistration]) async {
         pendingTools = tools
         if let socket, socket.isConnected {
             socket.sendRegisterTools(tools)
         }
+    }
+
+    public func registerTools(_ tools: [ClientToolInfo]) async {
+        await registerTools(tools.map { ClientToolRegistration($0) })
     }
 
     public func sendApproval(id: String, approved: Bool) async {
@@ -124,12 +128,32 @@ public final class CodeAgentSessionChannel: RuntimeSessionChannel, @unchecked Se
     }
 
     public func capabilities() async -> AgentCapabilityFlags {
-        Self.flags(from: socket?.serverCapabilities ?? [])
+        let hello = socket?.serverCapabilities ?? []
+        let base = Self.flags(from: hello)
+        guard hello.contains(where: { PreviewCapability(rawValue: $0) != nil }) else {
+            return base
+        }
+        let runtime = try? await http.runtimeCapabilities()
+        let negotiation = PreviewCapabilityNegotiation(
+            hello: hello,
+            runtime: Array(runtime?.enabledCapabilities ?? []),
+            client: .previewClient
+        )
+        if !negotiation.helloRuntimeMismatch.isEmpty {
+            DLLog("preview capability mismatch", negotiation.helloRuntimeMismatch.map(\.rawValue).sorted())
+        }
+        if negotiation.runtimeAdvertisementInvalid {
+            DLLog("preview runtime advertised interactive_html without static_asset; degrading")
+        }
+        return base.replacingPreviewCapabilities(with: negotiation.effective)
     }
 
     static func flags(from capabilities: [String]) -> AgentCapabilityFlags {
         let values = Set(capabilities)
         var flags = AgentCapabilityFlags.default
+        flags.formUnion(AgentCapabilityFlags(
+            previewCapabilities: Set(capabilities.compactMap(PreviewCapability.init(rawValue:)))
+        ))
         if values.contains("background_job_notifications_v1") { flags.insert(.backgroundContinuation) }
         if values.contains("client_tool_execution") {
             flags.insert(.clientToolExecution)
@@ -182,7 +206,7 @@ public final class CodeAgentTransport: AgentTransport, CodingTaskReading, Coding
     private let trustPolicy: RuntimeServerTrustPolicy?
 
     /// 待注册的客户端工具列表。在握手后自动发送。
-    private var pendingTools: [ClientToolInfo] = []
+    private var pendingTools: [ClientToolRegistration] = []
     private let submissionCoordinator = AgentInputSubmissionCoordinator()
 
     // MARK: - Init
@@ -704,7 +728,7 @@ public final class CodeAgentTransport: AgentTransport, CodingTaskReading, Coding
 
     // MARK: - AgentTransport: Tool registration
 
-    public func registerTools(_ tools: [ClientToolInfo]) async {
+    public func registerTools(_ tools: [ClientToolRegistration]) async {
         pendingTools = tools
         // 如果已经连上（握手已完成），立即发送
         if let socket, socket.isConnected {
@@ -713,10 +737,31 @@ public final class CodeAgentTransport: AgentTransport, CodingTaskReading, Coding
         // 否则在下次 attach 时通过 onHandshake 发送
     }
 
+    public func registerTools(_ tools: [ClientToolInfo]) async {
+        await registerTools(tools.map { ClientToolRegistration($0) })
+    }
+
     // MARK: - AgentTransport: Capability discovery
 
     public func capabilities() async -> AgentCapabilityFlags {
-        CodeAgentSessionChannel.flags(from: socket?.serverCapabilities ?? [])
+        let hello = socket?.serverCapabilities ?? []
+        let base = CodeAgentSessionChannel.flags(from: hello)
+        guard hello.contains(where: { PreviewCapability(rawValue: $0) != nil }) else {
+            return base
+        }
+        let runtime = try? await http.runtimeCapabilities()
+        let negotiation = PreviewCapabilityNegotiation(
+            hello: hello,
+            runtime: Array(runtime?.enabledCapabilities ?? []),
+            client: .previewClient
+        )
+        if !negotiation.helloRuntimeMismatch.isEmpty {
+            DLLog("preview capability mismatch", negotiation.helloRuntimeMismatch.map(\.rawValue).sorted())
+        }
+        if negotiation.runtimeAdvertisementInvalid {
+            DLLog("preview runtime advertised interactive_html without static_asset; degrading")
+        }
+        return base.replacingPreviewCapabilities(with: negotiation.effective)
     }
 }
 
@@ -1004,6 +1049,10 @@ public final class DefaultAgentClient: RuntimeClient, CodingTaskReading, CodingT
     }
 
     public func registerTools(_ tools: [ClientToolInfo]) async {
+        await transport.registerTools(tools)
+    }
+
+    public func registerTools(_ tools: [ClientToolRegistration]) async {
         await transport.registerTools(tools)
     }
 

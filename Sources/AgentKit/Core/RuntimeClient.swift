@@ -96,9 +96,12 @@ public protocol RuntimeClient: Sendable {
     /// ```
     func send(input: AgentInput) async
 
-    /// 向服务端注册客户端可执行工具。
+    /// 向服务端注册客户端可执行工具（legacy source-compatible shape）。
     /// 应在连接建立后调用，服务端据此知道哪些工具可委托给客户端。
     func registerTools(_ tools: [ClientToolInfo]) async
+
+    /// Canonical registration with `model_visibility` and `executor`.
+    func registerTools(_ tools: [ClientToolRegistration]) async
 
     /// 审批回复 — 对应某条 `approval_request`（两态兼容）。
     func sendApproval(id: String, approved: Bool) async
@@ -267,6 +270,10 @@ public protocol RuntimeClient: Sendable {
 // MARK: - Backward compatibility
 
 extension RuntimeClient {
+    public func registerTools(_ tools: [ClientToolRegistration]) async {
+        await registerTools(tools.map(\.clientToolInfo))
+    }
+
     public func backgroundJobRuntimeIdentity() async throws -> String { throw RuntimeHTTPError.unsupported }
     public func listBackgroundJobs(conversationID: String, runtimeIdentity: String) async throws -> [BackgroundJobSnapshot] { throw RuntimeHTTPError.unsupported }
     public func cancelBackgroundJob(conversationID: String, owner: BackgroundJobOwner, runtimeIdentity: String) async throws -> BackgroundJobSnapshot { throw RuntimeHTTPError.unsupported }

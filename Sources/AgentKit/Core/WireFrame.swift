@@ -45,6 +45,12 @@ struct WireFrame: Decodable {
     let observation: String?
     let output: JSONValue?
     let assets: [AgentAssetRef]?
+    /// Preview events carry a complete self-contained artifact snapshot.
+    let artifact: JSONValue?
+    /// Raw preview drafts are decoded one-by-one by PreviewArtifactDraft so a
+    /// malformed draft cannot make the containing tool result frame undecodable.
+    let previews: [JSONValue]?
+    let toolResult: WireToolResult?
     /// Agent Wire v1.5 user attachments. Never decode these as v1.3 tool assets.
     let userAssets: [UserAssetRef]?
     /// Workspace-relative user attachments emitted by the local Runtime.
@@ -123,6 +129,8 @@ struct WireFrame: Decodable {
     enum CodingKeys: String, CodingKey {
         case type, kind, at, step, id, server, seq, background
         case text, observation, output, assets, failure, err, error, ratio, todos, chunk
+        case artifact, previews
+        case toolResult = "tool_result"
         case ineffective
         case userAssets = "user_assets"
         case localAssets = "local_assets"
@@ -235,6 +243,25 @@ struct WireDiffFile: Decodable {
 struct WireErrorDetail: Decodable {
     let code: String?
     let message: String?
+}
+
+// MARK: - Wire tool result
+
+/// Raw nested `agent_input.tool_result` shape. Preview drafts remain raw JSON
+/// here for per-draft failure isolation.
+struct WireToolResult: Decodable {
+    let toolUseID: String?
+    let content: String?
+    let output: JSONValue?
+    let assets: [AgentAssetRef]?
+    let previews: [JSONValue]?
+    let isError: Bool?
+
+    enum CodingKeys: String, CodingKey {
+        case content, output, assets, previews
+        case toolUseID = "tool_use_id"
+        case isError = "is_error"
+    }
 }
 
 // MARK: - Wire todo
@@ -401,6 +428,7 @@ struct OutgoingAgentInput: Encodable {
                     content: $0.content,
                     output: $0.output,
                     assets: $0.assets,
+                    previews: $0.previews,
                     isError: $0.isError
                 )
             }
@@ -451,12 +479,25 @@ struct OutgoingToolResult: Encodable {
     let content: String
     let output: JSONValue?
     let assets: [AgentAssetRef]
+    let previews: [PreviewArtifactDraft]
     let isError: Bool
 
     enum CodingKeys: String, CodingKey {
-        case content, output, assets
+        case content, output, assets, previews
         case toolUseID = "tool_use_id"
         case isError = "is_error"
+    }
+
+    func encode(to encoder: Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encode(toolUseID, forKey: .toolUseID)
+        try container.encode(content, forKey: .content)
+        try container.encodeIfPresent(output, forKey: .output)
+        try container.encode(assets, forKey: .assets)
+        if !previews.isEmpty {
+            try container.encode(previews, forKey: .previews)
+        }
+        try container.encode(isError, forKey: .isError)
     }
 }
 
@@ -464,16 +505,31 @@ struct OutgoingToolResult: Encodable {
 struct OutgoingRegisterTools: Encodable {
     let type = "register_tools"
     let tools: [OutgoingClientToolDef]
+
+    init(tools: [ClientToolRegistration]) {
+        self.tools = tools.map {
+            OutgoingClientToolDef(
+                name: $0.name,
+                description: $0.description,
+                inputSchema: $0.inputSchema,
+                modelVisibility: $0.modelVisibility,
+                executor: $0.executor
+            )
+        }
+    }
 }
 
 struct OutgoingClientToolDef: Encodable {
     let name: String
     let description: String
     let inputSchema: JSONValue?
+    let modelVisibility: ToolModelVisibility
+    let executor: ToolExecutor
 
     enum CodingKeys: String, CodingKey {
-        case name, description
+        case name, description, executor
         case inputSchema = "input_schema"
+        case modelVisibility = "model_visibility"
     }
 }
 

@@ -131,6 +131,25 @@ public struct AgentInput: Sendable {
             throw AgentInputRejection(code: "invalid_assets", message: "Assets are only valid for text input")
         }
 
+        if kind.isToolResult, let previews = toolResult?.previews, !previews.isEmpty {
+            guard previews.count <= 4 else {
+                throw AgentInputRejection(
+                    code: "preview_invalid_artifact",
+                    message: "A tool result may contain at most four preview drafts"
+                )
+            }
+            do {
+                for preview in previews { try preview.validate() }
+            } catch let error as PreviewArtifactError {
+                throw AgentInputRejection(code: error.code, message: error.message)
+            } catch {
+                throw AgentInputRejection(
+                    code: "preview_invalid_artifact",
+                    message: "A preview draft is invalid"
+                )
+            }
+        }
+
         let attachmentCount = assets.count + localAssets.count
         guard attachmentCount <= maxFilesCount else {
             throw UserAssetValidationError.tooManyAssets(attachmentCount)
@@ -185,6 +204,11 @@ private extension AgentInput.Kind {
         if case .text = self { return true }
         return false
     }
+
+    var isToolResult: Bool {
+        if case .toolResult = self { return true }
+        return false
+    }
 }
 
 // MARK: - SystemCommand
@@ -218,18 +242,23 @@ public struct ToolResultContent: Sendable {
     public let assets: [AgentAssetRef]
     /// `true` = 工具执行失败，agent 应据此决定重试策略。
     public let isError: Bool
+    /// Typed preview drafts emitted only through the client tool-result
+    /// side-channel. Never inferred from `output`, metadata, or tool names.
+    public let previews: [PreviewArtifactDraft]
 
     public init(
         toolUseID: String,
         content: String,
         isError: Bool = false,
         output: JSONValue? = nil,
-        assets: [AgentAssetRef] = []
+        assets: [AgentAssetRef] = [],
+        previews: [PreviewArtifactDraft] = []
     ) {
         self.toolUseID = toolUseID
         self.content = content
         self.output = output
         self.assets = assets
+        self.previews = previews
         self.isError = isError
     }
 }
