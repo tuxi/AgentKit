@@ -2193,9 +2193,11 @@ function PreviewBlock({
     ? "Interactive HTML"
     : "Static image";
   const wantsViewer = preview.presentationState === "interactiveReady";
-  const wantsFallbackImage = Boolean(preview.fallbackAssetID)
-    && (preview.presentationState === "staticFallback"
-      || preview.presentationState === "expired");
+  const isDegradedPreview = preview.presentationState === "staticFallback"
+    || preview.presentationState === "expired"
+    || preview.presentationState === "unavailable"
+    || preview.presentationState === "renderFailed";
+  const wantsFallbackImage = Boolean(preview.fallbackAssetID) && isDegradedPreview;
 
   useEffect(() => {
     const handleResolved = (event: Event) => {
@@ -2380,7 +2382,7 @@ function PreviewBlock({
               )}
             </div>
           ) : null}
-          {preview.fallbackText ? (
+          {isDegradedPreview && preview.fallbackText ? (
             <div className="preview-evidence">
               <span className="preview-evidence-label">静态证据</span>
               <span>{preview.fallbackText}</span>

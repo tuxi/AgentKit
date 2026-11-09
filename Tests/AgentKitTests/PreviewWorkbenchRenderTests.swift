@@ -147,6 +147,11 @@ final class PreviewWorkbenchRenderTests: XCTestCase {
         ) as? Int
         XCTAssertGreaterThan(fallbackWidth ?? 0, 0)
 
+        let fallbackEvidence = try await webView.evaluateJavaScript("""
+        document.querySelector('[data-preview-id="preview_fixture_unavailable_with_fallback"] .preview-evidence')?.textContent
+        """) as? String
+        XCTAssertTrue(fallbackEvidence?.contains("Interactive preview unavailable. Showing static evidence.") == true)
+
         let screenshotDirectory = try screenshotDirectoryURL()
         _ = try await webView.evaluateJavaScript("""
         document.querySelector('[data-preview-id="preview_fixture_interactive"]')
@@ -198,6 +203,98 @@ final class PreviewWorkbenchRenderTests: XCTestCase {
             "document.querySelector('iframe[data-preview-frame=\"preview_fixture_interactive\"]')?.src"
         ) as? String
         XCTAssertEqual(secondFrameSource, firstFrameSource)
+    }
+
+    func testInteractiveReadyDoesNotRenderFallbackUnavailableEvidence() async throws {
+        let root = try PreviewFixtureManifestRunner.fixtureRoot()
+        let interactive = try PreviewArtifact.decode(
+            data: Data(contentsOf: root.appendingPathComponent("ready-interactive.json"))
+        )
+        let viewerData = try Data(contentsOf: root.appendingPathComponent("viewer.html"))
+        let assetData = try Data(contentsOf: root.appendingPathComponent("assets/fallback.png"))
+        let resolver = FixturePreviewResourceResolvers(
+            viewerData: viewerData,
+            assetData: assetData
+        )
+        let turn = ConversationTurn(
+            id: "turn_turn_fixture_user",
+            userPrompt: MessageNodePayload(role: .user, text: "Show a preview"),
+            blocks: [.text(
+                id: "answer",
+                MessageNodePayload(role: .assistant, text: "Preview ready.")
+            )],
+            footer: nil,
+            isLive: false
+        )
+        let snapshot = RuntimeSnapshot(
+            timeline: [],
+            turns: [turn],
+            previewArtifacts: [interactive],
+            generation: 1
+        )
+        let store = WorkspaceStore(usesEmbeddedRuntime: false)
+        let content = ConversationWebWorkbenchView(
+            snapshot: snapshot,
+            conversationID: "session_fixture",
+            workspaceRoot: nil,
+            previewViewerResolver: resolver,
+            previewAssetResolver: resolver,
+            extensionContributions: [:],
+            timelineExtensions: [],
+            isVisible: true,
+            bottomInset: 0,
+            onFatalFailure: { XCTFail("ConversationWorkbench renderer failed") }
+        )
+        .environment(store)
+
+        let hostingView = NSHostingView(rootView: content)
+        hostingView.frame = NSRect(x: 0, y: 0, width: 900, height: 1_000)
+        let window = NSWindow(
+            contentRect: hostingView.frame,
+            styleMask: [.titled, .closable],
+            backing: .buffered,
+            defer: false
+        )
+        window.contentView = hostingView
+        window.title = "AgentKit ConversationWorkbench Preview State"
+        window.makeKeyAndOrderFront(nil)
+        hostingView.layoutSubtreeIfNeeded()
+        self.window = window
+
+        let webView = try await waitForWebView(in: hostingView)
+        try await waitForJavaScript(
+            "Boolean(document.querySelector('[data-preview-id=\"preview_fixture_interactive\"]'))",
+            webView: webView,
+            timeout: 12
+        )
+        _ = try await webView.evaluateJavaScript("""
+        (() => {
+          const summary = document.querySelector('[data-preview-id="preview_fixture_interactive"] summary');
+          if (summary?.parentElement?.open === false) {
+            summary.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true }));
+          }
+        })()
+        """)
+        try await waitForJavaScript(
+            "document.querySelector('iframe[data-preview-frame=\"preview_fixture_interactive\"]')?.dataset.loaded === 'true'",
+            webView: webView,
+            timeout: 12
+        )
+
+        let inspection = try await webView.evaluateJavaScript("""
+        (() => {
+          const section = document.querySelector('[data-preview-id="preview_fixture_interactive"]');
+          const text = section?.textContent ?? '';
+          return {
+            status: section?.getAttribute('data-status'),
+            evidence: section?.querySelector('.preview-evidence')?.textContent ?? null,
+            hasUnavailableText: text.includes('Interactive preview unavailable. Showing static evidence.')
+          };
+        })()
+        """) as? [String: Any]
+        XCTAssertEqual(inspection?["status"] as? String, "interactiveReady")
+        XCTAssertNil(inspection?["evidence"] as? String)
+        XCTAssertEqual(inspection?["hasUnavailableText"] as? Bool, false)
     }
 
     private func waitForWebView(in root: NSView) async throws -> WKWebView {
