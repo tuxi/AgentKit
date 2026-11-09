@@ -20,6 +20,9 @@ public struct RuntimeSnapshot: Sendable {
     /// Turn → Block projection consumed by the timeline UI. Projected once
     /// per snapshot on the engine actor — views must not re-project.
     public let turns: [ConversationTurn]
+    /// Latest valid preview artifact snapshot per artifact identity. Revision
+    /// ordering and duplicate/conflict handling live in PreviewArtifactStore.
+    public let previewArtifacts: [PreviewArtifact]
     public let pendingApproval: ApprovalRequest? // 保留兼容：取队列第一个
     public let pendingApprovals: [ApprovalRequest]  // 新增：完整审批队列
     public let pendingPlanApproval: PlanApprovalRequest?
@@ -46,6 +49,7 @@ public struct RuntimeSnapshot: Sendable {
   
     public init(timeline: [ExecutionNode],
                 turns: [ConversationTurn] = [],
+                previewArtifacts: [PreviewArtifact] = [],
                 pendingApprovals: [ApprovalRequest] = [],
                 pendingPlanApproval: PlanApprovalRequest? = nil,
                 pendingAskUsers: [AskUserRequest] = [],
@@ -60,6 +64,7 @@ public struct RuntimeSnapshot: Sendable {
                 backgroundContinuation: BackgroundContinuationStatus? = nil) {
         self.timeline = timeline
         self.turns = turns
+        self.previewArtifacts = previewArtifacts
         self.pendingApproval = pendingApprovals.first
         self.pendingApprovals = pendingApprovals
         self.pendingPlanApproval = pendingPlanApproval
@@ -246,6 +251,9 @@ public actor RuntimeEngine {
     /// to finish without a corresponding terminal event.
     private var activeTurnID: String?
     private var backgroundTracker = BackgroundContinuationTracker()
+    /// Preview snapshots are event-sourced outside ExecutionGraph: they never
+    /// alter tool/turn execution semantics.
+    private var previewStore = PreviewArtifactStore()
 
     /// Latest plan state-machine state (`plan_state_changed`).
     private var _planState: PlanState = .none
@@ -292,6 +300,7 @@ public actor RuntimeEngine {
     /// Ingest a v1 AgentEvent from the wire.
     /// Persist → Reduce → Project → Notify UI (coalesced).
     public func ingest(_ event: AgentEvent) {
+        trackPreviewArtifact(event)
         let backgroundAccepted = backgroundTracker.reduce(event)
         if case .backgroundContinuation(let info) = event {
             guard backgroundAccepted else { return }
@@ -466,6 +475,7 @@ public actor RuntimeEngine {
         pendingTodoToolUpdates.removeAll()
         canonicalTodoRevision = 0
         for event in events {
+            trackPreviewArtifact(event)
             let accepted = backgroundTracker.reduce(event)
             if case .backgroundContinuation(let info) = event {
                 guard accepted else { continue }
@@ -574,6 +584,7 @@ public actor RuntimeEngine {
         wallClock: [String: TurnWallClock] = [:]
     ) {
         guard !events.isEmpty else { return }
+        for event in events { trackPreviewArtifact(event) }
         mergeWallClock(wallClock)
         olderEvents.insert(contentsOf: events, at: 0)
         if !leadingTailEvents.isEmpty,
@@ -617,6 +628,19 @@ public actor RuntimeEngine {
         switch event {
         case .turnFinished, .turnFailed, .turnCancelled: return true
         default: return false
+        }
+    }
+
+    private func trackPreviewArtifact(_ event: AgentEvent) {
+        guard case .previewArtifact(let previewEvent) = event else { return }
+        let result = previewStore.merge(previewEvent)
+        switch result {
+        case .conflict(_, let revision, let error):
+            DLLog("preview revision conflict", revision, error.code)
+        case .rejected(let error):
+            DLLog("preview event rejected", error.code, error.message)
+        case .inserted, .replaced, .duplicate, .stale:
+            break
         }
     }
 
@@ -882,6 +906,7 @@ public actor RuntimeEngine {
         return RuntimeSnapshot(
             timeline: olderTimeline + timeline.filter { !prefixRawTurnIDs.contains($0.turnID) },
             turns: olderTurns + uniqueLiveTurns,
+            previewArtifacts: previewStore.artifacts,
             pendingApprovals: _pendingApprovals,
             pendingPlanApproval: _pendingPlanApproval,
             pendingAskUsers: Array(_pendingAskUsers.values),

@@ -67,6 +67,14 @@ public struct ConversationTurn: Identifiable, Sendable, Equatable {
         self.changes = changes
     }
 
+    /// Runtime wire turn identity behind this UI turn. ConversationTurn uses
+    /// the stable `turn_<runtimeTurnID>_user` DOM identity, while preview
+    /// artifacts and other wire events carry the raw runtime turn id.
+    var runtimeTurnID: String {
+        guard id.hasPrefix("turn_"), id.hasSuffix("_user") else { return id }
+        return String(id.dropFirst("turn_".count).dropLast("_user".count))
+    }
+
     /// Nothing worth rendering — skip (e.g. a stray leading run with only
     /// demoted meta events).
     public var isEmpty: Bool {

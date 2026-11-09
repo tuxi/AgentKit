@@ -14,6 +14,7 @@ import type {
   ConversationWebDocument,
   ConversationWebExtensionNode,
   ConversationWebOperation,
+  ConversationWebPreview,
   ConversationWebTool,
   ConversationWebTurn,
   ConversationWebUpdate,
@@ -2165,6 +2166,74 @@ function processSummaryLabel(turn: ConversationWebTurn): string {
   return parts.length ? parts.join(" · ") : "查看执行过程";
 }
 
+/// First-class generic preview card. A4 deliberately renders metadata and
+/// static evidence only; the isolated interactive viewer is added by A5.
+function PreviewBlock({ preview }: { preview: ConversationWebPreview }) {
+  const [expanded, setExpanded] = useState(preview.initialState === "expanded");
+  const kindLabel = preview.kind === "interactive_html"
+    ? "Interactive HTML"
+    : "Static image";
+  return (
+    <section
+      className="preview-block"
+      data-preview-id={preview.id}
+      data-preview-revision={preview.revision}
+      data-status={preview.presentationState}
+      data-selection-id={`preview:${preview.id}`}
+      aria-label={`Preview: ${preview.title}`}
+    >
+      <details
+        className="preview-disclosure"
+        data-disclosure-id={`preview:${preview.id}`}
+        open={expanded}
+      >
+        <summary
+          className="interactive preview-summary"
+          data-focus-id={`preview:${preview.id}`}
+          onClick={(event) => {
+            event.preventDefault();
+            setExpanded((value) => !value);
+          }}
+        >
+          <span className="preview-kind" aria-hidden="true">Preview</span>
+          <span className="preview-title">{preview.title}</span>
+          <span className="preview-status" data-tone={preview.tone}>
+            {preview.statusLabel}
+          </span>
+          <span className="disclosure-chevron" aria-hidden="true">›</span>
+        </summary>
+        <div className="preview-body">
+          {preview.summary ? (
+            <p className="preview-description">{preview.summary}</p>
+          ) : null}
+          {preview.degradedReason ? (
+            <p className="preview-degraded" role="status">
+              {preview.degradedReason}
+            </p>
+          ) : null}
+          {preview.fallbackText ? (
+            <div className="preview-evidence">
+              <span className="preview-evidence-label">静态证据</span>
+              <span>{preview.fallbackText}</span>
+              {preview.fallbackAssetID ? (
+                <span className="preview-evidence-id">
+                  {preview.fallbackAssetID}
+                </span>
+              ) : null}
+            </div>
+          ) : null}
+          <div className="preview-meta">
+            <span>{kindLabel}</span>
+            <span>revision {preview.revision}</span>
+            {preview.capability ? <span>{preview.capability}</span> : null}
+            {preview.errorCode ? <span>{preview.errorCode}</span> : null}
+          </div>
+        </div>
+      </details>
+    </section>
+  );
+}
+
 /// Compact duration, mirroring `ConversationTurn.formattedDuration` so the live
 /// counter and the final "用时 …" never disagree in shape: 48秒 / 24分40秒 / 1小时5分.
 function formatDuration(totalSeconds: number): string {
@@ -2429,6 +2498,7 @@ const Turn = memo(function Turn({
   const { process, answer } = splitTurnForDisplay(turn);
   const failedProcessCalls = process.reduce((count, block) =>
     count + block.tools.filter((tool) => tool.status === "failed").length, 0);
+  const previews = turn.previews ?? [];
 
   const renderBlocks = (blocks: ConversationWebBlock[]) =>
     blocks.map((block) => (
@@ -2448,6 +2518,13 @@ const Turn = memo(function Turn({
 
   const todoNode = turn.todos.length ? (
     <TodoPanel todos={turn.todos} turnID={turn.id} isLive={turn.isLive} />
+  ) : null;
+  const previewNodes = previews.length ? (
+    <div className="turn-previews">
+      {previews.map((preview) => (
+        <PreviewBlock preview={preview} key={preview.id} />
+      ))}
+    </div>
   ) : null;
 
   return (
@@ -2566,6 +2643,7 @@ const Turn = memo(function Turn({
           <>
             <LiveTurnHeader startedAtMilliseconds={turn.startedAtMilliseconds} />
             {renderBlocks(turn.blocks)}
+            {previewNodes}
             {todoNode}
           </>
         ) : (
@@ -2597,6 +2675,7 @@ const Turn = memo(function Turn({
             {turn.changes ? (
               <TurnChangesCard turnID={turn.id} changes={turn.changes} />
             ) : null}
+            {previewNodes}
             <TurnActionsBar turn={turn} />
           </>
         )}

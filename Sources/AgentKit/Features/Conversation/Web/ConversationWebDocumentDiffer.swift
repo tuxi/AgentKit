@@ -278,6 +278,7 @@ enum ConversationWebDocumentDiffer {
             && lhs.userPrompt == rhs.userPrompt
             && lhs.userAssets == rhs.userAssets
             && lhs.localAssets == rhs.localAssets
+            && lhs.previews == rhs.previews
             && lhs.todos == rhs.todos
             && lhs.extensionNodes == rhs.extensionNodes
             && lhs.footer == rhs.footer

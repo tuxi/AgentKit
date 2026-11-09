@@ -771,6 +771,118 @@ summary:active {
   color: var(--danger);
 }
 
+.turn-previews {
+  display: grid;
+  gap: 8px;
+  margin: 8px 0 12px;
+}
+
+.preview-block {
+  overflow: hidden;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--subtle);
+}
+
+.preview-disclosure > .preview-summary::marker {
+  content: "";
+}
+
+.preview-summary {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 9px 11px;
+  list-style: none;
+  user-select: none;
+  -webkit-user-select: none;
+}
+
+.preview-kind {
+  flex: 0 0 auto;
+  color: var(--secondary);
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.preview-title {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow-wrap: anywhere;
+  font-weight: 600;
+}
+
+.preview-status {
+  flex: 0 0 auto;
+  color: var(--secondary);
+  font-size: var(--font-caption);
+}
+
+.preview-status[data-tone="success"] { color: var(--link); }
+.preview-status[data-tone="warning"] { color: var(--warning); }
+.preview-status[data-tone="danger"] { color: var(--danger); }
+
+.preview-disclosure[open] > .preview-summary > .disclosure-chevron {
+  transform: rotate(90deg);
+}
+
+.preview-body {
+  padding: 0 12px 12px;
+}
+
+.preview-description {
+  margin: 0 0 9px;
+  color: var(--text);
+}
+
+.preview-degraded {
+  margin: 0 0 9px;
+  padding: 7px 9px;
+  border-left: 2px solid var(--warning);
+  border-radius: 0 6px 6px 0;
+  background: var(--tool-surface);
+  color: var(--secondary);
+  font-size: var(--font-ui);
+}
+
+.preview-evidence {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 6px 9px;
+  margin: 0 0 9px;
+  padding: 8px 9px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--background);
+  font-size: var(--font-ui);
+}
+
+.preview-evidence-label {
+  flex: 0 0 auto;
+  color: var(--secondary);
+  font-size: var(--font-caption);
+  font-weight: 600;
+}
+
+.preview-evidence-id {
+  flex: 1 1 100%;
+  color: var(--secondary);
+  font-family: ui-monospace, "SFMono-Regular", Menlo, Monaco, monospace;
+  font-size: 11px;
+  overflow-wrap: anywhere;
+}
+
+.preview-meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 5px 12px;
+  color: var(--secondary);
+  font-size: 11px;
+}
+
 .artifact-title {
   padding: 9px 11px;
 }

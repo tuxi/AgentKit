@@ -117,12 +117,42 @@ export interface ConversationWebInvocation {
   thinkingText?: string;
 }
 
+export type PreviewPresentationState =
+  | "loading"
+  | "interactiveReady"
+  | "staticFallback"
+  | "unavailable"
+  | "renderFailed"
+  | "expired";
+
+export interface ConversationWebPreview {
+  id: string;
+  artifactID: string;
+  revision: number;
+  kind: "interactive_html" | "static_image";
+  title: string;
+  summary?: string;
+  presentationState: PreviewPresentationState;
+  runtimeStatus: "pending" | "ready" | "failed" | "unavailable";
+  statusLabel: string;
+  tone: "neutral" | "info" | "success" | "warning" | "danger";
+  capability: string;
+  fallbackText?: string;
+  fallbackAssetID?: string;
+  fallbackAlt?: string;
+  degradedReason?: string;
+  errorCode?: string;
+  initialState: "collapsed" | "expanded";
+  expiresAtMilliseconds?: number;
+}
+
 export interface ConversationWebTurn {
   id: string;
   userPrompt?: string;
   userAssets: ConversationWebUserAsset[];
   localAssets?: ConversationWebLocalAsset[];
   blocks: ConversationWebBlock[];
+  previews?: ConversationWebPreview[];
   todos: ConversationWebDocument["todos"];
   extensionNodes: ConversationWebExtensionNode[];
   footer?: {

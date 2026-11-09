@@ -60,6 +60,9 @@ struct ConversationWebDocument: Codable, Equatable, Sendable {
         let userAssets: [UserAsset]
         let localAssets: [LocalAsset]
         let blocks: [Block]
+        /// First-class preview cards associated with this turn. Nil/empty keeps
+        /// older encoded documents and preview-free turns byte-compatible.
+        let previews: [Preview]?
         let todos: [Todo]
         let extensionNodes: [ExtensionNode]
         let footer: Footer?
@@ -94,6 +97,29 @@ struct ConversationWebDocument: Codable, Equatable, Sendable {
         var model: String? = nil
         var modelRoute: String? = nil
         var processFailureText: String? = nil
+    }
+
+    /// Presentation-only projection of a PreviewArtifact. Model-authored HTML
+    /// is intentionally absent here; A4 renders only the generic card.
+    struct Preview: Codable, Equatable, Sendable, Identifiable {
+        let id: String
+        let artifactID: String
+        let revision: Int
+        let kind: String
+        let title: String
+        let summary: String?
+        let presentationState: String
+        let runtimeStatus: String
+        let statusLabel: String
+        let tone: String
+        let capability: String
+        let fallbackText: String?
+        let fallbackAssetID: String?
+        let fallbackAlt: String?
+        let degradedReason: String?
+        let errorCode: String?
+        let initialState: String
+        let expiresAtMilliseconds: Int64?
     }
 
     /// P8.9 — one model invocation rendered as a card (request shape → usage → thinking).
@@ -352,6 +378,10 @@ enum ConversationWebDocumentBuilder {
             todos: [],
             turns: snapshot.turns.enumerated().map { index, turn in
                 let contributions = extensionContributions[turn.id] ?? []
+                let previews = previewArtifacts(
+                    from: snapshot.previewArtifacts,
+                    for: turn
+                ).map(makePreview)
                 let previousTurn = reuseSource.flatMap {
                     index < $0.snapshot.turns.count ? $0.snapshot.turns[index] : nil
                 }
@@ -361,12 +391,14 @@ enum ConversationWebDocumentBuilder {
                 if let previousTurn,
                    previousDocumentTurn?.id == turn.id,
                    (reuseSource?.extensionContributions[turn.id] ?? []) == contributions,
+                   (previousDocumentTurn?.previews ?? []) == previews,
                    isContentUnchanged(previousTurn, turn) {
                     stableTurnIDs.insert(turn.id)
                     return previousDocumentTurn!
                 }
                 return makeTurn(
                     turn,
+                    previews: previews,
                     extensionContributions: contributions,
                     previousTurn: previousTurn?.id == turn.id ? previousTurn : nil,
                     previousDocumentTurn: previousDocumentTurn?.id == turn.id
@@ -425,6 +457,7 @@ enum ConversationWebDocumentBuilder {
 
     private static func makeTurn(
         _ turn: ConversationTurn,
+        previews: [ConversationWebDocument.Preview],
         extensionContributions: [TimelineWebContribution],
         previousTurn: ConversationTurn?,
         previousDocumentTurn: ConversationWebDocument.Turn?,
@@ -494,6 +527,7 @@ enum ConversationWebDocumentBuilder {
                     registerAction: registerAction
                 )
             },
+            previews: previews.isEmpty ? nil : previews,
             todos: turn.todos.map {
                 ConversationWebDocument.Todo(
                     content: $0.content,
@@ -560,6 +594,91 @@ enum ConversationWebDocumentBuilder {
             modelRoute: turn.modelRoute,
             processFailureText: turn.processFailureSummary
         )
+    }
+
+    private static let previewNegotiation = PreviewCapabilityNegotiation(
+        hello: PreviewCapability.allCases.map(\.rawValue),
+        runtime: PreviewCapability.allCases.map(\.rawValue),
+        client: .previewClient
+    )
+
+    private static func previewArtifacts(
+        from artifacts: [PreviewArtifact],
+        for turn: ConversationTurn
+    ) -> [PreviewArtifact] {
+        artifacts
+            .filter { $0.turnID == turn.runtimeTurnID }
+            .sorted {
+                if $0.createdAt != $1.createdAt {
+                    return $0.createdAt < $1.createdAt
+                }
+                return $0.artifactID < $1.artifactID
+            }
+    }
+
+    private static func makePreview(_ artifact: PreviewArtifact) -> ConversationWebDocument.Preview {
+        let state = artifact.presentationState(capabilities: previewNegotiation)
+        let fallbackAsset = artifact.fallbackAsset
+        let degradedReason: String?
+        switch state {
+        case .staticFallback:
+            if artifact.kind == .interactiveHTML {
+                degradedReason = artifact.error?.message
+                    ?? "交互预览不可用，正在显示静态证据。"
+            } else {
+                degradedReason = artifact.error?.message
+            }
+        case .expired:
+            degradedReason = "预览已过期，正在显示静态证据。"
+        case .unavailable, .renderFailed:
+            degradedReason = artifact.error?.message ?? "Preview unavailable."
+        case .loading, .interactiveReady:
+            degradedReason = nil
+        }
+
+        return ConversationWebDocument.Preview(
+            id: artifact.artifactID,
+            artifactID: artifact.artifactID,
+            revision: artifact.revision,
+            kind: artifact.kind.rawValue,
+            title: artifact.title,
+            summary: artifact.summary,
+            presentationState: state.rawValue,
+            runtimeStatus: artifact.status.rawValue,
+            statusLabel: previewStatusLabel(state),
+            tone: previewTone(state),
+            capability: artifact.capability,
+            fallbackText: artifact.fallback?.text,
+            fallbackAssetID: artifact.fallback?.assetID,
+            fallbackAlt: fallbackAsset?.alt,
+            degradedReason: degradedReason,
+            errorCode: artifact.error?.code,
+            initialState: artifact.presentation?.initialState ?? "collapsed",
+            expiresAtMilliseconds: artifact.expiresAtDate.map {
+                Int64(($0.timeIntervalSince1970 * 1_000).rounded())
+            }
+        )
+    }
+
+    private static func previewStatusLabel(_ state: PreviewPresentationState) -> String {
+        switch state {
+        case .loading: return "生成中"
+        case .interactiveReady: return "预览就绪"
+        case .staticFallback: return "静态证据"
+        case .unavailable: return "不可用"
+        case .renderFailed: return "渲染失败"
+        case .expired: return "已过期"
+        }
+    }
+
+    private static func previewTone(_ state: PreviewPresentationState) -> String {
+        switch state {
+        case .interactiveReady: return "success"
+        case .staticFallback: return "info"
+        case .expired: return "warning"
+        case .unavailable, .renderFailed: return "danger"
+        case .loading: return "neutral"
+        }
     }
 
     private static func makeExtensionNode(
