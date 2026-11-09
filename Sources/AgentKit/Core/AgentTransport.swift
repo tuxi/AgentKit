@@ -235,6 +235,11 @@ public protocol AgentTransport: Sendable {
     /// Resolve a runtime-relative URL such as `/v1/.../blob` against the active backend.
     func resolveRuntimeURL(_ value: String) async -> URL?
 
+    /// Authenticated transport-neutral preview resource resolvers. Backends
+    /// without preview support return nil and the block degrades closed.
+    func previewViewerResolver() -> (any PreviewViewerResolver)?
+    func previewAssetResolver() -> (any PreviewAssetResolver)?
+
     // MARK: - Tool registration
 
     /// 向服务端注册客户端可执行工具（legacy source-compatible shape）。
@@ -422,6 +427,9 @@ extension AgentTransport {
     public func resolveRuntimeURL(_ value: String) async -> URL? {
         URL(string: value)
     }
+
+    public func previewViewerResolver() -> (any PreviewViewerResolver)? { nil }
+    public func previewAssetResolver() -> (any PreviewAssetResolver)? { nil }
 
     /// 默认实现：全量拉取后按已转换事件数切尾（mock / 不支持 `since` 的 backend）。
     /// 此实现的游标是"已转换事件计数" —— CodeAgentTransport 覆盖为真实的 seq 游标。

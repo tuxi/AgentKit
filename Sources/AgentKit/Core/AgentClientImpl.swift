@@ -726,6 +726,14 @@ public final class CodeAgentTransport: AgentTransport, CodingTaskReading, Coding
         await http.resolveRuntimeURL(value)
     }
 
+    public func previewViewerResolver() -> (any PreviewViewerResolver)? {
+        RuntimePreviewResolver(http: http)
+    }
+
+    public func previewAssetResolver() -> (any PreviewAssetResolver)? {
+        RuntimePreviewResolver(http: http)
+    }
+
     // MARK: - AgentTransport: Tool registration
 
     public func registerTools(_ tools: [ClientToolRegistration]) async {
@@ -1150,5 +1158,13 @@ public final class DefaultAgentClient: RuntimeClient, CodingTaskReading, CodingT
 
     public func resolveRuntimeURL(_ value: String) async -> URL? {
         await transport.resolveRuntimeURL(value)
+    }
+
+    public func previewViewerResolver() -> (any PreviewViewerResolver)? {
+        transport.previewViewerResolver()
+    }
+
+    public func previewAssetResolver() -> (any PreviewAssetResolver)? {
+        transport.previewAssetResolver()
     }
 }

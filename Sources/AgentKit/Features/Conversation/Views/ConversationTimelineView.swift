@@ -27,6 +27,8 @@ public struct ConversationTimelineView: View {
             timelineExtensions: viewModel.timelineExtensions,
             conversationID: viewModel.conversation?.id,
             workspaceRoot: viewModel.workspaceRootURL,
+            previewViewerResolver: viewModel.previewViewerResolver,
+            previewAssetResolver: viewModel.previewAssetResolver,
             isVisible: isVisible,
             bottomInset: bottomInset,
             onReachedTop: { Task { await viewModel.loadOlderHistory() } }

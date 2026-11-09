@@ -209,6 +209,11 @@ public protocol RuntimeClient: Sendable {
     /// Resolve a runtime-relative URL such as `/v1/.../blob` against the active backend.
     func resolveRuntimeURL(_ value: String) async -> URL?
 
+    /// Authenticated preview bytes resolvers. Nil means the backend cannot
+    /// resolve preview resources and preview presentation must fail closed.
+    func previewViewerResolver() -> (any PreviewViewerResolver)?
+    func previewAssetResolver() -> (any PreviewAssetResolver)?
+
     // MARK: - Repos
 
     /// Clone a public HTTPS Git repository using the Runtime-owned project root.
@@ -445,6 +450,9 @@ extension RuntimeClient {
     public func resolveRuntimeURL(_ value: String) async -> URL? {
         URL(string: value)
     }
+
+    public func previewViewerResolver() -> (any PreviewViewerResolver)? { nil }
+    public func previewAssetResolver() -> (any PreviewAssetResolver)? { nil }
 
     /// 默认实现：全量拉取后切尾（mock backend）。`DefaultAgentClient` 覆盖为 transport 直达。
     public func getEventBatch(conversationID: String, since: Int) async throws -> AgentEventBatch {

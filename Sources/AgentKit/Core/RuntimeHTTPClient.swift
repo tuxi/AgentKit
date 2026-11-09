@@ -1155,6 +1155,19 @@ struct RuntimeHTTPClient: Sendable {
     }
 }
 
+/// Authenticated remote resolver adapter shared by the Web preview host.
+struct RuntimePreviewResolver: PreviewViewerResolver, PreviewAssetResolver, Sendable {
+    let http: RuntimeHTTPClient
+
+    func resolve(_ request: PreviewViewerRequest) async throws -> PreviewViewerResource {
+        try await http.resolvePreviewViewer(request)
+    }
+
+    func resolveContent(_ request: PreviewAssetRequest) async throws -> PreviewAssetResource {
+        try await http.resolvePreviewAsset(request)
+    }
+}
+
 // MARK: - Runtime Response Envelope
 
 /// Runtime 的 HTTP JSON 响应信封 — 格式与 Agent Gateway 的 `{trace_id, code, msg, data}` 完全兼容。

@@ -1377,7 +1377,12 @@ final class ConversationWebDocumentTests: XCTestCase {
                 rawImageCount: document.querySelectorAll('.turn-block img').length,
                 injected: Boolean(window.__agentKitInjected),
                 scopedHeaders: document.querySelectorAll('th[scope="col"]').length,
-                cspBlocksFrames: document.querySelector('meta[http-equiv="Content-Security-Policy"]')?.content.includes("frame-src 'none'") ?? false,
+                cspRestrictsFramesToPreviewScheme: (() => {
+                  const csp = document.querySelector('meta[http-equiv="Content-Security-Policy"]')?.content ?? "";
+                  return csp.includes("frame-src agentkit-workbench:")
+                    && !csp.includes("frame-src *")
+                    && !csp.includes("frame-src http:");
+                })(),
                 unnamedInteractive: [...document.querySelectorAll('button,a[href],summary,[role="button"]')].filter((element) => !(element.getAttribute('aria-label') || element.textContent?.trim())).length,
                 toolGroupCount: document.querySelectorAll('details.tool-group').length,
                 toolGroupOpen: document.querySelector('details.tool-group')?.open ?? null,
@@ -1455,7 +1460,7 @@ final class ConversationWebDocumentTests: XCTestCase {
         XCTAssertEqual(inspection?["rawImageCount"] as? Int, 0)
         XCTAssertEqual(inspection?["injected"] as? Bool, false)
         XCTAssertGreaterThan(inspection?["scopedHeaders"] as? Int ?? 0, 0)
-        XCTAssertEqual(inspection?["cspBlocksFrames"] as? Bool, true)
+        XCTAssertEqual(inspection?["cspRestrictsFramesToPreviewScheme"] as? Bool, true)
         XCTAssertEqual(inspection?["unnamedInteractive"] as? Int, 0)
         XCTAssertEqual(inspection?["toolGroupCount"] as? Int, 1)
         XCTAssertEqual(inspection?["toolGroupOpen"] as? Bool, true)

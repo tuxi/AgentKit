@@ -120,6 +120,8 @@ struct ConversationWebDocument: Codable, Equatable, Sendable {
         let errorCode: String?
         let initialState: String
         let expiresAtMilliseconds: Int64?
+        let minHeight: Int?
+        let preferredAspectRatio: Double?
     }
 
     /// P8.9 — one model invocation rendered as a card (request shape → usage → thinking).
@@ -656,7 +658,9 @@ enum ConversationWebDocumentBuilder {
             initialState: artifact.presentation?.initialState ?? "collapsed",
             expiresAtMilliseconds: artifact.expiresAtDate.map {
                 Int64(($0.timeIntervalSince1970 * 1_000).rounded())
-            }
+            },
+            minHeight: artifact.presentation?.minHeight,
+            preferredAspectRatio: artifact.presentation?.preferredAspectRatio
         )
     }
 

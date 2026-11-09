@@ -2166,20 +2166,142 @@ function processSummaryLabel(turn: ConversationWebTurn): string {
   return parts.length ? parts.join(" · ") : "查看执行过程";
 }
 
-/// First-class generic preview card. A4 deliberately renders metadata and
-/// static evidence only; the isolated interactive viewer is added by A5.
-function PreviewBlock({ preview }: { preview: ConversationWebPreview }) {
+/// First-class generic preview card. Interactive viewer bytes and fallback
+/// raster bytes are fetched by the authenticated native host and exposed only
+/// through opaque, memory-backed scheme tokens.
+function PreviewBlock({
+  preview,
+  conversationID,
+}: {
+  preview: ConversationWebPreview;
+  conversationID: string;
+}) {
   const [expanded, setExpanded] = useState(preview.initialState === "expanded");
+  const [viewer, setViewer] = useState<{
+    status: "idle" | "loading" | "ready" | "failed";
+    url?: string;
+    errorCode?: string;
+  }>({ status: "idle" });
+  const [fallback, setFallback] = useState<{
+    status: "idle" | "loading" | "ready" | "failed";
+    url?: string;
+    errorCode?: string;
+  }>({ status: "idle" });
+  const viewerRequestID = useRef<string | undefined>(undefined);
+  const fallbackRequestID = useRef<string | undefined>(undefined);
   const kindLabel = preview.kind === "interactive_html"
     ? "Interactive HTML"
     : "Static image";
+  const wantsViewer = preview.presentationState === "interactiveReady";
+  const wantsFallbackImage = Boolean(preview.fallbackAssetID)
+    && (preview.presentationState === "staticFallback"
+      || preview.presentationState === "expired");
+
+  useEffect(() => {
+    const handleResolved = (event: Event) => {
+      const detail = (event as CustomEvent<{
+        requestID?: string;
+        artifactID?: string;
+        revision?: number;
+        url?: string;
+        errorCode?: string;
+      }>).detail;
+      if (
+        detail?.artifactID !== preview.artifactID
+        || detail.revision !== preview.revision
+        || detail.requestID !== viewerRequestID.current
+      ) return;
+      setViewer(detail.url
+        ? { status: "ready", url: detail.url }
+        : { status: "failed", errorCode: detail.errorCode });
+    };
+    window.addEventListener("previewViewerURLResolved", handleResolved);
+    return () => window.removeEventListener("previewViewerURLResolved", handleResolved);
+  }, [preview.artifactID, preview.revision]);
+
+  useEffect(() => {
+    if (!expanded || !wantsViewer || viewer.status !== "idle") return;
+    const requestID = crypto.randomUUID();
+    viewerRequestID.current = requestID;
+    setViewer({ status: "loading" });
+    postToNative({
+      type: "resolvePreviewViewerURL",
+      conversationID,
+      artifactID: preview.artifactID,
+      revision: preview.revision,
+      requestID,
+    });
+  }, [
+    expanded,
+    wantsViewer,
+    viewer.status,
+    conversationID,
+    preview.artifactID,
+    preview.revision,
+  ]);
+
+  useEffect(() => {
+    const handleResolved = (event: Event) => {
+      const detail = (event as CustomEvent<{
+        requestID?: string;
+        artifactID?: string;
+        revision?: number;
+        assetID?: string;
+        url?: string;
+        errorCode?: string;
+      }>).detail;
+      if (
+        detail?.artifactID !== preview.artifactID
+        || detail.revision !== preview.revision
+        || detail.assetID !== preview.fallbackAssetID
+        || detail.requestID !== fallbackRequestID.current
+      ) return;
+      setFallback(detail.url
+        ? { status: "ready", url: detail.url }
+        : { status: "failed", errorCode: detail.errorCode });
+    };
+    window.addEventListener("previewAssetURLResolved", handleResolved);
+    return () => window.removeEventListener("previewAssetURLResolved", handleResolved);
+  }, [preview.artifactID, preview.revision, preview.fallbackAssetID]);
+
+  useEffect(() => {
+    if (!expanded || !wantsFallbackImage || !preview.fallbackAssetID
+      || fallback.status !== "idle") return;
+    const requestID = crypto.randomUUID();
+    fallbackRequestID.current = requestID;
+    setFallback({ status: "loading" });
+    postToNative({
+      type: "resolvePreviewAssetURL",
+      conversationID,
+      artifactID: preview.artifactID,
+      revision: preview.revision,
+      assetID: preview.fallbackAssetID,
+      requestID,
+    });
+  }, [
+    expanded,
+    wantsFallbackImage,
+    fallback.status,
+    conversationID,
+    preview.artifactID,
+    preview.revision,
+    preview.fallbackAssetID,
+  ]);
+
+  const viewerStyle = {
+    minHeight: preview.minHeight ?? 420,
+    aspectRatio: preview.preferredAspectRatio
+      ? String(preview.preferredAspectRatio)
+      : "16 / 9",
+  };
+
   return (
     <section
       className="preview-block"
       data-preview-id={preview.id}
       data-preview-revision={preview.revision}
       data-status={preview.presentationState}
-      data-selection-id={`preview:${preview.id}`}
+      data-selection-id={`preview:${preview.id}:${preview.revision}`}
       aria-label={`Preview: ${preview.title}`}
     >
       <details
@@ -2206,10 +2328,57 @@ function PreviewBlock({ preview }: { preview: ConversationWebPreview }) {
           {preview.summary ? (
             <p className="preview-description">{preview.summary}</p>
           ) : null}
+          {wantsViewer ? (
+            <div className="preview-viewer-shell" style={viewerStyle}>
+              {viewer.status === "ready" && viewer.url ? (
+                <iframe
+                  className="preview-frame"
+                  data-preview-frame={preview.artifactID}
+                  data-preview-revision={preview.revision}
+                  src={viewer.url}
+                  title={preview.title}
+                  sandbox="allow-scripts"
+                  referrerPolicy="no-referrer"
+                  loading="lazy"
+                  onLoad={(event) => {
+                    event.currentTarget.dataset.loaded = "true";
+                  }}
+                />
+              ) : (
+                <div className="preview-viewer-placeholder" role="status">
+                  {viewer.status === "failed"
+                    ? `Interactive preview unavailable${viewer.errorCode ? ` · ${viewer.errorCode}` : ""}`
+                    : "Loading interactive preview…"}
+                </div>
+              )}
+            </div>
+          ) : null}
           {preview.degradedReason ? (
             <p className="preview-degraded" role="status">
               {preview.degradedReason}
             </p>
+          ) : null}
+          {wantsFallbackImage ? (
+            <div className="preview-fallback">
+              {fallback.status === "ready" && fallback.url ? (
+                <img
+                  className="preview-fallback-image"
+                  data-preview-fallback-asset-id={preview.fallbackAssetID}
+                  src={fallback.url}
+                  alt={preview.fallbackAlt ?? "Static preview evidence"}
+                  loading="lazy"
+                  onLoad={(event) => {
+                    event.currentTarget.dataset.loaded = "true";
+                  }}
+                />
+              ) : (
+                <div className="preview-fallback-placeholder" role="status">
+                  {fallback.status === "failed"
+                    ? `Static evidence unavailable${fallback.errorCode ? ` · ${fallback.errorCode}` : ""}`
+                    : "Loading static evidence…"}
+                </div>
+              )}
+            </div>
           ) : null}
           {preview.fallbackText ? (
             <div className="preview-evidence">
@@ -2522,7 +2691,11 @@ const Turn = memo(function Turn({
   const previewNodes = previews.length ? (
     <div className="turn-previews">
       {previews.map((preview) => (
-        <PreviewBlock preview={preview} key={preview.id} />
+        <PreviewBlock
+          preview={preview}
+          conversationID={conversationID}
+          key={`${preview.id}:${preview.revision}`}
+        />
       ))}
     </div>
   ) : null;

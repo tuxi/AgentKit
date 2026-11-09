@@ -16,6 +16,8 @@ struct ConversationWebWorkbenchView: NSViewRepresentable {
     let snapshot: RuntimeSnapshot
     let conversationID: String?
     let workspaceRoot: URL?
+    let previewViewerResolver: (any PreviewViewerResolver)?
+    let previewAssetResolver: (any PreviewAssetResolver)?
     let extensionContributions: [String: [TimelineWebContribution]]
     let timelineExtensions: [any TimelineExtension]
     let isVisible: Bool
@@ -56,6 +58,7 @@ struct ConversationWebWorkbenchView: NSViewRepresentable {
 
         let webView = WKWebView(frame: .zero, configuration: configuration)
         webView.navigationDelegate = context.coordinator
+        webView.uiDelegate = context.coordinator
         webView.allowsBackForwardNavigationGestures = false
         webView.allowsLinkPreview = false
         webView.underPageBackgroundColor = .clear
@@ -70,6 +73,8 @@ struct ConversationWebWorkbenchView: NSViewRepresentable {
             webView: webView,
             messageProxy: messageProxy,
             schemeHandler: schemeHandler,
+            previewViewerResolver: previewViewerResolver,
+            previewAssetResolver: previewAssetResolver,
             onFatalFailure: onFatalFailure,
             onPreviewAssets: onPreviewAssets,
             onReachedTop: onReachedTop
@@ -84,7 +89,7 @@ struct ConversationWebWorkbenchView: NSViewRepresentable {
             openURL: openURL
         )
         context.coordinator.setVisible(isVisible)
-        context.coordinator.loadShell()
+        context.coordinator.installSecurityRulesAndLoadShell()
         return hostView
     }
 
@@ -112,11 +117,12 @@ struct ConversationWebWorkbenchView: NSViewRepresentable {
             forName: Coordinator.messageHandlerName
         )
         webView.navigationDelegate = nil
+        webView.uiDelegate = nil
         coordinator.detach()
     }
 
     @MainActor
-    final class Coordinator: NSObject, WKNavigationDelegate, WKScriptMessageHandler {
+    final class Coordinator: NSObject, WKNavigationDelegate, WKUIDelegate, WKScriptMessageHandler {
         static let messageHandlerName = "agentkitWorkbench"
         private static let logger = Logger(
             subsystem: "AgentKit",
@@ -127,6 +133,10 @@ struct ConversationWebWorkbenchView: NSViewRepresentable {
         private weak var webView: WKWebView?
         private var messageProxy: WeakScriptMessageHandler?
         private var schemeHandler: ConversationWebSchemeHandler?
+        private var previewViewerResolver: (any PreviewViewerResolver)?
+        private var previewAssetResolver: (any PreviewAssetResolver)?
+        private var previewResolutionTasks: [String: Task<Void, Never>] = [:]
+        private var pendingPreviewInitialURLs: Set<URL> = []
         private var latestSnapshot: RuntimeSnapshot?
         private var acknowledgedSnapshot: RuntimeSnapshot?
         private var inFlightSnapshot: RuntimeSnapshot?
@@ -173,6 +183,8 @@ struct ConversationWebWorkbenchView: NSViewRepresentable {
             webView: WKWebView,
             messageProxy: WeakScriptMessageHandler,
             schemeHandler: ConversationWebSchemeHandler,
+            previewViewerResolver: (any PreviewViewerResolver)?,
+            previewAssetResolver: (any PreviewAssetResolver)?,
             onFatalFailure: @escaping @MainActor () -> Void,
             onPreviewAssets: (@MainActor (AssetPreviewPresentation) -> Void)?,
             onReachedTop: (@MainActor () -> Void)?
@@ -181,6 +193,8 @@ struct ConversationWebWorkbenchView: NSViewRepresentable {
             self.webView = webView
             self.messageProxy = messageProxy
             self.schemeHandler = schemeHandler
+            self.previewViewerResolver = previewViewerResolver
+            self.previewAssetResolver = previewAssetResolver
             self.onFatalFailure = onFatalFailure
             self.onPreviewAssets = onPreviewAssets
             self.onReachedTop = onReachedTop
@@ -194,6 +208,11 @@ struct ConversationWebWorkbenchView: NSViewRepresentable {
             webView = nil
             messageProxy = nil
             schemeHandler = nil
+            previewViewerResolver = nil
+            previewAssetResolver = nil
+            for task in previewResolutionTasks.values { task.cancel() }
+            previewResolutionTasks.removeAll()
+            pendingPreviewInitialURLs.removeAll()
             isPageReady = false
             sendTask?.cancel()
             sendTask = nil
@@ -201,6 +220,7 @@ struct ConversationWebWorkbenchView: NSViewRepresentable {
             acknowledgementTimeoutTask = nil
             actionRegistry.removeAll()
             schemeHandler?.removeAllLocalAssets()
+            schemeHandler?.removeAllPreviewViewers()
             onFatalFailure = nil
             onPreviewAssets = nil
             onReachedTop = nil
@@ -246,6 +266,8 @@ struct ConversationWebWorkbenchView: NSViewRepresentable {
                 lastApplyDurationMilliseconds = 0
                 actionRegistry.removeAll()
                 schemeHandler?.removeAllLocalAssets()
+                schemeHandler?.removeAllPreviewViewers()
+                pendingPreviewInitialURLs.removeAll()
                 acknowledgedExtensionContributions = [:]
                 inFlightExtensionContributions = nil
             }
@@ -360,6 +382,26 @@ struct ConversationWebWorkbenchView: NSViewRepresentable {
             return String(format: "#%02X%02X%02X", r, g, b)
         }
 
+        func installSecurityRulesAndLoadShell() {
+            guard let webView else { return }
+            WKContentRuleListStore.default().compileContentRuleList(
+                forIdentifier: "AgentKitConversationNetworkBlockV1",
+                encodedContentRuleList: ConversationWebPreviewSecurity.networkBlockRulesJSON
+            ) { [weak self, weak webView] list, error in
+                Task { @MainActor in
+                    guard let self, let webView else { return }
+                    guard let list else {
+                        self.reportFatalFailure(
+                            "Conversation Web security rules failed to compile: \(error?.localizedDescription ?? "unknown error")"
+                        )
+                        return
+                    }
+                    webView.configuration.userContentController.add(list)
+                    self.loadShell()
+                }
+            }
+        }
+
         func loadShell() {
             let indexURL = ConversationWebSchemeHandler.indexURL
             shellURL = indexURL
@@ -372,6 +414,12 @@ struct ConversationWebWorkbenchView: NSViewRepresentable {
             _ userContentController: WKUserContentController,
             didReceive message: WKScriptMessage
         ) {
+            guard ConversationWebPreviewSecurity.acceptsScriptMessage(
+                isMainFrame: message.frameInfo.isMainFrame
+            ) else {
+                Self.logger.notice("Rejected non-main-frame Conversation Web message")
+                return
+            }
             guard message.name == Self.messageHandlerName,
                   let body = message.body as? [String: Any],
                   let type = body["type"] as? String else { return }
@@ -400,6 +448,8 @@ struct ConversationWebWorkbenchView: NSViewRepresentable {
                 acknowledgementTimeoutTask = nil
                 actionRegistry.removeAll()
                 schemeHandler?.removeAllLocalAssets()
+                schemeHandler?.removeAllPreviewViewers()
+                pendingPreviewInitialURLs.removeAll()
                 if isVisible {
                     scheduleLatestDocumentSend(delayMilliseconds: 0)
                 }
@@ -433,6 +483,10 @@ struct ConversationWebWorkbenchView: NSViewRepresentable {
                 handleResolveUserAssetURL(body)
             case "resolveLocalAssetURL":
                 handleResolveLocalAssetURL(body)
+            case "resolvePreviewViewerURL":
+                handleResolvePreviewViewerURL(body)
+            case "resolvePreviewAssetURL":
+                handleResolvePreviewAssetURL(body)
             case "previewTurnAssets":
                 handlePreviewTurnAssets(body)
             default:
@@ -449,16 +503,78 @@ struct ConversationWebWorkbenchView: NSViewRepresentable {
                 decisionHandler(.cancel)
                 return
             }
-
-            if navigationAction.navigationType == .other,
-               url.scheme == ConversationWebSchemeHandler.scheme,
-               url == shellURL {
-                decisionHandler(.allow)
-            } else {
-                // Runtime content never navigates the workbench. Approved link
-                // actions travel through the versioned native message bridge.
+            let isMainFrame = navigationAction.targetFrame?.isMainFrame ?? false
+            let decision = ConversationWebPreviewSecurity.navigationDecision(
+                url: url,
+                isMainFrame: isMainFrame,
+                isNewWindow: navigationAction.targetFrame == nil,
+                shouldPerformDownload: navigationAction.shouldPerformDownload,
+                isInitialShellNavigation: navigationAction.navigationType == .other
+                    && url == shellURL,
+                shellURL: shellURL,
+                pendingPreviewInitialURLs: pendingPreviewInitialURLs
+            )
+            guard decision == .allow else {
                 decisionHandler(.cancel)
+                return
             }
+            if !isMainFrame {
+                // The opaque viewer token gets exactly one initial frame load.
+                pendingPreviewInitialURLs.remove(url)
+            }
+            decisionHandler(.allow)
+        }
+
+        func webView(
+            _ webView: WKWebView,
+            decidePolicyFor navigationResponse: WKNavigationResponse,
+            decisionHandler: @escaping @MainActor @Sendable (WKNavigationResponsePolicy) -> Void
+        ) {
+            let disposition = (navigationResponse.response as? HTTPURLResponse)?
+                .value(forHTTPHeaderField: "Content-Disposition")?
+                .lowercased() ?? ""
+            let decision = ConversationWebPreviewSecurity.responseDecision(
+                canShowMIMEType: navigationResponse.canShowMIMEType,
+                isAttachment: disposition.contains("attachment")
+            )
+            decisionHandler(decision == .allow ? .allow : .cancel)
+        }
+
+        func webView(
+            _ webView: WKWebView,
+            createWebViewWith configuration: WKWebViewConfiguration,
+            for navigationAction: WKNavigationAction,
+            windowFeatures: WKWindowFeatures
+        ) -> WKWebView? {
+            nil
+        }
+
+        func webView(
+            _ webView: WKWebView,
+            runJavaScriptAlertPanelWithMessage message: String,
+            initiatedByFrame frame: WKFrameInfo,
+            completionHandler: @escaping @MainActor @Sendable () -> Void
+        ) {
+            completionHandler()
+        }
+
+        func webView(
+            _ webView: WKWebView,
+            runJavaScriptConfirmPanelWithMessage message: String,
+            initiatedByFrame frame: WKFrameInfo,
+            completionHandler: @escaping @MainActor @Sendable (Bool) -> Void
+        ) {
+            completionHandler(false)
+        }
+
+        func webView(
+            _ webView: WKWebView,
+            runJavaScriptTextInputPanelWithPrompt prompt: String,
+            defaultText: String?,
+            initiatedByFrame frame: WKFrameInfo,
+            completionHandler: @escaping @MainActor @Sendable (String?) -> Void
+        ) {
+            completionHandler(nil)
         }
 
         func webViewWebContentProcessDidTerminate(_ webView: WKWebView) {
@@ -840,6 +956,227 @@ struct ConversationWebWorkbenchView: NSViewRepresentable {
             }
         }
 
+        /// Resolves verified viewer bytes and returns only an opaque,
+        /// conversation-scoped preview scheme URL to the isolated frame.
+        private func handleResolvePreviewViewerURL(_ body: [String: Any]) {
+            guard let conversationID = body["conversationID"] as? String,
+                  conversationID == sourceConversationID,
+                  let artifactID = body["artifactID"] as? String,
+                  artifactID.utf8.count <= 256,
+                  let revision = (body["revision"] as? NSNumber)?.intValue,
+                  revision > 0,
+                  let requestID = body["requestID"] as? String,
+                  UUID(uuidString: requestID) != nil,
+                  let artifact = latestSnapshot?.previewArtifacts.first(where: {
+                      $0.sessionID == conversationID
+                          && $0.artifactID == artifactID
+                          && $0.revision == revision
+                  }),
+                  artifact.kind == .interactiveHTML,
+                  artifact.status == .ready
+            else { return }
+            guard let resolver = previewViewerResolver else {
+                if let webView {
+                    let response = ResolvePreviewViewerResponse(
+                        type: "previewViewerURLResolved",
+                        requestID: requestID,
+                        artifactID: artifactID,
+                        revision: revision,
+                        url: nil,
+                        errorCode: "preview_unsupported"
+                    )
+                    Task { @MainActor in
+                        await Self.dispatchPreviewResolutionEvent(
+                            "previewViewerURLResolved",
+                            response: response,
+                            webView: webView
+                        )
+                    }
+                }
+                return
+            }
+
+            previewResolutionTasks[requestID]?.cancel()
+            previewResolutionTasks[requestID] = Task { @MainActor [weak self] in
+                guard let self else { return }
+                defer { self.previewResolutionTasks.removeValue(forKey: requestID) }
+                var resolvedURL: URL?
+                var errorCode: String?
+                do {
+                    let resource = try await resolver.resolve(PreviewViewerRequest(
+                        sessionID: conversationID,
+                        artifactID: artifactID,
+                        revision: revision
+                    ))
+                    guard resource.statusCode == 200 else {
+                        throw PreviewResourceError(
+                            code: "preview_render_failed",
+                            message: "Viewer response was not successful."
+                        )
+                    }
+                    try resource.validate(against: artifact)
+                    _ = try ConversationWebPreviewSecurity.validateViewerDocument(resource.data)
+                    resolvedURL = self.schemeHandler?.registerPreviewViewer(resource)
+                    if resolvedURL == nil {
+                        errorCode = "preview_render_failed"
+                    }
+                } catch {
+                    errorCode = Self.previewErrorCode(error)
+                    Self.logger.error(
+                        "Preview viewer resolution failed for \(artifactID, privacy: .public) r\(revision, privacy: .public): \(error.localizedDescription, privacy: .public)"
+                    )
+                }
+
+                guard self.sourceConversationID == conversationID,
+                      self.latestSnapshot?.previewArtifacts.contains(where: {
+                          $0.sessionID == conversationID
+                              && $0.artifactID == artifactID
+                              && $0.revision == revision
+                              && $0.status == .ready
+                              && $0.kind == .interactiveHTML
+                      }) == true,
+                      let webView = self.webView else { return }
+                if let resolvedURL {
+                    self.pendingPreviewInitialURLs.insert(resolvedURL)
+                }
+                let response = ResolvePreviewViewerResponse(
+                    type: "previewViewerURLResolved",
+                    requestID: requestID,
+                    artifactID: artifactID,
+                    revision: revision,
+                    url: resolvedURL?.absoluteString,
+                    errorCode: errorCode
+                )
+                await Self.dispatchPreviewResolutionEvent(
+                    "previewViewerURLResolved",
+                    response: response,
+                    webView: webView
+                )
+            }
+        }
+
+        /// Resolves a verified raster fallback and exposes it through the
+        /// existing opaque local-asset scheme token.
+        private func handleResolvePreviewAssetURL(_ body: [String: Any]) {
+            guard let conversationID = body["conversationID"] as? String,
+                  conversationID == sourceConversationID,
+                  let artifactID = body["artifactID"] as? String,
+                  artifactID.utf8.count <= 256,
+                  let revision = (body["revision"] as? NSNumber)?.intValue,
+                  revision > 0,
+                  let assetID = body["assetID"] as? String,
+                  assetID.utf8.count <= 256,
+                  let requestID = body["requestID"] as? String,
+                  UUID(uuidString: requestID) != nil,
+                  let artifact = latestSnapshot?.previewArtifacts.first(where: {
+                      $0.sessionID == conversationID
+                          && $0.artifactID == artifactID
+                          && $0.revision == revision
+                  }),
+                  artifact.fallback?.assetID == assetID
+            else { return }
+            guard let resolver = previewAssetResolver else {
+                if let webView {
+                    let response = ResolvePreviewAssetResponse(
+                        type: "previewAssetURLResolved",
+                        requestID: requestID,
+                        artifactID: artifactID,
+                        revision: revision,
+                        assetID: assetID,
+                        url: nil,
+                        errorCode: "preview_unsupported"
+                    )
+                    Task { @MainActor in
+                        await Self.dispatchPreviewResolutionEvent(
+                            "previewAssetURLResolved",
+                            response: response,
+                            webView: webView
+                        )
+                    }
+                }
+                return
+            }
+
+            previewResolutionTasks[requestID]?.cancel()
+            previewResolutionTasks[requestID] = Task { @MainActor [weak self] in
+                guard let self else { return }
+                defer { self.previewResolutionTasks.removeValue(forKey: requestID) }
+                var resolvedURL: URL?
+                var errorCode: String?
+                do {
+                    let resource = try await resolver.resolveContent(PreviewAssetRequest(
+                        sessionID: conversationID,
+                        artifactID: artifactID,
+                        revision: revision,
+                        assetID: assetID
+                    ))
+                    guard resource.statusCode == 200 else {
+                        throw PreviewResourceError(
+                            code: "preview_asset_unavailable",
+                            message: "Preview asset response was not successful."
+                        )
+                    }
+                    try resource.validate(against: artifact)
+                    resolvedURL = self.schemeHandler?.registerLocalAsset(
+                        data: resource.data,
+                        mimeType: resource.mimeType
+                    )
+                    if resolvedURL == nil {
+                        errorCode = "preview_asset_unavailable"
+                    }
+                } catch {
+                    errorCode = Self.previewErrorCode(error)
+                    Self.logger.error(
+                        "Preview asset resolution failed for \(artifactID, privacy: .public)/\(assetID, privacy: .public): \(error.localizedDescription, privacy: .public)"
+                    )
+                }
+
+                guard self.sourceConversationID == conversationID,
+                      self.latestSnapshot?.previewArtifacts.contains(where: {
+                          $0.sessionID == conversationID
+                              && $0.artifactID == artifactID
+                              && $0.revision == revision
+                              && $0.fallback?.assetID == assetID
+                      }) == true,
+                      let webView = self.webView else { return }
+                let response = ResolvePreviewAssetResponse(
+                    type: "previewAssetURLResolved",
+                    requestID: requestID,
+                    artifactID: artifactID,
+                    revision: revision,
+                    assetID: assetID,
+                    url: resolvedURL?.absoluteString,
+                    errorCode: errorCode
+                )
+                await Self.dispatchPreviewResolutionEvent(
+                    "previewAssetURLResolved",
+                    response: response,
+                    webView: webView
+                )
+            }
+        }
+
+        private static func dispatchPreviewResolutionEvent<Response: Encodable>(
+            _ eventName: String,
+            response: Response,
+            webView: WKWebView
+        ) async {
+            guard let jsonData = try? JSONEncoder().encode(response),
+                  let json = String(data: jsonData, encoding: .utf8) else { return }
+            let script = "window.dispatchEvent(new CustomEvent('\(eventName)', {detail: \(json)}))"
+            _ = try? await webView.evaluateJavaScript(script)
+        }
+
+        private static func previewErrorCode(_ error: Error) -> String {
+            if let error = error as? PreviewResourceError { return error.code }
+            if let error = error as? ConversationWebPreviewSecurityError { return error.code }
+            if let runtimeError = error as? RuntimeHTTPError,
+               case .preview(let preview) = runtimeError {
+                return preview.error.code
+            }
+            return "preview_render_failed"
+        }
+
         /// Web thumbnail click → open the shared native previewer for the
         /// turn's mixed image list. Only identities cross the bridge; display
         /// URLs are resolved natively because the private workbench scheme is
@@ -942,7 +1279,7 @@ final class ConversationWebWorkbenchHostView: NSView {
 }
 
 @MainActor
-fileprivate final class WeakScriptMessageHandler: NSObject, WKScriptMessageHandler {
+final class WeakScriptMessageHandler: NSObject, WKScriptMessageHandler {
     weak var delegate: (any WKScriptMessageHandler)?
 
     init(delegate: any WKScriptMessageHandler) {
@@ -953,6 +1290,9 @@ fileprivate final class WeakScriptMessageHandler: NSObject, WKScriptMessageHandl
         _ userContentController: WKUserContentController,
         didReceive message: WKScriptMessage
     ) {
+        guard ConversationWebPreviewSecurity.acceptsScriptMessage(
+            isMainFrame: message.frameInfo.isMainFrame
+        ) else { return }
         delegate?.userContentController(userContentController, didReceive: message)
     }
 }
@@ -971,5 +1311,24 @@ private struct ResolveLocalAssetResponse: Encodable {
     let conversationID: String
     let requestID: String
     let url: String?
+}
+
+private struct ResolvePreviewViewerResponse: Encodable {
+    let type: String
+    let requestID: String
+    let artifactID: String
+    let revision: Int
+    let url: String?
+    let errorCode: String?
+}
+
+private struct ResolvePreviewAssetResponse: Encodable {
+    let type: String
+    let requestID: String
+    let artifactID: String
+    let revision: Int
+    let assetID: String
+    let url: String?
+    let errorCode: String?
 }
 #endif

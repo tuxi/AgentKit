@@ -334,6 +334,14 @@ public final class ConversationViewModel {
         return URL(fileURLWithPath: path, isDirectory: true)
     }
 
+    var previewViewerResolver: (any PreviewViewerResolver)? {
+        client.previewViewerResolver()
+    }
+
+    var previewAssetResolver: (any PreviewAssetResolver)? {
+        client.previewAssetResolver()
+    }
+
     public var managedWorktree: ManagedWorktreeMetadata? {
         detail?.worktree ?? conversation?.worktree
     }

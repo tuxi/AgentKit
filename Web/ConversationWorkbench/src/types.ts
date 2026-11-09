@@ -144,6 +144,8 @@ export interface ConversationWebPreview {
   errorCode?: string;
   initialState: "collapsed" | "expanded";
   expiresAtMilliseconds?: number;
+  minHeight?: number;
+  preferredAspectRatio?: number;
 }
 
 export interface ConversationWebTurn {
@@ -332,6 +334,21 @@ export type NativeBridgeMessage =
       type: "resolveLocalAssetURL";
       localAssetID: string;
       conversationID: string;
+      requestID: string;
+    }
+  | {
+      type: "resolvePreviewViewerURL";
+      conversationID: string;
+      artifactID: string;
+      revision: number;
+      requestID: string;
+    }
+  | {
+      type: "resolvePreviewAssetURL";
+      conversationID: string;
+      artifactID: string;
+      revision: number;
+      assetID: string;
       requestID: string;
     }
   | {

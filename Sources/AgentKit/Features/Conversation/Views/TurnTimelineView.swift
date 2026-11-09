@@ -20,6 +20,9 @@ public struct TurnTimelineView: View {
     let conversationID: String?
     /// Stable workspace root from the resident conversation model.
     let workspaceRoot: URL?
+    /// Authenticated bytes resolvers owned by the active runtime transport.
+    let previewViewerResolver: (any PreviewViewerResolver)?
+    let previewAssetResolver: (any PreviewAssetResolver)?
     let isVisible: Bool
     /// Height of the floating bottom bar in the macOS layout. The timeline pins
     /// its newest content just above this bar; the scroll range still extends
@@ -34,6 +37,8 @@ public struct TurnTimelineView: View {
         timelineExtensions: [any TimelineExtension] = [],
         conversationID: String? = nil,
         workspaceRoot: URL? = nil,
+        previewViewerResolver: (any PreviewViewerResolver)? = nil,
+        previewAssetResolver: (any PreviewAssetResolver)? = nil,
         isVisible: Bool = true,
         bottomInset: CGFloat = 0,
         onReachedTop: (@MainActor () -> Void)? = nil
@@ -42,6 +47,8 @@ public struct TurnTimelineView: View {
         self.timelineExtensions = timelineExtensions
         self.conversationID = conversationID
         self.workspaceRoot = workspaceRoot
+        self.previewViewerResolver = previewViewerResolver
+        self.previewAssetResolver = previewAssetResolver
         self.isVisible = isVisible
         self.bottomInset = bottomInset
         self.onReachedTop = onReachedTop
@@ -76,6 +83,8 @@ public struct TurnTimelineView: View {
                 snapshot: snapshot,
                 conversationID: conversationID,
                 workspaceRoot: workspaceRoot,
+                previewViewerResolver: previewViewerResolver,
+                previewAssetResolver: previewAssetResolver,
                 extensionContributions: webExtensionContributions,
                 timelineExtensions: timelineExtensions,
                 isVisible: isVisible,
