@@ -42,6 +42,7 @@ let package = Package(
                 .copy("Resources/settings.json"),
                 .copy("Resources/skills"),   // 从 build/skills/ 拷贝到 app bundle
                 .copy("Resources/ConversationWeb"),
+                .copy("Resources/Previews"),
                 .process("Resources/Localizable.xcstrings"),
             ],
             linkerSettings: [

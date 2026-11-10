@@ -1,0 +1,47 @@
+DreamLog Duo Interactive Preview HTML — R4d correction validation
+
+HTML bytes: 446779 (< 2 MiB)
+HTML SHA-256: 23695af5fa0187abfed70046fc26a2920d35ee3313da33a52eee05180b300817
+Inline SVG icons: 14
+data-lucide placeholders: 0
+Lucide runtime: absent
+Forbidden self-contained scan: 0 matches for lucide/iframe/form/fetch/XHR/WebSocket/window.open/http(s)/location/navigator/bridge/@container/container-type
+Page console errors: 0
+Browser resources: [] (no remote or additional resource requests)
+Buttons exercised at 500px and 900px: 外屏, 内屏竖向, 内屏横向
+
+Wide mode DOM geometry @ 500px
+- browser width: 500px
+- fixed natural device: 700 x 462px
+- scale: 0.69714
+- rendered device: 488 x 322.08px
+- layout display: grid
+- grid columns: 290.688px 355.312px
+- hero rect: left=6.697, top=74.697, right=209.348, bottom=395.383
+- workspace rect: left=209.348, top=74.697, right=457.051, bottom=395.383
+- side-by-side: true
+- stage height: 360.078px; scale viewport height: 322.078px; delta: 38px
+
+Wide mode DOM geometry @ 900px
+- browser width: 900px
+- fixed natural device: 700 x 462px
+- scale: 1
+- rendered device: 700 x 462px
+- layout display: grid
+- grid columns: 290.688px 355.312px
+- hero rect: left=101, top=75, right=391.688, bottom=535
+- workspace rect: left=391.688, top=75, right=747, bottom=535
+- side-by-side: true
+- stage height: 500px; scale viewport height: 462px; delta: 38px
+
+Required icon visibility
+- 500px: create plus=true; four tools=true; system create=true; project=true; profile=true
+- 900px: create plus=true; four tools=true; system create=true; project=true; profile=true
+
+Validation screenshots
+- 500px outer: 500x999, sha256=e30e48a8aed7d201034989c73b22fb075b42ad97b6878b4aac808a7df21b1eb9
+- 500px portrait: 500x906, sha256=a47e5babfa7a760c290cb364478f99a2138a0b492380e998f42c380533cb09c2
+- 500px wide: 500x443, sha256=df49f86a075a65d50d152161efd44ffcb08aa872ce839b8f54cee59778b3cb91
+- 900px outer: 900x999, sha256=e9d8acba31b7661cabfaf63b2cc912b3dd0326135b3de60596b6bea719b1f89a
+- 900px portrait: 900x1022, sha256=9fbd44be8c6e375a2a4fc1fb2c499aa7cc3a82dcaed1fe8b5e9f8ad1ca7856e0
+- 900px wide: 900x583, sha256=5102178daca037e22f2f3b39aa3169a673e3fab1a44c2d97435f38ce2543d69b

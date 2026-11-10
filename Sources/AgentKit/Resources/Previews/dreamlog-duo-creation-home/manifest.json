@@ -1,0 +1,26 @@
+{
+  "id": "dreamlog-duo-creation-home",
+  "title": "DreamLog Duo Creation Home",
+  "status": "accepted",
+  "statusNote": "Accepted for packaged AgentKit preview.",
+  "current": "current.html",
+  "source": {
+    "repository": "Dreamlog",
+    "baselineCommit": "a0c78f7a85fc83b3af6a899bd580584be454494c"
+  },
+  "html": {
+    "bytes": 446779,
+    "sha256": "23695af5fa0187abfed70046fc26a2920d35ee3313da33a52eee05180b300817",
+    "interactivePreviewMaximumBytes": 2097152,
+    "inlineSvgCount": 14,
+    "dataLucideCount": 0
+  },
+  "validation": {
+    "forms": [
+      "outer",
+      "portrait",
+      "wide"
+    ],
+    "resourceUrls": []
+  }
+}

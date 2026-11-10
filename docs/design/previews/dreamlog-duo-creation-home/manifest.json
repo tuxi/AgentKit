@@ -1,0 +1,95 @@
+{
+  "id": "dreamlog-duo-creation-home",
+  "status": "accepted",
+  "statusNote": "Accepted for packaged AgentKit preview and R4d evidence.",
+  "current": "current.html",
+  "latestRevision": "revisions/r4d.html",
+  "source": {
+    "repository": "Dreamlog",
+    "baselineCommit": "a0c78f7a85fc83b3af6a899bd580584be454494c"
+  },
+  "html": {
+    "bytes": 446779,
+    "sha256": "23695af5fa0187abfed70046fc26a2920d35ee3313da33a52eee05180b300817",
+    "interactivePreviewMaximumBytes": 2097152,
+    "inlineSvgCount": 14,
+    "dataLucideCount": 0
+  },
+  "validation": {
+    "browser": "Chrome 157 headless via Playwright CLI",
+    "widths": [
+      500,
+      900
+    ],
+    "forms": [
+      "outer",
+      "portrait",
+      "wide"
+    ],
+    "wideTwoColumn": true,
+    "consoleErrors": 0,
+    "resourceUrls": []
+  },
+  "evidence": [
+    {
+      "name": "SHA256SUMS.txt",
+      "bytes": 910,
+      "sha256": "d660c31a810f8b3f3e3b1119de74e81d870f0ad99b41a3f8d709ff2ce778b05c",
+      "viewportWidth": null
+    },
+    {
+      "name": "validation-500-outer.png",
+      "bytes": 263023,
+      "sha256": "e30e48a8aed7d201034989c73b22fb075b42ad97b6878b4aac808a7df21b1eb9",
+      "viewportWidth": 500
+    },
+    {
+      "name": "validation-500-portrait.png",
+      "bytes": 285877,
+      "sha256": "a47e5babfa7a760c290cb364478f99a2138a0b492380e998f42c380533cb09c2",
+      "viewportWidth": 500
+    },
+    {
+      "name": "validation-500-wide.png",
+      "bytes": 144716,
+      "sha256": "df49f86a075a65d50d152161efd44ffcb08aa872ce839b8f54cee59778b3cb91",
+      "viewportWidth": 500
+    },
+    {
+      "name": "validation-900-outer.png",
+      "bytes": 276656,
+      "sha256": "e9d8acba31b7661cabfaf63b2cc912b3dd0326135b3de60596b6bea719b1f89a",
+      "viewportWidth": 900
+    },
+    {
+      "name": "validation-900-portrait.png",
+      "bytes": 388127,
+      "sha256": "9fbd44be8c6e375a2a4fc1fb2c499aa7cc3a82dcaed1fe8b5e9f8ad1ca7856e0",
+      "viewportWidth": 900
+    },
+    {
+      "name": "validation-900-wide.png",
+      "bytes": 270340,
+      "sha256": "5102178daca037e22f2f3b39aa3169a673e3fab1a44c2d97435f38ce2543d69b",
+      "viewportWidth": 900
+    },
+    {
+      "name": "validation-summary.txt",
+      "bytes": 2213,
+      "sha256": "b50de7601b75448367037550aeb40bdb91fb1e2b8fe1650a3d9dbdc0d074bb0f",
+      "viewportWidth": null
+    },
+    {
+      "name": "wide-geometry-500.json",
+      "bytes": 1431,
+      "sha256": "5ea0afff9dd1107f5d4549e8b2b2f7b3ba7abcf450bb286763eae4b77864f13c",
+      "viewportWidth": null
+    },
+    {
+      "name": "wide-geometry-900.json",
+      "bytes": 1362,
+      "sha256": "c2863869e7f1e668c0f0721ebc75410d6d9ba2c5df61adb2310b4468ee8013ab",
+      "viewportWidth": null
+    }
+  ]
+}

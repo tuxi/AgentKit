@@ -1,0 +1,9 @@
+{
+  "schema": "agentkit.previews.v1",
+  "previews": [
+    {
+      "id": "dreamlog-duo-creation-home",
+      "manifest": "dreamlog-duo-creation-home/manifest.json"
+    }
+  ]
+}

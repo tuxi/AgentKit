@@ -1,0 +1,77 @@
+{
+  "browserWidth": 500,
+  "browserHeight": 1200,
+  "rootRect": {
+    "left": 0,
+    "top": 0,
+    "right": 500,
+    "bottom": 442.766,
+    "width": 500,
+    "height": 442.766
+  },
+  "pose": "wide",
+  "scale": 0.69714,
+  "naturalDeviceWidth": 700,
+  "naturalDeviceHeight": 462,
+  "scaledDeviceHeight": 322.08000000000004,
+  "layoutDisplay": "grid",
+  "gridTemplateColumns": "290.688px 355.312px",
+  "hero": {
+    "left": 6.697,
+    "top": 74.697,
+    "right": 209.348,
+    "bottom": 395.383,
+    "width": 202.651,
+    "height": 320.686
+  },
+  "workspace": {
+    "left": 209.348,
+    "top": 74.697,
+    "right": 457.051,
+    "bottom": 395.383,
+    "width": 247.704,
+    "height": 320.686
+  },
+  "device": {
+    "left": 6,
+    "top": 74,
+    "right": 494,
+    "bottom": 396.08,
+    "width": 488,
+    "height": 322.08
+  },
+  "scaleViewport": {
+    "left": 6,
+    "top": 74,
+    "right": 494,
+    "bottom": 396.078,
+    "width": 488,
+    "height": 322.078
+  },
+  "stage": {
+    "left": 0,
+    "top": 54,
+    "right": 500,
+    "bottom": 414.078,
+    "width": 500,
+    "height": 360.078
+  },
+  "sideBySide": true,
+  "stageHeightDelta": 38,
+  "svgCount": 14,
+  "dataLucideCount": 0,
+  "requiredIcons": {
+    "createPlus": true,
+    "toolIcons": [
+      true,
+      true,
+      true,
+      true
+    ],
+    "toolsAllVisible": true,
+    "systemCreate": true,
+    "systemProjects": true,
+    "systemProfile": true
+  },
+  "resourceUrls": []
+}
