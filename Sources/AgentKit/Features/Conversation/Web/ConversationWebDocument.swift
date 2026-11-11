@@ -205,6 +205,38 @@ struct ConversationWebDocument: Codable, Equatable, Sendable {
         var metadata: [String: String]? = nil
     }
 
+    /// Presentation-only projection of `view_image_result.v1`. Asset order is
+    /// the structured `assets[]` order; relationships are IDs, never paths.
+    struct ImageView: Codable, Equatable, Sendable {
+        let title: String
+        let displayName: String
+        let sourceAssetID: String
+        let cropAssetID: String?
+        let detailRequested: String
+        let detailEffective: String
+        let sourceRegion: ImageRegion?
+        let assets: [ImageViewAsset]
+    }
+
+    struct ImageViewAsset: Codable, Equatable, Sendable, Identifiable {
+        var id: String { assetID }
+        let assetID: String
+        let role: String
+        let displayName: String
+        let width: Int
+        let height: Int
+        let sourceAssetID: String?
+        let sourceRegion: ImageRegion?
+        let viewActionID: String?
+    }
+
+    struct ImageRegion: Codable, Equatable, Sendable {
+        let x: Double
+        let y: Double
+        let width: Double
+        let height: Double
+    }
+
     struct Tool: Codable, Equatable, Sendable {
         let id: String
         let name: String
@@ -235,6 +267,9 @@ struct ConversationWebDocument: Codable, Equatable, Sendable {
         var resultKind: String? = nil
         var outcomeText: String? = nil
         var outcomeTone: String? = nil
+        /// Generic image-view semantic derived from structured output. Nil is
+        /// the safe fallback for malformed metadata or missing tool assets.
+        var imageView: ImageView? = nil
     }
 
     struct InlineAction: Codable, Equatable, Sendable {
@@ -847,16 +882,22 @@ enum ConversationWebDocumentBuilder {
                         ))
                     }
                 }
+                let imageView = ViewImageActivityProjection.make(
+                    tool: tool,
+                    turnID: turn.id,
+                    assetIndex: assetIndex(),
+                    registerAction: registerAction
+                )
                 return ConversationWebDocument.Tool(
                     id: tool.callID,
-                    name: presentation.title,
+                    name: imageView?.title ?? presentation.title,
                     status: tool.status.rawValue,
                     statusText: presentation.statusText,
                     detail: presentation.detail,
                     elapsed: presentation.elapsed,
                     changeSummary: presentation.changeSummary,
                     arguments: arguments,
-                    output: dag != nil ? nil : output,  // suppress raw JSON when DAG is rendered
+                    output: imageView == nil && dag == nil ? output : nil,
                     artifactActionID: previousTool?.artifact == tool.artifact
                         ? previousWebTool?.artifactActionID
                         : tool.artifact.flatMap { _ in
@@ -867,7 +908,7 @@ enum ConversationWebDocumentBuilder {
                             ))
                         }
                     },
-                    assetActions: previousTool?.assets == tool.assets
+                    assetActions: imageView != nil ? [] : previousTool?.assets == tool.assets
                         ? previousWebTool?.assetActions ?? []
                         : tool.assets.compactMap { asset in
                         guard let registerAction else { return nil }
@@ -882,7 +923,7 @@ enum ConversationWebDocumentBuilder {
                             focusID: "tool:\(tool.callID):asset:\(reference.id)"
                         )
                     },
-                    copyOutputActionID: tool.status == .running || tool.output.isEmpty
+                    copyOutputActionID: imageView != nil || tool.status == .running || tool.output.isEmpty
                         ? nil
                         : registerAction.map {
                         $0(.transcript(
@@ -901,7 +942,7 @@ enum ConversationWebDocumentBuilder {
                             registerAction: registerAction
                         )
                     } ?? [],
-                    outputActions: tool.status == .running ? [] : output.map {
+                    outputActions: imageView != nil || tool.status == .running ? [] : output.map {
                         inlineActions(
                             text: $0,
                             annotations: [],
@@ -930,7 +971,8 @@ enum ConversationWebDocumentBuilder {
                     },
                     resultKind: resultKind,
                     outcomeText: outcomeText,
-                    outcomeTone: resultFailed ? "failed" : tool.status == .running ? "running" : "completed"
+                    outcomeTone: resultFailed ? "failed" : tool.status == .running ? "running" : "completed",
+                    imageView: imageView
                 )
             }
             return .init(

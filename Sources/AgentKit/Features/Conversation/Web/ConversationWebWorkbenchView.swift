@@ -483,6 +483,8 @@ struct ConversationWebWorkbenchView: NSViewRepresentable {
                 handleResolveUserAssetURL(body)
             case "resolveLocalAssetURL":
                 handleResolveLocalAssetURL(body)
+            case "resolveImageViewAssetURL":
+                handleResolveImageViewAssetURL(body)
             case "resolvePreviewViewerURL":
                 handleResolvePreviewViewerURL(body)
             case "resolvePreviewAssetURL":
@@ -956,6 +958,117 @@ struct ConversationWebWorkbenchView: NSViewRepresentable {
             }
         }
 
+        /// Resolves one structured image-view asset. The Web document sends
+        /// only stable IDs; the host validates them against the exact tool
+        /// result and exposes local bytes through the opaque scheme.
+        private func handleResolveImageViewAssetURL(_ body: [String: Any]) {
+            guard let conversationID = body["conversationID"] as? String,
+                  conversationID == sourceConversationID,
+                  let turnID = body["turnID"] as? String,
+                  turnID.utf8.count <= 256,
+                  let toolID = body["toolID"] as? String,
+                  toolID.utf8.count <= 256,
+                  let assetID = body["assetID"] as? String,
+                  assetID.utf8.count <= 187,
+                  let requestID = body["requestID"] as? String,
+                  UUID(uuidString: requestID) != nil,
+                  let workspaceRoot = sourceWorkspaceRoot,
+                  let tool = latestTurns.lazy
+                    .first(where: { $0.id == turnID })?
+                    .blocks
+                    .lazy
+                    .compactMap({ block -> ToolNodePayload? in
+                        guard case .toolGroup(let group) = block else { return nil }
+                        return group.tools.first(where: { $0.callID == toolID })
+                    })
+                    .first(where: { tool in
+                        ViewImageActivityProjection.validatedAssetIDs(in: tool)?.contains(assetID) == true
+                    }),
+                  let asset = tool.assets.first(where: { $0.id == assetID }),
+                  let resolvedAsset = validatedImageAssetData(
+                    asset: asset,
+                    workspaceRoot: workspaceRoot
+                  ) else {
+                return
+            }
+
+            let registeredURL = schemeHandler?.registerLocalAsset(
+                data: resolvedAsset.data,
+                mimeType: resolvedAsset.mimeType
+            )
+            let response = ResolveImageViewAssetResponse(
+                type: "imageViewAssetURLResolved",
+                requestID: requestID,
+                conversationID: conversationID,
+                turnID: turnID,
+                toolID: toolID,
+                assetID: assetID,
+                url: registeredURL?.absoluteString,
+                errorCode: registeredURL == nil ? "image_view_asset_unavailable" : nil
+            )
+            guard let webView,
+                  let jsonData = try? JSONEncoder().encode(response),
+                  let json = String(data: jsonData, encoding: .utf8) else { return }
+            let script = "window.dispatchEvent(new CustomEvent('imageViewAssetURLResolved', {detail: \(json)}))"
+            webView.evaluateJavaScript(script) { _, _ in }
+        }
+
+        private func validatedImageAssetData(
+            asset: AgentAssetRef,
+            workspaceRoot: URL
+        ) -> (data: Data, mimeType: String)? {
+            let root = workspaceRoot.standardizedFileURL.resolvingSymlinksInPath()
+            let candidate: URL?
+            if let relativePath = asset.workspaceRelativePath,
+               !relativePath.isEmpty,
+               !relativePath.hasPrefix("/") {
+                candidate = root.appendingPathComponent(relativePath)
+            } else if let absolutePath = asset.absolutePath, !absolutePath.isEmpty {
+                candidate = URL(fileURLWithPath: absolutePath)
+            } else if let uri = asset.uri,
+                      let url = URL(string: uri),
+                      url.isFileURL {
+                candidate = url
+            } else {
+                candidate = nil
+            }
+            guard let candidate else { return nil }
+            let resolved = candidate.standardizedFileURL.resolvingSymlinksInPath()
+            let rootPrefix = root.path.hasSuffix("/") ? root.path : root.path + "/"
+            guard resolved.path.hasPrefix(rootPrefix),
+                  let values = try? resolved.resourceValues(forKeys: [
+                    .isRegularFileKey, .fileSizeKey
+                  ]),
+                  values.isRegularFile == true,
+                  (values.fileSize ?? 0) <= 64 * 1024 * 1024,
+                  let mimeType = Self.sniffImageMIMEType(at: resolved),
+                  let data = try? Data(contentsOf: resolved, options: .mappedIfSafe),
+                  data.count <= 64 * 1024 * 1024 else {
+                return nil
+            }
+            return (data, mimeType)
+        }
+
+        private static func sniffImageMIMEType(at url: URL) -> String? {
+            guard let handle = try? FileHandle(forReadingFrom: url) else { return nil }
+            defer { try? handle.close() }
+            guard let data = try? handle.read(upToCount: 12), data.count >= 12 else {
+                return nil
+            }
+            let bytes = [UInt8](data)
+            if bytes.starts(with: [0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]) {
+                return "image/png"
+            }
+            if bytes.starts(with: [0xff, 0xd8, 0xff]) {
+                return "image/jpeg"
+            }
+            if String(bytes: bytes[0..<4], encoding: .ascii) == "RIFF",
+               String(bytes: bytes[8..<12], encoding: .ascii) == "WEBP" {
+                return "image/webp"
+            }
+            return nil
+        }
+
         /// Resolves verified viewer bytes and returns only an opaque,
         /// conversation-scoped preview scheme URL to the isolated frame.
         private func handleResolvePreviewViewerURL(_ body: [String: Any]) {
@@ -1311,6 +1424,17 @@ private struct ResolveLocalAssetResponse: Encodable {
     let conversationID: String
     let requestID: String
     let url: String?
+}
+
+private struct ResolveImageViewAssetResponse: Encodable {
+    let type: String
+    let requestID: String
+    let conversationID: String
+    let turnID: String
+    let toolID: String
+    let assetID: String
+    let url: String?
+    let errorCode: String?
 }
 
 private struct ResolvePreviewViewerResponse: Encodable {

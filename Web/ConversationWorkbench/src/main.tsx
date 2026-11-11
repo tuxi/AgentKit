@@ -13,6 +13,8 @@ import type {
   ConversationWebBlock,
   ConversationWebDocument,
   ConversationWebExtensionNode,
+  ConversationWebImageView,
+  ConversationWebImageViewAsset,
   ConversationWebOperation,
   ConversationWebPreview,
   ConversationWebTool,
@@ -147,6 +149,131 @@ function applyResolvedLocalAssetURL(
   pendingLocalAssetURLs.set(key, { ...pending, url });
   notifyLocalAssetURLChange();
 }
+
+interface PendingImageViewAssetURL {
+  conversationID: string;
+  turnID: string;
+  toolID: string;
+  assetID: string;
+  requestID: string;
+  url?: string;
+  expires: number;
+}
+
+const pendingImageViewAssetURLs = new Map<string, PendingImageViewAssetURL>();
+let imageViewAssetURLRevision = 0;
+const imageViewAssetURLSubscribers = new Set<() => void>();
+
+function subscribeImageViewAssetURLs(callback: () => void): () => void {
+  imageViewAssetURLSubscribers.add(callback);
+  return () => imageViewAssetURLSubscribers.delete(callback);
+}
+
+function imageViewAssetURLSnapshot(): number {
+  return imageViewAssetURLRevision;
+}
+
+function notifyImageViewAssetURLChange(): void {
+  imageViewAssetURLRevision += 1;
+  for (const callback of imageViewAssetURLSubscribers) callback();
+}
+
+function imageViewAssetCacheKey(
+  conversationID: string,
+  turnID: string,
+  toolID: string,
+  assetID: string,
+): string {
+  return [conversationID, turnID, toolID, assetID].join("\u0000");
+}
+
+function clearImageViewAssetURLs(): void {
+  if (pendingImageViewAssetURLs.size === 0) return;
+  pendingImageViewAssetURLs.clear();
+  notifyImageViewAssetURLChange();
+}
+
+function resolveImageViewAssetURL(
+  conversationID: string,
+  turnID: string,
+  toolID: string,
+  assetID: string,
+): void {
+  const key = imageViewAssetCacheKey(conversationID, turnID, toolID, assetID);
+  const existing = pendingImageViewAssetURLs.get(key);
+  if (existing?.url) return;
+  if (existing && existing.expires > Date.now()) return;
+  const requestID = crypto.randomUUID();
+  pendingImageViewAssetURLs.set(key, {
+    conversationID,
+    turnID,
+    toolID,
+    assetID,
+    requestID,
+    expires: Date.now() + localAssetRequestTimeoutMilliseconds,
+  });
+  window.webkit?.messageHandlers?.agentkitWorkbench?.postMessage({
+    type: "resolveImageViewAssetURL",
+    conversationID,
+    turnID,
+    toolID,
+    assetID,
+    requestID,
+  });
+  window.setTimeout(() => {
+    const pending = pendingImageViewAssetURLs.get(key);
+    if (pending?.requestID === requestID && !pending.url) {
+      pendingImageViewAssetURLs.delete(key);
+      notifyImageViewAssetURLChange();
+    }
+  }, localAssetRequestTimeoutMilliseconds);
+}
+
+function applyResolvedImageViewAssetURL(
+  conversationID: string,
+  turnID: string,
+  toolID: string,
+  assetID: string,
+  requestID: string,
+  url?: string,
+): void {
+  const key = imageViewAssetCacheKey(conversationID, turnID, toolID, assetID);
+  const pending = pendingImageViewAssetURLs.get(key);
+  if (
+    !pending ||
+    pending.requestID !== requestID ||
+    conversationID !== currentConversationID
+  ) return;
+  if (!url) {
+    pendingImageViewAssetURLs.delete(key);
+    notifyImageViewAssetURLChange();
+    return;
+  }
+  pendingImageViewAssetURLs.set(key, { ...pending, url });
+  notifyImageViewAssetURLChange();
+}
+
+function useImageViewAssetURL(
+  conversationID: string,
+  turnID: string,
+  toolID: string,
+  assetID: string,
+): string | undefined {
+  useSyncExternalStore(
+    subscribeImageViewAssetURLs,
+    imageViewAssetURLSnapshot,
+    imageViewAssetURLSnapshot,
+  );
+  const key = imageViewAssetCacheKey(conversationID, turnID, toolID, assetID);
+  const url = pendingImageViewAssetURLs.get(key)?.url;
+  useEffect(() => {
+    if (!url) resolveImageViewAssetURL(conversationID, turnID, toolID, assetID);
+  }, [assetID, conversationID, toolID, turnID, url]);
+  return url;
+}
+
+const imageViewPlaceholderSrc =
+  "data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='240' height='160' viewBox='0 0 240 160'%3E%3Crect width='240' height='160' fill='%23ececec'/%3E%3Cpath d='M72 108l34-36 25 25 16-16 25 27z' fill='%23a0a0a0'/%3E%3Ccircle cx='168' cy='61' r='11' fill='%23a0a0a0'/%3E%3C/svg%3E";
 
 function localAssetIcon(mimeType: string, kind: string): string {
   if (mimeType === "application/pdf") return "PDF";
@@ -1538,8 +1665,157 @@ function ToolActionIcon({ glyph }: { glyph: string }): React.JSX.Element {
   </span>;
 }
 
-function Tool({ tool }: { tool: ConversationWebTool }): React.JSX.Element {
+function imageRegionLabel(region: ConversationWebImageViewAsset["sourceRegion"]): string {
+  if (!region) return "";
+  const percent = (value: number) => `${(value * 100).toFixed(1)}%`;
+  return `${percent(region.width)} × ${percent(region.height)} at ${percent(region.x)}, ${percent(region.y)}`;
+}
+
+function ImageViewPreview({
+  conversationID,
+  turnID,
+  toolID,
+  image,
+  variant,
+}: {
+  conversationID: string;
+  turnID: string;
+  toolID: string;
+  image: ConversationWebImageViewAsset;
+  variant: "thumbnail" | "source" | "crop";
+}): React.JSX.Element {
+  const url = useImageViewAssetURL(conversationID, turnID, toolID, image.assetID);
+  return (
+    <span
+      className={`image-view-preview image-view-${variant}`}
+      data-image-view-role={image.role}
+      data-image-view-asset-id={image.assetID}
+      data-parent-asset-id={image.sourceAssetID ?? undefined}
+    >
+      <img
+        src={url ?? imageViewPlaceholderSrc}
+        alt={image.displayName}
+        loading={variant === "thumbnail" ? "lazy" : "eager"}
+        draggable={false}
+        onLoad={(event) => {
+          if (url) event.currentTarget.dataset.loaded = "true";
+        }}
+      />
+    </span>
+  );
+}
+
+function ImageViewActivity({
+  imageView,
+  conversationID,
+  turnID,
+  toolID,
+}: {
+  imageView: ConversationWebImageView;
+  conversationID: string;
+  turnID: string;
+  toolID: string;
+}): React.JSX.Element {
+  const source = imageView.assets.find((asset) => asset.role === "source");
+  const crops = imageView.assets.filter((asset) => asset.role === "crop");
+  if (!source) return <></>;
+  return (
+    <section
+      className="image-view-activity"
+      data-image-view-source-asset-id={imageView.sourceAssetID}
+      data-image-view-asset-order={imageView.assets.map((asset) => asset.assetID).join(",")}
+    >
+      <figure className="image-view-source" data-image-view-node="source">
+        <ImageViewPreview
+          conversationID={conversationID}
+          turnID={turnID}
+          toolID={toolID}
+          image={source}
+          variant="source"
+        />
+        <figcaption>
+          <div className="image-view-heading">
+            <span className="image-view-role">Source</span>
+            <strong className="image-view-name">{source.displayName}</strong>
+          </div>
+          <div className="image-view-metadata">
+            <span>Effective size: {source.width} × {source.height} px</span>
+            <span>Effective detail: {imageView.detailEffective}</span>
+            <span>Requested: {imageView.detailRequested}</span>
+          </div>
+          {source.viewActionID ? (
+            <ActionButton
+              actionID={source.viewActionID}
+              focusID={`image-view:${toolID}:source:original`}
+              tooltip="Open the original image asset"
+            >
+              View original
+            </ActionButton>
+          ) : null}
+        </figcaption>
+      </figure>
+      {crops.map((crop) => (
+        <section
+          className="image-view-crop"
+          data-image-view-node="crop"
+          data-image-view-crop-asset-id={crop.assetID}
+          data-parent-asset-id={crop.sourceAssetID}
+          key={crop.assetID}
+        >
+          <div className="image-view-crop-heading">
+            <span className="image-view-tree-branch" aria-hidden="true">└</span>
+            <span>
+              Crop of <strong>{source.displayName}</strong>
+            </span>
+          </div>
+          <ImageViewPreview
+            conversationID={conversationID}
+            turnID={turnID}
+            toolID={toolID}
+            image={crop}
+            variant="crop"
+          />
+          <div className="image-view-metadata">
+            <span>Effective size: {crop.width} × {crop.height} px</span>
+            <span>Region {imageRegionLabel(crop.sourceRegion)}</span>
+          </div>
+          <div className="image-view-crop-actions">
+            {source.viewActionID ? (
+              <ActionButton
+                actionID={source.viewActionID}
+                focusID={`image-view:${toolID}:crop:${crop.assetID}:source`}
+                tooltip="Open the source image asset"
+              >
+                View source
+              </ActionButton>
+            ) : null}
+            {crop.viewActionID ? (
+              <ActionButton
+                actionID={crop.viewActionID}
+                focusID={`image-view:${toolID}:crop:${crop.assetID}:crop`}
+                tooltip="Open the crop image asset"
+              >
+                View crop
+              </ActionButton>
+            ) : null}
+          </div>
+        </section>
+      ))}
+    </section>
+  );
+}
+
+function Tool({
+  tool,
+  conversationID,
+  turnID,
+}: {
+  tool: ConversationWebTool;
+  conversationID: string;
+  turnID: string;
+}): React.JSX.Element {
   const statusText = visibleExecutionStatus(tool.status, tool.statusText);
+  const imageViewSource = tool.imageView?.assets.find((asset) => asset.role === "source");
   // Tool rows stay compact by default, including while they run. The parent
   // group header communicates the current action without expanding detail.
   const { open, onSummaryClick } = useActivityDisclosure(`tool:${tool.id}`);
@@ -1560,7 +1836,15 @@ function Tool({ tool }: { tool: ConversationWebTool }): React.JSX.Element {
         data-focus-id={`tool:${tool.id}`}
         onClick={onSummaryClick}
       >
-        <ToolActionIcon glyph={tool.icon ?? "◇"} />
+        {imageViewSource ? (
+          <ImageViewPreview
+            conversationID={conversationID}
+            turnID={turnID}
+            toolID={tool.id}
+            image={imageViewSource}
+            variant="thumbnail"
+          />
+        ) : <ToolActionIcon glyph={tool.icon ?? "◇"} />}
         <span className="tool-title">{tool.name}</span>
         {tool.changeSummary ? <ChangeSummary value={tool.changeSummary} /> : null}
         {tool.detail ? <span className="tool-detail-summary">{tool.detail}</span> : null}
@@ -1571,7 +1855,14 @@ function Tool({ tool }: { tool: ConversationWebTool }): React.JSX.Element {
         <span className="disclosure-chevron" aria-hidden="true">›</span>
       </summary>
       {open ? <div className="tool-detail">
-        <ToolResultCard tool={tool} outputRef={setOutputFrame} />
+        {tool.imageView ? (
+          <ImageViewActivity
+            imageView={tool.imageView}
+            conversationID={conversationID}
+            turnID={turnID}
+            toolID={tool.id}
+          />
+        ) : <ToolResultCard tool={tool} outputRef={setOutputFrame} />}
         <RawToolDetails tool={tool} />
         {tool.dagNodes ? (
           <section className="dag-summary-card">
@@ -1604,7 +1895,7 @@ function Tool({ tool }: { tool: ConversationWebTool }): React.JSX.Element {
             Open artifact
           </ActionButton>
         ) : null}
-        {tool.assetActions.map((asset) => (
+        {tool.imageView ? null : tool.assetActions.map((asset) => (
           <ActionButton
             key={asset.actionID}
             actionID={asset.actionID}
@@ -1761,7 +2052,15 @@ function ThinkingBlock({ block }: { block: ConversationWebBlock }): React.JSX.El
   );
 }
 
-function ToolGroupBlock({ block }: { block: ConversationWebBlock }): React.JSX.Element {
+function ToolGroupBlock({
+  block,
+  conversationID,
+  turnID,
+}: {
+  block: ConversationWebBlock;
+  conversationID: string;
+  turnID: string;
+}): React.JSX.Element {
   // Expanded live groups describe the whole activity. Collapsed live groups
   // mirror the current action, including a one-line thinking preview.
   const { open, onSummaryClick } = useActivityDisclosure(`group:${block.id}`);
@@ -1789,7 +2088,7 @@ function ToolGroupBlock({ block }: { block: ConversationWebBlock }): React.JSX.E
   }
   const renderEntry = (id: string) => {
     const tool = tools.get(id);
-    if (tool) return <Tool key={id} tool={tool} />;
+    if (tool) return <Tool key={id} tool={tool} conversationID={conversationID} turnID={turnID} />;
     const thought = thinking.get(id);
     return thought ? <ThinkingBlock key={id} block={thought} /> : null;
   };
@@ -1838,8 +2137,12 @@ function ToolGroupBlock({ block }: { block: ConversationWebBlock }): React.JSX.E
 
 const Block = memo(function Block({
   block,
+  conversationID,
+  turnID,
 }: {
   block: ConversationWebBlock;
+  conversationID: string;
+  turnID: string;
 }): React.JSX.Element {
   switch (block.kind) {
     case "markdown":
@@ -1847,9 +2150,13 @@ const Block = memo(function Block({
     case "thinking":
       return <ThinkingBlock block={block} />;
     case "toolGroup":
-      if (block.activityOrder || block.tools.length > 1) return <ToolGroupBlock block={block} />;
+      if (block.activityOrder || block.tools.length > 1) {
+        return <ToolGroupBlock block={block} conversationID={conversationID} turnID={turnID} />;
+      }
       return <section className="tool-group" data-status={block.status}>
-        {block.tools.map((tool) => <Tool key={tool.id} tool={tool} />)}
+        {block.tools.map((tool) => (
+          <Tool key={tool.id} tool={tool} conversationID={conversationID} turnID={turnID} />
+        ))}
       </section>;
     case "artifact":
       return (
@@ -2712,7 +3019,7 @@ const Turn = memo(function Turn({
         data-selection-id={`block:${block.id}`}
         key={block.id}
       >
-        <Block block={block} />
+        <Block block={block} conversationID={conversationID} turnID={turn.id} />
       </div>
     ));
 
@@ -3089,6 +3396,7 @@ function App(): React.JSX.Element {
           if (isReset) {
             if (!update.document) throw new Error("Reset is missing document");
             clearLocalAssetURLs();
+            clearImageViewAssetURLs();
             conversationID.current = update.document.conversationID;
             currentConversationID = update.document.conversationID;
             setConversation(update.document);
@@ -3130,14 +3438,38 @@ function App(): React.JSX.Element {
         );
       }
     };
+    const handleImageViewAssetURLResolved = (event: Event) => {
+      const detail = (event as CustomEvent).detail;
+      if (
+        detail &&
+        typeof detail.conversationID === "string" &&
+        typeof detail.turnID === "string" &&
+        typeof detail.toolID === "string" &&
+        typeof detail.assetID === "string" &&
+        typeof detail.requestID === "string" &&
+        (typeof detail.url === "string" || detail.url == null)
+      ) {
+        applyResolvedImageViewAssetURL(
+          detail.conversationID,
+          detail.turnID,
+          detail.toolID,
+          detail.assetID,
+          detail.requestID,
+          detail.url ?? undefined,
+        );
+      }
+    };
     window.addEventListener("userAssetURLResolved", handleAssetURLResolved);
     window.addEventListener("localAssetURLResolved", handleLocalAssetURLResolved);
+    window.addEventListener("imageViewAssetURLResolved", handleImageViewAssetURLResolved);
     postToNative({ type: "ready", protocolVersion });
     return () => {
       window.removeEventListener("userAssetURLResolved", handleAssetURLResolved);
       window.removeEventListener("localAssetURLResolved", handleLocalAssetURLResolved);
+      window.removeEventListener("imageViewAssetURLResolved", handleImageViewAssetURLResolved);
       stopViewportController();
       clearLocalAssetURLs();
+      clearImageViewAssetURLs();
       currentConversationID = undefined;
       delete window.AgentKitWorkbench;
     };

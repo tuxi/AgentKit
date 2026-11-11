@@ -38,6 +38,38 @@ export interface ConversationWebTool {
   dagEdges?: number;
   /// Action to open the workflow DAG detail.
   dagOpenActionID?: string;
+  /// Generic `view_image_result.v1` semantic. Absent for malformed or
+  /// incomplete metadata; callers then fall back to the normal tool card.
+  imageView?: ConversationWebImageView;
+}
+
+export interface ConversationWebImageView {
+  title: string;
+  displayName: string;
+  sourceAssetID: string;
+  cropAssetID?: string;
+  detailRequested: "high" | "original";
+  detailEffective: "high" | "original";
+  sourceRegion?: ConversationWebImageRegion;
+  assets: ConversationWebImageViewAsset[];
+}
+
+export interface ConversationWebImageViewAsset {
+  assetID: string;
+  role: "source" | "crop";
+  displayName: string;
+  width: number;
+  height: number;
+  sourceAssetID?: string;
+  sourceRegion?: ConversationWebImageRegion;
+  viewActionID?: string;
+}
+
+export interface ConversationWebImageRegion {
+  x: number;
+  y: number;
+  width: number;
+  height: number;
 }
 
 export interface InlineAction {
@@ -336,6 +368,14 @@ export type NativeBridgeMessage =
       type: "resolveLocalAssetURL";
       localAssetID: string;
       conversationID: string;
+      requestID: string;
+    }
+  | {
+      type: "resolveImageViewAssetURL";
+      conversationID: string;
+      turnID: string;
+      toolID: string;
+      assetID: string;
       requestID: string;
     }
   | {
