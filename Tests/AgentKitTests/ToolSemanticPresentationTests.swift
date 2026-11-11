@@ -16,14 +16,36 @@ final class ToolSemanticPresentationTests: XCTestCase {
         XCTAssertEqual(ToolTranscriptPresenter.activityPresentation(for: running, locale: "zh-Hans").title, "正在读取 ProjectStore.swift")
         XCTAssertEqual(ToolTranscriptPresenter.activityPresentation(for: completed, locale: "zh-Hans").title, "已读取 ProjectStore.swift")
         let live = ToolGroup(id: "live", entries: [.tool(running)], isCollecting: true)
-        XCTAssertEqual(ToolTranscriptPresenter.groupPresentation(for: live, locale: "zh-Hans").summary, "正在读取 ProjectStore.swift")
+        let livePresentation = ToolTranscriptPresenter.groupPresentation(for: live, locale: "zh-Hans")
+        XCTAssertEqual(livePresentation.summary, "正在读取 ProjectStore.swift")
+        XCTAssertEqual(livePresentation.activitySummary, "正在读取文件")
         let betweenCalls = ToolGroup(id: "live", entries: [.tool(completed)], isCollecting: true)
-        XCTAssertEqual(ToolTranscriptPresenter.groupPresentation(for: betweenCalls, locale: "zh-Hans").summary, "已读取 ProjectStore.swift")
+        let betweenCallsPresentation = ToolTranscriptPresenter.groupPresentation(for: betweenCalls, locale: "zh-Hans")
+        XCTAssertEqual(betweenCallsPresentation.summary, "已读取 ProjectStore.swift")
+        XCTAssertEqual(betweenCallsPresentation.activitySummary, "已读取文件")
         let done = ToolGroup(id: "done", entries: [.tool(completed)])
-        XCTAssertEqual(ToolTranscriptPresenter.groupPresentation(for: done, locale: "zh-Hans").summary, "已读取文件")
+        let donePresentation = ToolTranscriptPresenter.groupPresentation(for: done, locale: "zh-Hans")
+        XCTAssertEqual(donePresentation.summary, "已读取文件")
+        XCTAssertEqual(donePresentation.activitySummary, "已读取文件")
         let failed = tool("read_file", args, status: .failed)
         let failureGroup = ToolGroup(id: "failed", entries: [.tool(failed)])
         XCTAssertTrue(ToolTranscriptPresenter.groupPresentation(for: failureGroup, locale: "zh-Hans").summary.contains("失败"))
+    }
+
+
+    func testExpandedActivitySummaryCombinesCompletedActiveAndThinkingStates() {
+        let completedRun = tool("run_command", .object(["command": .string("npm test")]))
+        let runningEdit = tool("edit_file", .object(["path": .string("src/App.swift")]), status: .running)
+        let thought = ThinkingNodePayload(text: "Checking the edit", isStreaming: true)
+        let group = ToolGroup(id: "mixed", entries: [
+            .tool(completedRun),
+            .tool(runningEdit),
+            .thinking(id: "thought", thought),
+        ], isCollecting: true)
+
+        let presentation = ToolTranscriptPresenter.groupPresentation(for: group, locale: "zh-Hans")
+        XCTAssertEqual(presentation.summary, "正在修改 App.swift")
+        XCTAssertEqual(presentation.activitySummary, "已运行命令、正在修改文件、思考中")
     }
 
     func testStructuredActionsUseTargetsAndBothLanguages() {
@@ -134,7 +156,7 @@ final class ToolSemanticPresentationTests: XCTestCase {
         XCTAssertEqual(ToolTranscriptText(locale: "zh-Hans").thinkingTitle(streaming: true), "思考中…")
         XCTAssertEqual(ToolTranscriptText(locale: "unavailable-locale").text("run"), "Run command")
         let group = ToolGroup(id: "g", entries: [.tool(tool("read_file")), .tool(tool("run_command", .object(["command": .string("rg needle src")])) )])
-        XCTAssertEqual(ToolTranscriptPresenter.groupPresentation(for: group, locale: "en").summary, "Read files, Run commands · 2 calls")
-        XCTAssertEqual(ToolTranscriptPresenter.groupPresentation(for: group, locale: "zh-Hans").summary, "读取文件、运行命令 · 2 次调用")
+        XCTAssertEqual(ToolTranscriptPresenter.groupPresentation(for: group, locale: "en").summary, "Read files, Ran commands")
+        XCTAssertEqual(ToolTranscriptPresenter.groupPresentation(for: group, locale: "zh-Hans").summary, "已读取文件、已运行命令")
     }
 }

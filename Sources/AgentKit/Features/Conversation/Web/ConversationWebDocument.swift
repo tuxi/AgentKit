@@ -195,6 +195,9 @@ struct ConversationWebDocument: Codable, Equatable, Sendable {
         var isCollecting: Bool? = nil
         var activityOrder: [String]? = nil
         var activityThinking: [Block]? = nil
+        /// State-based activity summary used for expanded live groups and for
+        /// completed groups. Unlike `title`, it never mirrors one child row.
+        var activitySummary: String? = nil
         /// Raw SystemNodeKind; absent/other kinds render as a plain system aside.
         var systemKind: String? = nil
         /// Present only for system blocks: kind-specific flags and values from
@@ -814,7 +817,11 @@ enum ConversationWebDocumentBuilder {
                 let previousWebTool = toolIndex < previousWebTools.count
                     ? previousWebTools[toolIndex]
                     : nil
-                let presentation = group.isActivityGroup ? ToolTranscriptPresenter.activityPresentation(for: tool) : ToolTranscriptPresenter.presentation(for: tool)
+                // Child rows keep the neutral action label. Running/completed
+                // state belongs to the row badge and the group summary; adding
+                // "running"/"done" prefixes here made expanded headers and rows
+                // repeat the same information.
+                let presentation = ToolTranscriptPresenter.presentation(for: tool)
                 let command = ToolTranscriptPresenter.commandValue(for: tool)
                 let commandForCard = command.map { value in
                     value.utf8.count > 8192 || ToolCommandPresentation.hasSensitiveArguments(value)
@@ -950,7 +957,8 @@ enum ConversationWebDocumentBuilder {
                                  status: payload.isStreaming ? "streaming" : nil,
                                  elapsed: nil, tools: [], childStreamKind: nil,
                                  actionID: nil, actionTooltip: nil, inlineActions: [], codeCopyActionIDs: [])
-                }
+                },
+                activitySummary: group.isActivityGroup ? groupPresentation.activitySummary : nil
             )
 
         case .artifact(let id, let artifact):

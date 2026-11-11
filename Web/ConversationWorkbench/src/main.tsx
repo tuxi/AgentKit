@@ -1250,6 +1250,31 @@ function visibleExecutionStatus(
   }
 }
 
+function compactActivityText(value: string | undefined, limit = 120): string {
+  const compact = (value ?? "")
+    .replace(/```[\s\S]*?```/g, " ")
+    .replace(/`([^`]+)`/g, "$1")
+    .replace(/^[#>*_\s~-]+/gm, "")
+    .replace(/\s+/g, " ")
+    .trim();
+  return compact.length > limit ? `${compact.slice(0, limit - 1)}…` : compact;
+}
+
+function streamingThought(block: ConversationWebBlock): ConversationWebBlock | undefined {
+  return [...(block.activityThinking ?? [])]
+    .reverse()
+    .find((item) => item.status === "streaming");
+}
+
+function activityIcon(block: ConversationWebBlock): string {
+  if (block.status === "failed" || block.tools.some((tool) => tool.status === "failed")) return "×";
+  if (streamingThought(block)) return "◇";
+  const running = block.tools.find((tool) => tool.status === "running");
+  if (running?.icon) return running.icon;
+  if (block.isCollecting) return "◇";
+  return "✓";
+}
+
 function ChangeSummary({ value }: { value: string }): React.JSX.Element {
   const counts = /^\+(\d+)\s+-(\d+)$/.exec(value);
   if (!counts) return <span className="tool-change-summary">{value}</span>;
@@ -1337,14 +1362,12 @@ function TodoPanel({
 }
 
 /**
- * Disclosure state for the auto-expanding cards (thinking / tool / tool-group).
+ * Disclosure state for activity rows (thinking / tool / tool-group).
  *
- * While `streaming` the card is forced open and toggle clicks are ignored; the
- * moment streaming ends it collapses again unless the user explicitly toggled
- * it open. This mirrors the native fallback transcript, where a thinking card
- * renders `isStreaming || expandedThinkingIDs.contains(id)`. User toggles are
- * only recorded outside streaming, so a running card cannot be collapsed
- * mid-stream and then silently pinned.
+ * Live activity now starts collapsed so the conversation stays compact; the
+ * group header carries the current action while streaming. User toggles are
+ * allowed at any time and stored by stable disclosure ID, so content growth or
+ * turn completion never overwrites an explicit choice.
  *
  * The returned `open` value is fully controlled: the summary click handler
  * preventDefaults the native toggle so the browser never fights React.
@@ -1357,26 +1380,23 @@ const TurnDisclosureContext = React.createContext<{
   setExpanded: React.Dispatch<React.SetStateAction<Record<string, boolean>>>;
 } | null>(null);
 
-function useStreamingDisclosure(
-  streaming: boolean,
+function useActivityDisclosure(
   disclosureID: string,
-  userControlsDefault = false,
+  defaultOpen = false,
 ): { open: boolean; onSummaryClick: (event: React.MouseEvent<HTMLElement>) => void } {
   const [localExpanded, setLocalExpanded] = useState<boolean | undefined>(undefined);
   const context = React.useContext(TurnDisclosureContext);
   const key = `${context?.scope}:${disclosureID}`;
   const preference = context ? context.expanded[key] : localExpanded;
-  const open = userControlsDefault ? preference ?? streaming : streaming || (preference ?? false);
+  const open = preference ?? defaultOpen;
   const onSummaryClick = (event: React.MouseEvent<HTMLElement>) => {
     if (!window.getSelection()?.isCollapsed) {
       event.preventDefault();
       return;
     }
     event.preventDefault();
-    if (userControlsDefault || !streaming) {
-      if (context) context.setExpanded((values) => ({ ...values, [key]: !open }));
-      else setLocalExpanded(!open);
-    }
+    if (context) context.setExpanded((values) => ({ ...values, [key]: !open }));
+    else setLocalExpanded(!open);
   };
   return { open, onSummaryClick };
 }
@@ -1476,7 +1496,7 @@ function ToolResultCard({ tool, outputRef }: {
 }
 
 function RawToolDetails({ tool }: { tool: ConversationWebTool }): React.JSX.Element {
-  const { open, onSummaryClick } = useStreamingDisclosure(false, `raw:${tool.id}`);
+  const { open, onSummaryClick } = useActivityDisclosure(`raw:${tool.id}`);
   return (
     <details className="tool-raw-details" open={open} data-disclosure-id={`tool-raw:${tool.id}`}>
       <summary onClick={onSummaryClick} data-focus-id={`tool-raw:${tool.id}`}>
@@ -1516,8 +1536,9 @@ function ToolActionIcon({ glyph }: { glyph: string }): React.JSX.Element {
 
 function Tool({ tool }: { tool: ConversationWebTool }): React.JSX.Element {
   const statusText = visibleExecutionStatus(tool.status, tool.statusText);
-  // Auto-expand while the tool runs; collapse when it finishes.
-  const { open, onSummaryClick } = useStreamingDisclosure(tool.status === "running", `tool:${tool.id}`);
+  // Tool rows stay compact by default, including while they run. The parent
+  // group header communicates the current action without expanding detail.
+  const { open, onSummaryClick } = useActivityDisclosure(`tool:${tool.id}`);
   // While the tool runs, follow the newest log lines inside the bounded output
   // frame; scrolling up to read pauses the follow until the user returns to
   // the bottom (see useTailFollow).
@@ -1535,7 +1556,7 @@ function Tool({ tool }: { tool: ConversationWebTool }): React.JSX.Element {
         data-focus-id={`tool:${tool.id}`}
         onClick={onSummaryClick}
       >
-        {tool.icon ? <ToolActionIcon glyph={tool.icon} /> : null}
+        <ToolActionIcon glyph={tool.icon ?? "◇"} />
         <span className="tool-title">{tool.name}</span>
         {tool.changeSummary ? <ChangeSummary value={tool.changeSummary} /> : null}
         {tool.detail ? <span className="tool-detail-summary">{tool.detail}</span> : null}
@@ -1689,8 +1710,7 @@ function VerifiedBlock({ block }: { block: ConversationWebBlock }): React.JSX.El
 }
 
 function ThinkingBlock({ block }: { block: ConversationWebBlock }): React.JSX.Element | null {
-  // Auto-expand while the model is streaming; collapse when it finishes.
-  const { open, onSummaryClick } = useStreamingDisclosure(block.status === "streaming", `thinking:${block.id}`);
+  const { open, onSummaryClick } = useActivityDisclosure(`thinking:${block.id}`);
   const streaming = block.status === "streaming";
   const [scrollPanel, setScrollPanel] = useState<HTMLDivElement | null>(null);
 
@@ -1704,10 +1724,10 @@ function ThinkingBlock({ block }: { block: ConversationWebBlock }): React.JSX.El
   // step and pins the container without re-rendering React.
   useTailFollow(scrollPanel, streaming);
 
-  // A streaming block can be inserted before the first token batch arrives.
-  // Until there is real content, a blank card (frame + background) is pure
-  // noise that pushes the conversation around — render nothing.
-  if (!block.text || !block.text.trim()) return null;
+  // Keep the compact thinking row mounted before the first token arrives so
+  // the user can see that the model is actively thinking. Completed empty
+  // thoughts carry no information and remain hidden.
+  if ((!block.text || !block.text.trim()) && block.status !== "streaming") return null;
 
   return (
     <details
@@ -1720,33 +1740,39 @@ function ThinkingBlock({ block }: { block: ConversationWebBlock }): React.JSX.El
         data-focus-id={`thinking:${block.id}`}
         onClick={onSummaryClick}
       >
+        <ToolActionIcon glyph="◇" />
         <span className="thinking-label">{block.title}</span>
         <span className="disclosure-chevron" aria-hidden="true">›</span>
       </summary>
-      <div className="thinking-body">
-        <div ref={setScrollPanel} className="thinking-scroll">
-          <div className="thinking-scroll-content">
-            {block.text ? <Markdown block={{ ...block, kind: "markdown" }} /> : null}
+      {open && block.text ? (
+        <div className="thinking-body">
+          <div ref={setScrollPanel} className="thinking-scroll">
+            <div className="thinking-scroll-content">
+              <Markdown block={{ ...block, kind: "markdown" }} />
+            </div>
           </div>
         </div>
-      </div>
+      ) : null}
     </details>
   );
 }
 
 function ToolGroupBlock({ block }: { block: ConversationWebBlock }): React.JSX.Element {
-  // Activity titles already contain running/thinking/failure counts. The
-  // individual rows describe whether a call is executing or waiting.
-  const statusText = block.activityOrder ? undefined : visibleExecutionStatus(block.status, block.statusText);
-  // Only the activity still accepting entries defaults open. Untouched groups
-  // close when sealed; explicit user choices survive growth and completion.
-  const { open, onSummaryClick } = useStreamingDisclosure(
-    block.activityOrder ? !!block.isCollecting : block.status === "running", `group:${block.id}`, !!block.activityOrder,
-  );
+  // Expanded live groups describe the whole activity. Collapsed live groups
+  // mirror the current action, including a one-line thinking preview.
+  const { open, onSummaryClick } = useActivityDisclosure(`group:${block.id}`);
   const [groupScroll, setGroupScroll] = useState<HTMLDivElement | null>(null);
   useTailFollow(groupScroll, !!block.isCollecting && open);
   const tools = new Map(block.tools.map((tool) => [`tool:${tool.id}`, tool]));
   const thinking = new Map((block.activityThinking ?? []).map((item) => [`thinking:${item.id}`, item]));
+  const activeThought = streamingThought(block);
+  const thoughtPreview = compactActivityText(activeThought?.text);
+  const currentTitle = activeThought
+    ? [activeThought.title, thoughtPreview].filter(Boolean).join(" · ")
+    : block.title;
+  const stateTitle = block.activitySummary?.trim() || block.title;
+  const headerTitle = block.isCollecting && !open ? currentTitle : stateTitle;
+  const statusText = block.activityOrder ? undefined : visibleExecutionStatus(block.status, block.statusText);
   // Collapse only adjacent waits for the same explicit job_id. Narration,
   // thinking, other tools and activity boundaries keep their original order.
   const rows: Array<{ ids: string[]; jobID?: string }> = [];
@@ -1774,7 +1800,8 @@ function ToolGroupBlock({ block }: { block: ConversationWebBlock }): React.JSX.E
         data-focus-id={`tool-group:${block.id}`}
         onClick={onSummaryClick}
       >
-        <span className="tool-group-title">{block.title}</span>
+        <ToolActionIcon glyph={activityIcon(block)} />
+        <span className="tool-group-title" title={headerTitle}>{headerTitle}</span>
         {statusText ? (
           <span className="tool-status" data-tone={block.status}>{statusText}</span>
         ) : null}
@@ -1791,7 +1818,8 @@ function ToolGroupBlock({ block }: { block: ConversationWebBlock }): React.JSX.E
           return <details className="job-wait-group" key={ids[0]}
             data-disclosure-id={`job-waits:${first.id}`} data-status={status}>
             <summary className="interactive tool-group-summary" data-focus-id={`job-waits:${first.id}`}>
-              <span>{first.labels?.waitGroup?.replace("{count}", String(ids.length)) ?? `${first.name} · ${ids.length}`}</span>
+              <ToolActionIcon glyph={first.icon ?? "◇"} />
+              <span className="tool-group-title">{first.labels?.waitGroup?.replace("{count}", String(ids.length)) ?? `${first.name} · ${ids.length}`}</span>
               {first.detail ? <span className="tool-detail-summary">{first.detail}</span> : null}
               {status !== "completed" ? <span className="tool-status" data-tone={status}>{visibleExecutionStatus(status)}</span> : null}
               <span className="disclosure-chevron" aria-hidden="true">›</span>
