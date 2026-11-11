@@ -485,6 +485,334 @@ final class PreviewWorkbenchRenderTests: XCTestCase {
         XCTAssertTrue(FileManager.default.fileExists(atPath: screenshot.path))
     }
 
+    func testConversationWorkbenchRendersRealCodeAgentViewImagePayloadLiveAndReplay() async throws {
+        let fixture = try loadCodeAgentViewImageFixture()
+        let snapshots = try await codeAgentViewImageSnapshots(fixture)
+        let workspace = codeAgentViewImageFixtureRoot().appendingPathComponent("workspace", isDirectory: true)
+
+        let live = try await presentCodeAgentImageViewWorkbench(
+            snapshot: snapshots.live,
+            conversationID: "real-code-agent-live",
+            workspace: workspace
+        )
+        try await expandCodeAgentImageViewTool(in: live.webView, toolID: fixture.callID)
+        try await waitForJavaScript(
+            "document.querySelector('[data-image-view-node=\"source\"] img')?.naturalWidth > 0 && document.querySelector('[data-image-view-node=\"crop\"] img')?.naturalWidth > 0",
+            webView: live.webView,
+            timeout: 12
+        )
+        let liveInspection = try await inspectCodeAgentImageView(
+            in: live.webView,
+            expected: fixture
+        )
+        XCTAssertEqual(liveInspection.sourceID, fixture.sourceAssetID)
+        XCTAssertEqual(liveInspection.cropParent, fixture.sourceAssetID)
+        live.window.orderOut(nil)
+        self.window = nil
+
+        let replay = try await presentCodeAgentImageViewWorkbench(
+            snapshot: snapshots.replay,
+            conversationID: "real-code-agent-replay",
+            workspace: workspace
+        )
+        try await expandCodeAgentImageViewTool(in: replay.webView, toolID: fixture.callID)
+        try await waitForJavaScript(
+            "document.querySelector('[data-image-view-node=\"source\"] img')?.naturalWidth > 0 && document.querySelector('[data-image-view-node=\"crop\"] img')?.naturalWidth > 0",
+            webView: replay.webView,
+            timeout: 12
+        )
+        let replayInspection = try await inspectCodeAgentImageView(
+            in: replay.webView,
+            expected: fixture
+        )
+
+        XCTAssertEqual(replayInspection.title, "Viewed image screen.png")
+        XCTAssertEqual(replayInspection.sourceFirst, "source")
+        XCTAssertEqual(replayInspection.assetOrder, "\(fixture.sourceAssetID),\(fixture.cropAssetID)")
+        XCTAssertEqual(replayInspection.sourceID, fixture.sourceAssetID)
+        XCTAssertEqual(replayInspection.cropParent, fixture.sourceAssetID)
+        XCTAssertEqual(replayInspection.sourceWidth, liveInspection.sourceWidth)
+        XCTAssertEqual(replayInspection.cropWidth, liveInspection.cropWidth)
+        XCTAssertEqual(replayInspection.hasDimensions, true)
+        XCTAssertEqual(replayInspection.hasEffectiveDetail, true)
+        XCTAssertEqual(replayInspection.hasOriginal, true)
+        XCTAssertEqual(replayInspection.hasViewSource, true)
+        XCTAssertEqual(replayInspection.hasViewCrop, true)
+        XCTAssertEqual(replayInspection.hasVisibleThumbnail, true)
+
+        let screenshotDirectory = try screenshotDirectoryURL()
+        let sourceScreenshot = screenshotDirectory
+            .appendingPathComponent("image-view-real-code-agent-payload-source.png")
+        try await saveSnapshot(of: replay.webView, to: sourceScreenshot)
+        XCTAssertTrue(FileManager.default.fileExists(atPath: sourceScreenshot.path))
+
+        _ = try await replay.webView.evaluateJavaScript("""
+        (() => {
+          const scroller = document.querySelector('.tool-group-tools');
+          if (scroller) scroller.scrollTop = Math.max(0, scroller.scrollHeight - scroller.clientHeight);
+        })()
+        """)
+        try await Task.sleep(for: .milliseconds(250))
+        let cropScreenshot = screenshotDirectory
+            .appendingPathComponent("image-view-real-code-agent-payload-crop.png")
+        try await saveSnapshot(of: replay.webView, to: cropScreenshot)
+        XCTAssertTrue(FileManager.default.fileExists(atPath: cropScreenshot.path))
+    }
+
+    private struct CodeAgentViewImageFixture {
+        let turnID: String
+        let callID: String
+        let result: ToolResult
+        let sourceAssetID: String
+        let cropAssetID: String
+    }
+
+    private struct CodeAgentViewImageSnapshots {
+        let live: RuntimeSnapshot
+        let replay: RuntimeSnapshot
+    }
+
+    private struct CodeAgentImageViewInspection {
+        let title: String
+        let sourceFirst: String
+        let assetOrder: String
+        let sourceID: String
+        let cropParent: String
+        let sourceWidth: Int
+        let cropWidth: Int
+        let hasDimensions: Bool
+        let hasEffectiveDetail: Bool
+        let hasOriginal: Bool
+        let hasViewSource: Bool
+        let hasViewCrop: Bool
+        let hasVisibleThumbnail: Bool
+    }
+
+    private struct PresentedCodeAgentImageViewWorkbench {
+        let window: NSWindow
+        let hostingView: NSHostingView<AnyView>
+        let webView: WKWebView
+        let store: WorkspaceStore
+    }
+
+    private func codeAgentViewImageFixtureRoot() -> URL {
+        URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent()
+            .appendingPathComponent("Fixtures/view-image/code-agent-80329b1", isDirectory: true)
+    }
+
+    private func loadCodeAgentViewImageFixture() throws -> CodeAgentViewImageFixture {
+        let url = codeAgentViewImageFixtureRoot().appendingPathComponent("source-and-crop.wire.json")
+        let wire = try JSONDecoder().decode(WireFrame.self, from: Data(contentsOf: url))
+        guard case .toolFinished(let rawTurnID, let callID, let result) = AgentEvent.from(wire: wire),
+              let turnID = rawTurnID,
+              let output = result.output,
+              let sourceAssetID = output["source_asset_id"].string,
+              let cropAssetID = output["crop_asset_id"].string else {
+            throw NSError(domain: "PreviewWorkbenchRenderTests", code: 5)
+        }
+        return CodeAgentViewImageFixture(
+            turnID: turnID,
+            callID: callID,
+            result: result,
+            sourceAssetID: sourceAssetID,
+            cropAssetID: cropAssetID
+        )
+    }
+
+    private func codeAgentViewImageSnapshots(
+        _ fixture: CodeAgentViewImageFixture
+    ) async throws -> CodeAgentViewImageSnapshots {
+        let prefix: [AgentEvent] = [
+            .turnStarted(turnID: fixture.turnID, text: "Inspect this screen"),
+            .toolStarted(
+                turnID: fixture.turnID,
+                callID: fixture.callID,
+                tool: ToolCall(
+                    callID: fixture.callID,
+                    toolName: fixture.result.toolName,
+                    toolArgs: nil
+                )
+            ),
+            .toolFinished(
+                turnID: fixture.turnID,
+                callID: fixture.callID,
+                result: fixture.result
+            )
+        ]
+        let liveEngine = RuntimeEngine(sessionID: "real-code-agent-live")
+        for event in prefix {
+            await liveEngine.ingest(event)
+        }
+        let live = await liveEngine.currentSnapshot()
+
+        let replayEngine = RuntimeEngine(sessionID: "real-code-agent-replay")
+        await replayEngine.importHistory(prefix + [
+            .turnFinished(turnID: fixture.turnID, text: "done", textAnnotations: [])
+        ])
+        let replay = await replayEngine.currentSnapshot()
+        return CodeAgentViewImageSnapshots(live: live, replay: replay)
+    }
+
+    private func presentCodeAgentImageViewWorkbench(
+        snapshot: RuntimeSnapshot,
+        conversationID: String,
+        workspace: URL
+    ) async throws -> PresentedCodeAgentImageViewWorkbench {
+        let store = WorkspaceStore(usesEmbeddedRuntime: false)
+        let content = AnyView(
+            ConversationWebWorkbenchView(
+                snapshot: snapshot,
+                conversationID: conversationID,
+                workspaceRoot: workspace,
+                previewViewerResolver: nil,
+                previewAssetResolver: nil,
+                extensionContributions: [:],
+                timelineExtensions: [],
+                isVisible: true,
+                bottomInset: 0,
+                onFatalFailure: { XCTFail("ConversationWorkbench renderer failed") }
+            )
+            .environment(store)
+        )
+        let hostingView = NSHostingView(rootView: content)
+        hostingView.frame = NSRect(x: 0, y: 0, width: 900, height: 780)
+        let window = NSWindow(
+            contentRect: hostingView.frame,
+            styleMask: [.titled, .closable],
+            backing: .buffered,
+            defer: false
+        )
+        window.contentView = hostingView
+        window.title = "AgentKit Real code-agent image_view"
+        window.makeKeyAndOrderFront(nil)
+        hostingView.layoutSubtreeIfNeeded()
+        self.window = window
+        let webView = try await waitForWebView(in: hostingView)
+        try await waitForJavaScript(
+            "document.body?.innerText?.length > 0",
+            webView: webView,
+            timeout: 12
+        )
+        return PresentedCodeAgentImageViewWorkbench(
+            window: window,
+            hostingView: hostingView,
+            webView: webView,
+            store: store
+        )
+    }
+
+    private func expandCodeAgentImageViewTool(
+        in webView: WKWebView,
+        toolID: String
+    ) async throws {
+        do {
+            try await waitForJavaScript(
+                "document.querySelector('.tool-group') !== null || document.querySelector('[data-tool-id=\"\(toolID)\"]') !== null",
+                webView: webView,
+                timeout: 12
+            )
+        } catch {
+            let body = try? await webView.evaluateJavaScript("document.body?.innerText ?? ''")
+            print("[RealImageViewRender] initial body: \(String(describing: body))")
+            throw error
+        }
+        _ = try await webView.evaluateJavaScript("""
+        (() => {
+          const process = document.querySelector('.turn-process');
+          if (process && !process.open) {
+            process.querySelector('.turn-process-summary')
+              ?.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true }));
+          }
+        })()
+        """)
+        try await waitForJavaScript(
+            "!document.querySelector('.turn-process') || document.querySelector('.turn-process')?.open === true",
+            webView: webView,
+            timeout: 5
+        )
+        _ = try await webView.evaluateJavaScript("""
+        (() => {
+          if (document.querySelector('[data-tool-id="\(toolID)"]')) return;
+          document.querySelector('.tool-group > .tool-group-summary')
+            ?.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true }));
+        })()
+        """)
+        do {
+            try await waitForJavaScript(
+                "document.querySelector('[data-tool-id=\"\(toolID)\"]') !== null",
+                webView: webView,
+                timeout: 12
+            )
+            try await waitForJavaScript(
+                "document.querySelector('[data-tool-id=\"\(toolID)\"] .image-view-thumbnail img')?.naturalWidth > 0",
+                webView: webView,
+                timeout: 12
+            )
+        } catch {
+            let state = try? await webView.evaluateJavaScript("""
+            (() => ({
+              body: document.body?.innerText ?? '',
+              processOpen: document.querySelector('.turn-process')?.open ?? null,
+              groupOpen: document.querySelector('.tool-group')?.open ?? null,
+              tool: Boolean(document.querySelector('[data-tool-id="\(toolID)"]')),
+              thumb: document.querySelector('.image-view-thumbnail img')?.naturalWidth ?? 0
+            }))()
+            """)
+            print("[RealImageViewRender] expanded state: \(String(describing: state))")
+            throw error
+        }
+        _ = try await webView.evaluateJavaScript("""
+        document.querySelector('[data-tool-id="\(toolID)"] .tool-summary')
+          ?.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true }));
+        """)
+    }
+
+    private func inspectCodeAgentImageView(
+        in webView: WKWebView,
+        expected: CodeAgentViewImageFixture
+    ) async throws -> CodeAgentImageViewInspection {
+        let state = try await webView.evaluateJavaScript("""
+        (() => {
+          const tool = document.querySelector('[data-tool-id="\(expected.callID)"]');
+          const activity = document.querySelector('.image-view-activity');
+          const source = activity?.querySelector('[data-image-view-node="source"]');
+          const crop = activity?.querySelector('[data-image-view-node="crop"]');
+          const text = activity?.textContent ?? '';
+          return {
+            title: tool?.querySelector('.tool-title')?.textContent ?? '',
+            sourceFirst: activity?.firstElementChild?.getAttribute('data-image-view-node') ?? '',
+            assetOrder: activity?.getAttribute('data-image-view-asset-order') ?? '',
+            sourceID: source?.querySelector('.image-view-preview')?.getAttribute('data-image-view-asset-id') ?? '',
+            cropParent: crop?.getAttribute('data-parent-asset-id') ?? '',
+            sourceWidth: source?.querySelector('img')?.naturalWidth ?? 0,
+            cropWidth: crop?.querySelector('img')?.naturalWidth ?? 0,
+            hasDimensions: text.includes('Effective size: 160 × 90 px') && text.includes('Effective size: 80 × 36 px'),
+            hasEffectiveDetail: text.includes('Effective detail: original'),
+            hasOriginal: text.includes('View original'),
+            hasViewSource: text.includes('View source'),
+            hasViewCrop: text.includes('View crop'),
+            hasVisibleThumbnail: (tool?.querySelector('.image-view-thumbnail img')?.naturalWidth ?? 0) > 0
+          };
+        })()
+        """) as? [String: Any]
+        return CodeAgentImageViewInspection(
+            title: state?["title"] as? String ?? "",
+            sourceFirst: state?["sourceFirst"] as? String ?? "",
+            assetOrder: state?["assetOrder"] as? String ?? "",
+            sourceID: state?["sourceID"] as? String ?? "",
+            cropParent: state?["cropParent"] as? String ?? "",
+            sourceWidth: state?["sourceWidth"] as? Int ?? 0,
+            cropWidth: state?["cropWidth"] as? Int ?? 0,
+            hasDimensions: state?["hasDimensions"] as? Bool ?? false,
+            hasEffectiveDetail: state?["hasEffectiveDetail"] as? Bool ?? false,
+            hasOriginal: state?["hasOriginal"] as? Bool ?? false,
+            hasViewSource: state?["hasViewSource"] as? Bool ?? false,
+            hasViewCrop: state?["hasViewCrop"] as? Bool ?? false,
+            hasVisibleThumbnail: state?["hasVisibleThumbnail"] as? Bool ?? false
+        )
+    }
+
     private func writeImageFixture(
         to url: URL,
         size: NSSize,

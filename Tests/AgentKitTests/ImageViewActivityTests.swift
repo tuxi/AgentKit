@@ -3,7 +3,9 @@
 //  AgentKitTests
 //
 
+import CryptoKit
 import XCTest
+import SwiftUI
 @testable import AgentKit
 
 @MainActor
@@ -190,6 +192,128 @@ final class ImageViewActivityTests: XCTestCase {
         XCTAssertNil(try project(wrongAssetKind).imageView)
     }
 
+    func testCodeAgentSourceOnlyWireFixtureLiveReplayAndActionTarget() async throws {
+        let fixture = try loadCodeAgentFixture("source-only.wire.json")
+        let output = try XCTUnwrap(fixture.result.output)
+        let sourceAssetID = try XCTUnwrap(output["source_asset_id"].string)
+
+        let (live, replay) = try await projectCodeAgentFixtureLiveAndReplay(fixture)
+        XCTAssertEqual(live, replay)
+        let imageView = try XCTUnwrap(replay.imageView)
+        XCTAssertEqual(imageView.title, "Viewed image screen.png")
+        XCTAssertEqual(imageView.assets.map(\.assetID), [sourceAssetID])
+        XCTAssertEqual(imageView.assets.map(\.role), ["source"])
+        XCTAssertNil(imageView.cropAssetID)
+
+        let (actions, actionImageView) = try await projectCodeAgentFixtureActions(fixture)
+        try await assertImageActionOpensAsset(
+            actions[try XCTUnwrap(actionImageView.assets[0].viewActionID)],
+            expectedAssetID: sourceAssetID
+        )
+    }
+
+    func testCodeAgentSourceCropWireFixtureLiveReplayAndActionTargets() async throws {
+        let fixture = try loadCodeAgentFixture("source-and-crop.wire.json")
+        let output = try XCTUnwrap(fixture.result.output)
+        let sourceAssetID = try XCTUnwrap(output["source_asset_id"].string)
+        let cropAssetID = try XCTUnwrap(output["crop_asset_id"].string)
+
+        let (live, replay) = try await projectCodeAgentFixtureLiveAndReplay(fixture)
+        XCTAssertEqual(live, replay)
+        XCTAssertEqual(replay.imageView?.assets.map(\.assetID), [sourceAssetID, cropAssetID])
+        XCTAssertEqual(replay.imageView?.assets.map(\.role), ["source", "crop"])
+        XCTAssertEqual(replay.imageView?.cropAssetID, cropAssetID)
+        XCTAssertEqual(replay.imageView?.assets[1].sourceAssetID, sourceAssetID)
+        XCTAssertEqual(replay.imageView?.sourceRegion, replay.imageView?.assets[1].sourceRegion)
+        XCTAssertEqual(fixture.result.assets.map(\.id), [sourceAssetID, cropAssetID])
+
+        let (actions, actionImageView) = try await projectCodeAgentFixtureActions(fixture)
+        try await assertImageActionOpensAsset(
+            actions[try XCTUnwrap(actionImageView.assets[0].viewActionID)],
+            expectedAssetID: sourceAssetID
+        )
+        try await assertImageActionOpensAsset(
+            actions[try XCTUnwrap(actionImageView.assets[1].viewActionID)],
+            expectedAssetID: cropAssetID
+        )
+    }
+
+    func testCodeAgentFixtureAssetBytesMatchRecordedSHA256() throws {
+        let workspace = codeAgentFixtureRoot().appendingPathComponent("workspace", isDirectory: true)
+        for name in ["source-only.wire.json", "source-and-crop.wire.json"] {
+            let fixture = try loadCodeAgentFixture(name)
+            for asset in fixture.result.assets {
+                let relativePath = try XCTUnwrap(asset.workspaceRelativePath)
+                let recordedSHA = try XCTUnwrap(
+                    fixture.result.output?["assets"].array?
+                        .first(where: { $0["asset_id"].string == asset.id })?["sha256"].string
+                )
+                let data = try Data(contentsOf: workspace.appendingPathComponent(relativePath))
+                let actualSHA = SHA256.hash(data: data)
+                    .map { String(format: "%02x", $0) }
+                    .joined()
+                XCTAssertEqual(actualSHA, recordedSHA, "\(asset.id) fixture bytes drifted")
+            }
+        }
+    }
+
+    func testCodeAgentRealOutputDoesNotRequireViewImageToolName() throws {
+        let fixture = try loadCodeAgentFixture("source-and-crop.wire.json")
+        let tool = ToolNodePayload(
+            callID: fixture.callID,
+            toolName: "renamed_image_surface",
+            args: nil,
+            status: .completed,
+            output: fixture.result.observation ?? "",
+            structuredOutput: fixture.result.output,
+            assets: fixture.result.assets
+        )
+        let webTool = try project(tool)
+        XCTAssertEqual(webTool.imageView?.assets.count, 2)
+        XCTAssertEqual(webTool.imageView?.assets[1].sourceAssetID, webTool.imageView?.sourceAssetID)
+    }
+
+    func testCodeAgentMalformedRealMetadataFallsBackSafely() async throws {
+        let data = try codeAgentFixtureData("source-and-crop.wire.json")
+        var root = try XCTUnwrap(
+            JSONSerialization.jsonObject(with: data) as? [String: Any]
+        )
+        var output = try XCTUnwrap(root["output"] as? [String: Any])
+        var assets = try XCTUnwrap(output["assets"] as? [[String: Any]])
+        var crop = assets[1]
+        crop["source_asset_id"] = "asset_wrong_source"
+        assets[1] = crop
+        output["assets"] = assets
+        root["output"] = output
+        let malformedData = try JSONSerialization.data(withJSONObject: root)
+
+        let wire = try JSONDecoder().decode(WireFrame.self, from: malformedData)
+        guard case .toolFinished(let rawTurnID, let callID, let result) = AgentEvent.from(wire: wire),
+              let turnID = rawTurnID else {
+            return XCTFail("Expected tool_finished fixture")
+        }
+        let engine = RuntimeEngine(sessionID: "malformed-image-view")
+        await engine.importHistory([
+            .turnStarted(turnID: turnID, text: "inspect"),
+            .toolStarted(
+                turnID: turnID,
+                callID: callID,
+                tool: ToolCall(callID: callID, toolName: result.toolName, toolArgs: nil)
+            ),
+            .toolFinished(turnID: turnID, callID: callID, result: result),
+            .turnFinished(turnID: turnID, text: "done", textAnnotations: [])
+        ])
+        let snapshot = await engine.currentSnapshot()
+        let webTool = try XCTUnwrap(
+            ConversationWebDocumentBuilder.build(
+                snapshot: snapshot,
+                conversationID: "malformed-image-view"
+            ).turns.first?.blocks.first?.tools.first
+        )
+        XCTAssertNil(webTool.imageView)
+        XCTAssertFalse(webTool.name.hasPrefix("Viewed image"))
+    }
+
     func testProjectionEncodesSemanticDataWithoutImageHTML() throws {
         let webTool = try project(makeTool(
             toolName: "generic_image_tool",
@@ -204,6 +328,170 @@ final class ImageViewActivityTests: XCTestCase {
         XCTAssertTrue(json.contains(cropID))
         XCTAssertFalse(json.lowercased().contains("<img"))
         XCTAssertFalse(json.lowercased().contains("<figure"))
+    }
+
+    // MARK: - Real code-agent fixture helpers
+
+    private struct DecodedCodeAgentFixture {
+        let turnID: String
+        let callID: String
+        let result: ToolResult
+    }
+
+    private func codeAgentFixtureRoot() -> URL {
+        URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent()
+            .appendingPathComponent("Fixtures/view-image/code-agent-80329b1", isDirectory: true)
+    }
+
+    private func codeAgentFixtureData(_ name: String) throws -> Data {
+        try Data(contentsOf: codeAgentFixtureRoot().appendingPathComponent(name))
+    }
+
+    private func loadCodeAgentFixture(_ name: String) throws -> DecodedCodeAgentFixture {
+        let wire = try JSONDecoder().decode(WireFrame.self, from: codeAgentFixtureData(name))
+        guard case .toolFinished(let rawTurnID, let callID, let result) = AgentEvent.from(wire: wire),
+              let turnID = rawTurnID else {
+            throw NSError(domain: "ImageViewActivityTests", code: 1)
+        }
+        return DecodedCodeAgentFixture(turnID: turnID, callID: callID, result: result)
+    }
+
+    private func projectCodeAgentFixtureLiveAndReplay(
+        _ fixture: DecodedCodeAgentFixture
+    ) async throws -> (live: ConversationWebDocument.Tool, replay: ConversationWebDocument.Tool) {
+        let prefix: [AgentEvent] = [
+            .turnStarted(turnID: fixture.turnID, text: "inspect"),
+            .toolStarted(
+                turnID: fixture.turnID,
+                callID: fixture.callID,
+                tool: ToolCall(
+                    callID: fixture.callID,
+                    toolName: fixture.result.toolName,
+                    toolArgs: nil
+                )
+            ),
+            .toolFinished(
+                turnID: fixture.turnID,
+                callID: fixture.callID,
+                result: fixture.result
+            )
+        ]
+
+        let liveEngine = RuntimeEngine(sessionID: "real-live")
+        for event in prefix {
+            await liveEngine.ingest(event)
+        }
+        let liveSnapshot = await liveEngine.currentSnapshot()
+        let live = try XCTUnwrap(
+            ConversationWebDocumentBuilder.build(
+                snapshot: liveSnapshot,
+                conversationID: "real-live"
+            ).turns.first?.blocks.first?.tools.first
+        )
+
+        let replayEngine = RuntimeEngine(sessionID: "real-replay")
+        await replayEngine.importHistory(prefix + [
+            .turnFinished(
+                turnID: fixture.turnID,
+                text: "done",
+                textAnnotations: []
+            )
+        ])
+        let replaySnapshot = await replayEngine.currentSnapshot()
+        let replay = try XCTUnwrap(
+            ConversationWebDocumentBuilder.build(
+                snapshot: replaySnapshot,
+                conversationID: "real-replay"
+            ).turns.first?.blocks.first?.tools.first
+        )
+        return (live, replay)
+    }
+
+    private func projectCodeAgentFixtureActions(
+        _ fixture: DecodedCodeAgentFixture
+    ) async throws -> (actions: [String: ConversationWebAction], imageView: ConversationWebDocument.ImageView) {
+        let engine = RuntimeEngine(sessionID: "real-actions")
+        await engine.importHistory([
+            .turnStarted(turnID: fixture.turnID, text: "inspect"),
+            .toolStarted(
+                turnID: fixture.turnID,
+                callID: fixture.callID,
+                tool: ToolCall(
+                    callID: fixture.callID,
+                    toolName: fixture.result.toolName,
+                    toolArgs: nil
+                )
+            ),
+            .toolFinished(
+                turnID: fixture.turnID,
+                callID: fixture.callID,
+                result: fixture.result
+            ),
+            .turnFinished(
+                turnID: fixture.turnID,
+                text: "done",
+                textAnnotations: []
+            )
+        ])
+        let snapshot = await engine.currentSnapshot()
+        var actions: [String: ConversationWebAction] = [:]
+        var nextAction = 0
+        let document = ConversationWebDocumentBuilder.build(
+            snapshot: snapshot,
+            conversationID: "real-actions",
+            registerAction: { action in
+                nextAction += 1
+                let token = "action_\(nextAction)"
+                actions[token] = action
+                return token
+            }
+        )
+        let imageView = try XCTUnwrap(
+            document.turns.first?.blocks.first?.tools.first?.imageView
+        )
+        return (actions, imageView)
+    }
+
+    private func assertImageActionOpensAsset(
+        _ action: ConversationWebAction?,
+        expectedAssetID: String
+    ) async throws {
+        guard case .transcript(_, let transcriptAction) = try XCTUnwrap(action),
+              case .openAsset(let reference) = transcriptAction,
+              let asset = reference.structuredAsset else {
+            return XCTFail("Expected an openAsset action")
+        }
+        XCTAssertEqual(asset.id, expectedAssetID)
+
+        let fixture = try loadCodeAgentFixture("source-and-crop.wire.json")
+        let engine = RuntimeEngine(sessionID: "real-action-dispatch")
+        await engine.importHistory([
+            .turnStarted(turnID: fixture.turnID, text: "inspect"),
+            .toolFinished(
+                turnID: fixture.turnID,
+                callID: fixture.callID,
+                result: fixture.result
+            ),
+            .turnFinished(
+                turnID: fixture.turnID,
+                text: "done",
+                textAnnotations: []
+            )
+        ])
+        let snapshot = await engine.currentSnapshot()
+        let turn = try XCTUnwrap(snapshot.turns.first)
+        let store = WorkspaceStore(usesEmbeddedRuntime: false)
+        let dispatcher = TurnActionDispatcher(
+            turn: turn,
+            store: store,
+            openURL: OpenURLAction { _ in .handled }
+        )
+        dispatcher.handle(.openAsset(reference))
+        guard case .asset(let payload) = store.inspectorSelection else {
+            return XCTFail("Expected asset Inspector selection")
+        }
+        XCTAssertEqual(payload.asset.id, expectedAssetID)
     }
 
     // MARK: - Fixtures and helpers

@@ -1,0 +1,100 @@
+{
+  "event_id": "evt_view_image_source_and_crop",
+  "kind": "tool_finished",
+  "at": "2026-11-11T14:11:06.321Z",
+  "session_id": "session_view_image_capture",
+  "turn_id": "turn_1",
+  "invocation_id": "40e97d40-aa3f-4800-a384-2294c4f4ccfc",
+  "call_id": "call_view_crop",
+  "step": 1,
+  "tool_name": "view_image",
+  "observation": "Viewed image screen.png (160x90, original detail) and cropped region.",
+  "output": {
+    "schema": "view_image_result.v1",
+    "kind": "image_view",
+    "source_asset_id": "asset_turn_1_call_view_crop_000_051dc77f",
+    "crop_asset_id": "asset_turn_1_call_view_crop_001_92b39260",
+    "assets": [
+      {
+        "asset_id": "asset_turn_1_call_view_crop_000_051dc77f",
+        "asset_role": "source",
+        "role": "source",
+        "relative_path": "screen.png",
+        "filename": "screen.png",
+        "mime_type": "image/png",
+        "width": 160,
+        "height": 90,
+        "sha256": "d22869a19423378a21df968cd84119de8c74c47fa124cc5f8821d85f4d0e7540"
+      },
+      {
+        "asset_id": "asset_turn_1_call_view_crop_001_92b39260",
+        "asset_role": "crop",
+        "role": "crop",
+        "relative_path": ".codeagent/assets/view-image/asset_turn_1_call_view_crop_001_92b39260.png",
+        "filename": "asset_turn_1_call_view_crop_001_92b39260.png",
+        "mime_type": "image/png",
+        "width": 80,
+        "height": 36,
+        "sha256": "5dbb18f6c630978f1d6daf02271c5566168923ba0b74d5d19f8a351e3b355dd2",
+        "source_asset_id": "asset_turn_1_call_view_crop_000_051dc77f",
+        "source_bbox": {
+          "x": 0.2,
+          "y": 0.2,
+          "width": 0.5,
+          "height": 0.4
+        },
+        "purpose": "unknown"
+      }
+    ],
+    "detail_requested": "original",
+    "detail_effective": "original",
+    "source_region": {
+      "x": 0.2,
+      "y": 0.2,
+      "width": 0.5,
+      "height": 0.4
+    }
+  },
+  "assets": [
+    {
+      "id": "asset_turn_1_call_view_crop_000_051dc77f",
+      "kind": "image",
+      "uri": "workspace://work-local/screen.png",
+      "display_name": "screen.png",
+      "workspace_id": "work-local",
+      "workspace_relative_path": "screen.png",
+      "absolute_path": "/private/tmp/agentkit-view-image-capture/work/screen.png",
+      "mime_type": "image/png",
+      "metadata": {
+        "asset_role": "source"
+      },
+      "source_turn_id": "turn_1",
+      "source_call_id": "call_view_crop"
+    },
+    {
+      "id": "asset_turn_1_call_view_crop_001_92b39260",
+      "kind": "image",
+      "uri": "workspace://work-local/.codeagent/assets/view-image/asset_turn_1_call_view_crop_001_92b39260.png",
+      "display_name": "asset_turn_1_call_view_crop_001_92b39260.png",
+      "workspace_id": "work-local",
+      "workspace_relative_path": ".codeagent/assets/view-image/asset_turn_1_call_view_crop_001_92b39260.png",
+      "absolute_path": "/private/tmp/agentkit-view-image-capture/work/.codeagent/assets/view-image/asset_turn_1_call_view_crop_001_92b39260.png",
+      "mime_type": "image/png",
+      "metadata": {
+        "asset_role": "crop",
+        "purpose": "unknown",
+        "source_asset_id": "asset_turn_1_call_view_crop_000_051dc77f",
+        "source_bbox": {
+          "x": 0.2,
+          "y": 0.2,
+          "width": 0.5,
+          "height": 0.4
+        }
+      },
+      "source_turn_id": "turn_1",
+      "source_call_id": "call_view_crop"
+    }
+  ],
+  "failure": "none",
+  "elapsed_ms": 1
+}

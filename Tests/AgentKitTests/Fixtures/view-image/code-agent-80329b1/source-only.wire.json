@@ -1,0 +1,52 @@
+{
+  "event_id": "evt_view_image_source_only",
+  "kind": "tool_finished",
+  "at": "2026-11-11T14:11:06.318Z",
+  "session_id": "session_view_image_capture",
+  "turn_id": "turn_1",
+  "invocation_id": "6e81fdad-2891-4e0f-8845-a6c5261609b0",
+  "call_id": "call_view_source",
+  "step": 1,
+  "tool_name": "view_image",
+  "observation": "Viewed image screen.png (160x90, original detail).",
+  "output": {
+    "schema": "view_image_result.v1",
+    "kind": "image_view",
+    "source_asset_id": "asset_turn_1_call_view_source_000_051dc77f",
+    "crop_asset_id": null,
+    "assets": [
+      {
+        "asset_id": "asset_turn_1_call_view_source_000_051dc77f",
+        "asset_role": "source",
+        "role": "source",
+        "relative_path": "screen.png",
+        "filename": "screen.png",
+        "mime_type": "image/png",
+        "width": 160,
+        "height": 90,
+        "sha256": "d22869a19423378a21df968cd84119de8c74c47fa124cc5f8821d85f4d0e7540"
+      }
+    ],
+    "detail_requested": "original",
+    "detail_effective": "original",
+    "source_region": null
+  },
+  "assets": [
+    {
+      "id": "asset_turn_1_call_view_source_000_051dc77f",
+      "kind": "image",
+      "uri": "workspace://work-local/screen.png",
+      "display_name": "screen.png",
+      "workspace_id": "work-local",
+      "workspace_relative_path": "screen.png",
+      "absolute_path": "/private/tmp/agentkit-view-image-capture/work/screen.png",
+      "mime_type": "image/png",
+      "metadata": {
+        "asset_role": "source"
+      },
+      "source_turn_id": "turn_1",
+      "source_call_id": "call_view_source"
+    }
+  ],
+  "failure": "none"
+}
