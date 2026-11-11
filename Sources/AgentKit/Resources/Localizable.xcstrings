@@ -8568,6 +8568,23 @@
         }
       }
     },
+    "transcript.tool.image.viewed": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Viewed %d image"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "已查看 %d 张图像"
+          }
+        }
+      }
+    },
     "transcript.tool.list": {
       "extractionState": "manual",
       "localizations": {

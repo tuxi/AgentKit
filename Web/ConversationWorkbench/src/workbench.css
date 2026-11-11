@@ -628,45 +628,8 @@ summary:active {
   max-width: 100%;
 }
 
-.image-view-heading,
-.image-view-crop-heading {
-  display: flex;
-  min-width: 0;
-  align-items: center;
-  gap: 7px;
-}
-
-.image-view-name {
-  min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.image-view-role {
-  flex: 0 0 auto;
-  padding: 1px 6px;
-  border-radius: 999px;
-  background: var(--subtle);
-  color: var(--secondary);
-  font-size: var(--font-caption);
-  text-transform: uppercase;
-  letter-spacing: 0.04em;
-}
-
-.image-view-metadata {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 3px 10px;
-  color: var(--secondary);
-  font-size: var(--font-caption);
-  font-variant-numeric: tabular-nums;
-}
-
 .image-view-crop {
   display: flex;
-  flex-direction: column;
-  gap: 6px;
   margin-left: 18px;
   padding: 8px 10px 10px 12px;
   border-left: 1px solid color-mix(in srgb, var(--border) 85%, transparent);
@@ -676,21 +639,6 @@ summary:active {
   width: 200px;
   height: 132px;
   max-width: 100%;
-}
-
-.image-view-tree-branch {
-  color: var(--secondary);
-  font-family: ui-monospace, "SFMono-Regular", Menlo, Monaco, monospace;
-}
-
-.image-view-crop-actions {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 2px;
-}
-
-.image-view-activity .action-button {
-  align-self: flex-start;
 }
 
 .detail-heading {

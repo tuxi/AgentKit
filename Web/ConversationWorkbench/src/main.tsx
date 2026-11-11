@@ -1665,12 +1665,6 @@ function ToolActionIcon({ glyph }: { glyph: string }): React.JSX.Element {
   </span>;
 }
 
-function imageRegionLabel(region: ConversationWebImageViewAsset["sourceRegion"]): string {
-  if (!region) return "";
-  const percent = (value: number) => `${(value * 100).toFixed(1)}%`;
-  return `${percent(region.width)} × ${percent(region.height)} at ${percent(region.x)}, ${percent(region.y)}`;
-}
-
 function ImageViewPreview({
   conversationID,
   turnID,
@@ -1725,7 +1719,11 @@ function ImageViewActivity({
       data-image-view-source-asset-id={imageView.sourceAssetID}
       data-image-view-asset-order={imageView.assets.map((asset) => asset.assetID).join(",")}
     >
-      <figure className="image-view-source" data-image-view-node="source">
+      <figure
+        className="image-view-source"
+        data-image-view-node="source"
+        aria-label={source.displayName}
+      >
         <ImageViewPreview
           conversationID={conversationID}
           turnID={turnID}
@@ -1733,26 +1731,6 @@ function ImageViewActivity({
           image={source}
           variant="source"
         />
-        <figcaption>
-          <div className="image-view-heading">
-            <span className="image-view-role">Source</span>
-            <strong className="image-view-name">{source.displayName}</strong>
-          </div>
-          <div className="image-view-metadata">
-            <span>Effective size: {source.width} × {source.height} px</span>
-            <span>Effective detail: {imageView.detailEffective}</span>
-            <span>Requested: {imageView.detailRequested}</span>
-          </div>
-          {source.viewActionID ? (
-            <ActionButton
-              actionID={source.viewActionID}
-              focusID={`image-view:${toolID}:source:original`}
-              tooltip="Open the original image asset"
-            >
-              View original
-            </ActionButton>
-          ) : null}
-        </figcaption>
       </figure>
       {crops.map((crop) => (
         <section
@@ -1760,14 +1738,9 @@ function ImageViewActivity({
           data-image-view-node="crop"
           data-image-view-crop-asset-id={crop.assetID}
           data-parent-asset-id={crop.sourceAssetID}
+          aria-label={`Crop of ${source.displayName}`}
           key={crop.assetID}
         >
-          <div className="image-view-crop-heading">
-            <span className="image-view-tree-branch" aria-hidden="true">└</span>
-            <span>
-              Crop of <strong>{source.displayName}</strong>
-            </span>
-          </div>
           <ImageViewPreview
             conversationID={conversationID}
             turnID={turnID}
@@ -1775,30 +1748,6 @@ function ImageViewActivity({
             image={crop}
             variant="crop"
           />
-          <div className="image-view-metadata">
-            <span>Effective size: {crop.width} × {crop.height} px</span>
-            <span>Region {imageRegionLabel(crop.sourceRegion)}</span>
-          </div>
-          <div className="image-view-crop-actions">
-            {source.viewActionID ? (
-              <ActionButton
-                actionID={source.viewActionID}
-                focusID={`image-view:${toolID}:crop:${crop.assetID}:source`}
-                tooltip="Open the source image asset"
-              >
-                View source
-              </ActionButton>
-            ) : null}
-            {crop.viewActionID ? (
-              <ActionButton
-                actionID={crop.viewActionID}
-                focusID={`image-view:${toolID}:crop:${crop.assetID}:crop`}
-                tooltip="Open the crop image asset"
-              >
-                View crop
-              </ActionButton>
-            ) : null}
-          </div>
         </section>
       ))}
     </section>
@@ -1862,8 +1811,10 @@ function Tool({
             turnID={turnID}
             toolID={tool.id}
           />
-        ) : <ToolResultCard tool={tool} outputRef={setOutputFrame} />}
-        <RawToolDetails tool={tool} />
+        ) : <>
+          <ToolResultCard tool={tool} outputRef={setOutputFrame} />
+          <RawToolDetails tool={tool} />
+        </>}
         {tool.dagNodes ? (
           <section className="dag-summary-card">
             <div className="dag-summary-header">

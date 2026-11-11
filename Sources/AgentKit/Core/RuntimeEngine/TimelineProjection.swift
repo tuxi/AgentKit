@@ -209,6 +209,18 @@ public struct TimelineProjection: Sendable {
                         }
                     }
                 }
+                // Image viewing is a first-class standalone activity. End the
+                // surrounding collection on both sides so it never reads as a
+                // child of a generic tool run. The semantic output kind keeps
+                // this independent of the tool's name.
+                if p.structuredOutput?["kind"].string == "image_view" {
+                    flushActivity()
+                    blocks.append(.toolGroup(ToolGroup(
+                        id: "image-view:\(turnUID):\(p.callID)",
+                        tools: [p]
+                    )))
+                    continue
+                }
                 if pendingActivity.isEmpty { activityAnchor = node.id }
                 pendingActivity.append(.tool(p))
             case .artifact(let p):

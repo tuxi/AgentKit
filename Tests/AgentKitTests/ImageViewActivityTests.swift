@@ -19,7 +19,7 @@ final class ImageViewActivityTests: XCTestCase {
         let webTool = try project(tool)
 
         let imageView = try XCTUnwrap(webTool.imageView)
-        XCTAssertEqual(imageView.title, "Viewed image screen.png")
+        XCTAssertEqual(imageView.title, ToolTranscriptText().text("image.viewed", 1))
         XCTAssertEqual(imageView.sourceAssetID, sourceID)
         XCTAssertNil(imageView.cropAssetID)
         XCTAssertNil(imageView.sourceRegion)
@@ -51,7 +51,7 @@ final class ImageViewActivityTests: XCTestCase {
         let webTool = try project(tool, registerAction: true)
 
         let imageView = try XCTUnwrap(webTool.imageView)
-        XCTAssertEqual(imageView.title, "Viewed image screen.png")
+        XCTAssertEqual(imageView.title, ToolTranscriptText().text("image.viewed", 1))
         XCTAssertEqual(imageView.sourceAssetID, sourceID)
         XCTAssertEqual(imageView.cropAssetID, cropID)
         XCTAssertEqual(imageView.assets.map(\.assetID), [sourceID, cropID])
@@ -61,6 +61,79 @@ final class ImageViewActivityTests: XCTestCase {
         XCTAssertNotNil(imageView.assets[0].viewActionID)
         XCTAssertNotNil(imageView.assets[1].viewActionID)
         XCTAssertNotEqual(imageView.assets[0].viewActionID, imageView.assets[1].viewActionID)
+    }
+
+    func testImageViewEndsAdjacentToolCollectionAndStaysStandalone() async throws {
+        let engine = RuntimeEngine(sessionID: "image-boundaries")
+        await engine.importHistory([
+            .turnStarted(turnID: "turn", text: "inspect image"),
+            .toolStarted(
+                turnID: "turn",
+                callID: "before",
+                tool: ToolCall(callID: "before", toolName: "read_file", toolArgs: nil)
+            ),
+            .toolFinished(
+                turnID: "turn",
+                callID: "before",
+                result: ToolResult(
+                    callID: "before",
+                    toolName: "read_file",
+                    observation: "file",
+                    error: nil
+                )
+            ),
+            .toolStarted(
+                turnID: "turn",
+                callID: "image",
+                tool: ToolCall(callID: "image", toolName: "renamed_image_surface", toolArgs: nil)
+            ),
+            .toolFinished(
+                turnID: "turn",
+                callID: "image",
+                result: ToolResult(
+                    callID: "image",
+                    toolName: "renamed_image_surface",
+                    observation: "viewed",
+                    error: nil,
+                    output: sourceOnlyOutput(),
+                    assets: [sourceAsset]
+                )
+            ),
+            .toolStarted(
+                turnID: "turn",
+                callID: "after",
+                tool: ToolCall(callID: "after", toolName: "grep", toolArgs: nil)
+            ),
+            .toolFinished(
+                turnID: "turn",
+                callID: "after",
+                result: ToolResult(
+                    callID: "after",
+                    toolName: "grep",
+                    observation: "matches",
+                    error: nil
+                )
+            ),
+            .turnFinished(turnID: "turn", text: "done", textAnnotations: [])
+        ])
+        let snapshot = await engine.currentSnapshot()
+        let blocks = try XCTUnwrap(snapshot.turns.first?.blocks)
+        let groups = blocks.compactMap { block -> ToolGroup? in
+            guard case .toolGroup(let group) = block else { return nil }
+            return group
+        }
+
+        XCTAssertEqual(groups.count, 3)
+        guard groups.count == 3 else { return }
+        let before = groups[0]
+        let image = groups[1]
+        let after = groups[2]
+        XCTAssertTrue(before.isActivityGroup)
+        XCTAssertEqual(before.tools.map(\.toolName), ["read_file"])
+        XCTAssertFalse(image.isActivityGroup)
+        XCTAssertEqual(image.tools.map(\.toolName), ["renamed_image_surface"])
+        XCTAssertTrue(after.isActivityGroup)
+        XCTAssertEqual(after.tools.map(\.toolName), ["grep"])
     }
 
     func testMultipleImageActivitiesPreserveToolAndAssetOrder() throws {
@@ -200,7 +273,7 @@ final class ImageViewActivityTests: XCTestCase {
         let (live, replay) = try await projectCodeAgentFixtureLiveAndReplay(fixture)
         XCTAssertEqual(live, replay)
         let imageView = try XCTUnwrap(replay.imageView)
-        XCTAssertEqual(imageView.title, "Viewed image screen.png")
+        XCTAssertEqual(imageView.title, ToolTranscriptText().text("image.viewed", 1))
         XCTAssertEqual(imageView.assets.map(\.assetID), [sourceAssetID])
         XCTAssertEqual(imageView.assets.map(\.role), ["source"])
         XCTAssertNil(imageView.cropAssetID)

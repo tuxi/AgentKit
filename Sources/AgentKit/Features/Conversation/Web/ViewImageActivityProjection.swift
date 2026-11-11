@@ -79,7 +79,7 @@ enum ViewImageActivityProjection {
             $0.assetID == parsed.sourceAssetID
         })?.displayName ?? sourceAsset.displayName ?? parsed.sourceAssetID
         return ConversationWebDocument.ImageView(
-            title: "Viewed image \(sourceFilename)",
+            title: ToolTranscriptText().text("image.viewed", 1),
             displayName: sourceFilename,
             sourceAssetID: parsed.sourceAssetID,
             cropAssetID: parsed.cropAssetID,

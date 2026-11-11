@@ -350,6 +350,7 @@ final class PreviewWorkbenchRenderTests: XCTestCase {
             isLive: false
         )
         let snapshot = RuntimeSnapshot(timeline: [], turns: [turn], generation: 1)
+        let expectedTitle = ToolTranscriptText().text("image.viewed", 1)
         let store = WorkspaceStore(usesEmbeddedRuntime: false)
         let content = ConversationWebWorkbenchView(
             snapshot: snapshot,
@@ -428,7 +429,7 @@ final class PreviewWorkbenchRenderTests: XCTestCase {
           };
         })()
         """) as? [String: Any]
-        XCTAssertEqual(collapsed?["title"] as? String, "Viewed image screen.png")
+        XCTAssertEqual(collapsed?["title"] as? String, expectedTitle)
         XCTAssertGreaterThan(collapsed?["thumbnailWidth"] as? Int ?? 0, 0)
         XCTAssertTrue((collapsed?["sourceURL"] as? String)?.hasPrefix("agentkit-workbench://local-asset/") == true)
 
@@ -455,13 +456,9 @@ final class PreviewWorkbenchRenderTests: XCTestCase {
             sourceWidth: source?.querySelector('img')?.naturalWidth ?? 0,
             cropWidth: crop?.querySelector('img')?.naturalWidth ?? 0,
             cropParent: crop?.getAttribute('data-parent-asset-id') ?? '',
-            relation: crop?.querySelector('.image-view-crop-heading')?.textContent ?? '',
-            hasDimensions: text.includes('Effective size: 640 × 400 px') && text.includes('Effective size: 320 × 160 px'),
-            hasEffectiveDetail: text.includes('Effective detail: original'),
-            hasOriginal: text.includes('View original'),
-            hasViewSource: text.includes('View source'),
-            hasViewCrop: text.includes('View crop'),
-            sourceRole: source?.querySelector('.image-view-role')?.textContent ?? ''
+            hasMetadataText: /SOURCE|Effective size|Effective detail|Requested:/.test(text),
+            hasActions: /View original|View source|View crop/.test(text),
+            hasToolChrome: /原始详情|Raw details|Open artifact/.test(text)
           };
         })()
         """) as? [String: Any]
@@ -471,13 +468,9 @@ final class PreviewWorkbenchRenderTests: XCTestCase {
         XCTAssertGreaterThan(expanded?["sourceWidth"] as? Int ?? 0, 0)
         XCTAssertGreaterThan(expanded?["cropWidth"] as? Int ?? 0, 0)
         XCTAssertEqual(expanded?["cropParent"] as? String, sourceID)
-        XCTAssertTrue((expanded?["relation"] as? String)?.contains("Crop of") == true)
-        XCTAssertEqual(expanded?["hasDimensions"] as? Bool, true)
-        XCTAssertEqual(expanded?["hasEffectiveDetail"] as? Bool, true)
-        XCTAssertEqual(expanded?["hasOriginal"] as? Bool, true)
-        XCTAssertEqual(expanded?["hasViewSource"] as? Bool, true)
-        XCTAssertEqual(expanded?["hasViewCrop"] as? Bool, true)
-        XCTAssertEqual(expanded?["sourceRole"] as? String, "Source")
+        XCTAssertEqual(expanded?["hasMetadataText"] as? Bool, false)
+        XCTAssertEqual(expanded?["hasActions"] as? Bool, false)
+        XCTAssertEqual(expanded?["hasToolChrome"] as? Bool, false)
 
         let screenshot = try screenshotDirectoryURL()
             .appendingPathComponent("image-view-source-crop.png")
@@ -488,6 +481,7 @@ final class PreviewWorkbenchRenderTests: XCTestCase {
     func testConversationWorkbenchRendersRealCodeAgentViewImagePayloadLiveAndReplay() async throws {
         let fixture = try loadCodeAgentViewImageFixture()
         let snapshots = try await codeAgentViewImageSnapshots(fixture)
+        let expectedTitle = ToolTranscriptText().text("image.viewed", 1)
         let workspace = codeAgentViewImageFixtureRoot().appendingPathComponent("workspace", isDirectory: true)
 
         let live = try await presentCodeAgentImageViewWorkbench(
@@ -526,18 +520,17 @@ final class PreviewWorkbenchRenderTests: XCTestCase {
             expected: fixture
         )
 
-        XCTAssertEqual(replayInspection.title, "Viewed image screen.png")
+        XCTAssertEqual(replayInspection.title, expectedTitle)
         XCTAssertEqual(replayInspection.sourceFirst, "source")
         XCTAssertEqual(replayInspection.assetOrder, "\(fixture.sourceAssetID),\(fixture.cropAssetID)")
         XCTAssertEqual(replayInspection.sourceID, fixture.sourceAssetID)
         XCTAssertEqual(replayInspection.cropParent, fixture.sourceAssetID)
         XCTAssertEqual(replayInspection.sourceWidth, liveInspection.sourceWidth)
         XCTAssertEqual(replayInspection.cropWidth, liveInspection.cropWidth)
-        XCTAssertEqual(replayInspection.hasDimensions, true)
-        XCTAssertEqual(replayInspection.hasEffectiveDetail, true)
-        XCTAssertEqual(replayInspection.hasOriginal, true)
-        XCTAssertEqual(replayInspection.hasViewSource, true)
-        XCTAssertEqual(replayInspection.hasViewCrop, true)
+        XCTAssertEqual(replayInspection.hasMetadataText, false)
+        XCTAssertEqual(replayInspection.hasActions, false)
+        XCTAssertEqual(replayInspection.hasToolChrome, false)
+        XCTAssertEqual(replayInspection.isStandaloneToolGroup, true)
         XCTAssertEqual(replayInspection.hasVisibleThumbnail, true)
 
         let screenshotDirectory = try screenshotDirectoryURL()
@@ -580,11 +573,10 @@ final class PreviewWorkbenchRenderTests: XCTestCase {
         let cropParent: String
         let sourceWidth: Int
         let cropWidth: Int
-        let hasDimensions: Bool
-        let hasEffectiveDetail: Bool
-        let hasOriginal: Bool
-        let hasViewSource: Bool
-        let hasViewCrop: Bool
+        let hasMetadataText: Bool
+        let hasActions: Bool
+        let hasToolChrome: Bool
+        let isStandaloneToolGroup: Bool
         let hasVisibleThumbnail: Bool
     }
 
@@ -779,6 +771,7 @@ final class PreviewWorkbenchRenderTests: XCTestCase {
           const source = activity?.querySelector('[data-image-view-node="source"]');
           const crop = activity?.querySelector('[data-image-view-node="crop"]');
           const text = activity?.textContent ?? '';
+          const toolGroup = tool?.closest('.tool-group');
           return {
             title: tool?.querySelector('.tool-title')?.textContent ?? '',
             sourceFirst: activity?.firstElementChild?.getAttribute('data-image-view-node') ?? '',
@@ -787,11 +780,10 @@ final class PreviewWorkbenchRenderTests: XCTestCase {
             cropParent: crop?.getAttribute('data-parent-asset-id') ?? '',
             sourceWidth: source?.querySelector('img')?.naturalWidth ?? 0,
             cropWidth: crop?.querySelector('img')?.naturalWidth ?? 0,
-            hasDimensions: text.includes('Effective size: 160 × 90 px') && text.includes('Effective size: 80 × 36 px'),
-            hasEffectiveDetail: text.includes('Effective detail: original'),
-            hasOriginal: text.includes('View original'),
-            hasViewSource: text.includes('View source'),
-            hasViewCrop: text.includes('View crop'),
+            hasMetadataText: /SOURCE|Effective size|Effective detail|Requested:/.test(text),
+            hasActions: /View original|View source|View crop/.test(text),
+            hasToolChrome: /原始详情|Raw details|Open artifact/.test(text),
+            isStandaloneToolGroup: Boolean(toolGroup && !toolGroup.querySelector(':scope > .tool-group-summary')),
             hasVisibleThumbnail: (tool?.querySelector('.image-view-thumbnail img')?.naturalWidth ?? 0) > 0
           };
         })()
@@ -804,11 +796,10 @@ final class PreviewWorkbenchRenderTests: XCTestCase {
             cropParent: state?["cropParent"] as? String ?? "",
             sourceWidth: state?["sourceWidth"] as? Int ?? 0,
             cropWidth: state?["cropWidth"] as? Int ?? 0,
-            hasDimensions: state?["hasDimensions"] as? Bool ?? false,
-            hasEffectiveDetail: state?["hasEffectiveDetail"] as? Bool ?? false,
-            hasOriginal: state?["hasOriginal"] as? Bool ?? false,
-            hasViewSource: state?["hasViewSource"] as? Bool ?? false,
-            hasViewCrop: state?["hasViewCrop"] as? Bool ?? false,
+            hasMetadataText: state?["hasMetadataText"] as? Bool ?? true,
+            hasActions: state?["hasActions"] as? Bool ?? true,
+            hasToolChrome: state?["hasToolChrome"] as? Bool ?? true,
+            isStandaloneToolGroup: state?["isStandaloneToolGroup"] as? Bool ?? false,
             hasVisibleThumbnail: state?["hasVisibleThumbnail"] as? Bool ?? false
         )
     }

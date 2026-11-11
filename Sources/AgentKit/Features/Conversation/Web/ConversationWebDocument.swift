@@ -893,12 +893,13 @@ enum ConversationWebDocumentBuilder {
                     name: imageView?.title ?? presentation.title,
                     status: tool.status.rawValue,
                     statusText: presentation.statusText,
-                    detail: presentation.detail,
-                    elapsed: presentation.elapsed,
-                    changeSummary: presentation.changeSummary,
+                    detail: imageView == nil ? presentation.detail : nil,
+                    elapsed: imageView == nil ? presentation.elapsed : nil,
+                    changeSummary: imageView == nil ? presentation.changeSummary : nil,
                     arguments: arguments,
                     output: imageView == nil && dag == nil ? output : nil,
-                    artifactActionID: previousTool?.artifact == tool.artifact
+                    artifactActionID: imageView != nil ? nil
+                        : previousTool?.artifact == tool.artifact
                         ? previousWebTool?.artifactActionID
                         : tool.artifact.flatMap { _ in
                         registerAction.map {
