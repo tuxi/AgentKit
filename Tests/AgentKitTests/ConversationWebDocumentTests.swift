@@ -1353,6 +1353,13 @@ final class ConversationWebDocumentTests: XCTestCase {
         await fulfillment(of: [acknowledged], timeout: 5)
         XCTAssertEqual(probe.acknowledgedRevision, 1)
 
+        let toolGroupInitiallyOpen = try await webView.evaluateJavaScript(
+            "document.querySelector('details.tool-group')?.open"
+        ) as? Bool
+        XCTAssertEqual(toolGroupInitiallyOpen, false, "live activity groups start collapsed")
+        _ = try await webView.evaluateJavaScript("document.querySelector('.tool-group-summary').click()")
+        try await Task.sleep(for: .milliseconds(30))
+
         let inspection = try await webView.evaluateJavaScript(
             """
             (() => {
@@ -2368,6 +2375,8 @@ final class ConversationWebDocumentTests: XCTestCase {
         }
         let first = document(1, thought: "Checking build symbols", answer: "Inspecting the binary")
         try await apply(ConversationWebDocumentDiffer.reset(first), revision: 1)
+        _ = try await webView.evaluateJavaScript("document.querySelector('.thinking-summary').click()")
+        try await Task.sleep(for: .milliseconds(20))
         let initialThought = try await displayed(".thinking-scroll-content")
         let initialAnswer = try await displayed("[data-selection-id=\"block:background-answer\"]")
         XCTAssertFalse(initialThought.isEmpty, "a received thinking block must not wait for an animation callback")
@@ -2753,6 +2762,8 @@ final class ConversationWebDocumentTests: XCTestCase {
         }
         let initial = document(1, count: 2)
         try await apply(ConversationWebDocumentDiffer.reset(initial), revision: 1)
+        _ = try await webView.evaluateJavaScript("document.querySelector('.tool-group-summary').click()")
+        try await Task.sleep(for: .milliseconds(30))
         _ = try await webView.evaluateJavaScript("document.querySelector('.job-wait-group > summary').click()")
         let updated = document(2, count: 3)
         try await apply(try XCTUnwrap(ConversationWebDocumentDiffer.update(from: initial, to: updated)), revision: 2)
@@ -2841,8 +2852,29 @@ final class ConversationWebDocumentTests: XCTestCase {
         }
         let initial = document(1, expanded: false, live: true)
         try await apply(ConversationWebDocumentDiffer.reset(initial), revision: 1)
-        let activeOpen = try await webView.evaluateJavaScript("document.querySelector('.tool-group').open === true && document.querySelectorAll('.tool-summary').length === 1") as? Bool
-        XCTAssertEqual(activeOpen, true, "the collecting group defaults open")
+        let activeClosed = try await webView.evaluateJavaScript("!document.querySelector('.tool-group').open && document.querySelectorAll('.tool-summary').length === 0") as? Bool
+        XCTAssertEqual(activeClosed, true, "the collecting group defaults closed")
+        _ = try await webView.evaluateJavaScript("document.querySelector('.tool-group-summary').click()")
+        try await Task.sleep(for: .milliseconds(20))
+        let activeExpanded = try await webView.evaluateJavaScript("""
+            (() => {
+              const group = document.querySelector('.tool-group');
+              const groupIcon = group.querySelector(':scope > summary .tool-action-icon');
+              const toolIcon = group.querySelector('.tool-group-tools .tool-action-icon');
+              return { open: group.open,
+                toolRows: group.querySelectorAll('.tool-summary').length,
+                toolOpen: !!group.querySelector('.tool').open,
+                aligned: Math.abs(groupIcon.getBoundingClientRect().left - toolIcon.getBoundingClientRect().left) < 0.5,
+                header: group.querySelector('.tool-group-title').textContent,
+                tool: group.querySelector('.tool-title').textContent };
+            })()
+            """) as? [String: Any]
+        XCTAssertEqual(activeExpanded?["open"] as? Bool, true, "user can expand a live activity")
+        XCTAssertEqual(activeExpanded?["toolRows"] as? Int, 1)
+        XCTAssertEqual(activeExpanded?["toolOpen"] as? Bool, false, "tool detail stays collapsed by default")
+        XCTAssertEqual(activeExpanded?["aligned"] as? Bool, true, "group and tool icon columns share one left edge")
+        XCTAssertEqual(activeExpanded?["header"] as? String, "正在读取文件")
+        XCTAssertNotEqual(activeExpanded?["header"] as? String, activeExpanded?["tool"] as? String, "expanded group header summarizes instead of repeating the tool row")
         _ = try await webView.evaluateJavaScript("document.querySelector('.tool-group-summary').click()")
         try await Task.sleep(for: .milliseconds(20))
         let hiddenWhileActive = try await webView.evaluateJavaScript("!document.querySelector('.tool-group').open && document.querySelectorAll('.tool-summary').length === 0") as? Bool
@@ -2924,15 +2956,78 @@ final class ConversationWebDocumentTests: XCTestCase {
         XCTAssertEqual(answerOnlyHeader?["label"] as? String, "用时 48秒")
         XCTAssertEqual(answerOnlyHeader?["foldable"] as? Bool, false)
         XCTAssertEqual(answerOnlyHeader?["answerVisible"] as? Bool, true)
-        // An untouched activity opens while collecting and closes on completion.
+        // An untouched activity stays closed while collecting and after completion.
         let untouched = document(7, expanded: true, live: true, conversation: "default-activity")
         try await apply(ConversationWebDocumentDiffer.reset(untouched), revision: 7)
         let untouchedLive = try await webView.evaluateJavaScript("document.querySelector('.tool-group').open") as? Bool
-        XCTAssertEqual(untouchedLive, true)
+        XCTAssertEqual(untouchedLive, false)
         let sealed = document(8, expanded: true, live: false, conversation: "default-activity")
         try await apply(try XCTUnwrap(ConversationWebDocumentDiffer.update(from: untouched, to: sealed)), revision: 8)
         let untouchedDone = try await webView.evaluateJavaScript("!document.querySelector('.tool-group').open && document.querySelectorAll('.tool-summary').length === 0 && !document.querySelector('.turn-process').open") as? Bool
         XCTAssertEqual(untouchedDone, true)
+
+        // A collapsed live group previews the streaming thought. Expanding the
+        // group swaps the header to a state summary and keeps the thought row
+        // collapsed until the user explicitly opens it.
+        let thoughtText = "Inspecting the current implementation before editing"
+        let thinkingTurn = ConversationTurn(
+            id: "thinking-turn",
+            userPrompt: .init(role: .user, text: "Think first"),
+            blocks: [.toolGroup(.init(id: "thinking-activity", entries: [
+                .thinking(id: "live-thought", .init(text: thoughtText, isStreaming: true)),
+            ], isCollecting: true))],
+            footer: nil,
+            isLive: true,
+            startedAt: startedAt
+        )
+        let thinkingDocument = ConversationWebDocumentBuilder.build(
+            snapshot: RuntimeSnapshot(timeline: [], turns: [thinkingTurn]),
+            conversationID: "thinking-activity",
+            revision: 9
+        )
+        try await apply(ConversationWebDocumentDiffer.reset(thinkingDocument), revision: 9)
+        let collapsedThought = try await webView.evaluateJavaScript("""
+            (() => {
+              const group = document.querySelector('.tool-group');
+              return { open: group.open,
+                header: group.querySelector('.tool-group-title').textContent,
+                thoughtBody: group.querySelectorAll('.thinking-body').length };
+            })()
+            """) as? [String: Any]
+        XCTAssertEqual(collapsedThought?["open"] as? Bool, false)
+        XCTAssertTrue((collapsedThought?["header"] as? String)?.contains(thoughtText) == true)
+        XCTAssertEqual(collapsedThought?["thoughtBody"] as? Int, 0)
+        let collapsedThoughtSnapshot = try await webView.takeSnapshot(configuration: nil)
+        if let data = collapsedThoughtSnapshot.tiffRepresentation, let bitmap = NSBitmapImageRep(data: data),
+           let png = bitmap.representation(using: .png, properties: [:]) {
+            try png.write(to: URL(fileURLWithPath: "/tmp/agentkit-thinking-collapsed.png"))
+        }
+        _ = try await webView.evaluateJavaScript("document.querySelector('.tool-group-summary').click()")
+        try await Task.sleep(for: .milliseconds(20))
+        let expandedThought = try await webView.evaluateJavaScript("""
+            (() => {
+              const group = document.querySelector('.tool-group');
+              const thought = group.querySelector('.thinking-block');
+              return { header: group.querySelector('.tool-group-title').textContent,
+                thoughtOpen: thought.open,
+                thoughtLabel: thought.querySelector('.thinking-label').textContent,
+                thoughtBody: group.querySelectorAll('.thinking-body').length };
+            })()
+            """) as? [String: Any]
+        XCTAssertEqual(expandedThought?["header"] as? String, "思考中")
+        XCTAssertEqual(expandedThought?["thoughtOpen"] as? Bool, false)
+        XCTAssertEqual(expandedThought?["thoughtLabel"] as? String, "思考中…")
+        XCTAssertEqual(expandedThought?["thoughtBody"] as? Int, 0)
+        let expandedThoughtSnapshot = try await webView.takeSnapshot(configuration: nil)
+        if let data = expandedThoughtSnapshot.tiffRepresentation, let bitmap = NSBitmapImageRep(data: data),
+           let png = bitmap.representation(using: .png, properties: [:]) {
+            try png.write(to: URL(fileURLWithPath: "/tmp/agentkit-thinking-expanded.png"))
+        }
+        _ = try await webView.evaluateJavaScript("document.querySelector('.thinking-summary').click()")
+        try await Task.sleep(for: .milliseconds(350))
+        let thoughtContent = try await webView.evaluateJavaScript("document.querySelector('.thinking-body')?.textContent") as? String
+        XCTAssertTrue(thoughtContent?.contains("Inspecting the current implementation") == true,
+                      "expanded thought should begin rendering: \(String(describing: thoughtContent))")
     }
     func testSemanticToolFixtureUsesSharedTitlesIconsAndOriginalDetails() async throws {
         let ready = expectation(description: "semantic fixture Web ready")
@@ -2983,7 +3078,7 @@ final class ConversationWebDocumentTests: XCTestCase {
         try await Task.sleep(for: .milliseconds(30))
         let inspection = try await webView.evaluateJavaScript("""
             (() => ({ titles: [...document.querySelectorAll('.tool-title')].map(e => e.textContent),
-              icons: [...document.querySelectorAll('.tool-action-icon')].map(e => e.textContent),
+              icons: [...document.querySelectorAll('.tool > .tool-summary > .tool-action-icon')].map(e => e.textContent),
               rawInputsMounted: document.querySelectorAll('[data-scroll-id^="tool-input:"]').length,
               thought: document.querySelector('.thinking-label')?.textContent,
               diff: document.querySelector('[data-tool-id="edit"] .tool-change-summary')?.textContent,

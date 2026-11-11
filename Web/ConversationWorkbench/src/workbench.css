@@ -18,6 +18,9 @@
   --font-code: 13px;
   --tool-output-max-height: 144px;
   --thinking-max-height: 176px;
+  --activity-icon-width: 1.15em;
+  --activity-row-gap: 6px;
+  --activity-row-padding: 3px 4px;
   --tool-surface: light-dark(rgb(0 0 0 / 3.5%), rgb(255 255 255 / 5%));
   --subtle: light-dark(rgb(0 0 0 / 5%), rgb(255 255 255 / 6%));
   --hover-fill: light-dark(rgb(0 0 0 / 7%), rgb(255 255 255 / 9%));
@@ -142,8 +145,7 @@ body {
   margin-bottom: 4px;
 }
 
-/* A block that renders nothing (e.g. a streaming thinking card that has not
-   received its first token yet) must not leave an empty wrapper with its
+/* A block that renders nothing must not leave an empty wrapper with its
    12px margin — collapse it so the conversation does not jump around. */
 .turn-block:empty {
   display: none;
@@ -425,23 +427,28 @@ summary:active {
 }
 
 .tool-group-summary {
-  display: inline-flex;
+  display: flex;
+  box-sizing: border-box;
+  width: 100%;
   max-width: 100%;
   align-items: center;
-  gap: 6px;
-  padding: 3px 4px;
+  gap: var(--activity-row-gap);
+  padding: var(--activity-row-padding);
   user-select: text;
   -webkit-user-select: text;
 }
 
 .tool-group-title {
+  flex: 1 1 auto;
   min-width: 0;
-  overflow-wrap: anywhere;
-  white-space: normal;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .tool-group-tools {
-  margin: 4px 0 4px 12px;
+  margin: 2px 0 4px;
+  padding: 0;
   max-height: min(320px, 45vh);
   overflow-y: auto;
   overscroll-behavior-y: auto;
@@ -459,8 +466,8 @@ summary:active {
   width: 100%;
   max-width: 100%;
   align-items: center;
-  gap: 6px;
-  padding: 3px 4px;
+  gap: var(--activity-row-gap);
+  padding: var(--activity-row-padding);
   cursor: pointer;
   user-select: text;
   -webkit-user-select: text;
@@ -487,11 +494,11 @@ summary:active {
 
 .tool-action-icon {
   display: inline-flex;
-  flex: 0 0 1.15em;
+  flex: 0 0 var(--activity-icon-width);
   align-items: center;
   justify-content: center;
-  width: 1.15em;
-  height: 1.15em;
+  width: var(--activity-icon-width);
+  height: var(--activity-icon-width);
   line-height: 1;
 }
 
@@ -549,7 +556,7 @@ summary:active {
 }
 
 .tool-detail {
-  padding: 0 0 6px;
+  padding: 0 0 6px calc(var(--activity-icon-width) + var(--activity-row-gap) + 4px);
 }
 
 .tool-detail h4 {
@@ -943,7 +950,7 @@ summary:active {
 /* --- Thinking block --- */
 
 .thinking-block {
-  width: fit-content;
+  width: 100%;
   max-width: 100%;
   font-size: var(--font-ui);
   line-height: 1.5;
@@ -955,17 +962,20 @@ summary:active {
 }
 
 .thinking-summary {
-  display: inline-flex;
+  display: flex;
+  box-sizing: border-box;
+  width: 100%;
   max-width: 100%;
   align-items: center;
-  gap: 6px;
-  padding: 3px 4px;
+  gap: var(--activity-row-gap);
+  padding: var(--activity-row-padding);
   cursor: pointer;
   user-select: text;
   -webkit-user-select: text;
 }
 
 .thinking-label {
+  flex: 1 1 auto;
   min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -1011,14 +1021,14 @@ summary:active {
 }
 
 .thinking-body {
-  padding: 4px 4px 8px 4px;
+  padding: 4px 4px 8px calc(var(--activity-icon-width) + var(--activity-row-gap) + 4px);
 }
 
-/* Bounded thinking panel. While streaming the card is open and this region
-   caps at --thinking-max-height, so a long stream never inflates the whole
-   conversation: the newest tokens are pinned to the bottom and older lines
-   scroll out of the fixed viewport (the auto-follow lives in ThinkingBlock).
-   When the content is shorter than the cap the panel fits it exactly. */
+/* Bounded thinking panel. When the user expands a streaming thought, this
+   region caps at --thinking-max-height so a long stream never inflates the
+   whole conversation: the newest tokens are pinned to the bottom and older
+   lines scroll out of the fixed viewport (the auto-follow lives in
+   ThinkingBlock). Shorter content fits the panel exactly. */
 .thinking-scroll {
   max-height: var(--thinking-max-height, 176px);
   overflow-y: auto;

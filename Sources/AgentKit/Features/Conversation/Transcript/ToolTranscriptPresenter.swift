@@ -63,6 +63,11 @@ struct ToolTranscriptPresentation: Hashable {
 struct ToolTranscriptGroupPresentation: Hashable {
     let callID: String
     let summary: String
+    /// A stable, state-based summary used while an activity group is expanded.
+    /// `summary` can track the current running tool; this value describes the
+    /// completed/running families as a whole so the group header never repeats
+    /// the active child row verbatim.
+    let activitySummary: String
     let statusTone: ToolTranscriptStatusTone
     let tools: [ToolTranscriptPresentation]
 }
@@ -163,9 +168,11 @@ enum ToolTranscriptPresenter {
 
     static func groupPresentation(for group: ToolGroup, locale: String? = nil) -> ToolTranscriptGroupPresentation {
         let tools = group.tools.map { presentation(for: $0, locale: locale) }
+        let text = ToolTranscriptText(locale: locale)
         return ToolTranscriptGroupPresentation(
             callID: group.id,
-            summary: group.isActivityGroup ? activitySummary(for: group, tools: tools, text: ToolTranscriptText(locale: locale)) : groupSummary(for: tools),
+            summary: group.isActivityGroup ? currentActivitySummary(for: group, tools: tools, text: text) : groupSummary(for: tools),
+            activitySummary: group.isActivityGroup ? activityStateSummary(for: group, tools: tools, text: text) : groupSummary(for: tools),
             statusTone: group.isThinking && !tools.contains(where: { $0.statusTone == .failed })
                 ? .running : groupStatusTone(for: tools),
             tools: tools
@@ -557,7 +564,7 @@ enum ToolTranscriptPresenter {
         }
     }
 
-    private static func activitySummary(for group: ToolGroup, tools: [ToolTranscriptPresentation], text: ToolTranscriptText) -> String {
+    private static func currentActivitySummary(for group: ToolGroup, tools: [ToolTranscriptPresentation], text: ToolTranscriptText) -> String {
         func activityTitle(_ tool: ToolNodePayload) -> String {
             let presentation = activityPresentation(for: tool, locale: text.locale)
             let showDetail = presentation.family == .terminal || presentation.family == .search
@@ -575,30 +582,56 @@ enum ToolTranscriptPresenter {
         // is running. Keep the most recent truthful status visible until the next call.
         if group.isCollecting, let latest = group.tools.last { return activityTitle(latest) }
 
-        // Summarize only successful operations; report failures separately.
-        var families = Set<ToolTranscriptFamily>()
-        var hasCommand = false
+        return activityStateSummary(for: group, tools: tools, text: text)
+    }
+
+    /// Describes the activity as a whole instead of mirroring the currently
+    /// running tool. The completed portion stays first, followed by active
+    /// families and thinking, matching the compact Codex activity header.
+    private static func activityStateSummary(for group: ToolGroup, tools: [ToolTranscriptPresentation], text: ToolTranscriptText) -> String {
+        var completedFamilies = Set<ToolTranscriptFamily>()
+        var runningFamilies = Set<ToolTranscriptFamily>()
         var failed = 0
         for (tool, presentation) in zip(group.tools, tools) {
             if tool.status == .failed || (tool.exitCode.map { $0 != 0 } ?? false) {
                 failed += 1
                 continue
             }
-            if ["run_command", "exec_command", "bash", "shell", "terminal"].contains(tool.toolName.lowercased()) {
-                hasCommand = true
+            let family = activityFamily(for: tool, fallback: presentation.family)
+            if tool.status == .running {
+                runningFamilies.insert(family)
             } else {
-                families.insert(presentation.family)
+                completedFamilies.insert(family)
             }
         }
+
         var labels: [String] = []
         for (family, key) in [(ToolTranscriptFamily.edit, "edit"), (.create, "create"),
-                              (.read, "read"), (.list, "list"), (.search, "search")] where families.remove(family) != nil {
+                              (.read, "read"), (.list, "list"), (.search, "search")] where completedFamilies.remove(family) != nil {
             labels.append(text.text("activity.done." + key))
         }
-        if hasCommand || families.remove(.terminal) != nil { labels.append(text.text("activity.done.run")) }
-        if !families.isEmpty { labels.append(text.text("activity.done.other")) }
+        if completedFamilies.remove(.terminal) != nil { labels.append(text.text("activity.done.run")) }
+        if !completedFamilies.isEmpty { labels.append(text.text("activity.done.other")) }
+
+        for (family, key) in [(ToolTranscriptFamily.edit, "edit"), (.create, "create"),
+                              (.read, "read"), (.list, "list"), (.search, "search")] where runningFamilies.remove(family) != nil {
+            labels.append(text.text("active.running", text.text("activity." + key)))
+        }
+        if runningFamilies.remove(.terminal) != nil {
+            labels.append(text.text("active.running", text.text("activity.run")))
+        }
+        if !runningFamilies.isEmpty { labels.append(text.text("active.processing")) }
+
+        if group.isThinking { labels.append(text.text("activity.thinking")) }
         if failed > 0 { labels.append(text.text("count.failed", failed)) }
         return labels.joined(separator: text.text("activity.separator"))
+    }
+
+    private static func activityFamily(for tool: ToolNodePayload, fallback: ToolTranscriptFamily) -> ToolTranscriptFamily {
+        if ["run_command", "exec_command", "bash", "shell", "terminal"].contains(tool.toolName.lowercased()) {
+            return .terminal
+        }
+        return fallback
     }
 
     private static func groupSummary(for tools: [ToolTranscriptPresentation]) -> String {

@@ -65,6 +65,8 @@ export interface ConversationWebBlock {
   isCollecting?: boolean;
   activityOrder?: string[];
   activityThinking?: ConversationWebBlock[];
+  /// State-based summary for expanded live groups and completed groups.
+  activitySummary?: string;
   childStreamKind?: "task" | "job";
   actionID?: string;
   actionTooltip?: string;
