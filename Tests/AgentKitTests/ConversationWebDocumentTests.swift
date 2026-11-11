@@ -1427,6 +1427,7 @@ final class ConversationWebDocumentTests: XCTestCase {
                 editChangeSummary: document.querySelector('.tool-change-summary')?.textContent ?? null,
                 editElapsed: [...document.querySelectorAll('.tool-summary')].find((element) => element.textContent?.includes('+2'))?.querySelector('.tool-elapsed')?.textContent ?? null,
                 subagentKind: document.querySelector('.child-stream-kind')?.textContent ?? null,
+                subagentIcon: document.querySelector('.child-stream .tool-action-icon')?.textContent ?? null,
                 subagentTitle: document.querySelector('.child-stream-title')?.textContent ?? null,
                 subagentContainsResult: document.querySelector('.child-stream')?.textContent?.includes('CHILD_RESULT_MUST_STAY_IN_INSPECTOR') ?? null,
                 subagentContainsCompleted: document.querySelector('.child-stream')?.textContent?.toLowerCase().includes('completed') ?? null,
@@ -1435,6 +1436,11 @@ final class ConversationWebDocumentTests: XCTestCase {
                   return Boolean(row && getComputedStyle(row).backgroundColor === 'rgba(0, 0, 0, 0)' && getComputedStyle(row).borderStyle === 'none');
                 })(),
                 subagentSingleLine: document.querySelector('.child-stream-title') ? getComputedStyle(document.querySelector('.child-stream-title')).whiteSpace === 'nowrap' : false,
+                runningGroupIcon: document.querySelector('.tool-group[data-status="running"] > .tool-group-summary .tool-action-icon')?.textContent ?? null,
+                runningGroupIconFill: (() => {
+                  const icon = document.querySelector('.tool-group[data-status="running"] > .tool-group-summary .tool-action-icon');
+                  return icon ? getComputedStyle(icon).webkitTextFillColor : null;
+                })(),
                 subagentFits: (() => {
                   const row = document.querySelector('.child-stream');
                   return Boolean(row && row.scrollWidth <= row.clientWidth + 1);
@@ -1482,7 +1488,10 @@ final class ConversationWebDocumentTests: XCTestCase {
         XCTAssertEqual(inspection?["editChangeSummary"] as? String, "+2 -1")
         XCTAssertEqual(inspection?["editElapsed"] as? String, "240ms")
         XCTAssertEqual(inspection?["subagentKind"] as? String, "Subagent")
+        XCTAssertEqual(inspection?["subagentIcon"] as? String, "◇")
         XCTAssertEqual(inspection?["subagentTitle"] as? String, subagent.title)
+        XCTAssertEqual(inspection?["runningGroupIcon"] as? String, "□")
+        XCTAssertNotEqual(inspection?["runningGroupIconFill"] as? String, "rgba(0, 0, 0, 0)")
         XCTAssertEqual(inspection?["subagentContainsResult"] as? Bool, false)
         XCTAssertEqual(inspection?["subagentContainsCompleted"] as? Bool, false)
         XCTAssertEqual(inspection?["subagentChromeIsClear"] as? Bool, true)
@@ -2777,8 +2786,10 @@ final class ConversationWebDocumentTests: XCTestCase {
                 count: group?.querySelectorAll('.tool').length,
                 title: group?.querySelector('summary')?.textContent,
                 rawNamesInGroupTitle: document.querySelector('.tool-group-title')?.textContent.includes('job_wait'),
+                activityIcon: document.querySelector('.tool-group > .tool-group-summary .tool-action-icon')?.textContent,
                 jobCount: document.querySelectorAll('.child-stream').length,
                 jobStatus: job?.dataset.status,
+                jobIcon: job?.querySelector('.tool-action-icon')?.textContent,
                 jobTitle: job?.querySelector('.child-stream-title')?.textContent,
                 waitTime: group?.querySelector('.tool-elapsed')?.textContent
               };
@@ -2789,8 +2800,10 @@ final class ConversationWebDocumentTests: XCTestCase {
         XCTAssertEqual(inspection?["count"] as? Int, 3, "every original wait record is retained")
         XCTAssertTrue((inspection?["title"] as? String)?.contains(ToolTranscriptText().text("job.wait.count", 3)) == true)
         XCTAssertEqual(inspection?["rawNamesInGroupTitle"] as? Bool, false)
+        XCTAssertEqual(inspection?["activityIcon"] as? String, "$")
         XCTAssertEqual(inspection?["jobCount"] as? Int, 1)
         XCTAssertEqual(inspection?["jobStatus"] as? String, "running")
+        XCTAssertEqual(inspection?["jobIcon"] as? String, "$")
         XCTAssertEqual(inspection?["jobTitle"] as? String, ToolTranscriptText().text("job.run", ToolTranscriptText().text("job.python")))
         XCTAssertEqual(inspection?["waitTime"] as? String, ToolTranscriptText().text("job.wait.elapsed", "1.0s"))
         let active = document(3, count: 1, waiting: true)

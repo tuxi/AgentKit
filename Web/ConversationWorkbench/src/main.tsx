@@ -1268,9 +1268,13 @@ function streamingThought(block: ConversationWebBlock): ConversationWebBlock | u
 
 function activityIcon(block: ConversationWebBlock): string {
   if (block.status === "failed" || block.tools.some((tool) => tool.status === "failed")) return "×";
-  if (streamingThought(block)) return "◇";
+  const icons = new Set(block.tools.map((tool) => tool.icon).filter(Boolean));
+  for (const glyph of ["$", "±", "+", "□", "≡", "⌕"]) {
+    if (icons.has(glyph)) return glyph;
+  }
   const running = block.tools.find((tool) => tool.status === "running");
   if (running?.icon) return running.icon;
+  if (streamingThought(block)) return "◇";
   if (block.isCollecting) return "◇";
   return "✓";
 }
@@ -1898,6 +1902,7 @@ const Block = memo(function Block({
           onClick={(event) => activateSelectableAction(event, block.actionID)}
           onKeyDown={(event) => activateSelectableAction(event, block.actionID)}
         >
+          <ToolActionIcon glyph={block.childStreamKind === "job" ? "$" : "◇"} />
           {block.childStreamKind !== "job" ? <span className="child-stream-kind">Subagent</span> : null}
           <span className="child-stream-title">{block.title}</span>
           {childStatus ? (

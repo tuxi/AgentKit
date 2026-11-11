@@ -416,6 +416,14 @@ summary:active {
   animation: tool-working-wave 1.45s linear infinite;
 }
 
+/* The shimmer owns the text color. Keep the leading glyph on its normal
+   secondary color so a running group still has a visible left-edge anchor. */
+.tool-group[data-status="running"] > .tool-group-summary > .tool-action-icon {
+  color: var(--secondary);
+  background-image: none;
+  -webkit-text-fill-color: var(--secondary);
+}
+
 .workbench-suspended .tool-group[data-status="running"] > .tool-group-summary,
 .workbench-suspended .tool[data-status="running"] > .tool-summary {
   animation-play-state: paused;
@@ -1140,19 +1148,23 @@ summary:active {
 }
 
 .child-stream {
-  display: inline-flex;
+  display: flex;
+  box-sizing: border-box;
+  width: 100%;
+  max-width: 100%;
   align-items: center;
-  gap: 6px;
-  padding: 3px 4px;
+  gap: var(--activity-row-gap);
+  padding: var(--activity-row-padding);
   color: var(--secondary);
 }
 
 .child-stream-kind {
-  flex: 0 0 auto;
+  flex: 0 1 auto;
   font-weight: 500;
 }
 
 .child-stream-title {
+  flex: 1 1 auto;
   min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
