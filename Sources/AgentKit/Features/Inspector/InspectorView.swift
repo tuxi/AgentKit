@@ -113,6 +113,10 @@ public struct InspectorView: View {
 
                 TrajectoryInspectorView(selection: selection)
 
+            case .uiEvidence(let selection):
+
+                UIEvidenceInspectorView(selection: selection)
+
             default:
 
                 ContentUnavailableView(

@@ -115,6 +115,9 @@ private struct InspectorNavigationContent: View {
 
         case .assetDetail(let payload):
             AssetPreviewInspectorView(payload: payload)
+
+        case .uiEvidence(let selection):
+            UIEvidenceInspectorView(selection: selection)
         }
     }
 

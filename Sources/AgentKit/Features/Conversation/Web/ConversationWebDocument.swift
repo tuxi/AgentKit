@@ -237,6 +237,73 @@ struct ConversationWebDocument: Codable, Equatable, Sendable {
         let height: Double
     }
 
+    /// Presentation-only projection of `ui_evidence.v1`. OCR and source-tree
+    /// text remain untrusted data: the renderer only displays it as text.
+    struct UIEvidence: Codable, Equatable, Sendable {
+        let title: String
+        let displayName: String
+        let sourceAssetID: String
+        let sourceTreeKind: String
+        let sourceTreeNote: String?
+        let producer: String
+        let summary: UIEvidenceSummary
+        let assets: [UIEvidenceAsset]
+        let ocrPreview: [UIEvidenceTextItem]
+        let repeatedGroups: [UIEvidenceGroup]
+        let uncertainties: [UIEvidenceNote]
+        let warnings: [String]
+        let limits: [String]
+        let rawActionID: String?
+    }
+
+    struct UIEvidenceSummary: Codable, Equatable, Sendable {
+        let textElements: Int
+        let containers: Int
+        let repeatedGroups: Int
+        let crops: Int
+        let observed: Int
+        let inferred: Int
+        let uncertain: Int
+        let uncertainties: Int
+        let warnings: Int
+    }
+
+    struct UIEvidenceAsset: Codable, Equatable, Sendable, Identifiable {
+        var id: String { assetID }
+        let assetID: String
+        let role: String
+        let displayName: String
+        let width: Int
+        let height: Int
+        let sourceAssetID: String?
+        let sourceBBox: ImageRegion?
+        let purpose: String?
+        let viewActionID: String?
+    }
+
+    struct UIEvidenceTextItem: Codable, Equatable, Sendable {
+        let id: String
+        let text: String
+        let bbox: ImageRegion
+        let confidence: Double
+        let evidence: String
+    }
+
+    struct UIEvidenceGroup: Codable, Equatable, Sendable {
+        let id: String
+        let axis: String
+        let memberIDs: [String]
+        let bbox: ImageRegion
+        let confidence: Double
+        let evidence: String
+    }
+
+    struct UIEvidenceNote: Codable, Equatable, Sendable {
+        let id: String
+        let text: String
+        let reason: String?
+    }
+
     struct Tool: Codable, Equatable, Sendable {
         let id: String
         let name: String
@@ -270,6 +337,10 @@ struct ConversationWebDocument: Codable, Equatable, Sendable {
         /// Generic image-view semantic derived from structured output. Nil is
         /// the safe fallback for malformed metadata or missing tool assets.
         var imageView: ImageView? = nil
+        /// Generic `ui_evidence.v1` semantic selected by output schema only.
+        /// Malformed documents or unregistered assets fall back to the ordinary
+        /// tool card and raw structured output.
+        var uiEvidence: UIEvidence? = nil
     }
 
     struct InlineAction: Codable, Equatable, Sendable {
@@ -882,23 +953,30 @@ enum ConversationWebDocumentBuilder {
                         ))
                     }
                 }
-                let imageView = ViewImageActivityProjection.make(
+                let uiEvidence = UIEvidenceActivityProjection.make(
                     tool: tool,
                     turnID: turn.id,
                     assetIndex: assetIndex(),
                     registerAction: registerAction
                 )
+                let imageView = uiEvidence == nil ? ViewImageActivityProjection.make(
+                    tool: tool,
+                    turnID: turn.id,
+                    assetIndex: assetIndex(),
+                    registerAction: registerAction
+                ) : nil
+                let hasStructuredActivity = imageView != nil || uiEvidence != nil
                 return ConversationWebDocument.Tool(
                     id: tool.callID,
-                    name: imageView?.title ?? presentation.title,
+                    name: uiEvidence?.title ?? imageView?.title ?? presentation.title,
                     status: tool.status.rawValue,
                     statusText: presentation.statusText,
-                    detail: imageView == nil ? presentation.detail : nil,
-                    elapsed: imageView == nil ? presentation.elapsed : nil,
-                    changeSummary: imageView == nil ? presentation.changeSummary : nil,
+                    detail: hasStructuredActivity ? nil : presentation.detail,
+                    elapsed: hasStructuredActivity ? nil : presentation.elapsed,
+                    changeSummary: hasStructuredActivity ? nil : presentation.changeSummary,
                     arguments: arguments,
-                    output: imageView == nil && dag == nil ? output : nil,
-                    artifactActionID: imageView != nil ? nil
+                    output: !hasStructuredActivity && dag == nil ? output : nil,
+                    artifactActionID: hasStructuredActivity ? nil
                         : previousTool?.artifact == tool.artifact
                         ? previousWebTool?.artifactActionID
                         : tool.artifact.flatMap { _ in
@@ -909,7 +987,7 @@ enum ConversationWebDocumentBuilder {
                             ))
                         }
                     },
-                    assetActions: imageView != nil ? [] : previousTool?.assets == tool.assets
+                    assetActions: hasStructuredActivity ? [] : previousTool?.assets == tool.assets
                         ? previousWebTool?.assetActions ?? []
                         : tool.assets.compactMap { asset in
                         guard let registerAction else { return nil }
@@ -924,7 +1002,7 @@ enum ConversationWebDocumentBuilder {
                             focusID: "tool:\(tool.callID):asset:\(reference.id)"
                         )
                     },
-                    copyOutputActionID: imageView != nil || tool.status == .running || tool.output.isEmpty
+                    copyOutputActionID: hasStructuredActivity || tool.status == .running || tool.output.isEmpty
                         ? nil
                         : registerAction.map {
                         $0(.transcript(
@@ -943,7 +1021,7 @@ enum ConversationWebDocumentBuilder {
                             registerAction: registerAction
                         )
                     } ?? [],
-                    outputActions: imageView != nil || tool.status == .running ? [] : output.map {
+                    outputActions: hasStructuredActivity || tool.status == .running ? [] : output.map {
                         inlineActions(
                             text: $0,
                             annotations: [],
@@ -973,7 +1051,8 @@ enum ConversationWebDocumentBuilder {
                     resultKind: resultKind,
                     outcomeText: outcomeText,
                     outcomeTone: resultFailed ? "failed" : tool.status == .running ? "running" : "completed",
-                    imageView: imageView
+                    imageView: imageView,
+                    uiEvidence: uiEvidence
                 )
             }
             return .init(

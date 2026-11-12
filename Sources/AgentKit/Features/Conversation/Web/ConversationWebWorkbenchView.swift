@@ -16,6 +16,7 @@ struct ConversationWebWorkbenchView: NSViewRepresentable {
     let snapshot: RuntimeSnapshot
     let conversationID: String?
     let workspaceRoot: URL?
+    var workspaceID: String? = nil
     let previewViewerResolver: (any PreviewViewerResolver)?
     let previewAssetResolver: (any PreviewAssetResolver)?
     let extensionContributions: [String: [TimelineWebContribution]]
@@ -83,6 +84,7 @@ struct ConversationWebWorkbenchView: NSViewRepresentable {
             snapshot,
             conversationID: conversationID,
             workspaceRoot: workspaceRoot,
+            workspaceID: workspaceID,
             extensionContributions: extensionContributions,
             timelineExtensions: timelineExtensions,
             store: workspaceStore,
@@ -99,6 +101,7 @@ struct ConversationWebWorkbenchView: NSViewRepresentable {
             snapshot,
             conversationID: conversationID,
             workspaceRoot: workspaceRoot,
+            workspaceID: workspaceID,
             extensionContributions: extensionContributions,
             timelineExtensions: timelineExtensions,
             store: workspaceStore,
@@ -148,6 +151,7 @@ struct ConversationWebWorkbenchView: NSViewRepresentable {
         private var sourceGeneration: UInt64?
         private var sourceConversationID: String?
         private var sourceWorkspaceRoot: URL?
+        private var sourceWorkspaceID: String?
         private var sourceExtensionContributions: [String: [TimelineWebContribution]] = [:]
         private var acknowledgedExtensionContributions: [String: [TimelineWebContribution]] = [:]
         private var inFlightExtensionContributions: [String: [TimelineWebContribution]]?
@@ -230,6 +234,7 @@ struct ConversationWebWorkbenchView: NSViewRepresentable {
             _ snapshot: RuntimeSnapshot,
             conversationID: String?,
             workspaceRoot: URL?,
+            workspaceID: String?,
             extensionContributions: [String: [TimelineWebContribution]],
             timelineExtensions: [any TimelineExtension],
             store: WorkspaceStore,
@@ -244,6 +249,7 @@ struct ConversationWebWorkbenchView: NSViewRepresentable {
             guard sourceGeneration != snapshot.generation
                     || sourceConversationID != resolvedConversationID
                     || sourceWorkspaceRoot != workspaceRoot
+                    || sourceWorkspaceID != workspaceID
                     || sourceExtensionContributions != extensionContributions else {
                 return
             }
@@ -275,6 +281,7 @@ struct ConversationWebWorkbenchView: NSViewRepresentable {
             sourceGeneration = snapshot.generation
             sourceConversationID = resolvedConversationID
             sourceWorkspaceRoot = workspaceRoot
+            sourceWorkspaceID = workspaceID
             sourceExtensionContributions = extensionContributions
             sourceVersion &+= 1
             scheduleLatestDocumentSend()
@@ -982,11 +989,12 @@ struct ConversationWebWorkbenchView: NSViewRepresentable {
                         return group.tools.first(where: { $0.callID == toolID })
                     })
                     .first(where: { tool in
-                        ViewImageActivityProjection.validatedAssetIDs(in: tool)?.contains(assetID) == true
+                        StructuredImageActivityAssets.validatedAssetIDs(in: tool)?.contains(assetID) == true
                     }),
                   let asset = tool.assets.first(where: { $0.id == assetID }),
-                  let resolvedAsset = validatedImageAssetData(
+                  let resolvedAsset = WorkspaceImageAssetResolver.resolve(
                     asset: asset,
+                    workspaceID: sourceWorkspaceID,
                     workspaceRoot: workspaceRoot
                   ) else {
                 return
@@ -1011,62 +1019,6 @@ struct ConversationWebWorkbenchView: NSViewRepresentable {
                   let json = String(data: jsonData, encoding: .utf8) else { return }
             let script = "window.dispatchEvent(new CustomEvent('imageViewAssetURLResolved', {detail: \(json)}))"
             webView.evaluateJavaScript(script) { _, _ in }
-        }
-
-        private func validatedImageAssetData(
-            asset: AgentAssetRef,
-            workspaceRoot: URL
-        ) -> (data: Data, mimeType: String)? {
-            let root = workspaceRoot.standardizedFileURL.resolvingSymlinksInPath()
-            let candidate: URL?
-            if let relativePath = asset.workspaceRelativePath,
-               !relativePath.isEmpty,
-               !relativePath.hasPrefix("/") {
-                candidate = root.appendingPathComponent(relativePath)
-            } else if let absolutePath = asset.absolutePath, !absolutePath.isEmpty {
-                candidate = URL(fileURLWithPath: absolutePath)
-            } else if let uri = asset.uri,
-                      let url = URL(string: uri),
-                      url.isFileURL {
-                candidate = url
-            } else {
-                candidate = nil
-            }
-            guard let candidate else { return nil }
-            let resolved = candidate.standardizedFileURL.resolvingSymlinksInPath()
-            let rootPrefix = root.path.hasSuffix("/") ? root.path : root.path + "/"
-            guard resolved.path.hasPrefix(rootPrefix),
-                  let values = try? resolved.resourceValues(forKeys: [
-                    .isRegularFileKey, .fileSizeKey
-                  ]),
-                  values.isRegularFile == true,
-                  (values.fileSize ?? 0) <= 64 * 1024 * 1024,
-                  let mimeType = Self.sniffImageMIMEType(at: resolved),
-                  let data = try? Data(contentsOf: resolved, options: .mappedIfSafe),
-                  data.count <= 64 * 1024 * 1024 else {
-                return nil
-            }
-            return (data, mimeType)
-        }
-
-        private static func sniffImageMIMEType(at url: URL) -> String? {
-            guard let handle = try? FileHandle(forReadingFrom: url) else { return nil }
-            defer { try? handle.close() }
-            guard let data = try? handle.read(upToCount: 12), data.count >= 12 else {
-                return nil
-            }
-            let bytes = [UInt8](data)
-            if bytes.starts(with: [0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]) {
-                return "image/png"
-            }
-            if bytes.starts(with: [0xff, 0xd8, 0xff]) {
-                return "image/jpeg"
-            }
-            if String(bytes: bytes[0..<4], encoding: .ascii) == "RIFF",
-               String(bytes: bytes[8..<12], encoding: .ascii) == "WEBP" {
-                return "image/webp"
-            }
-            return nil
         }
 
         /// Resolves verified viewer bytes and returns only an opaque,

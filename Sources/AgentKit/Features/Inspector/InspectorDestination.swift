@@ -24,4 +24,7 @@ public enum InspectorDestination: Hashable {
 
     /// 资产详情预览（从资产列表 push 进入）
     case assetDetail(AssetPreviewPayload)
+
+    /// Raw structured UI evidence associated with a tool call.
+    case uiEvidence(UIEvidenceSelection)
 }

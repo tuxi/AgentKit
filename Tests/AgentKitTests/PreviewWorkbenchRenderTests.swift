@@ -478,6 +478,253 @@ final class PreviewWorkbenchRenderTests: XCTestCase {
         XCTAssertTrue(FileManager.default.fileExists(atPath: screenshot.path))
     }
 
+    func testConversationWorkbenchRendersUIEvidenceSourceCropAndInspectorActions() async throws {
+        let workspace = FileManager.default.temporaryDirectory
+            .appendingPathComponent("agentkit-ui-evidence-\(UUID().uuidString)", isDirectory: true)
+        let images = workspace.appendingPathComponent("images", isDirectory: true)
+        try FileManager.default.createDirectory(at: images, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: workspace) }
+        let sourceURL = images.appendingPathComponent("screen.png")
+        let cropURL = images.appendingPathComponent("screen-crop.png")
+        try writeImageFixture(
+            to: sourceURL,
+            size: NSSize(width: 640, height: 400),
+            color: NSColor(calibratedRed: 0.12, green: 0.42, blue: 0.66, alpha: 1),
+            label: "SOURCE"
+        )
+        try writeImageFixture(
+            to: cropURL,
+            size: NSSize(width: 320, height: 160),
+            color: NSColor(calibratedRed: 0.75, green: 0.34, blue: 0.18, alpha: 1),
+            label: "CROP"
+        )
+
+        let sourceID = "asset_ui_evidence_source"
+        let cropID = "asset_ui_evidence_crop"
+        let tool = ToolNodePayload(
+            callID: "call_ui_evidence",
+            toolName: "arbitrary_evidence_surface",
+            args: nil,
+            status: .completed,
+            output: "evidence",
+            structuredOutput: uiEvidenceRenderOutput(sourceID: sourceID, cropID: cropID),
+            assets: [
+                AgentAssetRef(
+                    id: sourceID,
+                    kind: "image",
+                    displayName: "screen.png",
+                    workspaceRelativePath: "images/screen.png",
+                    mimeType: "image/png"
+                ),
+                AgentAssetRef(
+                    id: cropID,
+                    kind: "image",
+                    displayName: "screen-crop.png",
+                    workspaceRelativePath: "images/screen-crop.png",
+                    mimeType: "image/png"
+                ),
+            ]
+        )
+        let turn = ConversationTurn(
+            id: "turn-ui-evidence",
+            userPrompt: MessageNodePayload(role: .user, text: "Inspect this screen"),
+            blocks: [.toolGroup(ToolGroup(id: "ui-evidence-activity", tools: [tool]))],
+            footer: nil,
+            isLive: false
+        )
+        let snapshot = RuntimeSnapshot(timeline: [], turns: [turn], generation: 1)
+        let store = WorkspaceStore(usesEmbeddedRuntime: false)
+        let content = ConversationWebWorkbenchView(
+            snapshot: snapshot,
+            conversationID: "ui-evidence-render",
+            workspaceRoot: workspace,
+            previewViewerResolver: nil,
+            previewAssetResolver: nil,
+            extensionContributions: [:],
+            timelineExtensions: [],
+            isVisible: true,
+            bottomInset: 0,
+            onFatalFailure: { XCTFail("ConversationWorkbench renderer failed") }
+        )
+        .environment(store)
+        let hostingView = NSHostingView(rootView: content)
+        hostingView.frame = NSRect(x: 0, y: 0, width: 900, height: 1_000)
+        let window = NSWindow(
+            contentRect: hostingView.frame,
+            styleMask: [.titled, .closable],
+            backing: .buffered,
+            defer: false
+        )
+        window.contentView = hostingView
+        window.title = "AgentKit UI Evidence Workbench"
+        window.makeKeyAndOrderFront(nil)
+        hostingView.layoutSubtreeIfNeeded()
+        self.window = window
+
+        let webView = try await waitForWebView(in: hostingView)
+        try await waitForJavaScript(
+            "document.querySelector('[data-tool-id=\"call_ui_evidence\"]') !== null",
+            webView: webView,
+            timeout: 12
+        )
+        _ = try await webView.evaluateJavaScript("""
+        document.querySelector('.turn-process-summary')
+          ?.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true }));
+        """)
+        do {
+            try await waitForJavaScript(
+                "document.querySelector('[data-tool-id=\"call_ui_evidence\"] .image-view-thumbnail img')?.naturalWidth > 0",
+                webView: webView,
+                timeout: 12
+            )
+        } catch {
+            let body = try? await webView.evaluateJavaScript("document.body?.innerText ?? ''")
+            let state = try? await webView.evaluateJavaScript("""
+            (() => {
+              const tool = document.querySelector('[data-tool-id="call_ui_evidence"]');
+              const img = tool?.querySelector('.image-view-thumbnail img');
+              return { open: document.querySelector('.turn-process')?.open ?? null, tool: tool?.outerHTML ?? '', src: img?.src ?? '', width: img?.naturalWidth ?? 0 };
+            })()
+            """)
+            print("[UIEvidenceRender] body: \(String(describing: body))")
+            print("[UIEvidenceRender] state: \(String(describing: state))")
+            throw error
+        }
+
+        let collapsed = try await webView.evaluateJavaScript("""
+        (() => {
+          const tool = document.querySelector('[data-tool-id="call_ui_evidence"]');
+          const thumb = tool?.querySelector('.image-view-thumbnail img');
+          return {
+            title: tool?.querySelector('.tool-title')?.textContent ?? '',
+            thumbnailWidth: thumb?.naturalWidth ?? 0,
+            sourceURL: thumb?.src ?? ''
+          };
+        })()
+        """) as? [String: Any]
+        XCTAssertEqual(collapsed?["title"] as? String, "UI evidence: screen.png")
+        XCTAssertGreaterThan(collapsed?["thumbnailWidth"] as? Int ?? 0, 0)
+        XCTAssertTrue((collapsed?["sourceURL"] as? String)?.hasPrefix("agentkit-workbench://local-asset/") == true)
+
+        _ = try await webView.evaluateJavaScript("""
+        document.querySelector('[data-tool-id="call_ui_evidence"] .tool-summary')
+          ?.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true }));
+        """)
+        try await waitForJavaScript(
+            "document.querySelector('[data-ui-evidence-node=\"source\"] img')?.naturalWidth > 0 && document.querySelector('[data-ui-evidence-node=\"crop\"] img')?.naturalWidth > 0",
+            webView: webView,
+            timeout: 12
+        )
+
+        let expanded = try await webView.evaluateJavaScript("""
+        (() => {
+          const activity = document.querySelector('.ui-evidence-activity');
+          const source = activity?.querySelector('[data-ui-evidence-node="source"]');
+          const crop = activity?.querySelector('[data-ui-evidence-node="crop"]');
+          const ocr = activity?.querySelector('.ui-evidence-ocr-list');
+          const text = activity?.textContent ?? '';
+          return {
+            sourceFirst: activity?.firstElementChild?.getAttribute('data-ui-evidence-node') ?? '',
+            sourceID: source?.querySelector('.image-view-preview')?.getAttribute('data-image-view-asset-id') ?? '',
+            sourceWidth: source?.querySelector('img')?.naturalWidth ?? 0,
+            cropWidth: crop?.querySelector('img')?.naturalWidth ?? 0,
+            cropParent: crop?.getAttribute('data-parent-asset-id') ?? '',
+            hasSummary: /text/.test(text) && /containers/.test(text) && /repeated groups/.test(text),
+            hasOCR: text.includes('Settings'),
+            hasBBox: text.includes('bbox 0.120, 0.240'),
+            hasObserved: text.includes('Observed'),
+            hasInferred: text.includes('Inferred'),
+            hasSourceTreeNote: text.includes('No AX/DOM tree was supplied'),
+            hasUncertainty: text.includes('Small text may be unreadable'),
+            hasWarning: text.includes('Element list was truncated'),
+            hasRawJSON: text.includes('"schema"') || text.includes('"elements"'),
+            hasRecommendation: text.includes('recommended_component') || text.includes('layout_should_be'),
+            injectedImageCount: ocr?.querySelectorAll('img').length ?? -1,
+            hasSourceAction: /View source/.test(text),
+            hasCropAction: /View crop/.test(text),
+            hasRawAction: /Inspect raw evidence/.test(text)
+          };
+        })()
+        """) as? [String: Any]
+        XCTAssertEqual(expanded?["sourceFirst"] as? String, "source")
+        XCTAssertEqual(expanded?["sourceID"] as? String, sourceID)
+        XCTAssertGreaterThan(expanded?["sourceWidth"] as? Int ?? 0, 0)
+        XCTAssertGreaterThan(expanded?["cropWidth"] as? Int ?? 0, 0)
+        XCTAssertEqual(expanded?["cropParent"] as? String, sourceID)
+        XCTAssertEqual(expanded?["hasSummary"] as? Bool, true)
+        XCTAssertEqual(expanded?["hasOCR"] as? Bool, true)
+        XCTAssertEqual(expanded?["hasBBox"] as? Bool, true)
+        XCTAssertEqual(expanded?["hasObserved"] as? Bool, true)
+        XCTAssertEqual(expanded?["hasInferred"] as? Bool, true)
+        XCTAssertEqual(expanded?["hasSourceTreeNote"] as? Bool, true)
+        XCTAssertEqual(expanded?["hasUncertainty"] as? Bool, true)
+        XCTAssertEqual(expanded?["hasWarning"] as? Bool, true)
+        XCTAssertEqual(expanded?["hasRawJSON"] as? Bool, false)
+        XCTAssertEqual(expanded?["hasRecommendation"] as? Bool, false)
+        XCTAssertEqual(expanded?["injectedImageCount"] as? Int, 0)
+        XCTAssertEqual(expanded?["hasSourceAction"] as? Bool, true)
+        XCTAssertEqual(expanded?["hasCropAction"] as? Bool, true)
+        XCTAssertEqual(expanded?["hasRawAction"] as? Bool, true)
+
+        let screenshot = try screenshotDirectoryURL()
+            .appendingPathComponent("ui-evidence-source-crop.png")
+        try await saveSnapshot(of: webView, to: screenshot)
+        XCTAssertTrue(FileManager.default.fileExists(atPath: screenshot.path))
+        print("[UIEvidenceRender] screenshot: \(screenshot.path)")
+
+        _ = try await webView.evaluateJavaScript("""
+        [...document.querySelectorAll('.ui-evidence-activity button')]
+          .find((button) => button.textContent?.includes('View source'))?.click();
+        """)
+        let assetDeadline = Date().addingTimeInterval(5)
+        while Date() < assetDeadline {
+            if case .asset(let payload) = store.inspectorSelection,
+               payload.asset.id == sourceID {
+                break
+            }
+            try await Task.sleep(for: .milliseconds(50))
+        }
+        guard case .asset(let payload) = store.inspectorSelection else {
+            return XCTFail("View source did not open the source asset")
+        }
+        XCTAssertEqual(payload.asset.id, sourceID)
+
+        _ = try await webView.evaluateJavaScript("""
+        [...document.querySelectorAll('.ui-evidence-activity button')]
+          .find((button) => button.textContent?.includes('View crop'))?.click();
+        """)
+        let cropDeadline = Date().addingTimeInterval(5)
+        while Date() < cropDeadline {
+            if case .asset(let payload) = store.inspectorSelection,
+               payload.asset.id == cropID {
+                break
+            }
+            try await Task.sleep(for: .milliseconds(50))
+        }
+        guard case .asset(let cropPayload) = store.inspectorSelection else {
+            return XCTFail("View crop did not open the crop asset")
+        }
+        XCTAssertEqual(cropPayload.asset.id, cropID)
+        XCTAssertEqual(cropPayload.asset.workspaceRelativePath, "images/screen-crop.png")
+
+        _ = try await webView.evaluateJavaScript("""
+        [...document.querySelectorAll('.ui-evidence-activity button')]
+          .find((button) => button.textContent?.includes('Inspect raw evidence'))?.click();
+        """)
+        let rawDeadline = Date().addingTimeInterval(5)
+        while Date() < rawDeadline {
+            if case .uiEvidence(let selection) = store.inspectorSelection,
+               selection.callID == "call_ui_evidence" {
+                break
+            }
+            try await Task.sleep(for: .milliseconds(50))
+        }
+        guard case .uiEvidence(let selection) = store.inspectorSelection else {
+            return XCTFail("Inspect raw evidence did not open the evidence Inspector")
+        }
+        XCTAssertEqual(selection.callID, "call_ui_evidence")
+    }
+
     func testConversationWorkbenchRendersRealCodeAgentViewImagePayloadLiveAndReplay() async throws {
         let fixture = try loadCodeAgentViewImageFixture()
         let snapshots = try await codeAgentViewImageSnapshots(fixture)
@@ -833,6 +1080,99 @@ final class PreviewWorkbenchRenderTests: XCTestCase {
             throw NSError(domain: "PreviewWorkbenchRenderTests", code: 4)
         }
         try png.write(to: url, options: .atomic)
+    }
+
+    private func uiEvidenceRenderOutput(sourceID: String, cropID: String) -> JSONValue {
+        let bbox: JSONValue = .object([
+            "x": .number(0.12),
+            "y": .number(0.24),
+            "width": .number(0.5),
+            "height": .number(0.4)
+        ])
+        let textBBox: JSONValue = .object([
+            "x": .number(0.12),
+            "y": .number(0.24),
+            "width": .number(0.4),
+            "height": .number(0.08)
+        ])
+        return .object([
+            "schema": .string("ui_evidence.v1"),
+            "source": .object([
+                "asset_id": .string(sourceID),
+                "source_kind": .string("app_screenshot"),
+                "sha256": .string(String(repeating: "a", count: 64)),
+                "mime_type": .string("image/png"),
+                "width": .integer(640),
+                "height": .integer(400)
+            ]),
+            "coordinate_space": .string("normalized_top_left"),
+            "producer": .object([
+                "name": .string("ClientToolsKit.inspect_ui_image"),
+                "version": .string("1")
+            ]),
+            "elements": .array([
+                .object([
+                    "id": .string("el_title"),
+                    "kind": .string("text"),
+                    "role": .string("heading"),
+                    "bbox": textBBox,
+                    "text": .string("Settings <img src=x onerror=alert(1)>"),
+                    "confidence": .number(0.97),
+                    "evidence": .string("observed")
+                ]),
+                .object([
+                    "id": .string("el_toggle"),
+                    "kind": .string("control"),
+                    "role": .string("switch"),
+                    "bbox": textBBox,
+                    "text": .string("Wi-Fi"),
+                    "confidence": .number(0.84),
+                    "evidence": .string("inferred"),
+                    "interactive": .bool(true)
+                ]),
+                .object([
+                    "id": .string("el_region"),
+                    "kind": .string("container"),
+                    "bbox": bbox,
+                    "confidence": .number(0.95),
+                    "evidence": .string("observed")
+                ])
+            ]),
+            "repeated_groups": .array([
+                .object([
+                    "id": .string("group_rows"),
+                    "axis": .string("vertical"),
+                    "member_ids": .array([.string("el_title"), .string("el_toggle")]),
+                    "bbox": bbox,
+                    "confidence": .number(0.83),
+                    "evidence": .string("inferred")
+                ])
+            ]),
+            "source_tree": .object([
+                "kind": .string("none"),
+                "nodes": .array([]),
+                "truncated": .bool(false)
+            ]),
+            "crops": .array([
+                .object([
+                    "asset_id": .string(cropID),
+                    "source_bbox": bbox,
+                    "purpose": .string("detail")
+                ])
+            ]),
+            "uncertainties": .array([
+                .object([
+                    "description": .string("Small text may be unreadable."),
+                    "related_element_ids": .array([.string("el_title")]),
+                    "reason": .string("low_resolution")
+                ])
+            ]),
+            "limits": .object([
+                "element_count": .integer(3),
+                "elements_truncated": .bool(true),
+                "tree_nodes_truncated": .bool(false)
+            ])
+        ])
     }
 
     private func imageViewRenderOutput(sourceID: String, cropID: String) -> JSONValue {

@@ -22,6 +22,7 @@ public enum InspectorSelection: Hashable {
     case workflowDAG(WorkflowDAGSelection)
     case timelineDocument(TimelineWebDocument)
     case conversationTrajectory(TrajectorySelection)
+    case uiEvidence(UIEvidenceSelection)
 }
 
 /// P8.9 — 调用轨迹查看器的选择载荷（DSH 式调用过程展示）。
@@ -101,5 +102,19 @@ public struct AssetPanelPayload: Sendable, Hashable {
         self.assets = assets
         self.conversationID = conversationID
         self.workspace = workspace
+    }
+}
+
+
+/// Read-only Inspector destination for the raw `ui_evidence.v1` associated
+/// with one tool call. Only the stable call identity is carried; the payload is
+/// re-read from the resident conversation so live/replay stay in sync.
+public struct UIEvidenceSelection: Sendable, Hashable {
+    public let callID: String
+    public let title: String
+
+    public init(callID: String, title: String) {
+        self.callID = callID
+        self.title = title
     }
 }

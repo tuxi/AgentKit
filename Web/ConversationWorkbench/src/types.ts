@@ -41,6 +41,8 @@ export interface ConversationWebTool {
   /// Generic `view_image_result.v1` semantic. Absent for malformed or
   /// incomplete metadata; callers then fall back to the normal tool card.
   imageView?: ConversationWebImageView;
+  /// Generic `ui_evidence.v1` semantic selected by output schema only.
+  uiEvidence?: ConversationWebUIEvidence;
 }
 
 export interface ConversationWebImageView {
@@ -70,6 +72,62 @@ export interface ConversationWebImageRegion {
   y: number;
   width: number;
   height: number;
+}
+
+export interface ConversationWebUIEvidence {
+  title: string;
+  displayName: string;
+  sourceAssetID: string;
+  sourceTreeKind: "accessibility" | "dom" | "none";
+  sourceTreeNote?: string;
+  producer: string;
+  summary: {
+    textElements: number;
+    containers: number;
+    repeatedGroups: number;
+    crops: number;
+    observed: number;
+    inferred: number;
+    uncertain: number;
+    uncertainties: number;
+    warnings: number;
+  };
+  assets: ConversationWebUIEvidenceAsset[];
+  ocrPreview: Array<{
+    id: string;
+    text: string;
+    bbox: ConversationWebImageRegion;
+    confidence: number;
+    evidence: "observed" | "inferred" | "uncertain";
+  }>;
+  repeatedGroups: Array<{
+    id: string;
+    axis: "vertical" | "horizontal" | "grid" | "unknown";
+    memberIDs: string[];
+    bbox: ConversationWebImageRegion;
+    confidence: number;
+    evidence: "observed" | "inferred" | "uncertain";
+  }>;
+  uncertainties: Array<{
+    id: string;
+    text: string;
+    reason?: string;
+  }>;
+  warnings: string[];
+  limits: string[];
+  rawActionID?: string;
+}
+
+export interface ConversationWebUIEvidenceAsset {
+  assetID: string;
+  role: "source" | "crop";
+  displayName: string;
+  width: number;
+  height: number;
+  sourceAssetID?: string;
+  sourceBBox?: ConversationWebImageRegion;
+  purpose?: string;
+  viewActionID?: string;
 }
 
 export interface InlineAction {

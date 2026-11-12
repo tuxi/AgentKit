@@ -285,7 +285,13 @@ struct AssetPreviewInspectorView: View {
     }
 
     private var mediaURL: URL? {
-        localWorkspaceMediaURL ?? displayAsset.mediaURL ?? resolvedMediaURL
+        // Structured workspace images never fall back to an event-supplied
+        // absolute path. Validate the relative path against the current
+        // workspace root before native preview can read it.
+        if displayAsset.isImageAsset, displayAsset.workspaceRelativePath != nil {
+            return localWorkspaceMediaURL ?? resolvedMediaURL
+        }
+        return localWorkspaceMediaURL ?? displayAsset.mediaURL ?? resolvedMediaURL
     }
 
     private var fallbackMediaURL: URL? {
@@ -315,14 +321,34 @@ struct AssetPreviewInspectorView: View {
     private var localWorkspaceMediaURL: URL? {
         guard displayAsset.isImageAsset || displayAsset.isVideoAsset,
               let root = payload.workspace?.localRootPath,
-              let relativePath = displayAsset.workspaceRelativePath,
-              !root.isEmpty,
+              !root.isEmpty else {
+            return nil
+        }
+        let workspaceRoot = URL(fileURLWithPath: root, isDirectory: true)
+        if displayAsset.isImageAsset,
+           displayAsset.workspaceRelativePath != nil {
+            return WorkspaceImageAssetResolver.resolvedImageURL(
+                asset: displayAsset,
+                workspaceID: payload.workspace?.id,
+                workspaceRoot: workspaceRoot
+            )
+        }
+        guard let relativePath = displayAsset.workspaceRelativePath,
               !relativePath.isEmpty,
               !relativePath.hasPrefix("/") else {
             return nil
         }
-        let url = URL(fileURLWithPath: root).appendingPathComponent(relativePath)
-        return FileManager.default.fileExists(atPath: url.path) ? url : nil
+        let url = workspaceRoot
+            .appendingPathComponent(relativePath)
+            .standardizedFileURL
+        let resolvedRoot = workspaceRoot.standardizedFileURL.resolvingSymlinksInPath()
+        let resolvedURL = url.resolvingSymlinksInPath()
+        let rootPrefix = resolvedRoot.path.hasSuffix("/") ? resolvedRoot.path : resolvedRoot.path + "/"
+        guard resolvedURL.path.hasPrefix(rootPrefix),
+              FileManager.default.fileExists(atPath: resolvedURL.path) else {
+            return nil
+        }
+        return resolvedURL
     }
 
     private var readNotice: some View {

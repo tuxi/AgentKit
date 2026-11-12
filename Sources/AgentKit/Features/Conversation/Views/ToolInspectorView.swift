@@ -118,6 +118,18 @@ struct ToolInspectorView: View {
                     }
                     .buttonStyle(.bordered)
 
+                    if p.structuredOutput?["schema"].string == "ui_evidence.v1" {
+                        Button {
+                            inspectorPath.push(.uiEvidence(UIEvidenceSelection(
+                                callID: p.callID,
+                                title: "UI Evidence"
+                            )))
+                        } label: {
+                            Label("Open UI Evidence", systemImage: "viewfinder.rectangular")
+                        }
+                        .buttonStyle(.bordered)
+                    }
+
                     Spacer()
                 }
             }

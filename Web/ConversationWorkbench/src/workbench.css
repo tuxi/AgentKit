@@ -2063,3 +2063,209 @@ button.user-asset-thumbnail {
   white-space: nowrap;
   text-align: center;
 }
+
+/* Generic ui_evidence.v1 activity. Evidence content is untrusted data and is
+   only rendered as text; source pixels remain the primary visual asset. */
+.ui-evidence-activity {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  width: min(100%, 430px);
+  margin: 6px 0 8px;
+  color: var(--text);
+}
+
+.ui-evidence-source,
+.ui-evidence-crop {
+  display: flex;
+  flex-direction: column;
+  gap: 7px;
+  margin: 0;
+  padding: 10px;
+  border: 1px solid color-mix(in srgb, var(--border) 65%, transparent);
+  border-radius: 12px;
+  background: var(--tool-surface);
+}
+
+.ui-evidence-source > .image-view-preview {
+  width: 280px;
+  max-width: 100%;
+  height: 174px;
+}
+
+.ui-evidence-source figcaption,
+.ui-evidence-crop figcaption {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  min-width: 0;
+  color: var(--secondary);
+  font-size: var(--font-caption);
+}
+
+.ui-evidence-source figcaption > span,
+.ui-evidence-crop figcaption > span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.ui-evidence-summary {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.ui-evidence-metric {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 4px;
+  padding: 4px 7px;
+  border: 1px solid color-mix(in srgb, var(--border) 70%, transparent);
+  border-radius: 7px;
+  background: var(--subtle);
+  color: var(--secondary);
+  font-size: var(--font-caption);
+}
+
+.ui-evidence-metric strong {
+  color: var(--text);
+  font-variant-numeric: tabular-nums;
+}
+
+.ui-evidence-levels {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  color: var(--secondary);
+  font-size: var(--font-caption);
+}
+
+.ui-evidence-levels > span {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.ui-evidence-badge {
+  display: inline-flex;
+  padding: 1px 6px;
+  border-radius: 999px;
+  font-size: 11px;
+  font-weight: 600;
+  line-height: 1.45;
+}
+
+.ui-evidence-badge[data-evidence="observed"] {
+  color: light-dark(rgb(20 116 64), rgb(105 222 157));
+  background: light-dark(rgb(20 116 64 / 10%), rgb(105 222 157 / 12%));
+}
+
+.ui-evidence-badge[data-evidence="inferred"] {
+  color: light-dark(rgb(20 95 180), rgb(120 184 255));
+  background: light-dark(rgb(20 95 180 / 10%), rgb(120 184 255 / 12%));
+}
+
+.ui-evidence-badge[data-evidence="uncertain"] {
+  color: var(--warning);
+  background: color-mix(in srgb, var(--warning) 13%, transparent);
+}
+
+.ui-evidence-source-tree-note {
+  margin: 0;
+  padding: 7px 9px;
+  border-left: 2px solid var(--warning);
+  border-radius: 0 7px 7px 0;
+  background: color-mix(in srgb, var(--warning) 8%, transparent);
+  color: var(--secondary);
+  font-size: var(--font-caption);
+}
+
+.ui-evidence-section {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.ui-evidence-section h4 {
+  margin: 2px 0 0;
+  color: var(--secondary);
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.ui-evidence-ocr-list,
+.ui-evidence-notes {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.ui-evidence-ocr-list > li {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  align-items: start;
+  gap: 3px 6px;
+  padding: 7px 8px;
+  border-radius: 7px;
+  background: var(--subtle);
+}
+
+.ui-evidence-ocr-text {
+  min-width: 0;
+  overflow-wrap: anywhere;
+  user-select: text;
+  -webkit-user-select: text;
+}
+
+.ui-evidence-geometry {
+  grid-column: 2;
+  color: var(--tertiary, var(--secondary));
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, monospace;
+  font-size: 10px;
+  overflow-wrap: anywhere;
+}
+
+.ui-evidence-notes {
+  padding-inline-start: 1.1em;
+  list-style: disc;
+  color: var(--secondary);
+  font-size: var(--font-caption);
+  overflow-wrap: anywhere;
+}
+
+.ui-evidence-crops {
+  display: grid;
+  gap: 8px;
+}
+
+.ui-evidence-crop {
+  margin-left: 14px;
+  border-left: 2px solid color-mix(in srgb, var(--border) 90%, transparent);
+}
+
+.ui-evidence-crop > .image-view-preview {
+  width: 210px;
+  max-width: 100%;
+  height: 130px;
+}
+
+.ui-evidence-limits {
+  color: var(--secondary);
+  font-size: var(--font-caption);
+}
+
+.ui-evidence-limits summary {
+  cursor: pointer;
+  user-select: none;
+  -webkit-user-select: none;
+}
+
+.ui-evidence-mono {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, monospace;
+  font-size: 11px;
+}

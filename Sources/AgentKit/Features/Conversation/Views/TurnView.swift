@@ -268,6 +268,13 @@ struct TurnView: View, Equatable {
         case .openAsset(let reference):
             openAsset(reference)
 
+        case .openUIEvidence(let callID):
+            guard tool(callID: callID) != nil else { return }
+            store.showInspector(.uiEvidence(UIEvidenceSelection(
+                callID: callID,
+                title: "UI Evidence"
+            )))
+
         case .openURL(let raw):
             openExternalURL(raw)
 
@@ -445,6 +452,16 @@ struct TurnView: View, Equatable {
         }
         openURL(url)
         return true
+    }
+
+    private func tool(callID: String) -> ToolNodePayload? {
+        for block in turn.blocks {
+            guard case .toolGroup(let group) = block else { continue }
+            if let tool = group.tools.first(where: { $0.callID == callID }) {
+                return tool
+            }
+        }
+        return nil
     }
 
     private func artifact(callID: String) -> ArtifactNode? {

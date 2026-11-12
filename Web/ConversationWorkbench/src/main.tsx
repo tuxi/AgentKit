@@ -17,6 +17,7 @@ import type {
   ConversationWebImageViewAsset,
   ConversationWebOperation,
   ConversationWebPreview,
+  ConversationWebUIEvidence,
   ConversationWebTool,
   ConversationWebTurn,
   ConversationWebUpdate,
@@ -1754,6 +1755,224 @@ function ImageViewActivity({
   );
 }
 
+function evidenceLabel(value: "observed" | "inferred" | "uncertain"): string {
+  switch (value) {
+    case "observed": return "Observed";
+    case "inferred": return "Inferred";
+    case "uncertain": return "Uncertain";
+  }
+}
+
+function EvidenceBadge({
+  evidence,
+}: {
+  evidence: "observed" | "inferred" | "uncertain";
+}): React.JSX.Element {
+  return (
+    <span className="ui-evidence-badge" data-evidence={evidence}>
+      {evidenceLabel(evidence)}
+    </span>
+  );
+}
+
+function UIEvidenceMetric({
+  value,
+  label,
+}: {
+  value: number;
+  label: string;
+}): React.JSX.Element {
+  return (
+    <span className="ui-evidence-metric">
+      <strong>{value}</strong>
+      <span>{label}</span>
+    </span>
+  );
+}
+
+function UIEvidenceActivity({
+  evidence,
+  conversationID,
+  turnID,
+  toolID,
+}: {
+  evidence: ConversationWebUIEvidence;
+  conversationID: string;
+  turnID: string;
+  toolID: string;
+}): React.JSX.Element {
+  const source = evidence.assets.find((asset) => asset.role === "source");
+  const crops = evidence.assets.filter((asset) => asset.role === "crop");
+  if (!source) return <></>;
+  const warnings = evidence.warnings;
+  return (
+    <section
+      className="ui-evidence-activity"
+      data-ui-evidence-source-asset-id={evidence.sourceAssetID}
+      data-ui-evidence-source-tree={evidence.sourceTreeKind}
+    >
+      <figure className="ui-evidence-source" data-ui-evidence-node="source">
+        <ImageViewPreview
+          conversationID={conversationID}
+          turnID={turnID}
+          toolID={toolID}
+          image={source}
+          variant="source"
+        />
+        <figcaption>
+          <span>{source.displayName}</span>
+          {source.viewActionID ? (
+            <ActionButton
+              actionID={source.viewActionID}
+              focusID={`ui-evidence:${toolID}:source`}
+              tooltip={source.displayName}
+            >
+              View source
+            </ActionButton>
+          ) : null}
+        </figcaption>
+      </figure>
+
+      <div className="ui-evidence-summary" aria-label="UI evidence summary">
+        <UIEvidenceMetric value={evidence.summary.textElements} label="text" />
+        <UIEvidenceMetric value={evidence.summary.containers} label="containers" />
+        <UIEvidenceMetric value={evidence.summary.repeatedGroups} label="repeated groups" />
+        <UIEvidenceMetric value={evidence.summary.crops} label="crops" />
+        <UIEvidenceMetric value={evidence.summary.uncertainties} label="uncertainties" />
+        <UIEvidenceMetric value={evidence.summary.warnings} label="warnings" />
+      </div>
+
+      <div className="ui-evidence-levels" aria-label="Evidence levels">
+        <span><EvidenceBadge evidence="observed" /> {evidence.summary.observed}</span>
+        <span><EvidenceBadge evidence="inferred" /> {evidence.summary.inferred}</span>
+        <span><EvidenceBadge evidence="uncertain" /> {evidence.summary.uncertain}</span>
+      </div>
+
+      {evidence.sourceTreeNote ? (
+        <p className="ui-evidence-source-tree-note" data-ui-evidence-source-tree-note="none">
+          {evidence.sourceTreeNote}
+        </p>
+      ) : null}
+
+      {evidence.ocrPreview.length ? (
+        <section className="ui-evidence-section" aria-label="Compact OCR preview">
+          <h4>OCR preview</h4>
+          <ol className="ui-evidence-ocr-list">
+            {evidence.ocrPreview.map((item) => (
+              <li key={item.id} data-evidence={item.evidence}>
+                <EvidenceBadge evidence={item.evidence} />
+                <span className="ui-evidence-ocr-text">{item.text}</span>
+                <span className="ui-evidence-geometry">
+                  bbox {item.bbox.x.toFixed(3)}, {item.bbox.y.toFixed(3)}, {item.bbox.width.toFixed(3)}, {item.bbox.height.toFixed(3)}
+                  {" · "}
+                  confidence {item.confidence.toFixed(3)}
+                </span>
+              </li>
+            ))}
+          </ol>
+        </section>
+      ) : null}
+
+      {evidence.repeatedGroups.length ? (
+        <section className="ui-evidence-section" aria-label="Repeated groups">
+          <h4>Repeated groups</h4>
+          <ul className="ui-evidence-notes">
+            {evidence.repeatedGroups.map((group) => (
+              <li key={group.id}>
+                <span className="ui-evidence-mono">{group.id}</span>
+                {" · "}
+                {group.axis}
+                {" · "}
+                {group.memberIDs.length} members
+                {" · "}
+                <EvidenceBadge evidence={group.evidence} />
+              </li>
+            ))}
+          </ul>
+        </section>
+      ) : null}
+
+      {crops.length ? (
+        <section className="ui-evidence-section" aria-label="Evidence crops">
+          <h4>Crops</h4>
+          <div className="ui-evidence-crops">
+            {crops.map((crop) => (
+              <figure
+                className="ui-evidence-crop"
+                data-ui-evidence-node="crop"
+                data-ui-evidence-crop-asset-id={crop.assetID}
+                data-parent-asset-id={crop.sourceAssetID}
+                key={crop.assetID}
+              >
+                <ImageViewPreview
+                  conversationID={conversationID}
+                  turnID={turnID}
+                  toolID={toolID}
+                  image={crop}
+                  variant="crop"
+                />
+                <figcaption>
+                  <span>{crop.purpose ?? "crop"}</span>
+                  {crop.viewActionID ? (
+                    <ActionButton
+                      actionID={crop.viewActionID}
+                      focusID={`ui-evidence:${toolID}:crop:${crop.assetID}`}
+                      tooltip={crop.displayName}
+                    >
+                      View crop
+                    </ActionButton>
+                  ) : null}
+                </figcaption>
+              </figure>
+            ))}
+          </div>
+        </section>
+      ) : null}
+
+      {evidence.uncertainties.length ? (
+        <section className="ui-evidence-section" aria-label="Uncertainties">
+          <h4>Uncertainties</h4>
+          <ul className="ui-evidence-notes">
+            {evidence.uncertainties.map((uncertainty) => (
+              <li key={uncertainty.id}>
+                {uncertainty.text}
+                {uncertainty.reason ? <span className="ui-evidence-mono"> · {uncertainty.reason}</span> : null}
+              </li>
+            ))}
+          </ul>
+        </section>
+      ) : null}
+
+      {warnings.length ? (
+        <section className="ui-evidence-section" aria-label="Warnings">
+          <h4>Warnings</h4>
+          <ul className="ui-evidence-notes">
+            {warnings.map((warning, index) => <li key={`${index}:${warning}`}>{warning}</li>)}
+          </ul>
+        </section>
+      ) : null}
+
+      <details className="ui-evidence-limits">
+        <summary>Limits and producer</summary>
+        <ul className="ui-evidence-notes">
+          {evidence.limits.map((limit) => <li key={limit}>{limit}</li>)}
+          <li>Producer: {evidence.producer}</li>
+        </ul>
+      </details>
+
+      {evidence.rawActionID ? (
+        <ActionButton
+          actionID={evidence.rawActionID}
+          focusID={`ui-evidence:${toolID}:raw`}
+          tooltip="Open raw ui_evidence.v1 in Inspector"
+        >
+          Inspect raw evidence
+        </ActionButton>
+      ) : null}
+    </section>
+  );
+}
+
 function Tool({
   tool,
   conversationID,
@@ -1765,6 +1984,8 @@ function Tool({
 }): React.JSX.Element {
   const statusText = visibleExecutionStatus(tool.status, tool.statusText);
   const imageViewSource = tool.imageView?.assets.find((asset) => asset.role === "source");
+  const evidenceSource = tool.uiEvidence?.assets.find((asset) => asset.role === "source");
+  const structuredImageSource = imageViewSource ?? evidenceSource;
   // Tool rows stay compact by default, including while they run. The parent
   // group header communicates the current action without expanding detail.
   const { open, onSummaryClick } = useActivityDisclosure(`tool:${tool.id}`);
@@ -1785,12 +2006,12 @@ function Tool({
         data-focus-id={`tool:${tool.id}`}
         onClick={onSummaryClick}
       >
-        {imageViewSource ? (
+        {structuredImageSource ? (
           <ImageViewPreview
             conversationID={conversationID}
             turnID={turnID}
             toolID={tool.id}
-            image={imageViewSource}
+            image={structuredImageSource}
             variant="thumbnail"
           />
         ) : <ToolActionIcon glyph={tool.icon ?? "◇"} />}
@@ -1807,6 +2028,13 @@ function Tool({
         {tool.imageView ? (
           <ImageViewActivity
             imageView={tool.imageView}
+            conversationID={conversationID}
+            turnID={turnID}
+            toolID={tool.id}
+          />
+        ) : tool.uiEvidence ? (
+          <UIEvidenceActivity
+            evidence={tool.uiEvidence}
             conversationID={conversationID}
             turnID={turnID}
             toolID={tool.id}
@@ -1846,7 +2074,7 @@ function Tool({
             Open artifact
           </ActionButton>
         ) : null}
-        {tool.imageView ? null : tool.assetActions.map((asset) => (
+        {tool.imageView || tool.uiEvidence ? null : tool.assetActions.map((asset) => (
           <ActionButton
             key={asset.actionID}
             actionID={asset.actionID}

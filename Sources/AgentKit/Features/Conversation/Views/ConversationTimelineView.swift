@@ -27,6 +27,7 @@ public struct ConversationTimelineView: View {
             timelineExtensions: viewModel.timelineExtensions,
             conversationID: viewModel.conversation?.id,
             workspaceRoot: viewModel.workspaceRootURL,
+            workspaceID: viewModel.workspaceAnchor?.id,
             previewViewerResolver: viewModel.previewViewerResolver,
             previewAssetResolver: viewModel.previewAssetResolver,
             isVisible: isVisible,

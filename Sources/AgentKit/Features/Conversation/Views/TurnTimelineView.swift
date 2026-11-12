@@ -20,6 +20,8 @@ public struct TurnTimelineView: View {
     let conversationID: String?
     /// Stable workspace root from the resident conversation model.
     let workspaceRoot: URL?
+    /// Stable workspace identity used to reject cross-workspace asset refs.
+    let workspaceID: String?
     /// Authenticated bytes resolvers owned by the active runtime transport.
     let previewViewerResolver: (any PreviewViewerResolver)?
     let previewAssetResolver: (any PreviewAssetResolver)?
@@ -37,6 +39,7 @@ public struct TurnTimelineView: View {
         timelineExtensions: [any TimelineExtension] = [],
         conversationID: String? = nil,
         workspaceRoot: URL? = nil,
+        workspaceID: String? = nil,
         previewViewerResolver: (any PreviewViewerResolver)? = nil,
         previewAssetResolver: (any PreviewAssetResolver)? = nil,
         isVisible: Bool = true,
@@ -47,6 +50,7 @@ public struct TurnTimelineView: View {
         self.timelineExtensions = timelineExtensions
         self.conversationID = conversationID
         self.workspaceRoot = workspaceRoot
+        self.workspaceID = workspaceID
         self.previewViewerResolver = previewViewerResolver
         self.previewAssetResolver = previewAssetResolver
         self.isVisible = isVisible
@@ -83,6 +87,7 @@ public struct TurnTimelineView: View {
                 snapshot: snapshot,
                 conversationID: conversationID,
                 workspaceRoot: workspaceRoot,
+                workspaceID: workspaceID,
                 previewViewerResolver: previewViewerResolver,
                 previewAssetResolver: previewAssetResolver,
                 extensionContributions: webExtensionContributions,
