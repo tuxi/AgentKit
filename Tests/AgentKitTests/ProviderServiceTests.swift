@@ -230,7 +230,8 @@ final class RuntimeProviderServiceTests: XCTestCase {
             enabled: false,
             models: [RuntimeProviderModelDefinition(
                 id: "deepseek-chat",
-                contextWindow: 128_000
+                contextWindow: 128_000,
+                toolImageInput: true
             )]
         )
         let result = try await service.upsertProvider(definition)
@@ -341,7 +342,8 @@ final class ProviderMappingTests: XCTestCase {
             enabled: false,
             models: [RuntimeProviderModelDefinition(
                 id: "deepseek-chat",
-                contextWindow: 128_000
+                contextWindow: 128_000,
+                toolImageInput: true
             )]
         )
         let connection = definition.asProviderConnection()
@@ -352,6 +354,7 @@ final class ProviderMappingTests: XCTestCase {
         XCTAssertEqual(connection.isEnabled, false)
         XCTAssertEqual(connection.models.first?.id, "deepseek-chat")
         XCTAssertEqual(connection.models.first?.contextWindow, 128_000)
+        XCTAssertEqual(connection.models.first?.toolImageInput, true)
     }
 }
 

@@ -38,6 +38,7 @@ public struct RuntimeProviderModelDefinition: Codable, Sendable, Equatable, Iden
     public let supportsTools: Bool?
     public let supportsReasoning: Bool?
     public let inputModalities: [String]?
+    public let toolImageInput: Bool?
     public let webSearch: Bool?
     public let supportedReasoningEfforts: [String]?
     public let canDisableReasoning: Bool?
@@ -57,6 +58,7 @@ public struct RuntimeProviderModelDefinition: Codable, Sendable, Equatable, Iden
         case supportsTools = "supports_tools"
         case supportsReasoning = "supports_reasoning"
         case inputModalities = "input_modalities"
+        case toolImageInput = "tool_image_input"
         case webSearch = "web_search"
         case supportedReasoningEfforts = "supported_reasoning_efforts"
         case canDisableReasoning = "can_disable_reasoning"
@@ -77,6 +79,7 @@ public struct RuntimeProviderModelDefinition: Codable, Sendable, Equatable, Iden
         supportsTools: Bool? = nil,
         supportsReasoning: Bool? = nil,
         inputModalities: [String]? = nil,
+        toolImageInput: Bool? = nil,
         webSearch: Bool? = nil,
         supportedReasoningEfforts: [String]? = nil,
         canDisableReasoning: Bool? = nil,
@@ -94,6 +97,7 @@ public struct RuntimeProviderModelDefinition: Codable, Sendable, Equatable, Iden
         self.supportsTools = supportsTools
         self.supportsReasoning = supportsReasoning
         self.inputModalities = inputModalities
+        self.toolImageInput = toolImageInput
         self.webSearch = webSearch
         self.supportedReasoningEfforts = supportedReasoningEfforts
         self.canDisableReasoning = canDisableReasoning
@@ -232,6 +236,7 @@ public struct RuntimeProviderTemplateModel: Codable, Sendable, Equatable, Identi
     public let supportsTools: Bool?
     public let supportsReasoning: Bool?
     public let inputModalities: [String]?
+    public let toolImageInput: Bool?
     public let webSearch: Bool?
     public let inputPricePerMillion: Double?
     public let outputPricePerMillion: Double?
@@ -247,6 +252,7 @@ public struct RuntimeProviderTemplateModel: Codable, Sendable, Equatable, Identi
         case supportsTools = "supports_tools"
         case supportsReasoning = "supports_reasoning"
         case inputModalities = "input_modalities"
+        case toolImageInput = "tool_image_input"
         case webSearch = "web_search"
         case inputPricePerMillion = "input_price_per_million"
         case outputPricePerMillion = "output_price_per_million"
@@ -263,6 +269,7 @@ public struct RuntimeProviderTemplateModel: Codable, Sendable, Equatable, Identi
         supportsTools: Bool? = nil,
         supportsReasoning: Bool? = nil,
         inputModalities: [String]? = nil,
+        toolImageInput: Bool? = nil,
         webSearch: Bool? = nil,
         inputPricePerMillion: Double? = nil,
         outputPricePerMillion: Double? = nil,
@@ -277,6 +284,7 @@ public struct RuntimeProviderTemplateModel: Codable, Sendable, Equatable, Identi
         self.supportsTools = supportsTools
         self.supportsReasoning = supportsReasoning
         self.inputModalities = inputModalities
+        self.toolImageInput = toolImageInput
         self.webSearch = webSearch
         self.inputPricePerMillion = inputPricePerMillion
         self.outputPricePerMillion = outputPricePerMillion
@@ -330,6 +338,7 @@ public extension ProviderConnection {
                 supportsTools: model.supportsTools,
                 supportsReasoning: model.supportsReasoning,
                 inputModalities: model.inputModalities.map { $0.rawValue },
+                toolImageInput: model.toolImageInput,
                 webSearch: model.webSearch
             )
         }
@@ -387,6 +396,7 @@ public extension RuntimeProviderDefinition {
                 supportsTools: model.supportsTools ?? true,
                 supportsReasoning: model.supportsReasoning ?? false,
                 inputModalities: modalities ?? [.text],
+                toolImageInput: model.toolImageInput,
                 inputPricePerMillion: model.inputPricePerMillion,
                 outputPricePerMillion: model.outputPricePerMillion,
                 cacheInputPricePerMillion: model.cacheInputPricePerMillion,

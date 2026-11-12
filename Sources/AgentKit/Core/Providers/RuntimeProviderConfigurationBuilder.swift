@@ -245,7 +245,8 @@ public enum RuntimeProviderConfigurationBuilder {
                     supportsReasoning: descriptor.supportsReasoning,
                     inputModalities: descriptor.inputModalities
                         .sorted { $0.rawValue < $1.rawValue }
-                        .map(\.rawValue)
+                        .map(\.rawValue),
+                    toolImageInput: descriptor.toolImageInput
                 )
             )
         }
@@ -498,6 +499,7 @@ private struct RuntimeModelCatalogConfig: Encodable {
     let supportsTools: Bool?
     let supportsReasoning: Bool?
     let inputModalities: [String]?
+    let toolImageInput: Bool?
 
     enum CodingKeys: String, CodingKey {
         case connectionID = "connection_id"
@@ -507,6 +509,7 @@ private struct RuntimeModelCatalogConfig: Encodable {
         case supportsTools = "supports_tools"
         case supportsReasoning = "supports_reasoning"
         case inputModalities = "input_modalities"
+        case toolImageInput = "tool_image_input"
     }
 }
 

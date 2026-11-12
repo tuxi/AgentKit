@@ -99,6 +99,8 @@ public struct ProviderModel: Codable, Hashable, Identifiable, Sendable {
     public var supportsTools: Bool
     public var supportsReasoning: Bool
     public var inputModalities: Set<ProviderInputModality>
+    /// Strict opt-in for image content inside tool results. nil/false = denied.
+    public var toolImageInput: Bool?
     public var inputPricePerMillion: Double?
     public var outputPricePerMillion: Double?
     public var cacheInputPricePerMillion: Double?
@@ -118,6 +120,7 @@ public struct ProviderModel: Codable, Hashable, Identifiable, Sendable {
         supportsTools: Bool = true,
         supportsReasoning: Bool = false,
         inputModalities: Set<ProviderInputModality> = [.text],
+        toolImageInput: Bool? = nil,
         inputPricePerMillion: Double? = nil,
         outputPricePerMillion: Double? = nil,
         cacheInputPricePerMillion: Double? = nil,
@@ -135,6 +138,7 @@ public struct ProviderModel: Codable, Hashable, Identifiable, Sendable {
         self.supportsTools = supportsTools
         self.supportsReasoning = supportsReasoning
         self.inputModalities = inputModalities
+        self.toolImageInput = toolImageInput
         self.inputPricePerMillion = inputPricePerMillion
         self.outputPricePerMillion = outputPricePerMillion
         self.cacheInputPricePerMillion = cacheInputPricePerMillion

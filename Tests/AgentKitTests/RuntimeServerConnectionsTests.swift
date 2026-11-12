@@ -207,6 +207,7 @@ final class RuntimeServerConnectionsTests: XCTestCase {
               "supports_tools": true,
               "supports_reasoning": false,
               "input_modalities": ["text"],
+              "tool_image_input": true,
               "available": true
             }]
           }]
@@ -218,6 +219,7 @@ final class RuntimeServerConnectionsTests: XCTestCase {
         )
         XCTAssertEqual(catalog.revision, 7)
         XCTAssertEqual(catalog.connections.first?.models.first?.wireModelID, "deepseek-chat")
+        XCTAssertEqual(catalog.connections.first?.models.first?.toolImageInput, true)
         XCTAssertTrue(catalog.connections.first?.models.first?.available == true)
 
         let firstServerModels = catalog.unifiedModels(serverConnectionID: "server-a")
@@ -225,6 +227,7 @@ final class RuntimeServerConnectionsTests: XCTestCase {
         XCTAssertEqual(firstServerModels.first?.runtimeAlias, secondServerModels.first?.runtimeAlias)
         XCTAssertNotEqual(firstServerModels.first?.id, secondServerModels.first?.id)
         XCTAssertEqual(firstServerModels.first?.serverConnectionID, "server-a")
+        XCTAssertEqual(firstServerModels.first?.toolImageInput, true)
         XCTAssertEqual(
             catalog.defaultModelStableID(serverConnectionID: "server-a"),
             firstServerModels.first?.id

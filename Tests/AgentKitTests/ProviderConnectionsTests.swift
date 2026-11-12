@@ -101,7 +101,7 @@ final class ProviderConnectionsTests: XCTestCase {
         let direct = try makeConnection(
             id: "company-production",
             models: [
-                ProviderModel(id: "qwen3-coder", displayName: "Qwen3 Coder", supportsTools: true, supportsReasoning: true, inputModalities: [.text, .image]),
+                ProviderModel(id: "qwen3-coder", displayName: "Qwen3 Coder", supportsTools: true, supportsReasoning: true, inputModalities: [.text, .image], toolImageInput: true),
             ]
         )
         let generated = try RuntimeProviderConfigurationBuilder.build(connections: [direct])
@@ -123,6 +123,20 @@ final class ProviderConnectionsTests: XCTestCase {
             (catalog["input_modalities"] as? [String])?.sorted(),
             ["image", "text"]
         )
+        XCTAssertEqual(catalog["tool_image_input"] as? Bool, true)
+    }
+
+    func testSettingsModelOmitsUnknownToolImageInput() throws {
+        let direct = try makeConnection(
+            id: "company-production",
+            models: [ProviderModel(id: "qwen3-coder", inputModalities: [.text, .image])]
+        )
+        let generated = try RuntimeProviderConfigurationBuilder.build(connections: [direct])
+        let root = try jsonObject(generated.settingsJSON)
+        let models = try XCTUnwrap(root["models"] as? [String: Any])
+        let model = try XCTUnwrap(models.first?.value as? [String: Any])
+        let catalog = try XCTUnwrap(model["catalog"] as? [String: Any])
+        XCTAssertNil(catalog["tool_image_input"])
     }
 
     func testRuntimeConfigurationOmitsGatewaySearchWithoutGatewayConnection() throws {

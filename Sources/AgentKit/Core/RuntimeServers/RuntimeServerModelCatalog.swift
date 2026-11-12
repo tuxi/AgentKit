@@ -83,6 +83,7 @@ public struct RuntimeServerModelCatalog: Codable, Sendable, Equatable {
                     supportsTools: model.supportsTools,
                     supportsReasoning: model.supportsReasoning,
                     inputModalities: modalities.isEmpty ? [.text] : modalities,
+                    toolImageInput: model.toolImageInput,
                     billingSource: connection.billingSource,
                     supportedReasoningEfforts: model.supportedReasoningEfforts,
                     canDisableReasoning: model.canDisableReasoning ?? false,
@@ -173,6 +174,7 @@ public struct RuntimeServerModelDescriptor: Codable, Sendable, Equatable {
     public let supportsTools: Bool
     public let supportsReasoning: Bool
     public let inputModalities: [String]
+    public let toolImageInput: Bool?
     public let available: Bool
     /// v2 addition (optional for interop): why the model is unavailable, e.g.
     /// "quota exhausted" / "provider error". Present only when available == false.
@@ -190,6 +192,7 @@ public struct RuntimeServerModelDescriptor: Codable, Sendable, Equatable {
         case supportsTools = "supports_tools"
         case supportsReasoning = "supports_reasoning"
         case inputModalities = "input_modalities"
+        case toolImageInput = "tool_image_input"
         case unavailableReason = "unavailable_reason"
         case supportedReasoningEfforts = "supported_reasoning_efforts"
         case canDisableReasoning = "can_disable_reasoning"
@@ -204,6 +207,7 @@ public struct RuntimeServerModelDescriptor: Codable, Sendable, Equatable {
         supportsTools: Bool,
         supportsReasoning: Bool,
         inputModalities: [String],
+        toolImageInput: Bool? = nil,
         available: Bool,
         unavailableReason: String? = nil,
         supportedReasoningEfforts: [ModelReasoningEffort]? = nil,
@@ -219,6 +223,7 @@ public struct RuntimeServerModelDescriptor: Codable, Sendable, Equatable {
         self.supportsTools = supportsTools
         self.supportsReasoning = supportsReasoning
         self.inputModalities = inputModalities
+        self.toolImageInput = toolImageInput
         self.available = available
         self.unavailableReason = unavailableReason
         self.supportedReasoningEfforts = supportedReasoningEfforts

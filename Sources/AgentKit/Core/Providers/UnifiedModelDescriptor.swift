@@ -57,6 +57,7 @@ public struct UnifiedModelDescriptor: Codable, Hashable, Identifiable, Sendable 
     public let supportsTools: Bool
     public let supportsReasoning: Bool
     public let inputModalities: Set<ProviderInputModality>
+    public let toolImageInput: Bool?
     public let inputPricePerMillion: Double?
     public let outputPricePerMillion: Double?
     public let cacheInputPricePerMillion: Double?
@@ -84,6 +85,7 @@ public struct UnifiedModelDescriptor: Codable, Hashable, Identifiable, Sendable 
         self.supportsTools = model.supportsTools
         self.supportsReasoning = model.supportsReasoning
         self.inputModalities = model.inputModalities
+        self.toolImageInput = model.toolImageInput
         self.inputPricePerMillion = model.inputPricePerMillion
         self.outputPricePerMillion = model.outputPricePerMillion
         self.cacheInputPricePerMillion = model.cacheInputPricePerMillion
@@ -106,6 +108,7 @@ public struct UnifiedModelDescriptor: Codable, Hashable, Identifiable, Sendable 
         supportsTools: Bool,
         supportsReasoning: Bool,
         inputModalities: Set<ProviderInputModality>,
+        toolImageInput: Bool? = nil,
         billingSource: String,
         supportedReasoningEfforts: [ModelReasoningEffort]? = nil,
         canDisableReasoning: Bool = false,
@@ -128,6 +131,7 @@ public struct UnifiedModelDescriptor: Codable, Hashable, Identifiable, Sendable 
         self.supportsTools = supportsTools
         self.supportsReasoning = supportsReasoning
         self.inputModalities = inputModalities
+        self.toolImageInput = toolImageInput
         self.inputPricePerMillion = nil
         self.outputPricePerMillion = nil
         self.cacheInputPricePerMillion = nil
