@@ -28,6 +28,40 @@ struct SystemSkillManifest: Codable, Equatable, Sendable {
     }
 }
 
+struct LegacySystemSkillManifest: Codable, Equatable, Sendable {
+    let schema: String
+    let bundleVersion: String
+    let skills: [LegacySystemSkillEntry]
+
+    enum CodingKeys: String, CodingKey {
+        case schema
+        case bundleVersion = "bundle_version"
+        case skills
+    }
+}
+
+struct LegacySystemSkillEntry: Codable, Equatable, Sendable {
+    let name: String
+    let variants: [LegacySystemSkillVariant]
+}
+
+struct LegacySystemSkillVariant: Codable, Equatable, Sendable {
+    let id: String
+    let sha256: String
+    let files: [SystemSkillFile]
+}
+
+enum LegacyMigrationState: String, Sendable {
+    case migrated
+    case preserved
+}
+
+struct LegacyMigrationResult: Equatable, Sendable {
+    let name: String
+    let state: LegacyMigrationState
+    let warning: String?
+}
+
 struct SystemSkillMarker: Codable, Equatable {
     let schema: String
     let bundleVersion: String
@@ -81,16 +115,19 @@ enum BundledSkillsInstallerError: Error, LocalizedError {
 
 enum BundledSkillsInstaller {
     static let schema = "codeagent.system-skills.v1"
+    static let legacySchema = "codeagent.legacy-system-skills.v1"
     static let manifestFilename = "system-skills.json"
+    static let legacyManifestFilename = "legacy-system-skills.json"
     static let markerFilename = ".codeagent-system-skills.json"
     static let markerSalt = "codeagent-system-skills-v1"
 
+    @discardableResult
     static func install(
         bundleRoot: URL,
         dataDirectory: URL,
         source: String,
         fileManager: FileManager = .default
-    ) throws {
+    ) throws -> [LegacyMigrationResult] {
         let manifestURL = bundleRoot.appendingPathComponent(manifestFilename, isDirectory: false)
         guard fileManager.fileExists(atPath: manifestURL.path) else {
             throw BundledSkillsInstallerError.missingManifest(manifestURL)
@@ -98,6 +135,13 @@ enum BundledSkillsInstaller {
         let manifestData = try Data(contentsOf: manifestURL)
         let manifest = try JSONDecoder().decode(SystemSkillManifest.self, from: manifestData)
         try validate(manifest)
+        let legacyManifestURL = bundleRoot.appendingPathComponent(legacyManifestFilename, isDirectory: false)
+        guard fileManager.fileExists(atPath: legacyManifestURL.path) else {
+            throw BundledSkillsInstallerError.missingManifest(legacyManifestURL)
+        }
+        let legacyManifestData = try Data(contentsOf: legacyManifestURL)
+        let legacyManifest = try JSONDecoder().decode(LegacySystemSkillManifest.self, from: legacyManifestData)
+        try validateLegacy(legacyManifest)
         try verifyBundle(bundleRoot, manifest: manifest, allowMarker: false, fileManager: fileManager)
 
         let skillsRoot = dataDirectory.appendingPathComponent("skills", isDirectory: true)
@@ -111,48 +155,52 @@ enum BundledSkillsInstaller {
         let marker = SystemSkillMarker(
             schema: manifest.schema,
             bundleVersion: manifest.bundleVersion,
-            fingerprint: sha256(manifestData),
+            fingerprint: bundleFingerprint(manifestData, legacyManifestData: legacyManifestData),
             source: source,
-            files: installedFiles(manifest, manifestData: manifestData)
+            files: installedFiles(manifest, manifestData: manifestData, legacyManifestData: legacyManifestData)
         )
-        if markerMatches(
+        if !markerMatches(
             destination.appendingPathComponent(markerFilename),
             expected: marker,
             destination: destination,
             manifest: manifest,
             fileManager: fileManager
         ) {
-            return
-        }
+            let stage = skillsRoot.appendingPathComponent(
+                ".system.stage-\(UUID().uuidString)",
+                isDirectory: true
+            )
+            try copyTree(bundleRoot, to: stage, fileManager: fileManager)
+            let markerData = try JSONEncoder.pretty.encode(marker)
+            try markerData.write(to: stage.appendingPathComponent(markerFilename), options: .atomic)
+            try verifyBundle(stage, manifest: manifest, allowMarker: true, fileManager: fileManager)
 
-        let stage = skillsRoot.appendingPathComponent(
-            ".system.stage-\(UUID().uuidString)",
-            isDirectory: true
-        )
-        try copyTree(bundleRoot, to: stage, fileManager: fileManager)
-        let markerData = try JSONEncoder.pretty.encode(marker)
-        try markerData.write(to: stage.appendingPathComponent(markerFilename), options: .atomic)
-        try verifyBundle(stage, manifest: manifest, allowMarker: true, fileManager: fileManager)
-
-        let backup = skillsRoot.appendingPathComponent(".system.backup", isDirectory: true)
-        if fileManager.fileExists(atPath: backup.path) {
-            try fileManager.removeItem(at: backup)
-        }
-        if fileManager.fileExists(atPath: destination.path) {
-            try fileManager.moveItem(at: destination, to: backup)
-        }
-        do {
-            try fileManager.moveItem(at: stage, to: destination)
+            let backup = skillsRoot.appendingPathComponent(".system.backup", isDirectory: true)
             if fileManager.fileExists(atPath: backup.path) {
                 try fileManager.removeItem(at: backup)
             }
-        } catch {
-            if !fileManager.fileExists(atPath: destination.path), fileManager.fileExists(atPath: backup.path) {
-                try? fileManager.moveItem(at: backup, to: destination)
+            if fileManager.fileExists(atPath: destination.path) {
+                try fileManager.moveItem(at: destination, to: backup)
             }
-            try? fileManager.removeItem(at: stage)
-            throw error
+            do {
+                try fileManager.moveItem(at: stage, to: destination)
+                if fileManager.fileExists(atPath: backup.path) {
+                    try fileManager.removeItem(at: backup)
+                }
+            } catch {
+                if !fileManager.fileExists(atPath: destination.path), fileManager.fileExists(atPath: backup.path) {
+                    try? fileManager.moveItem(at: backup, to: destination)
+                }
+                try? fileManager.removeItem(at: stage)
+                throw error
+            }
         }
+
+        return try migrateLegacySkills(
+            skillsRoot: skillsRoot,
+            manifest: legacyManifest,
+            fileManager: fileManager
+        )
     }
 
     static func verifyBundle(
@@ -181,6 +229,7 @@ enum BundledSkillsInstaller {
 
         let manifestRelative = manifestFilename
         expected.insert(manifestRelative)
+        expected.insert(legacyManifestFilename)
         if allowMarker {
             expected.insert(markerFilename)
         }
@@ -262,6 +311,31 @@ enum BundledSkillsInstaller {
         }
     }
 
+    private static func validateLegacy(_ manifest: LegacySystemSkillManifest) throws {
+        guard manifest.schema == legacySchema else {
+            throw BundledSkillsInstallerError.invalidManifest("unsupported legacy schema \(manifest.schema)")
+        }
+        guard !manifest.bundleVersion.isEmpty, !manifest.skills.isEmpty else {
+            throw BundledSkillsInstallerError.invalidManifest("legacy bundle version and skills are required")
+        }
+        var names = Set<String>()
+        for skill in manifest.skills {
+            guard safeComponent(skill.name), names.insert(skill.name).inserted, !skill.variants.isEmpty else {
+                throw BundledSkillsInstallerError.invalidManifest("invalid legacy skill \(skill.name)")
+            }
+            for variant in skill.variants {
+                guard !variant.id.isEmpty, isSHA256(variant.sha256), !variant.files.isEmpty,
+                      variant.files.contains(where: { $0.path == "SKILL.md" }),
+                      aggregateHash(variant.files) == variant.sha256 else {
+                    throw BundledSkillsInstallerError.invalidManifest("invalid legacy variant for \(skill.name)")
+                }
+                for file in variant.files where !safeRelativePath(file.path) || !isSHA256(file.sha256) {
+                    throw BundledSkillsInstallerError.invalidManifest("invalid legacy file for \(skill.name)")
+                }
+            }
+        }
+    }
+
     private static func recoverInterruptedInstall(
         skillsRoot: URL,
         destination: URL,
@@ -315,15 +389,105 @@ enum BundledSkillsInstaller {
         return fileComponents.dropFirst(rootComponents.count).joined(separator: "/")
     }
 
+
+    private static func bundleFingerprint(_ manifestData: Data, legacyManifestData: Data) -> String {
+        var data = Data(markerSalt.utf8)
+        data.append(0)
+        data.append(manifestData)
+        data.append(0)
+        data.append(legacyManifestData)
+        return sha256(data)
+    }
+
     private static func installedFiles(
         _ manifest: SystemSkillManifest,
-        manifestData: Data
+        manifestData: Data,
+        legacyManifestData: Data
     ) -> [SystemSkillFile] {
         var files = manifest.skills.flatMap { skill in
             skill.files.map { SystemSkillFile(path: "\(skill.destination)/\($0.path)", sha256: $0.sha256) }
         }
         files.append(SystemSkillFile(path: manifestFilename, sha256: sha256(manifestData)))
+        files.append(SystemSkillFile(path: legacyManifestFilename, sha256: sha256(legacyManifestData)))
         return files.sorted { $0.path < $1.path }
+    }
+
+    private static func migrateLegacySkills(
+        skillsRoot: URL,
+        manifest: LegacySystemSkillManifest,
+        fileManager: FileManager
+    ) throws -> [LegacyMigrationResult] {
+        var results: [LegacyMigrationResult] = []
+        for skill in manifest.skills {
+            let legacyURL = skillsRoot.appendingPathComponent(skill.name, isDirectory: true)
+            guard fileManager.fileExists(atPath: legacyURL.path) else { continue }
+            let values = try? legacyURL.resourceValues(forKeys: [.isDirectoryKey, .isSymbolicLinkKey])
+            guard values?.isDirectory == true, values?.isSymbolicLink != true else {
+                results.append(preservedLegacy(name: skill.name, reason: "not a regular directory"))
+                continue
+            }
+            guard let files = try? legacyFiles(legacyURL, fileManager: fileManager) else {
+                results.append(preservedLegacy(name: skill.name, reason: "contains unsafe or non-regular files"))
+                continue
+            }
+            guard skill.variants.contains(where: { matchesLegacyVariant(files, variant: $0) }) else {
+                results.append(preservedLegacy(name: skill.name, reason: "content differs from known bundle-owned versions"))
+                continue
+            }
+            do {
+                try fileManager.removeItem(at: legacyURL)
+            } catch {
+                throw BundledSkillsInstallerError.invalidManifest(
+                    "remove bundle-owned legacy skill \(skill.name): \(error.localizedDescription)"
+                )
+            }
+            results.append(LegacyMigrationResult(name: skill.name, state: .migrated, warning: nil))
+        }
+        return results
+    }
+
+    private static func preservedLegacy(name: String, reason: String) -> LegacyMigrationResult {
+        LegacyMigrationResult(
+            name: name,
+            state: .preserved,
+            warning: "legacy skill \"\(name)\" preserved: \(reason); it shadows system skill \"\(name)\""
+        )
+    }
+
+    private static func legacyFiles(
+        _ root: URL,
+        fileManager: FileManager
+    ) throws -> [SystemSkillFile] {
+        let keys: [URLResourceKey] = [.isDirectoryKey, .isRegularFileKey, .isSymbolicLinkKey]
+        guard let enumerator = fileManager.enumerator(
+            at: root,
+            includingPropertiesForKeys: keys,
+            options: [],
+            errorHandler: nil
+        ) else {
+            throw BundledSkillsInstallerError.missingFile(root.path)
+        }
+        var files: [SystemSkillFile] = []
+        for case let url as URL in enumerator {
+            let values = try url.resourceValues(forKeys: Set(keys))
+            if values.isSymbolicLink == true || (values.isDirectory != true && values.isRegularFile != true) {
+                throw BundledSkillsInstallerError.nonRegularFile(url)
+            }
+            if values.isDirectory == true { continue }
+            files.append(SystemSkillFile(
+                path: relativePath(of: url, under: root),
+                sha256: try sha256(fileAt: url, fileManager: fileManager)
+            ))
+        }
+        return files.sorted { $0.path < $1.path }
+    }
+
+    private static func matchesLegacyVariant(
+        _ files: [SystemSkillFile],
+        variant: LegacySystemSkillVariant
+    ) -> Bool {
+        files == variant.files.sorted { $0.path < $1.path } &&
+            aggregateHash(files) == variant.sha256
     }
 
     private static func aggregateHash(_ files: [SystemSkillFile]) -> String {

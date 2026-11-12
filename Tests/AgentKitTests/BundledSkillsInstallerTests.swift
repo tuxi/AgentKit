@@ -18,6 +18,82 @@ final class BundledSkillsInstallerTests: XCTestCase {
             .appendingPathComponent("SKILL.md")
     }
 
+    private func copyLegacyFixture(into dataDirectory: URL) throws {
+        let fixture = URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent()
+            .appendingPathComponent("Fixtures/legacy-system-skills", isDirectory: true)
+        let skills = dataDirectory.appendingPathComponent("skills", isDirectory: true)
+        try FileManager.default.createDirectory(at: skills, withIntermediateDirectories: true)
+        for name in ["review-change", "verify-change", "skill-creator"] {
+            try FileManager.default.copyItem(
+                at: fixture.appendingPathComponent(name, isDirectory: true),
+                to: skills.appendingPathComponent(name, isDirectory: true)
+            )
+        }
+    }
+
+    func testUpgradeFromLegacyFlattenedBundle() throws {
+        let dataDirectory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("AgentKitSkills-\(UUID().uuidString)", isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: dataDirectory) }
+        try copyLegacyFixture(into: dataDirectory)
+
+        let migrations = try BundledSkillsInstaller.install(
+            bundleRoot: try bundledSystemSkills(),
+            dataDirectory: dataDirectory,
+            source: "test"
+        )
+
+        XCTAssertEqual(migrations.map(\.state), [.migrated, .migrated, .migrated])
+        for name in ["review-change", "verify-change", "skill-creator"] {
+            XCTAssertFalse(
+                FileManager.default.fileExists(atPath: dataDirectory.appendingPathComponent("skills/\(name)").path)
+            )
+            XCTAssertTrue(
+                FileManager.default.fileExists(
+                    atPath: dataDirectory.appendingPathComponent("skills/.system/\(name)/SKILL.md").path
+                )
+            )
+        }
+    }
+
+    func testModifiedLegacySkillIsPreservedWithShadowWarning() throws {
+        let dataDirectory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("AgentKitSkills-\(UUID().uuidString)", isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: dataDirectory) }
+        try copyLegacyFixture(into: dataDirectory)
+        let legacy = dataDirectory.appendingPathComponent("skills/verify-change/SKILL.md")
+        let handle = try FileHandle(forWritingTo: legacy)
+        try handle.seekToEnd()
+        try handle.write(contentsOf: Data("\nuser modification\n".utf8))
+        try handle.close()
+
+        let migrations = try BundledSkillsInstaller.install(
+            bundleRoot: try bundledSystemSkills(),
+            dataDirectory: dataDirectory,
+            source: "test"
+        )
+
+        let preserved = migrations.first { $0.name == "verify-change" }
+        XCTAssertEqual(preserved?.state, .preserved)
+        XCTAssertTrue(preserved?.warning?.contains("shadows system skill") == true)
+        XCTAssertTrue(FileManager.default.fileExists(atPath: legacy.path))
+        XCTAssertTrue(
+            FileManager.default.fileExists(atPath: dataDirectory.appendingPathComponent("skills/.system/verify-change/SKILL.md").path)
+        )
+    }
+
+    func testResourcesSkillsContainsOnlySystemBundle() throws {
+        guard let skills = Bundle.agentKitResourceBundle.url(forResource: "skills", withExtension: nil) else {
+            throw BundledSkillsInstallerError.missingFile("skills test resource")
+        }
+        let children = try FileManager.default.contentsOfDirectory(
+            at: skills,
+            includingPropertiesForKeys: nil
+        )
+        XCTAssertEqual(children.map(\.lastPathComponent), [".system"])
+    }
+
     func testCleanAppDataInstallsSystemBundle() throws {
         let dataDirectory = FileManager.default.temporaryDirectory
             .appendingPathComponent("AgentKitSkills-\(UUID().uuidString)", isDirectory: true)

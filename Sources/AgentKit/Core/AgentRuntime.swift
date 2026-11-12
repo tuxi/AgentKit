@@ -579,11 +579,16 @@ public final class AgentRuntime: @unchecked Sendable {
         guard let skills = Bundle.module.url(forResource: "skills", withExtension: nil) else {
             throw BundledSkillsInstallerError.missingFile("skills resource directory")
         }
-        try BundledSkillsInstaller.install(
+        let migrations = try BundledSkillsInstaller.install(
             bundleRoot: skills.appendingPathComponent(".system", isDirectory: true),
             dataDirectory: dataDirectory,
             source: "AgentKit:\(bundleFingerprintSource)"
         )
+        for migration in migrations {
+            if let warning = migration.warning {
+                DLLog("System skills: \(warning)")
+            }
+        }
     }
 
     private static var bundleFingerprintSource: String {
