@@ -40,7 +40,7 @@ let package = Package(
                 // iOS 内嵌 runtime 的默认 settings 文档（settings.File JSON 形状，
                 // 经 MobileStart 的 settingsJSON 参数注入）。
                 .copy("Resources/settings.json"),
-                .copy("Resources/skills"),   // 从 build/skills/ 拷贝到 app bundle
+                .copy("Resources/skills"),   // Resources/skills/.system 是共享 system bundle
                 .copy("Resources/ConversationWeb"),
                 .copy("Resources/Previews"),
                 .process("Resources/Localizable.xcstrings"),

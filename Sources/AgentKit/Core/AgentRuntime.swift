@@ -512,7 +512,7 @@ public final class AgentRuntime: @unchecked Sendable {
         )
         Self.applyDataProtectionIfNeeded(to: config.dataDirectory)
         Self.bootstrapExecutablePath(config.executableSearchPaths)
-        Self.installBundledSkills(in: config.dataDirectory)
+        try Self.installBundledSkills(in: config.dataDirectory)
 
         // A4.2: 持久化 (connectionsJSON, secretsJSON) 对，restart() 时保留。
         injectedConnectionsJSON = connectionsJSON
@@ -575,28 +575,19 @@ public final class AgentRuntime: @unchecked Sendable {
         return text.replacingOccurrences(of: "__GATEWAY_BASE_URL__", with: gatewayBaseURL)
     }
 
-    private static func installBundledSkills(in dataDirectory: URL) {
-        let fileManager = FileManager.default
-        guard let source = Bundle.module.url(forResource: "skills", withExtension: nil),
-              let bundledSkills = try? fileManager.contentsOfDirectory(
-                at: source,
-                includingPropertiesForKeys: [.isDirectoryKey]
-              ) else {
-            return
+    private static func installBundledSkills(in dataDirectory: URL) throws {
+        guard let skills = Bundle.module.url(forResource: "skills", withExtension: nil) else {
+            throw BundledSkillsInstallerError.missingFile("skills resource directory")
         }
+        try BundledSkillsInstaller.install(
+            bundleRoot: skills.appendingPathComponent(".system", isDirectory: true),
+            dataDirectory: dataDirectory,
+            source: "AgentKit:\(bundleFingerprintSource)"
+        )
+    }
 
-        let destination = dataDirectory.appendingPathComponent("skills", isDirectory: true)
-        try? fileManager.createDirectory(at: destination, withIntermediateDirectories: true)
-
-        // Replace only skills owned by the bundle. User-installed sibling skills survive upgrades.
-        for bundledSkill in bundledSkills {
-            let target = destination.appendingPathComponent(
-                bundledSkill.lastPathComponent,
-                isDirectory: true
-            )
-            try? fileManager.removeItem(at: target)
-            try? fileManager.copyItem(at: bundledSkill, to: target)
-        }
+    private static var bundleFingerprintSource: String {
+        Bundle.main.bundleIdentifier ?? "unknown"
     }
 
     private static func applyDataProtectionIfNeeded(to directory: URL) {
