@@ -173,6 +173,11 @@ public struct RuntimeCapabilitySnapshot: Codable, Sendable, Equatable {
     }
 
     public var supportsWorkspaceGitBranch: Bool { flags.contains(.workspaceGitBranch) }
+
+    /// REST/WebSocket feature advertised by P1-A Runtime builds.
+    public var supportsSkillPluginManagement: Bool {
+        capabilities["skill_plugin_management_v1"] == true
+    }
 }
 
 public struct RuntimeTerminalActivity: Codable, Sendable, Equatable {

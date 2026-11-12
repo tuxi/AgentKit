@@ -779,30 +779,46 @@ public final class CodeAgentTransport: AgentTransport, CodingTaskReading, Coding
 ///
 /// UI 通过 `AgentDependencies` 拿到 `RuntimeClient` 协议实例。
 /// 要替换 backend，替换 `transport` 即可，不修改 UI 层。
-public final class DefaultAgentClient: RuntimeClient, CodingTaskReading, CodingTaskWriting, CodingTaskModelReading, @unchecked Sendable {
+public final class DefaultAgentClient: RuntimeClient, CodingTaskReading, CodingTaskWriting, CodingTaskModelReading, SkillPluginManaging, @unchecked Sendable {
 
     private let transport: any AgentTransport
+    private let managementHTTP: RuntimeHTTPClient?
 
     // MARK: - Init
 
     /// 使用指定的 transport 创建。
     public init(transport: any AgentTransport) {
         self.transport = transport
+        self.managementHTTP = nil
+    }
+
+    private init(transport: any AgentTransport, managementHTTP: RuntimeHTTPClient?) {
+        self.transport = transport
+        self.managementHTTP = managementHTTP
     }
 
     /// 便捷初始化：连接指定 Runtime（无 credential）。
     public convenience init(environment: RuntimeEnvironment) {
-        self.init(transport: CodeAgentTransport(environment: environment))
+        self.init(
+            transport: CodeAgentTransport(environment: environment),
+            managementHTTP: RuntimeHTTPClient(environment: environment)
+        )
     }
 
     public convenience init(
         environment: RuntimeEnvironment,
         trustPolicy: RuntimeServerTrustPolicy?
     ) {
-        self.init(transport: CodeAgentTransport(
-            environment: environment,
-            trustPolicy: trustPolicy
-        ))
+        self.init(
+            transport: CodeAgentTransport(
+                environment: environment,
+                trustPolicy: trustPolicy
+            ),
+            managementHTTP: RuntimeHTTPClient(
+                environment: environment,
+                trustPolicy: trustPolicy
+            )
+        )
     }
 
     /// 便捷初始化：连接指定 Runtime 并注入 credential store（macOS 路径）。
@@ -812,12 +828,20 @@ public final class DefaultAgentClient: RuntimeClient, CodingTaskReading, CodingT
         credentialTarget: CredentialTarget = .runtimeAccess("default"),
         trustPolicy: RuntimeServerTrustPolicy? = nil
     ) {
-        self.init(transport: CodeAgentTransport(
-            environment: environment,
-            credentialStore: credentialStore,
-            credentialTarget: credentialTarget,
-            trustPolicy: trustPolicy
-        ))
+        self.init(
+            transport: CodeAgentTransport(
+                environment: environment,
+                credentialStore: credentialStore,
+                credentialTarget: credentialTarget,
+                trustPolicy: trustPolicy
+            ),
+            managementHTTP: RuntimeHTTPClient(
+                environment: environment,
+                credentialStore: credentialStore,
+                credentialTarget: credentialTarget,
+                trustPolicy: trustPolicy
+            )
+        )
     }
 
     /// 便捷初始化：使用默认占位环境。调用方应在 Runtime 启动后替换为真实端口。
@@ -885,6 +909,35 @@ public final class DefaultAgentClient: RuntimeClient, CodingTaskReading, CodingT
 
     public func runtimeCapabilities() async throws -> RuntimeCapabilitySnapshot {
         try await transport.runtimeCapabilities()
+    }
+
+    // MARK: - SkillPluginManaging
+
+    private var skillPluginHTTP: RuntimeHTTPClient {
+        get throws {
+            guard let managementHTTP else { throw RuntimeHTTPError.unsupported }
+            return managementHTTP
+        }
+    }
+
+    public func skillInventory(sessionID: String?) async throws -> RuntimeSkillInventory {
+        try await skillPluginHTTP.skillInventory(sessionID: sessionID)
+    }
+
+    public func pluginInventory() async throws -> RuntimePluginInventory {
+        try await skillPluginHTTP.pluginInventory()
+    }
+
+    public func installLocalPlugin(source: String, confirmed: Bool) async throws -> RuntimePluginMutation {
+        try await skillPluginHTTP.installLocalPlugin(source: source, confirmed: confirmed)
+    }
+
+    public func setPluginEnabled(name: String, enabled: Bool) async throws -> RuntimePluginMutation {
+        try await skillPluginHTTP.setPluginEnabled(name: name, enabled: enabled)
+    }
+
+    public func uninstallPlugin(name: String) async throws -> RuntimePluginMutation {
+        try await skillPluginHTTP.uninstallPlugin(name: name)
     }
 
     public func backgroundJobRuntimeIdentity() async throws -> String { try await transport.backgroundJobRuntimeIdentity() }

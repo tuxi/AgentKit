@@ -239,6 +239,102 @@ struct RuntimeHTTPClient: Sendable {
         return try decodeEnvelope(RuntimeCapabilitySnapshot.self, from: data)
     }
 
+    // MARK: - Skill & plugin management
+
+    /// `GET /v1/runtime/skills?session_id=...`.
+    ///
+    /// Project scope is resolved exclusively by Runtime from the persisted
+    /// session workspace. The client intentionally exposes no workspace path
+    /// parameter and therefore cannot bypass session scope.
+    func skillInventory(sessionID: String?) async throws -> RuntimeSkillInventory {
+        let trimmed = sessionID?.trimmingCharacters(in: .whitespacesAndNewlines)
+        let query = (trimmed?.isEmpty == false)
+            ? [URLQueryItem(name: "session_id", value: trimmed)]
+            : nil
+        let request = try await buildRequest(
+            "GET",
+            pathComponents: "v1/runtime/skills",
+            queryItems: query,
+            timeout: 30
+        )
+        let (data, response) = try await session.data(for: request)
+        try validateManagementHTTP(response, data: data)
+        do {
+            return try decodeEnvelope(RuntimeSkillInventory.self, from: data)
+        } catch {
+            throw SkillPluginManagementError.invalidResponse
+        }
+    }
+
+    /// `GET /v1/runtime/plugins`.
+    func pluginInventory() async throws -> RuntimePluginInventory {
+        let request = try await buildRequest(
+            "GET",
+            pathComponents: "v1/runtime/plugins",
+            timeout: 30
+        )
+        let (data, response) = try await session.data(for: request)
+        try validateManagementHTTP(response, data: data)
+        do {
+            return try decodeEnvelope(RuntimePluginInventory.self, from: data)
+        } catch {
+            throw SkillPluginManagementError.invalidResponse
+        }
+    }
+
+    /// `POST /v1/runtime/plugins/install-local`.
+    func installLocalPlugin(
+        source: String,
+        confirmed: Bool
+    ) async throws -> RuntimePluginMutation {
+        let request = try await buildRequest(
+            "POST",
+            pathComponents: "v1/runtime/plugins/install-local",
+            body: RuntimePluginInstallLocalRequest(source: source, confirmed: confirmed),
+            timeout: 60
+        )
+        let (data, response) = try await session.data(for: request)
+        try validateManagementHTTP(response, data: data)
+        do {
+            return try decodeEnvelope(RuntimePluginMutation.self, from: data)
+        } catch {
+            throw SkillPluginManagementError.invalidResponse
+        }
+    }
+
+    /// `POST /v1/runtime/plugins/{name}/enable|disable`.
+    func setPluginEnabled(name: String, enabled: Bool) async throws -> RuntimePluginMutation {
+        let action = enabled ? "enable" : "disable"
+        let request = try await buildRequest(
+            "POST",
+            pathComponents: "v1/runtime/plugins", name, action,
+            timeout: 30
+        )
+        let (data, response) = try await session.data(for: request)
+        try validateManagementHTTP(response, data: data)
+        do {
+            return try decodeEnvelope(RuntimePluginMutation.self, from: data)
+        } catch {
+            throw SkillPluginManagementError.invalidResponse
+        }
+    }
+
+    /// `DELETE /v1/runtime/plugins/{name}`.
+    func uninstallPlugin(name: String) async throws -> RuntimePluginMutation {
+        let request = try await buildRequest(
+            "DELETE",
+            pathComponents: "v1/runtime/plugins", name,
+            timeout: 30
+        )
+        let (data, response) = try await session.data(for: request)
+        try validateManagementHTTP(response, data: data)
+        do {
+            return try decodeEnvelope(RuntimePluginMutation.self, from: data)
+        } catch {
+            throw SkillPluginManagementError.invalidResponse
+        }
+    }
+
     // MARK: - Preview resources
 
     /// Authenticated, redirect-free viewer fetch. The returned bytes are not
@@ -1153,6 +1249,28 @@ struct RuntimeHTTPClient: Sendable {
             throw RuntimeHTTPError.unexpectedStatus(httpResponse.statusCode, body: body)
         }
     }
+
+    /// Management endpoints preserve their stable error code while mapping the
+    /// transport status (401/409/422/428, etc.) into a UI-actionable error.
+    private func validateManagementHTTP(_ response: URLResponse, data: Data) throws {
+        guard let httpResponse = response as? HTTPURLResponse else {
+            throw SkillPluginManagementError.invalidResponse
+        }
+        switch httpResponse.statusCode {
+        case 200, 201, 202:
+            return
+        default:
+            let payload = try? decoder.decode(
+                RuntimeManagementErrorEnvelope.self,
+                from: data
+            )
+            throw SkillPluginManagementError.mapped(
+                statusCode: httpResponse.statusCode,
+                code: payload?.data?.code,
+                message: payload?.data?.message ?? payload?.msg
+            )
+        }
+    }
 }
 
 /// Authenticated remote resolver adapter shared by the Web preview host.
@@ -1177,6 +1295,21 @@ private struct RuntimeEnvelope<T: Decodable>: Decodable {
     let code: Int
     let msg: String
     let data: T?
+}
+
+private struct RuntimePluginInstallLocalRequest: Encodable {
+    let source: String
+    let confirmed: Bool
+}
+
+private struct RuntimeManagementErrorEnvelope: Decodable {
+    struct Payload: Decodable {
+        let code: String
+        let message: String
+    }
+
+    let msg: String?
+    let data: Payload?
 }
 
 /// `GET /v1/providers` list payload (`data: {providers: [...]}` form).
