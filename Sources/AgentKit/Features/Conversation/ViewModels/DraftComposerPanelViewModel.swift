@@ -46,6 +46,8 @@ final class DraftComposerPanelViewModel {
     
     // Context window
     var contextSnapshot: ConversationContextSnapshot?
+    var isContextCompacting = false
+    var contextCompactionMessage: String?
     var isContextLoading = false
     var contextError: String?
     var isContextPresented = false
@@ -112,7 +114,7 @@ final class DraftComposerPanelViewModel {
             return attachment.state == .ready
         }
         return isEnabled && hasContent && attachmentsReady && !isSending
-        && !isTurnRunning && modelSettings.isModelAvailable(selectedModel?.model)
+        && !isTurnRunning && !isContextCompacting && modelSettings.isModelAvailable(selectedModel?.model)
     }
     
     var trimmed: String {
@@ -498,7 +500,32 @@ final class DraftComposerPanelViewModel {
         selectModel(modelID, reasoningEffort: nil)
     }
 
+    func compactContext() {
+        guard let id = sessionID, !isContextCompacting, !isTurnRunning, !isSending else { return }
+        contextRefreshTask?.cancel()
+        isContextLoading = false
+        isContextCompacting = true
+        contextCompactionMessage = nil
+        Task { [weak self] in
+            guard let self else { return }
+            defer { self.isContextCompacting = false }
+            do {
+                let result = try await self.workspaceStore.client.compactConversationContext(id: id)
+                guard self.sessionID == id else { return }
+                self.contextSnapshot = result.snapshot
+                self.contextError = nil
+                self.contextCompactionMessage = AgentKitLocalized.string(
+                    result.status == "no_change" ? "context_window.no_change" : "context_window.pending_measurement"
+                )
+            } catch {
+                guard self.sessionID == id else { return }
+                self.contextCompactionMessage = error.localizedDescription
+            }
+        }
+    }
+
     func refreshContext() {
+        guard !isContextCompacting else { return }
         guard let id = sessionID else { return }
         contextRefreshTask?.cancel()
         isContextLoading = true

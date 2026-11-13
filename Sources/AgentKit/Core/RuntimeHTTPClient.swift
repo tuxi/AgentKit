@@ -684,6 +684,13 @@ struct RuntimeHTTPClient: Sendable {
     }
 
     /// `GET /v1/conversations/{id}/context` — 会话上下文窗口快照。
+    func compactConversationContext(id: String) async throws -> ConversationCompactionResult {
+        let request = try await buildRequest("POST", pathComponents: "v1/conversations", id, "compact", timeout: 300)
+        let (data, response) = try await session.data(for: request)
+        try validateHTTP(response, data: data)
+        return try decodeEnvelope(ConversationCompactionResult.self, from: data)
+    }
+
     func getConversationContext(id: String) async throws -> ConversationContextSnapshot {
         let request = try await buildRequest("GET", pathComponents: "v1/conversations", id, "context")
         let (data, response) = try await session.data(for: request)

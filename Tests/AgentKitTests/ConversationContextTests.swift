@@ -402,3 +402,36 @@ private final class StubContextTransport: AgentTransport, @unchecked Sendable {
     func registerTools(_ tools: [ClientToolInfo]) async {}
     func capabilities() async -> AgentCapabilityFlags { .default }
 }
+
+
+final class ManualContextCompactionHTTPTests: XCTestCase {
+    func testManualCompactionPOSTAndPendingUsage() async throws {
+        ConversationContextMockURLProtocol.setHandler { request in
+            XCTAssertEqual(request.httpMethod, "POST")
+            XCTAssertEqual(request.url?.path, "/v1/conversations/conv-123/compact")
+            let snapshot: [String: Any] = [
+                "model": ["name": "test", "context_window": 1000000, "compact_threshold": 750000, "output_token_budget": 16384, "input_token_budget": 933616],
+                "current": ["prompt_tokens": 957379, "usage_pct": 95.7, "threshold_pct": 75.0],
+                "compaction": ["total_count": 1, "total_saved_tokens": 0, "last": ["before_tokens": 957379, "after_tokens": -1, "saved_tokens": 0, "ratio": 0, "summary_chars": 100, "ineffective": false, "at": "2026-11-13T00:00:00Z"]],
+                "structure": ["message_count": 5, "estimated_tokens": 1000, "has_summary": true, "summary_chars": 100]
+            ]
+            return (HTTPURLResponse(url: try XCTUnwrap(request.url), statusCode: 200, httpVersion: nil, headerFields: nil)!, envelopeJSON(["status": "compacted_pending_measurement", "snapshot": snapshot]))
+        }
+        let client = RuntimeHTTPClient(environment: RuntimeEnvironment(host: "127.0.0.1", port: 8797), session: makeMockSession())
+        let result = try await client.compactConversationContext(id: "conv-123")
+        XCTAssertEqual(result.status, "compacted_pending_measurement")
+        XCTAssertEqual(result.snapshot.model.outputTokenBudget, 16384)
+        XCTAssertEqual(result.snapshot.compaction.last?.afterTokens, -1)
+    }
+
+    func testManualCompactionConflictIsNotSuccess() async throws {
+        ConversationContextMockURLProtocol.setHandler { request in
+            (HTTPURLResponse(url: try XCTUnwrap(request.url), statusCode: 409, httpVersion: nil, headerFields: nil)!, Data("conversation is in use".utf8))
+        }
+        let client = RuntimeHTTPClient(environment: RuntimeEnvironment(host: "127.0.0.1", port: 8797), session: makeMockSession())
+        do {
+            _ = try await client.compactConversationContext(id: "conv-123")
+            XCTFail("active conversation accepted")
+        } catch {}
+    }
+}

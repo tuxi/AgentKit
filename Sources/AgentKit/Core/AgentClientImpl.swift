@@ -528,6 +528,10 @@ public final class CodeAgentTransport: AgentTransport, CodingTaskReading, Coding
         try await http.getConversationDetail(id: id)
     }
 
+    public func compactConversationContext(id: String) async throws -> ConversationCompactionResult {
+        try await http.compactConversationContext(id: id)
+    }
+
     public func getConversationContext(id: String) async throws -> ConversationContextSnapshot {
         try await http.getConversationContext(id: id)
     }
@@ -1151,6 +1155,10 @@ public final class DefaultAgentClient: RuntimeClient, CodingTaskReading, CodingT
 
     public func getConversationDetail(id: String) async throws -> ConversationDetail {
         try await transport.getConversationDetail(id: id)
+    }
+
+    public func compactConversationContext(id: String) async throws -> ConversationCompactionResult {
+        try await transport.compactConversationContext(id: id)
     }
 
     public func getConversationContext(id: String) async throws -> ConversationContextSnapshot {

@@ -136,6 +136,8 @@ public protocol RuntimeClient: Sendable {
     /// 客户端据此实时获知距离压缩还有多远 —— `current.prompt_tokens` 趋近
     /// `model.compact_threshold` 时即将触发压缩。默认实现抛 `unsupported`
     /// （mock / 旧 backend）。
+    func compactConversationContext(id: String) async throws -> ConversationCompactionResult
+
     func getConversationContext(id: String) async throws -> ConversationContextSnapshot
 
     /// 对话主干消息（user/assistant）。
@@ -342,6 +344,10 @@ extension RuntimeClient {
     }
 
     /// 默认实现：不支持上下文快照（mock backend）。
+    public func compactConversationContext(id: String) async throws -> ConversationCompactionResult {
+        throw RuntimeHTTPError.unsupported
+    }
+
     public func getConversationContext(id: String) async throws -> ConversationContextSnapshot {
         throw RuntimeHTTPError.unsupported
     }

@@ -43,6 +43,8 @@ public struct ConversationContextSnapshot: Sendable, Codable, Hashable {
 /// 当前模型及其上下文窗口配置。
 public struct ConversationContextModel: Sendable, Codable, Hashable, Identifiable, Equatable {
     public let name: String
+    public let outputTokenBudget: Int?
+    public let inputTokenBudget: Int?
     public let contextWindow: Int
     public let reasoningEffort: ModelReasoningEffort?
     public let compactThreshold: Int
@@ -55,6 +57,8 @@ public struct ConversationContextModel: Sendable, Codable, Hashable, Identifiabl
     public init(name: String, reasoningEffort: ModelReasoningEffort?, contextWindow: Int, compactThreshold: Int, compactRatio: Double) {
         self.name = name
         self.reasoningEffort = reasoningEffort
+        self.outputTokenBudget = nil
+        self.inputTokenBudget = nil
         self.contextWindow = contextWindow
         self.compactThreshold = compactThreshold
         self.compactRatio = compactRatio
@@ -63,6 +67,8 @@ public struct ConversationContextModel: Sendable, Codable, Hashable, Identifiabl
     enum CodingKeys: String, CodingKey {
         case name
         case reasoningEffort = "reasoning_effort"
+        case outputTokenBudget = "output_token_budget"
+        case inputTokenBudget = "input_token_budget"
         case contextWindow = "context_window"
         case compactThreshold = "compact_threshold"
         case compactRatio = "compact_ratio"
@@ -72,6 +78,8 @@ public struct ConversationContextModel: Sendable, Codable, Hashable, Identifiabl
         let c = try decoder.container(keyedBy: CodingKeys.self)
         name = try c.decode(String.self, forKey: .name)
         reasoningEffort = try? c.decodeIfPresent(ModelReasoningEffort.self, forKey: .reasoningEffort)
+        outputTokenBudget = try c.decodeIfPresent(Int.self, forKey: .outputTokenBudget)
+        inputTokenBudget = try c.decodeIfPresent(Int.self, forKey: .inputTokenBudget)
         contextWindow = try c.decodeIfPresent(Int.self, forKey: .contextWindow) ?? 0
         compactThreshold = try c.decodeIfPresent(Int.self, forKey: .compactThreshold) ?? 0
         compactRatio = try c.decodeIfPresent(Double.self, forKey: .compactRatio) ?? 0
@@ -217,4 +225,10 @@ public struct ConversationContextStructure: Sendable, Codable, Hashable {
         hasSummary = try c.decode(Bool.self, forKey: .hasSummary)
         summaryChars = try c.decodeIfPresent(Int.self, forKey: .summaryChars) ?? 0
     }
+}
+
+/// Compaction changes model context; the original transcript remains in events.
+public struct ConversationCompactionResult: Sendable, Codable, Hashable {
+    public let status: String
+    public let snapshot: ConversationContextSnapshot
 }

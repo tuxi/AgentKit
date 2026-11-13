@@ -462,7 +462,11 @@ struct DraftComposerPanel: View {
                                 snapshot: vm.contextSnapshot,
                                 isLoading: vm.isContextLoading,
                                 errorMessage: vm.contextError,
-                                onRefresh: { vm.refreshContext() }
+                                onRefresh: { vm.refreshContext() },
+                                onCompact: { vm.compactContext() },
+                                isCompacting: vm.isContextCompacting,
+                                canCompact: !vm.isTurnRunning && !vm.isSending,
+                                compactionMessage: vm.contextCompactionMessage
                             )
                         }
 #else
@@ -475,7 +479,11 @@ struct DraftComposerPanel: View {
                                     snapshot: vm.contextSnapshot,
                                     isLoading: vm.isContextLoading,
                                     errorMessage: vm.contextError,
-                                    onRefresh: { vm.refreshContext() }
+                                    onRefresh: { vm.refreshContext() },
+                                    onCompact: { vm.compactContext() },
+                                    isCompacting: vm.isContextCompacting,
+                                    canCompact: !vm.isTurnRunning && !vm.isSending,
+                                    compactionMessage: vm.contextCompactionMessage
                                 )
                                 .toolbar {
                                     ToolbarItem(placement: .topBarTrailing) {

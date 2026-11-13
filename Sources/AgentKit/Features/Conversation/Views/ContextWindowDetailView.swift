@@ -14,12 +14,27 @@ struct ContextWindowDetailView: View {
     let isLoading: Bool
     let errorMessage: String?
     let onRefresh: () -> Void
+    let onCompact: () -> Void
+    let isCompacting: Bool
+    let canCompact: Bool
+    let compactionMessage: String?
 
     var body: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 14) {
                 header
                 content
+                Button(action: onCompact) {
+                    HStack {
+                        if isCompacting { ProgressView().controlSize(.small) }
+                        Text(AgentKitLocalized.string(isCompacting ? "context_window.compacting" : "context_window.compact_now"))
+                    }
+                }
+                .buttonStyle(.bordered)
+                .disabled(!canCompact || isCompacting || isLoading || snapshot == nil)
+                if let compactionMessage {
+                    Text(compactionMessage).font(.caption).foregroundStyle(.secondary)
+                }
                 Spacer()
             }
             .padding(16)
@@ -45,7 +60,7 @@ struct ContextWindowDetailView: View {
             }
             .buttonStyle(.plain)
             .foregroundStyle(.secondary)
-            .disabled(isLoading)
+            .disabled(isLoading || isCompacting)
             .accessibilityLabel(AgentKitLocalized.string("context_window.refresh"))
         }
     }
@@ -81,6 +96,9 @@ struct ContextWindowDetailView: View {
                 modelSection(snapshot.model)
                 Divider()
                 usageSection(snapshot.current)
+                if snapshot.compaction.last?.afterTokens ?? 0 < 0 {
+                    Text(AgentKitLocalized.string("context_window.usage_stale")).font(.caption).foregroundStyle(.secondary)
+                }
                 Divider()
                 compactionSection(snapshot.compaction)
                 Divider()
@@ -106,6 +124,12 @@ struct ContextWindowDetailView: View {
                 AgentKitLocalized.string("context_window.context_window"),
                 value: ContextFormat.tokens(model.contextWindow)
             )
+            if let budget = model.outputTokenBudget {
+                LabeledContent(AgentKitLocalized.string("context_window.output_budget"), value: ContextFormat.tokens(budget))
+            }
+            if let budget = model.inputTokenBudget {
+                LabeledContent(AgentKitLocalized.string("context_window.input_budget"), value: ContextFormat.tokens(budget))
+            }
             if let reasoningEffort = model.reasoningEffort {
                 LabeledContent(
                     AgentKitLocalized.string("context_window.reasoning_effort"),
@@ -162,15 +186,15 @@ struct ContextWindowDetailView: View {
                     )
                     LabeledContent(
                         AgentKitLocalized.string("context_window.after"),
-                        value: ContextFormat.tokens(last.afterTokens)
+                        value: last.afterTokens < 0 ? "—" : ContextFormat.tokens(last.afterTokens)
                     )
                     LabeledContent(
                         AgentKitLocalized.string("context_window.saved_tokens"),
-                        value: ContextFormat.tokens(last.savedTokens)
+                        value: last.afterTokens < 0 ? "—" : ContextFormat.tokens(last.savedTokens)
                     )
                     LabeledContent(
                         AgentKitLocalized.string("context_window.ratio"),
-                        value: ContextFormat.pct(last.ratio * 100)
+                        value: last.afterTokens < 0 ? "—" : ContextFormat.pct(last.ratio * 100)
                     )
                     LabeledContent(
                         AgentKitLocalized.string("context_window.summary_chars"),
@@ -178,7 +202,9 @@ struct ContextWindowDetailView: View {
                     )
                     LabeledContent(
                         AgentKitLocalized.string("context_window.has_summary"),
-                        value: last.ineffective
+                        value: last.afterTokens < 0
+                            ? AgentKitLocalized.string("context_window.pending_measurement")
+                            : last.ineffective
                             ? AgentKitLocalized.string("context_window.ineffective")
                             : AgentKitLocalized.string("context_window.effective")
                     )
