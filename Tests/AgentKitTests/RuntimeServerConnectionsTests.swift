@@ -164,8 +164,95 @@ final class RuntimeServerConnectionsTests: XCTestCase {
         XCTAssertNotEqual(first, second)
     }
 
-    func testRuntimeInfoDecodesLockedWireContract() throws {
-        let json = """
+    func testNoAuthLocalConnectionPersistsAsActiveAcrossRestart() async throws {
+        let suite = "RuntimeServerConnectionsTests.\(UUID().uuidString)"
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
+        defer { defaults.removePersistentDomain(forName: suite) }
+        let registry = RuntimeServerRegistry(
+            defaults: defaults,
+            storageKey: "servers",
+            activeStorageKey: "active"
+        )
+        let coordinator = RuntimeServerCoordinator(
+            registry: registry,
+            runtimeCredentialStore: MemoryCredentialStore(),
+            platform: .macOS
+        )
+        let endpoint = try XCTUnwrap(URL(string: "http://127.0.0.1:18797"))
+        let preflight = RuntimeServerPreflightResult(
+            endpoint: endpoint,
+            kind: .local,
+            authentication: .none,
+            info: RuntimeServerInfo(
+                schema: "runtime-info/v1",
+                serverID: "srv_no_auth",
+                displayName: "No Auth codeagentd",
+                product: "codeagent",
+                runtimeVersion: "dev",
+                agentWireProtocol: RuntimeServerProtocolVersion(
+                    major: 1,
+                    revision: "1.2"
+                ),
+                runtimeProfile: "headless"
+            ),
+            capabilities: RuntimeCapabilitySnapshot(),
+            modelCatalog: RuntimeServerModelCatalog(
+                schema: "runtime-model-catalog/v2",
+                revision: 0,
+                defaultRuntimeAlias: "qwen",
+                connections: [
+                    RuntimeServerModelConnection(
+                        id: "qwen",
+                        providerID: "qwen",
+                        displayName: "qwen",
+                        billingSource: "server_managed",
+                        models: [
+                            RuntimeServerModelDescriptor(
+                                runtimeAlias: "qwen",
+                                wireModelID: "qwen3-coder-plus",
+                                displayName: "qwen3-coder-plus",
+                                contextWindow: 128_000,
+                                supportsTools: true,
+                                supportsReasoning: false,
+                                inputModalities: ["text"],
+                                available: true
+                            ),
+                        ]
+                    ),
+                ]
+            ),
+            checkedAt: Date()
+        )
+
+        let saved = try await coordinator.saveExternalConnection(
+            id: "local-no-auth",
+            displayName: "Local codeagentd",
+            preflight: preflight,
+            accessToken: nil
+        )
+        try registry.setActive(connectionID: saved.id)
+        XCTAssertEqual(saved.authentication, .none)
+        XCTAssertEqual(saved.serverID, "srv_no_auth")
+
+        let restored = RuntimeServerRegistry(
+            defaults: defaults,
+            storageKey: "servers",
+            activeStorageKey: "active"
+        )
+        let restoredConnection = try XCTUnwrap(
+            restored.connection(id: "local-no-auth")
+        )
+        XCTAssertEqual(restored.activeConnectionID, "local-no-auth")
+        XCTAssertEqual(restoredConnection.endpoint, endpoint)
+        XCTAssertEqual(restoredConnection.authentication, .none)
+        XCTAssertEqual(restoredConnection.serverID, "srv_no_auth")
+        XCTAssertEqual(
+            restoredConnection.credentialTarget,
+            .runtimeAccess("local-no-auth")
+        )
+    }
+
+    func testRuntimeInfoDecodesLockedWireContract() throws {        let json = """
         {
           "schema": "runtime-info/v1",
           "server_id": "srv_stable",

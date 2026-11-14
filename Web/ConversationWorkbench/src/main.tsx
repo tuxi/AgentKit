@@ -14,10 +14,10 @@ import type {
   ConversationWebDocument,
   ConversationWebExtensionNode,
   ConversationWebImageView,
-  ConversationWebImageViewAsset,
   ConversationWebOperation,
   ConversationWebPreview,
   ConversationWebUIEvidence,
+  ConversationWebUILayout,
   ConversationWebTool,
   ConversationWebTurn,
   ConversationWebUpdate,
@@ -1676,7 +1676,12 @@ function ImageViewPreview({
   conversationID: string;
   turnID: string;
   toolID: string;
-  image: ConversationWebImageViewAsset;
+  image: {
+    assetID: string;
+    role: string;
+    displayName: string;
+    sourceAssetID?: string;
+  };
   variant: "thumbnail" | "source" | "crop";
 }): React.JSX.Element {
   const url = useImageViewAssetURL(conversationID, turnID, toolID, image.assetID);
@@ -1973,6 +1978,111 @@ function UIEvidenceActivity({
   );
 }
 
+function UILayoutActivity({
+  layout,
+  conversationID,
+  turnID,
+  toolID,
+}: {
+  layout: ConversationWebUILayout;
+  conversationID: string;
+  turnID: string;
+  toolID: string;
+}): React.JSX.Element {
+  return (
+    <section
+      className="ui-layout-activity"
+      data-ui-layout-artifact-id={layout.artifactID}
+      data-ui-layout-revision={layout.revision}
+      data-ui-layout-created={layout.created ? "true" : "false"}
+      data-ui-layout-overlay-asset-id={layout.overlay.assetID}
+      data-ui-layout-json-asset-id={layout.layoutJSON.assetID}
+    >
+      <figure className="ui-layout-overlay" data-ui-layout-node="overlay">
+        <ImageViewPreview
+          conversationID={conversationID}
+          turnID={turnID}
+          toolID={toolID}
+          image={layout.overlay}
+          variant="source"
+        />
+        <figcaption>
+          <span>{layout.overlay.displayName}</span>
+          {layout.overlay.viewActionID ? (
+            <ActionButton
+              actionID={layout.overlay.viewActionID}
+              focusID={`ui-layout:${toolID}:overlay`}
+              tooltip={layout.overlay.displayName}
+            >
+              Open overlay
+            </ActionButton>
+          ) : null}
+        </figcaption>
+      </figure>
+
+      <div className="ui-layout-summary" aria-label="UI layout summary">
+        <UIEvidenceMetric value={layout.revision} label="revision" />
+        <UIEvidenceMetric value={layout.nodeCount} label="nodes" />
+        <UIEvidenceMetric value={layout.assumptionCount} label="assumptions" />
+        <span
+          className="ui-layout-state"
+          data-created={layout.created ? "true" : "false"}
+        >
+          {layout.created ? "Created" : "Reused"}
+        </span>
+      </div>
+
+      <dl className="ui-layout-facts">
+        <div>
+          <dt>Canvas</dt>
+          <dd>{layout.canvasWidth} × {layout.canvasHeight}</dd>
+        </div>
+        <div>
+          <dt>Targets</dt>
+          <dd className="ui-layout-targets">
+            {layout.targets.map((target) => (
+              <span className="ui-layout-target" key={target}>{target}</span>
+            ))}
+          </dd>
+        </div>
+        <div>
+          <dt>Evidence SHA-256</dt>
+          <dd className="ui-evidence-mono">{layout.evidenceSHA256 ?? "none"}</dd>
+        </div>
+        <div>
+          <dt>Revision SHA-256</dt>
+          <dd className="ui-evidence-mono">{layout.revisionSHA256}</dd>
+        </div>
+        <div>
+          <dt>Source SHA-256</dt>
+          <dd className="ui-evidence-mono">{layout.sourceAssetSHA256}</dd>
+        </div>
+      </dl>
+
+      <div className="ui-layout-actions">
+        {layout.rawActionID ? (
+          <ActionButton
+            actionID={layout.rawActionID}
+            focusID={`ui-layout:${toolID}:metadata`}
+            tooltip="Open ui_layout_result.v1 metadata in Inspector"
+          >
+            Inspect metadata
+          </ActionButton>
+        ) : null}
+        {layout.layoutJSON.viewActionID ? (
+          <ActionButton
+            actionID={layout.layoutJSON.viewActionID}
+            focusID={`ui-layout:${toolID}:json`}
+            tooltip={layout.layoutJSON.displayName}
+          >
+            Open layout JSON
+          </ActionButton>
+        ) : null}
+      </div>
+    </section>
+  );
+}
+
 function Tool({
   tool,
   conversationID,
@@ -1985,7 +2095,7 @@ function Tool({
   const statusText = visibleExecutionStatus(tool.status, tool.statusText);
   const imageViewSource = tool.imageView?.assets.find((asset) => asset.role === "source");
   const evidenceSource = tool.uiEvidence?.assets.find((asset) => asset.role === "source");
-  const structuredImageSource = imageViewSource ?? evidenceSource;
+  const structuredImageSource = imageViewSource ?? evidenceSource ?? tool.uiLayout?.overlay;
   // Tool rows stay compact by default, including while they run. The parent
   // group header communicates the current action without expanding detail.
   const { open, onSummaryClick } = useActivityDisclosure(`tool:${tool.id}`);
@@ -2039,6 +2149,13 @@ function Tool({
             turnID={turnID}
             toolID={tool.id}
           />
+        ) : tool.uiLayout ? (
+          <UILayoutActivity
+            layout={tool.uiLayout}
+            conversationID={conversationID}
+            turnID={turnID}
+            toolID={tool.id}
+          />
         ) : <>
           <ToolResultCard tool={tool} outputRef={setOutputFrame} />
           <RawToolDetails tool={tool} />
@@ -2074,7 +2191,7 @@ function Tool({
             Open artifact
           </ActionButton>
         ) : null}
-        {tool.imageView || tool.uiEvidence ? null : tool.assetActions.map((asset) => (
+        {tool.imageView || tool.uiEvidence || tool.uiLayout ? null : tool.assetActions.map((asset) => (
           <ActionButton
             key={asset.actionID}
             actionID={asset.actionID}

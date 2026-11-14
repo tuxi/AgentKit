@@ -81,9 +81,16 @@ public enum RuntimeServerPreflightError: Error, LocalizedError, Equatable {
 
 struct RuntimeServerPreflightService: Sendable {
     let platform: RuntimeServerClientPlatform
+    /// Test seam for no-auth servers: production always builds the client from
+    /// the endpoint and trust policy.
+    private let noAuthClientFactory: (@Sendable (URL) throws -> RuntimeHTTPClient)?
 
-    init(platform: RuntimeServerClientPlatform = .current) {
+    init(
+        platform: RuntimeServerClientPlatform = .current,
+        noAuthClientFactory: (@Sendable (URL) throws -> RuntimeHTTPClient)? = nil
+    ) {
         self.platform = platform
+        self.noAuthClientFactory = noAuthClientFactory
     }
 
     func test(
@@ -107,7 +114,7 @@ struct RuntimeServerPreflightService: Sendable {
         let client: RuntimeHTTPClient
         switch authentication {
         case .none:
-            client = RuntimeHTTPClient(
+            client = try noAuthClientFactory?(endpoint) ?? RuntimeHTTPClient(
                 environment: environment,
                 trustPolicy: trustPolicy
             )
@@ -149,7 +156,7 @@ struct RuntimeServerPreflightService: Sendable {
         let client: RuntimeHTTPClient
         switch connection.authentication {
         case .none:
-            client = RuntimeHTTPClient(
+            client = try noAuthClientFactory?(endpoint) ?? RuntimeHTTPClient(
                 environment: environment,
                 trustPolicy: connection.trustPolicy
             )

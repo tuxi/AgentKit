@@ -27,4 +27,7 @@ public enum InspectorDestination: Hashable {
 
     /// Raw structured UI evidence associated with a tool call.
     case uiEvidence(UIEvidenceSelection)
+
+    /// Metadata of one persisted ui_layout_result.v1 revision.
+    case uiLayout(UILayoutSelection)
 }

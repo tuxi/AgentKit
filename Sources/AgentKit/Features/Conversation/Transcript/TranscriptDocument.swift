@@ -26,6 +26,7 @@ enum TranscriptAction: Hashable {
     case openArtifact(callID: String)
     case openAsset(AssetReference)
     case openUIEvidence(callID: String)
+    case openUILayout(callID: String)
     case openURL(String)
     case openPath(String)
     case openChildStream(childID: String)

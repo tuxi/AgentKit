@@ -43,6 +43,8 @@ export interface ConversationWebTool {
   imageView?: ConversationWebImageView;
   /// Generic `ui_evidence.v1` semantic selected by output schema only.
   uiEvidence?: ConversationWebUIEvidence;
+  /// Generic `ui_layout_result.v1` semantic selected by output schema only.
+  uiLayout?: ConversationWebUILayout;
 }
 
 export interface ConversationWebImageView {
@@ -127,6 +129,34 @@ export interface ConversationWebUIEvidenceAsset {
   sourceAssetID?: string;
   sourceBBox?: ConversationWebImageRegion;
   purpose?: string;
+  viewActionID?: string;
+}
+
+export interface ConversationWebUILayout {
+  title: string;
+  artifactID: string;
+  revision: number;
+  revisionSHA256: string;
+  sourceAssetID: string;
+  sourceAssetSHA256: string;
+  evidenceSHA256?: string;
+  canvasWidth: number;
+  canvasHeight: number;
+  nodeCount: number;
+  assumptionCount: number;
+  targets: string[];
+  created: boolean;
+  overlay: ConversationWebUILayoutAsset;
+  layoutJSON: ConversationWebUILayoutAsset;
+  rawActionID?: string;
+}
+
+export interface ConversationWebUILayoutAsset {
+  assetID: string;
+  role: "layout_overlay" | "layout_json";
+  displayName: string;
+  width?: number;
+  height?: number;
   viewActionID?: string;
 }
 

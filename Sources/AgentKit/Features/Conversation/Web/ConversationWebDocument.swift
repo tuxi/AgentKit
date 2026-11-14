@@ -304,6 +304,38 @@ struct ConversationWebDocument: Codable, Equatable, Sendable {
         let reason: String?
     }
 
+    /// Presentation-only projection of `ui_layout_result.v1`. Bound to the
+    /// persisted revision and its two canonical assets; the layout JSON body
+    /// itself never enters the transcript document.
+    struct UILayout: Codable, Equatable, Sendable {
+        let title: String
+        let artifactID: String
+        let revision: Int
+        let revisionSHA256: String
+        let sourceAssetID: String
+        let sourceAssetSHA256: String
+        let evidenceSHA256: String?
+        let canvasWidth: Int
+        let canvasHeight: Int
+        let nodeCount: Int
+        let assumptionCount: Int
+        let targets: [String]
+        let created: Bool
+        let overlay: UILayoutAsset
+        let layoutJSON: UILayoutAsset
+        let rawActionID: String?
+    }
+
+    struct UILayoutAsset: Codable, Equatable, Sendable, Identifiable {
+        var id: String { assetID }
+        let assetID: String
+        let role: String
+        let displayName: String
+        let width: Int?
+        let height: Int?
+        let viewActionID: String?
+    }
+
     struct Tool: Codable, Equatable, Sendable {
         let id: String
         let name: String
@@ -341,6 +373,10 @@ struct ConversationWebDocument: Codable, Equatable, Sendable {
         /// Malformed documents or unregistered assets fall back to the ordinary
         /// tool card and raw structured output.
         var uiEvidence: UIEvidence? = nil
+        /// Generic `ui_layout_result.v1` semantic selected by output schema
+        /// only. Malformed documents or unregistered assets fall back to the
+        /// ordinary tool card and raw structured output.
+        var uiLayout: UILayout? = nil
     }
 
     struct InlineAction: Codable, Equatable, Sendable {
@@ -953,22 +989,28 @@ enum ConversationWebDocumentBuilder {
                         ))
                     }
                 }
-                let uiEvidence = UIEvidenceActivityProjection.make(
+                let uiLayout = UILayoutActivityProjection.make(
                     tool: tool,
                     turnID: turn.id,
                     assetIndex: assetIndex(),
                     registerAction: registerAction
                 )
-                let imageView = uiEvidence == nil ? ViewImageActivityProjection.make(
+                let uiEvidence = uiLayout == nil ? UIEvidenceActivityProjection.make(
                     tool: tool,
                     turnID: turn.id,
                     assetIndex: assetIndex(),
                     registerAction: registerAction
                 ) : nil
-                let hasStructuredActivity = imageView != nil || uiEvidence != nil
+                let imageView = uiLayout == nil && uiEvidence == nil ? ViewImageActivityProjection.make(
+                    tool: tool,
+                    turnID: turn.id,
+                    assetIndex: assetIndex(),
+                    registerAction: registerAction
+                ) : nil
+                let hasStructuredActivity = imageView != nil || uiEvidence != nil || uiLayout != nil
                 return ConversationWebDocument.Tool(
                     id: tool.callID,
-                    name: uiEvidence?.title ?? imageView?.title ?? presentation.title,
+                    name: uiLayout?.title ?? uiEvidence?.title ?? imageView?.title ?? presentation.title,
                     status: tool.status.rawValue,
                     statusText: presentation.statusText,
                     detail: hasStructuredActivity ? nil : presentation.detail,
@@ -1052,7 +1094,8 @@ enum ConversationWebDocumentBuilder {
                     outcomeText: outcomeText,
                     outcomeTone: resultFailed ? "failed" : tool.status == .running ? "running" : "completed",
                     imageView: imageView,
-                    uiEvidence: uiEvidence
+                    uiEvidence: uiEvidence,
+                    uiLayout: uiLayout
                 )
             }
             return .init(

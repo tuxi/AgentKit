@@ -311,6 +311,7 @@ enum StructuredImageActivityAssets {
     static func validatedAssetIDs(in tool: ToolNodePayload) -> [String]? {
         ViewImageActivityProjection.validatedAssetIDs(in: tool)
             ?? UIEvidenceActivityProjection.validatedAssetIDs(in: tool)
+            ?? UILayoutActivityProjection.validatedImageAssetIDs(in: tool)
     }
 }
 

@@ -2269,3 +2269,125 @@ button.user-asset-thumbnail {
   font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, monospace;
   font-size: 11px;
 }
+
+/* Generic ui_layout_result.v1 activity. The overlay is the primary visual
+   asset; metadata stays secondary and every digest remains selectable text. */
+.ui-layout-activity {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  width: min(100%, 470px);
+  margin: 6px 0 8px;
+  color: var(--text);
+}
+
+.ui-layout-overlay {
+  display: flex;
+  flex-direction: column;
+  gap: 7px;
+  margin: 0;
+  padding: 10px;
+  border: 1px solid color-mix(in srgb, var(--border) 65%, transparent);
+  border-radius: 12px;
+  background: var(--tool-surface);
+}
+
+.ui-layout-overlay > .image-view-preview {
+  width: 100%;
+  max-width: 100%;
+  height: 220px;
+}
+
+.ui-layout-overlay figcaption {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  min-width: 0;
+  color: var(--secondary);
+  font-size: var(--font-caption);
+}
+
+.ui-layout-overlay figcaption > span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.ui-layout-summary {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+}
+
+.ui-layout-state {
+  display: inline-flex;
+  align-items: center;
+  padding: 3px 8px;
+  border-radius: 999px;
+  font-size: 11px;
+  font-weight: 600;
+  line-height: 1.45;
+}
+
+.ui-layout-state[data-created="true"] {
+  color: light-dark(rgb(20 116 64), rgb(105 222 157));
+  background: light-dark(rgb(20 116 64 / 10%), rgb(105 222 157 / 12%));
+}
+
+.ui-layout-state[data-created="false"] {
+  color: light-dark(rgb(20 95 180), rgb(120 184 255));
+  background: light-dark(rgb(20 95 180 / 10%), rgb(120 184 255 / 12%));
+}
+
+.ui-layout-facts {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  margin: 0;
+  padding: 9px 10px;
+  border-radius: 8px;
+  background: var(--subtle);
+}
+
+.ui-layout-facts > div {
+  display: grid;
+  grid-template-columns: 96px minmax(0, 1fr);
+  align-items: start;
+  gap: 8px;
+}
+
+.ui-layout-facts dt {
+  color: var(--secondary);
+  font-size: var(--font-caption);
+}
+
+.ui-layout-facts dd {
+  margin: 0;
+  min-width: 0;
+  overflow-wrap: anywhere;
+  font-size: var(--font-caption);
+  user-select: text;
+  -webkit-user-select: text;
+}
+
+.ui-layout-targets {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+}
+
+.ui-layout-target {
+  padding: 1px 6px;
+  border: 1px solid color-mix(in srgb, var(--border) 70%, transparent);
+  border-radius: 999px;
+  color: var(--secondary);
+  font-size: 11px;
+}
+
+.ui-layout-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}

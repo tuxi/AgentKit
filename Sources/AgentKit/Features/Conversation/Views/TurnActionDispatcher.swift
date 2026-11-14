@@ -40,6 +40,12 @@ final class TurnActionDispatcher {
                 callID: callID,
                 title: "UI Evidence"
             )))
+        case .openUILayout(let callID):
+            guard tool(callID: callID) != nil else { return }
+            store.showInspector(.uiLayout(UILayoutSelection(
+                callID: callID,
+                title: "UI Layout"
+            )))
         case .openURL(let raw):
             openExternalURL(raw)
         case .openPath(let path):

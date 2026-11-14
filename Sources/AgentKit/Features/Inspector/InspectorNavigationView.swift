@@ -118,6 +118,9 @@ private struct InspectorNavigationContent: View {
 
         case .uiEvidence(let selection):
             UIEvidenceInspectorView(selection: selection)
+
+        case .uiLayout(let selection):
+            UILayoutInspectorView(selection: selection)
         }
     }
 

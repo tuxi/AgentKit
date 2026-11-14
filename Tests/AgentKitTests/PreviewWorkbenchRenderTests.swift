@@ -725,6 +725,248 @@ final class PreviewWorkbenchRenderTests: XCTestCase {
         XCTAssertEqual(selection.callID, "call_ui_evidence")
     }
 
+    func testConversationWorkbenchRendersUILayoutOverlayMetadataAndInspectorActions() async throws {
+        let workspace = FileManager.default.temporaryDirectory
+            .appendingPathComponent("agentkit-ui-layout-\(UUID().uuidString)", isDirectory: true)
+        let revision = workspace
+            .appendingPathComponent(".codeagent/assets/ui-layout/layout_render/revision-000003", isDirectory: true)
+        try FileManager.default.createDirectory(at: revision, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: workspace) }
+        let overlayURL = revision.appendingPathComponent("overlay.png")
+        try writeImageFixture(
+            to: overlayURL,
+            size: NSSize(width: 200, height: 400),
+            color: NSColor(calibratedRed: 0.18, green: 0.52, blue: 0.36, alpha: 1),
+            label: "OVERLAY"
+        )
+        try Data("{}".utf8).write(to: revision.appendingPathComponent("layout.json"))
+
+        let overlayID = "asset_layout_overlay"
+        let layoutJSONID = "asset_layout_json"
+        let artifactID = "layout_render"
+        let sourceSHA = String(repeating: "a", count: 64)
+        let evidenceSHA = String(repeating: "b", count: 64)
+        let revisionSHA = "sha256:" + String(repeating: "c", count: 64)
+        let overlayPath = ".codeagent/assets/ui-layout/\(artifactID)/revision-000003/overlay.png"
+        let layoutPath = ".codeagent/assets/ui-layout/\(artifactID)/revision-000003/layout.json"
+        let sharedMetadata: [String: JSONValue] = [
+            "layout_artifact_id": .string(artifactID),
+            "layout_revision": .integer(3),
+            "layout_revision_sha256": .string(revisionSHA),
+            "source_asset_id": .string("asset_source_screen"),
+            "source_asset_sha256": .string(sourceSHA),
+            "canvas": .object(["width": .integer(200), "height": .integer(400)]),
+            "node_count": .integer(3),
+        ]
+        let output: JSONValue = .object([
+            "schema": .string("ui_layout_result.v1"),
+            "layout_artifact_id": .string(artifactID),
+            "layout_revision": .integer(3),
+            "layout_revision_sha256": .string(revisionSHA),
+            "source_asset_id": .string("asset_source_screen"),
+            "source_asset_sha256": .string(sourceSHA),
+            "evidence_sha256": .string(evidenceSHA),
+            "canvas": .object(["width": .integer(200), "height": .integer(400)]),
+            "node_count": .integer(3),
+            "assumption_count": .integer(1),
+            "targets": .array([.string("duo_folded"), .string("iphone_portrait")]),
+            "created": .bool(true),
+            "overlay_asset": .object([
+                "asset_id": .string(overlayID),
+                "asset_role": .string("layout_overlay"),
+                "kind": .string("image"),
+                "relative_path": .string(overlayPath),
+                "filename": .string("overlay.png"),
+                "mime_type": .string("image/png"),
+                "width": .integer(200),
+                "height": .integer(400),
+                "sha256": .string(String(repeating: "d", count: 64)),
+            ]),
+            "layout_json_asset": .object([
+                "asset_id": .string(layoutJSONID),
+                "asset_role": .string("layout_json"),
+                "kind": .string("file"),
+                "relative_path": .string(layoutPath),
+                "filename": .string("layout.json"),
+                "mime_type": .string("application/json"),
+                "sha256": .string(String(repeating: "c", count: 64)),
+            ]),
+        ])
+        var overlayMetadata = sharedMetadata
+        overlayMetadata["asset_role"] = .string("layout_overlay")
+        var jsonMetadata = sharedMetadata
+        jsonMetadata["asset_role"] = .string("layout_json")
+        let tool = ToolNodePayload(
+            callID: "call_ui_layout",
+            toolName: "arbitrary_layout_surface",
+            args: nil,
+            status: .completed,
+            output: "layout",
+            structuredOutput: output,
+            assets: [
+                AgentAssetRef(
+                    id: overlayID,
+                    kind: "image",
+                    displayName: "overlay.png",
+                    workspaceRelativePath: overlayPath,
+                    mimeType: "image/png",
+                    metadata: overlayMetadata
+                ),
+                AgentAssetRef(
+                    id: layoutJSONID,
+                    kind: "file",
+                    displayName: "layout.json",
+                    workspaceRelativePath: layoutPath,
+                    mimeType: "application/json",
+                    metadata: jsonMetadata
+                ),
+            ]
+        )
+        let turn = ConversationTurn(
+            id: "turn-ui-layout",
+            userPrompt: MessageNodePayload(role: .user, text: "Analyze this layout"),
+            blocks: [.toolGroup(ToolGroup(id: "ui-layout-activity", tools: [tool]))],
+            footer: nil,
+            isLive: false
+        )
+        let snapshot = RuntimeSnapshot(timeline: [], turns: [turn], generation: 1)
+        let store = WorkspaceStore(usesEmbeddedRuntime: false)
+        let content = ConversationWebWorkbenchView(
+            snapshot: snapshot,
+            conversationID: "ui-layout-render",
+            workspaceRoot: workspace,
+            previewViewerResolver: nil,
+            previewAssetResolver: nil,
+            extensionContributions: [:],
+            timelineExtensions: [],
+            isVisible: true,
+            bottomInset: 0,
+            onFatalFailure: { XCTFail("ConversationWorkbench renderer failed") }
+        )
+        .environment(store)
+        let hostingView = NSHostingView(rootView: content)
+        hostingView.frame = NSRect(x: 0, y: 0, width: 900, height: 1_000)
+        let window = NSWindow(
+            contentRect: hostingView.frame,
+            styleMask: [.titled, .closable],
+            backing: .buffered,
+            defer: false
+        )
+        window.contentView = hostingView
+        window.title = "AgentKit UI Layout Workbench"
+        window.makeKeyAndOrderFront(nil)
+        hostingView.layoutSubtreeIfNeeded()
+        self.window = window
+
+        let webView = try await waitForWebView(in: hostingView)
+        try await waitForJavaScript(
+            "document.querySelector('[data-tool-id=\"call_ui_layout\"]') !== null",
+            webView: webView,
+            timeout: 12
+        )
+        _ = try await webView.evaluateJavaScript("""
+        document.querySelector('.turn-process-summary')
+          ?.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true }));
+        """)
+        try await waitForJavaScript(
+            "document.querySelector('[data-tool-id=\"call_ui_layout\"] .image-view-thumbnail img')?.naturalWidth > 0",
+            webView: webView,
+            timeout: 12
+        )
+        _ = try await webView.evaluateJavaScript("""
+        document.querySelector('[data-tool-id=\"call_ui_layout\"] .tool-summary')
+          ?.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true }));
+        """)
+        try await waitForJavaScript(
+            "document.querySelector('[data-ui-layout-node=\"overlay\"] img')?.naturalWidth > 0",
+            webView: webView,
+            timeout: 12
+        )
+
+        let expanded = try await webView.evaluateJavaScript("""
+        (() => {
+          const activity = document.querySelector('.ui-layout-activity');
+          const overlay = activity?.querySelector('[data-ui-layout-node="overlay"]');
+          const text = activity?.textContent ?? '';
+          return {
+            artifactID: activity?.getAttribute('data-ui-layout-artifact-id') ?? '',
+            revision: activity?.getAttribute('data-ui-layout-revision') ?? '',
+            created: activity?.getAttribute('data-ui-layout-created') ?? '',
+            overlayAssetID: overlay?.querySelector('.image-view-preview')?.getAttribute('data-image-view-asset-id') ?? '',
+            overlayWidth: overlay?.querySelector('img')?.naturalWidth ?? 0,
+            hasRevision: /revision/.test(text),
+            hasCanvas: text.includes('200 × 400'),
+            hasNodes: text.includes('3') && /nodes/.test(text),
+            hasTargets: text.includes('duo_folded') && text.includes('iphone_portrait'),
+            hasEvidenceSHA: text.includes('\(evidenceSHA)'),
+            hasCreated: text.includes('Created'),
+            hasOverlayAction: /Open overlay/.test(text),
+            hasJSONAction: /Open layout JSON/.test(text),
+            hasMetadataAction: /Inspect metadata/.test(text)
+          };
+        })()
+        """) as? [String: Any]
+        XCTAssertEqual(expanded?["artifactID"] as? String, artifactID)
+        XCTAssertEqual(expanded?["revision"] as? String, "3")
+        XCTAssertEqual(expanded?["created"] as? String, "true")
+        XCTAssertEqual(expanded?["overlayAssetID"] as? String, overlayID)
+        XCTAssertGreaterThan(expanded?["overlayWidth"] as? Int ?? 0, 0)
+        XCTAssertEqual(expanded?["hasRevision"] as? Bool, true)
+        XCTAssertEqual(expanded?["hasCanvas"] as? Bool, true)
+        XCTAssertEqual(expanded?["hasNodes"] as? Bool, true)
+        XCTAssertEqual(expanded?["hasTargets"] as? Bool, true)
+        XCTAssertEqual(expanded?["hasEvidenceSHA"] as? Bool, true)
+        XCTAssertEqual(expanded?["hasCreated"] as? Bool, true)
+        XCTAssertEqual(expanded?["hasOverlayAction"] as? Bool, true)
+        XCTAssertEqual(expanded?["hasJSONAction"] as? Bool, true)
+        XCTAssertEqual(expanded?["hasMetadataAction"] as? Bool, true)
+
+        for (label, expectedID) in [
+            ("Open overlay", overlayID),
+            ("Open layout JSON", layoutJSONID),
+        ] {
+            _ = try await webView.evaluateJavaScript("""
+            [...document.querySelectorAll('.ui-layout-activity button')]
+              .find((button) => button.textContent?.includes('\(label)'))?.click();
+            """)
+            let deadline = Date().addingTimeInterval(5)
+            while Date() < deadline {
+                if case .asset(let payload) = store.inspectorSelection,
+                   payload.asset.id == expectedID {
+                    break
+                }
+                try await Task.sleep(for: .milliseconds(50))
+            }
+            guard case .asset(let payload) = store.inspectorSelection else {
+                return XCTFail("\(label) did not open the asset Inspector")
+            }
+            XCTAssertEqual(payload.asset.id, expectedID)
+        }
+
+        _ = try await webView.evaluateJavaScript("""
+        [...document.querySelectorAll('.ui-layout-activity button')]
+          .find((button) => button.textContent?.includes('Inspect metadata'))?.click();
+        """)
+        let metadataDeadline = Date().addingTimeInterval(5)
+        while Date() < metadataDeadline {
+            if case .uiLayout(let selection) = store.inspectorSelection,
+               selection.callID == "call_ui_layout" {
+                break
+            }
+            try await Task.sleep(for: .milliseconds(50))
+        }
+        guard case .uiLayout(let selection) = store.inspectorSelection else {
+            return XCTFail("Inspect metadata did not open the UI Layout Inspector")
+        }
+        XCTAssertEqual(selection.callID, "call_ui_layout")
+
+        let screenshot = try screenshotDirectoryURL()
+            .appendingPathComponent("ui-layout-overlay.png")
+        try await saveSnapshot(of: webView, to: screenshot)
+        XCTAssertTrue(FileManager.default.fileExists(atPath: screenshot.path))
+        print("[UILayoutRender] screenshot: \(screenshot.path)")
+    }
+
     func testConversationWorkbenchRendersRealCodeAgentViewImagePayloadLiveAndReplay() async throws {
         let fixture = try loadCodeAgentViewImageFixture()
         let snapshots = try await codeAgentViewImageSnapshots(fixture)

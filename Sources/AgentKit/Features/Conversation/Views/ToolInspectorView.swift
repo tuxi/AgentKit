@@ -130,6 +130,18 @@ struct ToolInspectorView: View {
                         .buttonStyle(.bordered)
                     }
 
+                    if p.structuredOutput?["schema"].string == "ui_layout_result.v1" {
+                        Button {
+                            inspectorPath.push(.uiLayout(UILayoutSelection(
+                                callID: p.callID,
+                                title: "UI Layout"
+                            )))
+                        } label: {
+                            Label("Open UI Layout", systemImage: "rectangle.3.group")
+                        }
+                        .buttonStyle(.bordered)
+                    }
+
                     Spacer()
                 }
             }

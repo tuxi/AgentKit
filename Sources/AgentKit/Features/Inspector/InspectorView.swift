@@ -117,6 +117,10 @@ public struct InspectorView: View {
 
                 UIEvidenceInspectorView(selection: selection)
 
+            case .uiLayout(let selection):
+
+                UILayoutInspectorView(selection: selection)
+
             default:
 
                 ContentUnavailableView(
