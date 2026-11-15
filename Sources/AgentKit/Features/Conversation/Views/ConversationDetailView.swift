@@ -15,6 +15,7 @@ import SwiftUI
 
 public struct ConversationDetailView: View {
     
+    @Environment(\.conversationUsesWorkspaceHeader) private var usesWorkspaceHeader
     @Environment(\.colorScheme) private var colorScheme
     @Environment(WorkspaceStore.self) private var store
     @Environment(AgentRouter.self) private var router
@@ -51,7 +52,9 @@ public struct ConversationDetailView: View {
             }
         }
         .frame(maxWidth: .infinity) // 保持整体居中
-        .toolbar { toolbarContent }
+        .toolbar {
+            if !usesWorkspaceHeader { toolbarContent }
+        }
 #if os(iOS)
         .navigationBarTitleDisplayMode(.inline)
 #endif
@@ -520,8 +523,43 @@ public struct ConversationDetailView: View {
     
     @ToolbarContentBuilder
     private var toolbarContent: some ToolbarContent {
+        ToolbarItemGroup {
+            ConversationWorkspaceActions(
+                hasConversation: viewModel != nil || store.activeConversationViewModel != nil,
+                includesDetailsButton: true
+            )
+        }
+    }
+
+}
+
+
+private struct ConversationUsesWorkspaceHeaderKey: EnvironmentKey {
+    static let defaultValue = false
+}
+
+public extension EnvironmentValues {
+    /// A custom workspace header owns conversation actions instead of the window toolbar.
+    var conversationUsesWorkspaceHeader: Bool {
+        get { self[ConversationUsesWorkspaceHeaderKey.self] }
+        set { self[ConversationUsesWorkspaceHeaderKey.self] = newValue }
+    }
+}
+
+/// The same conversation commands can live in a native toolbar or a workspace menu.
+public struct ConversationWorkspaceActions: View {
+    @Environment(WorkspaceStore.self) private var store
+    private let hasConversation: Bool
+    private let includesDetailsButton: Bool
+
+    public init(hasConversation: Bool = true, includesDetailsButton: Bool = false) {
+        self.hasConversation = hasConversation
+        self.includesDetailsButton = includesDetailsButton
+    }
+
+    public var body: some View {
         if !store.supervisor.pendingApprovals.isEmpty {
-            ToolbarItem {
+            Group {
                 Menu {
                     ForEach(store.supervisor.pendingApprovals) { approval in
                         Button {
@@ -547,8 +585,8 @@ public struct ConversationDetailView: View {
             }
         }
         
-        if viewModel != nil || store.activeConversationViewModel != nil {
-            ToolbarItem {
+        if hasConversation {
+            Group {
                 Menu {
                     Button {
                         shareConversation(as: .pdf)
@@ -566,7 +604,7 @@ public struct ConversationDetailView: View {
                 .disabled(store.activeConversationViewModel?.snapshot.turns.isEmpty ?? true)
                 .help(AgentKitLocalized.string("conversation.share_full"))
             }
-            ToolbarItem {
+            Group {
                 Button {
                     guard let vm = store.activeConversationViewModel else { return }
                     store.showInspector(.assets(AssetPanelPayload(
@@ -580,7 +618,7 @@ public struct ConversationDetailView: View {
                 }
                 .disabled(store.activeConversationViewModel?.assetRefs.isEmpty ?? true)
             }
-            ToolbarItem {
+            Group {
                 Button {
                     guard let vm = store.activeConversationViewModel else { return }
                     let raw = (vm.conversation?.name ?? "")
@@ -596,7 +634,7 @@ public struct ConversationDetailView: View {
                     .allSatisfy { $0.invocations.isEmpty } ?? true)
                 .help("查看对话完整调用轨迹")
             }
-            ToolbarItem {
+            if includesDetailsButton {
                 Button {
                     store.isInspectorPresented.toggle()
                 } label: {
@@ -606,7 +644,7 @@ public struct ConversationDetailView: View {
             }
         }
     }
-    
+
     private func shareConversation(as format: ConversationShareFormat) {
         guard let vm = store.activeConversationViewModel, !vm.snapshot.turns.isEmpty else { return }
         let rawTitle = vm.conversation?.name?.trimmingCharacters(in: .whitespacesAndNewlines)
