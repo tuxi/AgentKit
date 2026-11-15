@@ -30,4 +30,7 @@ public enum InspectorDestination: Hashable {
 
     /// Metadata of one persisted ui_layout_result.v1 revision.
     case uiLayout(UILayoutSelection)
+
+    /// Adaptation/explore classification and lineage of one ui_preview record.
+    case uiPreview(UIPreviewSelection)
 }

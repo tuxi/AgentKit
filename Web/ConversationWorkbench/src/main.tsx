@@ -18,6 +18,7 @@ import type {
   ConversationWebPreview,
   ConversationWebUIEvidence,
   ConversationWebUILayout,
+  ConversationWebUIPreview,
   ConversationWebTool,
   ConversationWebTurn,
   ConversationWebUpdate,
@@ -2083,6 +2084,264 @@ function UILayoutActivity({
   );
 }
 
+function UIPreviewActivity({
+  preview,
+  conversationID,
+  turnID,
+  toolID,
+}: {
+  preview: ConversationWebUIPreview;
+  conversationID: string;
+  turnID: string;
+  toolID: string;
+}): React.JSX.Element {
+  const [viewer, setViewer] = useState<{
+    status: "idle" | "loading" | "ready" | "failed";
+    url?: string;
+    errorCode?: string;
+  }>({ status: "idle" });
+  const viewerRequestID = useRef<string | undefined>(undefined);
+  const wantsViewer = preview.presentationState === "interactiveReady";
+  const degraded = preview.presentationState !== "interactiveReady";
+  const lineage = preview.lineage;
+  const viewerStyle = {
+    minHeight: preview.minHeight ?? 320,
+    aspectRatio: preview.preferredAspectRatio
+      ? String(preview.preferredAspectRatio)
+      : "16 / 9",
+  };
+
+  useEffect(() => {
+    const handleResolved = (event: Event) => {
+      const detail = (event as CustomEvent<{
+        requestID?: string;
+        artifactID?: string;
+        revision?: number;
+        url?: string;
+        errorCode?: string;
+      }>).detail;
+      if (
+        detail?.artifactID !== preview.artifactID
+        || detail.revision !== preview.revision
+        || detail.requestID !== viewerRequestID.current
+      ) return;
+      setViewer(detail.url
+        ? { status: "ready", url: detail.url }
+        : { status: "failed", errorCode: detail.errorCode });
+    };
+    window.addEventListener("previewViewerURLResolved", handleResolved);
+    return () => window.removeEventListener("previewViewerURLResolved", handleResolved);
+  }, [preview.artifactID, preview.revision]);
+
+  useEffect(() => {
+    if (!wantsViewer || viewer.status !== "idle") return;
+    const requestID = crypto.randomUUID();
+    viewerRequestID.current = requestID;
+    setViewer({ status: "loading" });
+    postToNative({
+      type: "resolvePreviewViewerURL",
+      conversationID,
+      artifactID: preview.artifactID,
+      revision: preview.revision,
+      requestID,
+    });
+  }, [
+    wantsViewer,
+    viewer.status,
+    conversationID,
+    preview.artifactID,
+    preview.revision,
+  ]);
+
+  return (
+    <section
+      className="ui-preview-activity"
+      data-ui-preview-mode={preview.mode}
+      data-ui-preview-artifact-id={preview.artifactID}
+      data-ui-preview-revision={preview.revision}
+      data-ui-preview-kind={preview.kind}
+      data-ui-preview-fallback-asset-id={preview.fallback.assetID}
+      data-ui-preview-presentation-state={preview.presentationState}
+      aria-label={`${preview.modeLabel}: ${preview.title}`}
+    >
+      <header className="ui-preview-header">
+        <span className="ui-preview-mode" data-mode={preview.mode}>
+          {preview.modeLabel}
+        </span>
+        <span className="ui-preview-title">{preview.title}</span>
+        <span className="ui-preview-status" data-tone={preview.tone}>
+          {preview.statusLabel}
+        </span>
+      </header>
+
+      {preview.mode === "explore" ? (
+        <p className="ui-preview-mode-note">
+          Explore Preview — standalone, with no layout lineage.
+        </p>
+      ) : null}
+
+      {wantsViewer ? (
+        <div
+          className="ui-preview-viewer-shell"
+          data-ui-preview-node="viewer"
+          style={viewerStyle}
+        >
+          {viewer.status === "ready" && viewer.url ? (
+            <iframe
+              className="ui-preview-frame"
+              data-ui-preview-frame={preview.artifactID}
+              data-ui-preview-revision={preview.revision}
+              src={viewer.url}
+              title={preview.title}
+              sandbox="allow-scripts"
+              referrerPolicy="no-referrer"
+            />
+          ) : (
+            <div className="ui-preview-viewer-placeholder">
+              {viewer.status === "failed"
+                ? `Preview render failed${viewer.errorCode ? ` (${viewer.errorCode})` : ""}. Showing the fallback below.`
+                : "Preparing interactive preview…"}
+            </div>
+          )}
+        </div>
+      ) : null}
+
+      {degraded && preview.fallbackText ? (
+        <p className="ui-preview-degraded">{preview.fallbackText}</p>
+      ) : null}
+
+      <figure className="ui-preview-fallback" data-ui-preview-node="fallback">
+        <ImageViewPreview
+          conversationID={conversationID}
+          turnID={turnID}
+          toolID={toolID}
+          image={{
+            assetID: preview.fallback.assetID,
+            role: "fallback",
+            displayName: preview.fallback.displayName,
+          }}
+          variant="source"
+        />
+        <figcaption>
+          <span>{preview.fallback.displayName}</span>
+          {preview.fallback.viewActionID ? (
+            <ActionButton
+              actionID={preview.fallback.viewActionID}
+              focusID={`ui-preview:${toolID}:fallback`}
+              tooltip={preview.fallback.displayName}
+            >
+              Open fallback PNG
+            </ActionButton>
+          ) : null}
+        </figcaption>
+      </figure>
+
+      <dl className="ui-preview-facts" data-ui-preview-node="facts">
+        <div>
+          <dt>Artifact</dt>
+          <dd className="ui-preview-mono">
+            {preview.artifactID} · r{preview.revision}
+          </dd>
+        </div>
+        <div>
+          <dt>Kind</dt>
+          <dd>{preview.kind}</dd>
+        </div>
+        {lineage ? (
+          <>
+            <div>
+              <dt>Layout revision</dt>
+              <dd className="ui-preview-mono">
+                {lineage.layoutArtifactID} · r{lineage.layoutRevision}
+              </dd>
+            </div>
+            <div>
+              <dt>Layout SHA-256</dt>
+              <dd className="ui-preview-mono">{lineage.layoutRevisionSHA256}</dd>
+            </div>
+            <div>
+              <dt>Source asset</dt>
+              <dd className="ui-preview-mono">{lineage.sourceAssetID}</dd>
+            </div>
+            <div>
+              <dt>Source SHA-256</dt>
+              <dd className="ui-preview-mono">{lineage.sourceAssetSHA256}</dd>
+            </div>
+            <div>
+              <dt>Evidence SHA-256</dt>
+              <dd className="ui-preview-mono">{lineage.evidenceSHA256 ?? "none"}</dd>
+            </div>
+            <div>
+              <dt>Target</dt>
+              <dd>{lineage.target}</dd>
+            </div>
+            <div>
+              <dt>State</dt>
+              <dd>{lineage.state}</dd>
+            </div>
+            <div>
+              <dt>Approval</dt>
+              <dd>
+                {lineage.approvalState}
+                {lineage.approvalEvidenceRef
+                  ? ` · ${lineage.approvalEvidenceRef}`
+                  : ""}
+              </dd>
+            </div>
+            <div>
+              <dt>Target matrix</dt>
+              <dd className="ui-preview-targets">
+                <span className="ui-preview-matrix-id">
+                  {lineage.targetMatrixID}
+                </span>
+                {lineage.targetMatrixTargets.map((target) => (
+                  <span
+                    className="ui-preview-target"
+                    data-selected={target === lineage.target ? "true" : "false"}
+                    key={target}
+                  >
+                    {target}
+                  </span>
+                ))}
+              </dd>
+            </div>
+          </>
+        ) : null}
+      </dl>
+
+      <div className="ui-preview-actions">
+        {preview.layoutJSON?.viewActionID ? (
+          <ActionButton
+            actionID={preview.layoutJSON.viewActionID}
+            focusID={`ui-preview:${toolID}:layout-json`}
+            tooltip={preview.layoutJSON.displayName}
+          >
+            Open layout JSON
+          </ActionButton>
+        ) : null}
+        {preview.evidenceJSON?.viewActionID ? (
+          <ActionButton
+            actionID={preview.evidenceJSON.viewActionID}
+            focusID={`ui-preview:${toolID}:evidence-json`}
+            tooltip={preview.evidenceJSON.displayName}
+          >
+            Open evidence JSON
+          </ActionButton>
+        ) : null}
+        {preview.rawActionID ? (
+          <ActionButton
+            actionID={preview.rawActionID}
+            focusID={`ui-preview:${toolID}:lineage`}
+            tooltip="Open ui_preview_result.v1 lineage in Inspector"
+          >
+            Inspect lineage
+          </ActionButton>
+        ) : null}
+      </div>
+    </section>
+  );
+}
+
 function Tool({
   tool,
   conversationID,
@@ -2095,7 +2354,8 @@ function Tool({
   const statusText = visibleExecutionStatus(tool.status, tool.statusText);
   const imageViewSource = tool.imageView?.assets.find((asset) => asset.role === "source");
   const evidenceSource = tool.uiEvidence?.assets.find((asset) => asset.role === "source");
-  const structuredImageSource = imageViewSource ?? evidenceSource ?? tool.uiLayout?.overlay;
+  const structuredImageSource = imageViewSource ?? evidenceSource
+    ?? tool.uiLayout?.overlay ?? tool.uiPreview?.fallback;
   // Tool rows stay compact by default, including while they run. The parent
   // group header communicates the current action without expanding detail.
   const { open, onSummaryClick } = useActivityDisclosure(`tool:${tool.id}`);
@@ -2135,7 +2395,14 @@ function Tool({
         <span className="disclosure-chevron" aria-hidden="true">›</span>
       </summary>
       {open ? <div className="tool-detail">
-        {tool.imageView ? (
+        {tool.uiPreview ? (
+          <UIPreviewActivity
+            preview={tool.uiPreview}
+            conversationID={conversationID}
+            turnID={turnID}
+            toolID={tool.id}
+          />
+        ) : tool.imageView ? (
           <ImageViewActivity
             imageView={tool.imageView}
             conversationID={conversationID}
@@ -2191,7 +2458,9 @@ function Tool({
             Open artifact
           </ActionButton>
         ) : null}
-        {tool.imageView || tool.uiEvidence || tool.uiLayout ? null : tool.assetActions.map((asset) => (
+        {tool.imageView || tool.uiEvidence || tool.uiLayout || tool.uiPreview
+          ? null
+          : tool.assetActions.map((asset) => (
           <ActionButton
             key={asset.actionID}
             actionID={asset.actionID}

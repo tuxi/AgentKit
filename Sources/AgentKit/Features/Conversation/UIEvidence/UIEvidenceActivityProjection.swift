@@ -312,6 +312,7 @@ enum StructuredImageActivityAssets {
         ViewImageActivityProjection.validatedAssetIDs(in: tool)
             ?? UIEvidenceActivityProjection.validatedAssetIDs(in: tool)
             ?? UILayoutActivityProjection.validatedImageAssetIDs(in: tool)
+            ?? UIPreviewActivityProjection.validatedImageAssetIDs(in: tool)
     }
 }
 

@@ -45,6 +45,9 @@ export interface ConversationWebTool {
   uiEvidence?: ConversationWebUIEvidence;
   /// Generic `ui_layout_result.v1` semantic selected by output schema only.
   uiLayout?: ConversationWebUILayout;
+  /// Generic `ui_preview_result.v1` semantic selected by output schema only.
+  /// Present only with a correlated preview artifact and valid lineage.
+  uiPreview?: ConversationWebUIPreview;
 }
 
 export interface ConversationWebImageView {
@@ -158,6 +161,61 @@ export interface ConversationWebUILayoutAsset {
   width?: number;
   height?: number;
   viewActionID?: string;
+}
+
+export interface ConversationWebUIPreview {
+  title: string;
+  mode: "adaptation" | "explore";
+  modeLabel: "Adaptation Preview" | "Explore Preview";
+  artifactKey: string;
+  artifactID: string;
+  revision: number;
+  revisionSHA256: string;
+  kind: "interactive_html" | "static_image";
+  presentationState: PreviewPresentationState;
+  runtimeStatus: string;
+  statusLabel: string;
+  tone: "neutral" | "info" | "success" | "warning" | "danger";
+  fallbackText?: string;
+  minHeight?: number;
+  preferredAspectRatio?: number;
+  fallback: ConversationWebUIPreviewAsset;
+  lineage?: ConversationWebUIPreviewLineage;
+  layoutJSON?: ConversationWebUIPreviewRelatedAsset;
+  evidenceJSON?: ConversationWebUIPreviewRelatedAsset;
+  rawActionID?: string;
+}
+
+export interface ConversationWebUIPreviewAsset {
+  assetID: string;
+  role: "fallback";
+  displayName: string;
+  mimeType?: string;
+  width?: number;
+  height?: number;
+  sha256?: string;
+  viewActionID?: string;
+}
+
+export interface ConversationWebUIPreviewRelatedAsset {
+  assetID: string;
+  displayName: string;
+  viewActionID?: string;
+}
+
+export interface ConversationWebUIPreviewLineage {
+  layoutArtifactID: string;
+  layoutRevision: number;
+  layoutRevisionSHA256: string;
+  sourceAssetID: string;
+  sourceAssetSHA256: string;
+  evidenceSHA256?: string;
+  target: string;
+  state: string;
+  targetMatrixID: string;
+  targetMatrixTargets: string[];
+  approvalState: "user_confirmed" | "not_required" | "unconfirmed";
+  approvalEvidenceRef?: string;
 }
 
 export interface InlineAction {

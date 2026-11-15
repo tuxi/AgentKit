@@ -142,6 +142,18 @@ struct ToolInspectorView: View {
                         .buttonStyle(.bordered)
                     }
 
+                    if p.structuredOutput?["schema"].string == "ui_preview_result.v1" {
+                        Button {
+                            inspectorPath.push(.uiPreview(UIPreviewSelection(
+                                callID: p.callID,
+                                title: "UI Preview Lineage"
+                            )))
+                        } label: {
+                            Label("Open UI Preview Lineage", systemImage: "point.3.connected.trianglepath.dotted")
+                        }
+                        .buttonStyle(.bordered)
+                    }
+
                     Spacer()
                 }
             }

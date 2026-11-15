@@ -22,6 +22,15 @@ enum UILayoutActivityProjection {
         parse(tool: tool).map { [$0.overlayAsset.id] }
     }
 
+    /// Reuses the full ui_layout_result.v1 validation path so a lineage card
+    /// can only link to a layout revision whose JSON asset is registered.
+    static func validatedLayoutRevision(
+        in tool: ToolNodePayload
+    ) -> (document: UILayoutResultDocument, layoutJSON: AgentAssetRef)? {
+        guard let parsed = parse(tool: tool) else { return nil }
+        return (parsed.document, parsed.layoutJSONAsset)
+    }
+
     static func make(
         tool: ToolNodePayload,
         turnID: String,

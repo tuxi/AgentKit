@@ -121,6 +121,10 @@ public struct InspectorView: View {
 
                 UILayoutInspectorView(selection: selection)
 
+            case .uiPreview(let selection):
+
+                UIPreviewInspectorView(selection: selection)
+
             default:
 
                 ContentUnavailableView(

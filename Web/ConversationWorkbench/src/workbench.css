@@ -2391,3 +2391,201 @@ button.user-asset-thumbnail {
   flex-wrap: wrap;
   gap: 8px;
 }
+
+.ui-preview-activity {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  width: min(100%, 560px);
+  margin: 6px 0 8px;
+  color: var(--text);
+}
+
+.ui-preview-header {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+}
+
+.ui-preview-mode {
+  padding: 2px 8px;
+  border-radius: 999px;
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  line-height: 1.45;
+}
+
+.ui-preview-mode[data-mode="adaptation"] {
+  color: light-dark(rgb(20 116 64), rgb(105 222 157));
+  background: light-dark(rgb(20 116 64 / 10%), rgb(105 222 157 / 12%));
+}
+
+.ui-preview-mode[data-mode="explore"] {
+  color: light-dark(rgb(122 80 10), rgb(255 205 110));
+  background: light-dark(rgb(122 80 10 / 10%), rgb(255 205 110 / 12%));
+}
+
+.ui-preview-title {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow-wrap: anywhere;
+  font-weight: 600;
+}
+
+.ui-preview-status {
+  flex: 0 0 auto;
+  color: var(--secondary);
+  font-size: var(--font-caption);
+}
+
+.ui-preview-status[data-tone="success"] { color: var(--link); }
+.ui-preview-status[data-tone="warning"] { color: var(--warning); }
+.ui-preview-status[data-tone="danger"] { color: var(--danger); }
+
+.ui-preview-mode-note {
+  margin: 0;
+  color: var(--secondary);
+  font-size: var(--font-ui);
+}
+
+.ui-preview-viewer-shell {
+  position: relative;
+  width: 100%;
+  min-height: 320px;
+  aspect-ratio: 16 / 9;
+  overflow: hidden;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--code-background);
+}
+
+.ui-preview-frame {
+  display: block;
+  width: 100%;
+  height: 100%;
+  border: 0;
+  background: Canvas;
+}
+
+.ui-preview-viewer-placeholder {
+  display: grid;
+  min-height: 160px;
+  height: 100%;
+  place-items: center;
+  padding: 18px;
+  color: var(--secondary);
+  font-size: var(--font-ui);
+  text-align: center;
+}
+
+.ui-preview-degraded {
+  margin: 0;
+  padding: 7px 9px;
+  border-left: 2px solid var(--warning);
+  border-radius: 0 6px 6px 0;
+  background: var(--tool-surface);
+  color: var(--secondary);
+  font-size: var(--font-ui);
+}
+
+.ui-preview-fallback {
+  display: flex;
+  flex-direction: column;
+  gap: 7px;
+  margin: 0;
+  padding: 10px;
+  border: 1px solid color-mix(in srgb, var(--border) 65%, transparent);
+  border-radius: 12px;
+  background: var(--tool-surface);
+}
+
+.ui-preview-fallback > .image-view-preview {
+  width: 100%;
+  max-width: 100%;
+  height: 200px;
+}
+
+.ui-preview-fallback figcaption {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  min-width: 0;
+  color: var(--secondary);
+  font-size: var(--font-caption);
+}
+
+.ui-preview-fallback figcaption > span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.ui-preview-facts {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  margin: 0;
+  padding: 9px 10px;
+  border-radius: 8px;
+  background: var(--subtle);
+}
+
+.ui-preview-facts > div {
+  display: grid;
+  grid-template-columns: 110px minmax(0, 1fr);
+  align-items: start;
+  gap: 8px;
+}
+
+.ui-preview-facts dt {
+  color: var(--secondary);
+  font-size: var(--font-caption);
+}
+
+.ui-preview-facts dd {
+  margin: 0;
+  min-width: 0;
+  overflow-wrap: anywhere;
+  font-size: var(--font-caption);
+  user-select: text;
+  -webkit-user-select: text;
+}
+
+.ui-preview-mono {
+  font-family: ui-monospace, "SFMono-Regular", Menlo, Monaco, monospace;
+  font-size: 11px;
+}
+
+.ui-preview-targets {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+}
+
+.ui-preview-matrix-id {
+  color: var(--secondary);
+  font-family: ui-monospace, "SFMono-Regular", Menlo, Monaco, monospace;
+  font-size: 11px;
+}
+
+.ui-preview-target {
+  padding: 1px 6px;
+  border: 1px solid color-mix(in srgb, var(--border) 70%, transparent);
+  border-radius: 999px;
+  color: var(--secondary);
+  font-size: 11px;
+}
+
+.ui-preview-target[data-selected="true"] {
+  color: var(--link);
+  border-color: color-mix(in srgb, var(--link) 45%, transparent);
+}
+
+.ui-preview-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}

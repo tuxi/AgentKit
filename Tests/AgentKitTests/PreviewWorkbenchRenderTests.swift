@@ -1462,6 +1462,437 @@ final class PreviewWorkbenchRenderTests: XCTestCase {
         ])
     }
 
+    func testConversationWorkbenchRendersUIPreviewLineageViewerAndFallback() async throws {
+        let root = try PreviewFixtureManifestRunner.fixtureRoot()
+        let viewerData = try Data(contentsOf: root.appendingPathComponent("viewer.html"))
+        let fallbackData = try Data(contentsOf: root.appendingPathComponent("assets/fallback.png"))
+        let fallbackSHA = String(
+            PreviewRFC8785.sha256(data: fallbackData).dropFirst("sha256:".count)
+        )
+        let resolver = FixturePreviewResourceResolvers(
+            viewerData: viewerData,
+            assetData: fallbackData
+        )
+        let lineage = renderLineage()
+        let artifact = try makeRenderArtifact(
+            sessionID: "ui-preview-render",
+            callID: "call_ui_preview",
+            title: "DreamLog Duo Home",
+            viewerData: viewerData,
+            fallbackSHA256: fallbackSHA,
+            lineage: lineage
+        )
+        let fallbackAsset = AgentAssetRef(
+            id: "asset_render_fallback",
+            kind: "image",
+            displayName: "fallback.png",
+            workspaceID: "ws_current",
+            workspaceRelativePath: "assets/fallback.png",
+            mimeType: "image/png",
+            sourceCallID: "call_ui_preview"
+        )
+        let tool = ToolNodePayload(
+            callID: "call_ui_preview",
+            toolName: "ui_preview",
+            args: nil,
+            status: .completed,
+            output: "Prepared adaptation preview.",
+            structuredOutput: renderPreviewResult(
+                fallbackPath: "assets/fallback.png",
+                fallbackSHA256: fallbackSHA,
+                lineage: lineage
+            ),
+            assets: [fallbackAsset]
+        )
+        let layoutTurn = ConversationTurn(
+            id: "turn-ui-layout-support",
+            userPrompt: nil,
+            blocks: [.toolGroup(ToolGroup(
+                id: "layout-support",
+                tools: [renderLayoutTool()]
+            ))],
+            footer: nil,
+            isLive: false
+        )
+        let turn = ConversationTurn(
+            id: "turn-ui-preview",
+            userPrompt: MessageNodePayload(role: .user, text: "Build the adaptation preview"),
+            blocks: [.toolGroup(ToolGroup(id: "ui-preview-activity", tools: [tool]))],
+            footer: nil,
+            isLive: false
+        )
+        let snapshot = RuntimeSnapshot(
+            timeline: [],
+            turns: [layoutTurn, turn],
+            previewArtifacts: [artifact],
+            generation: 1
+        )
+        let store = WorkspaceStore(usesEmbeddedRuntime: false)
+        let content = ConversationWebWorkbenchView(
+            snapshot: snapshot,
+            conversationID: "ui-preview-render",
+            workspaceRoot: root,
+            previewViewerResolver: resolver,
+            previewAssetResolver: resolver,
+            extensionContributions: [:],
+            timelineExtensions: [],
+            isVisible: true,
+            bottomInset: 0,
+            onFatalFailure: { XCTFail("ConversationWorkbench renderer failed") }
+        )
+        .environment(store)
+        let hostingView = NSHostingView(rootView: content)
+        hostingView.frame = NSRect(x: 0, y: 0, width: 900, height: 1_200)
+        let window = NSWindow(
+            contentRect: hostingView.frame,
+            styleMask: [.titled, .closable],
+            backing: .buffered,
+            defer: false
+        )
+        window.contentView = hostingView
+        window.title = "AgentKit UI Preview Workbench"
+        window.makeKeyAndOrderFront(nil)
+        hostingView.layoutSubtreeIfNeeded()
+        self.window = window
+
+        let webView = try await waitForWebView(in: hostingView)
+        try await waitForJavaScript(
+            "document.querySelector('[data-tool-id=\"call_ui_preview\"]') !== null",
+            webView: webView,
+            timeout: 12
+        )
+        _ = try await webView.evaluateJavaScript("""
+        document.querySelectorAll('.turn-process-summary')
+          .forEach((summary) => summary.dispatchEvent(
+            new MouseEvent('click', { bubbles: true, cancelable: true })
+          ));
+        """)
+        try await waitForJavaScript(
+            "document.querySelector('[data-tool-id=\"call_ui_preview\"]') !== null",
+            webView: webView,
+            timeout: 12
+        )
+        _ = try await webView.evaluateJavaScript("""
+        document.querySelector('[data-tool-id="call_ui_preview"] .tool-summary')
+          ?.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true }));
+        """)
+        try await waitForJavaScript(
+            "document.querySelector('details.tool[data-tool-id=\"call_ui_preview\"]')?.open === true",
+            webView: webView,
+            timeout: 12
+        )
+        try await waitForJavaScript(
+            "document.querySelector('.ui-preview-activity') !== null",
+            webView: webView,
+            timeout: 12
+        )
+        try await waitForJavaScript(
+            "document.querySelector('[data-ui-preview-node=\"fallback\"] img')?.naturalWidth > 0",
+            webView: webView,
+            timeout: 12
+        )
+        try await waitForJavaScript(
+            "document.querySelector('iframe[data-ui-preview-frame=\"preview_p1f_render\"]')?.src.startsWith('agentkit-workbench://preview/') === true",
+            webView: webView,
+            timeout: 12
+        )
+        let loaded = try await webView.evaluateJavaScript("""
+        (() => {
+          const activity = document.querySelector('.ui-preview-activity');
+          const text = activity?.textContent ?? '';
+          return {
+            mode: activity?.getAttribute('data-ui-preview-mode') ?? '',
+            artifactID: activity?.getAttribute('data-ui-preview-artifact-id') ?? '',
+            revision: activity?.getAttribute('data-ui-preview-revision') ?? '',
+            kind: activity?.getAttribute('data-ui-preview-kind') ?? '',
+            hasModeLabel: text.includes('Adaptation Preview'),
+            hasSource: text.includes('asset_source_screen'),
+            hasSourceSHA: text.includes('aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa'),
+            hasEvidence: text.includes('bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb'),
+            hasLayout: text.includes('layout_abcdef0123456789'),
+            hasTarget: text.includes('duo_folded') && text.includes('home'),
+            hasMatrix: text.includes('matrix_duo_primary') && text.includes('iphone_portrait'),
+            hasApproval: text.includes('user_confirmed') && text.includes('approval-note-1'),
+            hasFallbackAction: /Open fallback PNG/.test(text),
+            hasLayoutAction: /Open layout JSON/.test(text),
+            hasEvidenceAction: /Open evidence JSON/.test(text),
+            hasLineageAction: /Inspect lineage/.test(text)
+          };
+        })()
+        """) as? [String: Any]
+        XCTAssertEqual(loaded?["mode"] as? String, "adaptation")
+        XCTAssertEqual(loaded?["artifactID"] as? String, "preview_p1f_render")
+        XCTAssertEqual(loaded?["revision"] as? String, "1")
+        XCTAssertEqual(loaded?["kind"] as? String, "interactive_html")
+        for key in [
+            "hasModeLabel", "hasSource", "hasSourceSHA", "hasEvidence", "hasLayout",
+            "hasTarget", "hasMatrix", "hasApproval", "hasFallbackAction",
+            "hasLayoutAction", "hasEvidenceAction", "hasLineageAction",
+        ] {
+            XCTAssertEqual(loaded?[key] as? Bool, true, key)
+        }
+        let renderDocument = ConversationWebDocumentBuilder.build(
+            snapshot: snapshot,
+            conversationID: "ui-preview-render"
+        )
+        XCTAssertNil(
+            renderDocument.turns.last?.previews,
+            "the tool card owns the only preview Block"
+        )
+        let encoded = try XCTUnwrap(
+            String(
+                data: JSONEncoder().encode(renderDocument),
+                encoding: .utf8
+            )
+        )
+        XCTAssertFalse(encoded.contains("viewer_html"))
+        XCTAssertFalse(encoded.contains("recommended_"))
+
+        _ = try await webView.evaluateJavaScript("""
+        [...document.querySelectorAll('.ui-preview-activity button')]
+          .find((button) => button.textContent?.includes('Inspect lineage'))?.click();
+        """)
+        let deadline = Date().addingTimeInterval(5)
+        while Date() < deadline {
+            if case .uiPreview(let selection) = store.inspectorSelection,
+               selection.callID == "call_ui_preview" {
+                break
+            }
+            try await Task.sleep(for: .milliseconds(50))
+        }
+        guard case .uiPreview(let selection) = store.inspectorSelection else {
+            return XCTFail("Inspect lineage did not open the UI Preview Inspector")
+        }
+        XCTAssertEqual(selection.callID, "call_ui_preview")
+
+        _ = try await webView.evaluateJavaScript("""
+        document.querySelector('.ui-preview-activity')?.scrollIntoView({ block: 'start' });
+        """)
+        try await Task.sleep(for: .milliseconds(300))
+        let screenshot = try screenshotDirectoryURL()
+            .appendingPathComponent("ui-preview-lineage.png")
+        try await saveSnapshot(of: webView, to: screenshot)
+        XCTAssertTrue(FileManager.default.fileExists(atPath: screenshot.path))
+        print("[UIPreviewRender] screenshot: \(screenshot.path)")
+    }
+
+    private func renderLineage() -> JSONValue {
+        .object([
+            "schema": .string("ui_preview_lineage.v2"),
+            "layout_artifact_id": .string("layout_abcdef0123456789"),
+            "layout_revision": .integer(3),
+            "layout_revision_sha256": .string(
+                "sha256:" + String(repeating: "c", count: 64)
+            ),
+            "source_asset_id": .string("asset_source_screen"),
+            "source_asset_sha256": .string(String(repeating: "a", count: 64)),
+            "evidence_sha256": .string(String(repeating: "b", count: 64)),
+            "approval": .object([
+                "state": .string("user_confirmed"),
+                "evidence_ref": .string("approval-note-1"),
+            ]),
+            "target": .string("duo_folded"),
+            "state": .string("home"),
+            "target_matrix": .object([
+                "id": .string("matrix_duo_primary"),
+                "targets": .array(["duo_folded", "iphone_portrait"].map(JSONValue.string)),
+            ]),
+        ])
+    }
+
+    private func renderPreviewResult(
+        fallbackPath: String,
+        fallbackSHA256: String,
+        lineage: JSONValue
+    ) -> JSONValue {
+        .object([
+            "schema": .string("ui_preview_result.v1"),
+            "artifact_key": "preview_key",
+            "kind": "interactive_html",
+            "title": "DreamLog Duo Home",
+            "mode": "adaptation",
+            "lineage": lineage,
+            "fallback_asset": .object([
+                "asset_id": .string("asset_render_fallback"),
+                "relative_path": .string(fallbackPath),
+                "mime_type": "image/png",
+                "width": .integer(1_200),
+                "height": .integer(800),
+                "sha256": .string(fallbackSHA256),
+            ]),
+        ])
+    }
+
+    private func makeRenderArtifact(
+        sessionID: String,
+        callID: String,
+        title: String,
+        viewerData: Data,
+        fallbackSHA256: String,
+        lineage: JSONValue
+    ) throws -> PreviewArtifact {
+        let artifactID = "preview_p1f_render"
+        let fallbackID = "asset_render_fallback"
+        var object: [String: JSONValue] = [
+            "schema_version": .string("preview.artifact.v1"),
+            "artifact_id": .string(artifactID),
+            "revision": .integer(1),
+            "status": .string("ready"),
+            "kind": .string("interactive_html"),
+            "title": .string(title),
+            "summary": .string("Adaptation preview for the reviewed layout revision."),
+            "capability": .string("ui-adaptation"),
+            "producer_id": .string("ui_preview"),
+            "session_id": .string(sessionID),
+            "turn_id": .string("turn-ui-preview"),
+            "call_id": .string(callID),
+            "created_at": .string("2026-11-14T12:00:00Z"),
+            "updated_at": .string("2026-11-14T12:00:00Z"),
+            "expires_at": .null,
+            "presentation": .object([
+                "placement": .string("conversation_inline"),
+                "preferred_aspect_ratio": .number(1.78),
+                "min_height": .integer(420),
+                "initial_state": .string("expanded"),
+            ]),
+            "viewer": .object([
+                "url": .string("/v1/conversations/\(sessionID)/previews/\(artifactID)/revisions/1/viewer"),
+                "mime_type": .string("text/html; charset=utf-8"),
+                "size_bytes": .integer(viewerData.count),
+                "sha256": .string(PreviewRFC8785.sha256(data: viewerData)),
+            ]),
+            "assets": .array([
+                .object([
+                    "asset_id": .string(fallbackID),
+                    "role": .string("fallback"),
+                    "mime_type": .string("image/png"),
+                    "size_bytes": .integer(1),
+                    "sha256": .string("sha256:" + fallbackSHA256),
+                    "content_url": .string("/v1/conversations/\(sessionID)/previews/\(artifactID)/revisions/1/assets/\(fallbackID)/content"),
+                    "width": .integer(1_200),
+                    "height": .integer(800),
+                    "alt": .string("DreamLog Duo preview fallback"),
+                ]),
+            ]),
+            "fallback": .object([
+                "asset_id": .string(fallbackID),
+                "text": .string("Interactive preview unavailable. Showing static evidence."),
+            ]),
+            "security": .object([
+                "profile": .string("preview.security.v1"),
+                "javascript": .string("isolated_only"),
+                "network": .string("deny"),
+                "navigation": .string("deny"),
+                "persistent_data": .string("deny"),
+                "actions": .string("none"),
+            ]),
+            "error": .null,
+            "metadata": .object([
+                "preview_mode": .string("adaptation"),
+                "ui_preview_lineage": lineage,
+            ]),
+        ]
+        object["revision_sha256"] = .string(try PreviewRFC8785.sha256(.object(object)))
+        return try PreviewArtifact.decode(.object(object))
+    }
+
+    private func renderLayoutTool() -> ToolNodePayload {
+        let artifactID = "layout_abcdef0123456789"
+        let revisionSHA = "sha256:" + String(repeating: "c", count: 64)
+        let sourceSHA = String(repeating: "a", count: 64)
+        let evidenceSHA = String(repeating: "b", count: 64)
+        let overlayID = "asset_layout_overlay"
+        let layoutJSONID = "asset_layout_json"
+        let evidenceID = "asset_evidence_json"
+        var shape: [String: JSONValue] = [
+            "asset_role": .string("layout_overlay"),
+            "layout_artifact_id": .string(artifactID),
+            "layout_revision": .integer(3),
+            "layout_revision_sha256": .string(revisionSHA),
+            "source_asset_id": .string("asset_source_screen"),
+            "source_asset_sha256": .string(sourceSHA),
+            "canvas": .object(["width": .integer(200), "height": .integer(400)]),
+            "node_count": .integer(3),
+        ]
+        let overlay = AgentAssetRef(
+            id: overlayID,
+            kind: "image",
+            displayName: "overlay.png",
+            workspaceID: "ws_current",
+            workspaceRelativePath: ".codeagent/assets/ui-layout/\(artifactID)/revision-000003/overlay.png",
+            mimeType: "image/png",
+            sourceCallID: "call_ui_layout",
+            metadata: shape
+        )
+        shape["asset_role"] = .string("layout_json")
+        let layoutJSON = AgentAssetRef(
+            id: layoutJSONID,
+            kind: "file",
+            displayName: "layout.json",
+            workspaceID: "ws_current",
+            workspaceRelativePath: ".codeagent/assets/ui-layout/\(artifactID)/revision-000003/layout.json",
+            mimeType: "application/json",
+            sourceCallID: "call_ui_layout",
+            metadata: shape
+        )
+        let evidence = AgentAssetRef(
+            id: evidenceID,
+            kind: "file",
+            displayName: "evidence.json",
+            workspaceID: "ws_current",
+            workspaceRelativePath: "ui-evidence/\(String(sourceSHA.prefix(16)))/evidence.json",
+            mimeType: "application/json",
+            sourceCallID: "call_ui_evidence",
+            metadata: [
+                "asset_role": .string("evidence"),
+                "source_asset_id": .string("asset_source_screen"),
+                "evidence_sha256": .string(evidenceSHA),
+            ]
+        )
+        return ToolNodePayload(
+            callID: "call_ui_layout",
+            toolName: "ui_layout",
+            args: nil,
+            status: .completed,
+            output: "layout",
+            structuredOutput: .object([
+                "schema": .string("ui_layout_result.v1"),
+                "layout_artifact_id": .string(artifactID),
+                "layout_revision": .integer(3),
+                "layout_revision_sha256": .string(revisionSHA),
+                "source_asset_id": .string("asset_source_screen"),
+                "source_asset_sha256": .string(sourceSHA),
+                "evidence_sha256": .string(evidenceSHA),
+                "canvas": .object(["width": .integer(200), "height": .integer(400)]),
+                "node_count": .integer(3),
+                "assumption_count": .integer(1),
+                "targets": .array(["duo_folded", "iphone_portrait"].map(JSONValue.string)),
+                "created": .bool(true),
+                "overlay_asset": .object([
+                    "asset_id": .string(overlayID),
+                    "asset_role": .string("layout_overlay"),
+                    "kind": .string("image"),
+                    "relative_path": .string(overlay.workspaceRelativePath!),
+                    "filename": .string("overlay.png"),
+                    "mime_type": .string("image/png"),
+                    "width": .integer(200),
+                    "height": .integer(400),
+                    "sha256": .string(String(repeating: "1", count: 64)),
+                ]),
+                "layout_json_asset": .object([
+                    "asset_id": .string(layoutJSONID),
+                    "asset_role": .string("layout_json"),
+                    "kind": .string("file"),
+                    "relative_path": .string(layoutJSON.workspaceRelativePath!),
+                    "filename": .string("layout.json"),
+                    "mime_type": .string("application/json"),
+                    "sha256": .string(String(repeating: "2", count: 64)),
+                ]),
+            ]),
+            assets: [overlay, layoutJSON, evidence]
+        )
+    }
+
     private func waitForWebView(in root: NSView) async throws -> WKWebView {
         let deadline = Date().addingTimeInterval(12)
         while Date() < deadline {

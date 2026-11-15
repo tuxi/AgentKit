@@ -336,6 +336,66 @@ struct ConversationWebDocument: Codable, Equatable, Sendable {
         let viewActionID: String?
     }
 
+    /// Presentation-only projection of `ui_preview_result.v1`. The result
+    /// supplies mode and lineage; the correlated preview artifact supplies
+    /// runtime identity. No viewer HTML or workspace path enters this model.
+    struct UIPreview: Codable, Equatable, Sendable {
+        let title: String
+        let mode: String
+        let modeLabel: String
+        let artifactKey: String
+        let artifactID: String
+        let revision: Int
+        let revisionSHA256: String
+        let kind: String
+        let presentationState: String
+        let runtimeStatus: String
+        let statusLabel: String
+        let tone: String
+        let fallbackText: String?
+        let minHeight: Int?
+        let preferredAspectRatio: Double?
+        let fallback: UIPreviewAsset
+        let lineage: UIPreviewLineage?
+        let layoutJSON: UIPreviewRelatedAsset?
+        let evidenceJSON: UIPreviewRelatedAsset?
+        let rawActionID: String?
+    }
+
+    struct UIPreviewAsset: Codable, Equatable, Sendable, Identifiable {
+        var id: String { assetID }
+        let assetID: String
+        let role: String
+        let displayName: String
+        let mimeType: String?
+        let width: Int?
+        let height: Int?
+        let sha256: String?
+        let viewActionID: String?
+    }
+
+    struct UIPreviewRelatedAsset: Codable, Equatable, Sendable, Identifiable {
+        var id: String { assetID }
+        let assetID: String
+        let displayName: String
+        let viewActionID: String?
+    }
+
+    struct UIPreviewLineage: Codable, Equatable, Sendable {
+        let layoutArtifactID: String
+        let layoutRevision: Int
+        let layoutRevisionSHA256: String
+        let sourceAssetID: String
+        let sourceAssetSHA256: String
+        let evidenceSHA256: String?
+        let target: String
+        let state: String
+        let targetMatrixID: String
+        let targetMatrixTargets: [String]
+        let approvalState: String
+        let approvalEvidenceRef: String?
+    }
+
     struct Tool: Codable, Equatable, Sendable {
         let id: String
         let name: String
@@ -377,6 +437,10 @@ struct ConversationWebDocument: Codable, Equatable, Sendable {
         /// only. Malformed documents or unregistered assets fall back to the
         /// ordinary tool card and raw structured output.
         var uiLayout: UILayout? = nil
+        /// Generic `ui_preview_result.v1` semantic selected by output schema
+        /// only. The card is shown only when a correlated preview artifact and
+        /// a valid v2 lineage (for adaptation) are present.
+        var uiPreview: UIPreview? = nil
     }
 
     struct InlineAction: Codable, Equatable, Sendable {
@@ -525,18 +589,30 @@ enum ConversationWebDocumentBuilder {
             todos: [],
             turns: snapshot.turns.enumerated().map { index, turn in
                 let contributions = extensionContributions[turn.id] ?? []
-                let previews = previewArtifacts(
+                let turnPreviewArtifacts = previewArtifacts(
                     from: snapshot.previewArtifacts,
                     for: turn
-                ).map(makePreview)
+                )
+                // A ui_preview tool result renders its own card. Suppressing the
+                // generic preview card for the same artifact keeps one preview
+                // revision to exactly one Block, even when projection fails.
+                let uiPreviewCallIDs = Self.uiPreviewResultCallIDs(in: turn)
+                let previews = turnPreviewArtifacts.filter { artifact in
+                    guard let callID = artifact.callID else { return true }
+                    return !uiPreviewCallIDs.contains(callID)
+                }.map(makePreview)
                 let previousTurn = reuseSource.flatMap {
                     index < $0.snapshot.turns.count ? $0.snapshot.turns[index] : nil
                 }
                 let previousDocumentTurn = reuseSource.flatMap {
                     index < $0.document.turns.count ? $0.document.turns[index] : nil
                 }
+                // ui_preview tool cards read preview artifacts and assets from
+                // outside the turn, so a reused turn could hold a stale card
+                // when an artifact arrives after the tool result.
                 if let previousTurn,
                    previousDocumentTurn?.id == turn.id,
+                   uiPreviewCallIDs.isEmpty,
                    (reuseSource?.extensionContributions[turn.id] ?? []) == contributions,
                    (previousDocumentTurn?.previews ?? []) == previews,
                    isContentUnchanged(previousTurn, turn) {
@@ -546,6 +622,8 @@ enum ConversationWebDocumentBuilder {
                 return makeTurn(
                     turn,
                     previews: previews,
+                    previewArtifacts: turnPreviewArtifacts,
+                    allTurns: snapshot.turns,
                     extensionContributions: contributions,
                     previousTurn: previousTurn?.id == turn.id ? previousTurn : nil,
                     previousDocumentTurn: previousDocumentTurn?.id == turn.id
@@ -605,6 +683,8 @@ enum ConversationWebDocumentBuilder {
     private static func makeTurn(
         _ turn: ConversationTurn,
         previews: [ConversationWebDocument.Preview],
+        previewArtifacts: [PreviewArtifact],
+        allTurns: [ConversationTurn],
         extensionContributions: [TimelineWebContribution],
         previousTurn: ConversationTurn?,
         previousDocumentTurn: ConversationWebDocument.Turn?,
@@ -619,6 +699,10 @@ enum ConversationWebDocumentBuilder {
             cachedAssetIndex = index
             return index
         }
+        // A ui_preview tool card reads the preview artifact and related assets
+        // from outside the turn. Never reuse its block or tool projections: a
+        // later artifact event must be able to replace the ordinary card.
+        let containsUIPreviewResults = !uiPreviewResultCallIDs(in: turn).isEmpty
         // Turn-level asset actions are hidden while live. Defer collecting and
         // deduplicating the entire turn until the terminal revision.
         let assets = turn.isLive ? [] : turnAssets(turn)
@@ -662,12 +746,16 @@ enum ConversationWebDocumentBuilder {
                 let previousWebBlock = previousDocumentTurn.flatMap {
                     blockIndex < $0.blocks.count ? $0.blocks[blockIndex] : nil
                 }
-                if previousBlock == block, previousWebBlock?.id == block.id {
+                if !containsUIPreviewResults,
+                   previousBlock == block,
+                   previousWebBlock?.id == block.id {
                     return previousWebBlock!
                 }
                 return makeBlock(
                     block,
                     turn: turn,
+                    previewArtifacts: previewArtifacts,
+                    allTurns: allTurns,
                     previousBlock: previousBlock,
                     previousWebBlock: previousWebBlock,
                     assetIndex: assetIndex,
@@ -743,11 +831,29 @@ enum ConversationWebDocumentBuilder {
         )
     }
 
-    private static let previewNegotiation = PreviewCapabilityNegotiation(
+    static let previewNegotiation = PreviewCapabilityNegotiation(
         hello: PreviewCapability.allCases.map(\.rawValue),
         runtime: PreviewCapability.allCases.map(\.rawValue),
         client: .previewClient
     )
+
+    /// Tool results that own a `ui_preview_result.v1` structured output. Their
+    /// correlated preview artifact is rendered by the tool card, so the turn
+    /// must not render the generic preview card for the same artifact.
+    private static func isUIPreviewResultTool(_ tool: ToolNodePayload) -> Bool {
+        tool.structuredOutput?["schema"].string == "ui_preview_result.v1"
+    }
+
+    private static func uiPreviewResultCallIDs(in turn: ConversationTurn) -> Set<String> {
+        var callIDs = Set<String>()
+        for block in turn.blocks {
+            guard case .toolGroup(let group) = block else { continue }
+            for tool in group.tools where isUIPreviewResultTool(tool) {
+                callIDs.insert(tool.callID)
+            }
+        }
+        return callIDs
+    }
 
     private static func previewArtifacts(
         from artifacts: [PreviewArtifact],
@@ -885,6 +991,8 @@ enum ConversationWebDocumentBuilder {
     private static func makeBlock(
         _ block: TurnBlock,
         turn: ConversationTurn,
+        previewArtifacts: [PreviewArtifact],
+        allTurns: [ConversationTurn],
         previousBlock: TurnBlock?,
         previousWebBlock: ConversationWebDocument.Block?,
         assetIndex: () -> AssetIndex,
@@ -947,7 +1055,8 @@ enum ConversationWebDocumentBuilder {
                 ? previousWebBlock?.tools ?? []
                 : []
             let tools = group.tools.enumerated().map { toolIndex, tool -> ConversationWebDocument.Tool in
-                if toolIndex < previousTools.count,
+                if !isUIPreviewResultTool(tool),
+                   toolIndex < previousTools.count,
                    toolIndex < previousWebTools.count,
                    previousTools[toolIndex] == tool,
                    previousWebTools[toolIndex].id == tool.callID {
@@ -989,28 +1098,40 @@ enum ConversationWebDocumentBuilder {
                         ))
                     }
                 }
-                let uiLayout = UILayoutActivityProjection.make(
+                let uiPreview = UIPreviewActivityProjection.make(
                     tool: tool,
                     turnID: turn.id,
+                    previewArtifacts: previewArtifacts,
+                    turns: allTurns,
                     assetIndex: assetIndex(),
                     registerAction: registerAction
                 )
-                let uiEvidence = uiLayout == nil ? UIEvidenceActivityProjection.make(
+                let uiLayout = uiPreview == nil ? UILayoutActivityProjection.make(
                     tool: tool,
                     turnID: turn.id,
                     assetIndex: assetIndex(),
                     registerAction: registerAction
                 ) : nil
-                let imageView = uiLayout == nil && uiEvidence == nil ? ViewImageActivityProjection.make(
+                let uiEvidence = uiPreview == nil && uiLayout == nil ? UIEvidenceActivityProjection.make(
                     tool: tool,
                     turnID: turn.id,
                     assetIndex: assetIndex(),
                     registerAction: registerAction
                 ) : nil
-                let hasStructuredActivity = imageView != nil || uiEvidence != nil || uiLayout != nil
+                let imageView = uiPreview == nil && uiLayout == nil && uiEvidence == nil
+                    ? ViewImageActivityProjection.make(
+                        tool: tool,
+                        turnID: turn.id,
+                        assetIndex: assetIndex(),
+                        registerAction: registerAction
+                    ) : nil
+                let hasStructuredActivity = imageView != nil || uiEvidence != nil
+                    || uiLayout != nil || uiPreview != nil
                 return ConversationWebDocument.Tool(
                     id: tool.callID,
-                    name: uiLayout?.title ?? uiEvidence?.title ?? imageView?.title ?? presentation.title,
+                    name: uiPreview.map { "\($0.modeLabel): \($0.title)" }
+                        ?? uiLayout?.title ?? uiEvidence?.title ?? imageView?.title
+                        ?? presentation.title,
                     status: tool.status.rawValue,
                     statusText: presentation.statusText,
                     detail: hasStructuredActivity ? nil : presentation.detail,
@@ -1095,7 +1216,8 @@ enum ConversationWebDocumentBuilder {
                     outcomeTone: resultFailed ? "failed" : tool.status == .running ? "running" : "completed",
                     imageView: imageView,
                     uiEvidence: uiEvidence,
-                    uiLayout: uiLayout
+                    uiLayout: uiLayout,
+                    uiPreview: uiPreview
                 )
             }
             return .init(

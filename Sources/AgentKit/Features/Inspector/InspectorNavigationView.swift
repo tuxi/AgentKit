@@ -121,6 +121,9 @@ private struct InspectorNavigationContent: View {
 
         case .uiLayout(let selection):
             UILayoutInspectorView(selection: selection)
+
+        case .uiPreview(let selection):
+            UIPreviewInspectorView(selection: selection)
         }
     }
 

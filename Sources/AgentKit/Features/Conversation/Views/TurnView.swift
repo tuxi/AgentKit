@@ -282,6 +282,13 @@ struct TurnView: View, Equatable {
                 title: "UI Layout"
             )))
 
+        case .openUIPreview(let callID):
+            guard tool(callID: callID) != nil else { return }
+            store.showInspector(.uiPreview(UIPreviewSelection(
+                callID: callID,
+                title: "UI Preview Lineage"
+            )))
+
         case .openURL(let raw):
             openExternalURL(raw)
 
