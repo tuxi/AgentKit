@@ -652,6 +652,15 @@ public struct PreviewArtifactStore: Sendable, Equatable {
         insertionOrder.compactMap { latest[$0] }
     }
 
+    /// Every accepted revision, grouped by artifact identity in insertion
+    /// order with revisions ascending. A replayed turn must resolve against
+    /// the revision its own result describes, not the newest one.
+    public var history: [PreviewArtifact] {
+        insertionOrder.flatMap { identity in
+            (revisions[identity] ?? [:]).values.sorted { $0.revision < $1.revision }
+        }
+    }
+
     public func artifacts(sessionID: String) -> [PreviewArtifact] {
         artifacts.filter { $0.sessionID == sessionID }
     }

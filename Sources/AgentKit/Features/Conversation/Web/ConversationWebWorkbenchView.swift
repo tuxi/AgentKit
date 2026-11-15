@@ -246,7 +246,7 @@ struct ConversationWebWorkbenchView: NSViewRepresentable {
             latestTimelineExtensions = timelineExtensions
 
             let resolvedConversationID = conversationID ?? "unbound"
-            let previewArtifactsChanged = latestSnapshot?.previewArtifacts != snapshot.previewArtifacts
+            let previewArtifactsChanged = latestSnapshot?.previewArtifactHistory != snapshot.previewArtifactHistory
             // The bridge reads this snapshot when the page asks it to resolve a
             // viewer. A preview artifact can arrive after the tool result with
             // no other source change; keep it current even when no document is
@@ -1054,7 +1054,7 @@ struct ConversationWebWorkbenchView: NSViewRepresentable {
                 )
                 return
             }
-            guard let artifact = latestSnapshot?.previewArtifacts.first(where: {
+            guard let artifact = latestSnapshot?.previewArtifactHistory.first(where: {
                 $0.sessionID == conversationID
                     && $0.artifactID == artifactID
                     && $0.revision == revision
@@ -1118,7 +1118,7 @@ struct ConversationWebWorkbenchView: NSViewRepresentable {
                 }
 
                 guard self.sourceConversationID == conversationID,
-                      self.latestSnapshot?.previewArtifacts.contains(where: {
+                      self.latestSnapshot?.previewArtifactHistory.contains(where: {
                           $0.sessionID == conversationID
                               && $0.artifactID == artifactID
                               && $0.revision == revision
@@ -1200,7 +1200,7 @@ struct ConversationWebWorkbenchView: NSViewRepresentable {
                 )
                 return
             }
-            guard let artifact = latestSnapshot?.previewArtifacts.first(where: {
+            guard let artifact = latestSnapshot?.previewArtifactHistory.first(where: {
                 $0.sessionID == conversationID
                     && $0.artifactID == artifactID
                     && $0.revision == revision
@@ -1260,7 +1260,7 @@ struct ConversationWebWorkbenchView: NSViewRepresentable {
                 }
 
                 guard self.sourceConversationID == conversationID,
-                      self.latestSnapshot?.previewArtifacts.contains(where: {
+                      self.latestSnapshot?.previewArtifactHistory.contains(where: {
                           $0.sessionID == conversationID
                               && $0.artifactID == artifactID
                               && $0.revision == revision

@@ -43,7 +43,7 @@ struct UIPreviewInspectorView: View {
               }) else {
             return nil
         }
-        return snapshot.previewArtifacts
+        return snapshot.previewArtifactHistory
             .filter { $0.turnID == turn.runtimeTurnID && $0.callID == selection.callID }
             .max { $0.revision < $1.revision }
     }

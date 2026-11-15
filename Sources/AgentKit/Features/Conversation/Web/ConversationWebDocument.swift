@@ -590,7 +590,7 @@ enum ConversationWebDocumentBuilder {
             turns: snapshot.turns.enumerated().map { index, turn in
                 let contributions = extensionContributions[turn.id] ?? []
                 let turnPreviewArtifacts = previewArtifacts(
-                    from: snapshot.previewArtifacts,
+                    from: snapshot.previewArtifactHistory,
                     for: turn
                 )
                 // A ui_preview tool result renders its own card. Suppressing the

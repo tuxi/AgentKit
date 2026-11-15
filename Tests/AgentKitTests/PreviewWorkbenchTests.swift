@@ -29,6 +29,19 @@ final class PreviewWorkbenchTests: XCTestCase {
         XCTAssertEqual(snapshot.previewArtifacts.first?.status, .failed)
     }
 
+    func testSnapshotKeepsEveryRevisionForReplayedTurns() async throws {
+        let root = try PreviewFixtureManifestRunner.fixtureRoot()
+        let engine = RuntimeEngine(sessionID: "session_fixture")
+        await engine.ingest(.previewArtifact(try loadEvent("event-revision-1.json", root: root)))
+        await engine.ingest(.previewArtifact(try loadEvent("event-revision-2.json", root: root)))
+
+        let snapshot = await engine.currentSnapshot()
+        XCTAssertEqual(snapshot.previewArtifacts.count, 1, "latest per artifact identity")
+        XCTAssertEqual(snapshot.previewArtifacts.first?.revision, 2)
+        XCTAssertEqual(snapshot.previewArtifactHistory.map(\.revision), [1, 2])
+        XCTAssertEqual(Set(snapshot.previewArtifactHistory.map(\.artifactID)).count, 1)
+    }
+
     func testHistoryReplayMergesPreviewArtifacts() async throws {
         let root = try PreviewFixtureManifestRunner.fixtureRoot()
         let event = try loadEvent("event-revision-1.json", root: root)

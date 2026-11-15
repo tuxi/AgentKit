@@ -23,6 +23,9 @@ public struct RuntimeSnapshot: Sendable {
     /// Latest valid preview artifact snapshot per artifact identity. Revision
     /// ordering and duplicate/conflict handling live in PreviewArtifactStore.
     public let previewArtifacts: [PreviewArtifact]
+    /// Every accepted artifact revision. Historical turns and the viewer
+    /// bridge resolve an exact revision, which may be older than the latest.
+    public let previewArtifactHistory: [PreviewArtifact]
     public let pendingApproval: ApprovalRequest? // 保留兼容：取队列第一个
     public let pendingApprovals: [ApprovalRequest]  // 新增：完整审批队列
     public let pendingPlanApproval: PlanApprovalRequest?
@@ -50,6 +53,7 @@ public struct RuntimeSnapshot: Sendable {
     public init(timeline: [ExecutionNode],
                 turns: [ConversationTurn] = [],
                 previewArtifacts: [PreviewArtifact] = [],
+                previewArtifactHistory: [PreviewArtifact]? = nil,
                 pendingApprovals: [ApprovalRequest] = [],
                 pendingPlanApproval: PlanApprovalRequest? = nil,
                 pendingAskUsers: [AskUserRequest] = [],
@@ -65,6 +69,7 @@ public struct RuntimeSnapshot: Sendable {
         self.timeline = timeline
         self.turns = turns
         self.previewArtifacts = previewArtifacts
+        self.previewArtifactHistory = previewArtifactHistory ?? previewArtifacts
         self.pendingApproval = pendingApprovals.first
         self.pendingApprovals = pendingApprovals
         self.pendingPlanApproval = pendingPlanApproval
@@ -907,6 +912,7 @@ public actor RuntimeEngine {
             timeline: olderTimeline + timeline.filter { !prefixRawTurnIDs.contains($0.turnID) },
             turns: olderTurns + uniqueLiveTurns,
             previewArtifacts: previewStore.artifacts,
+            previewArtifactHistory: previewStore.history,
             pendingApprovals: _pendingApprovals,
             pendingPlanApproval: _pendingPlanApproval,
             pendingAskUsers: Array(_pendingAskUsers.values),
