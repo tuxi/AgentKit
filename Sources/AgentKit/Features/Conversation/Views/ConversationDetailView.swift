@@ -16,6 +16,7 @@ import SwiftUI
 public struct ConversationDetailView: View {
     
     @Environment(\.conversationUsesWorkspaceHeader) private var usesWorkspaceHeader
+    @Environment(\.conversationUsesSessionRail) private var railOwnsTasks
     @Environment(\.colorScheme) private var colorScheme
     @Environment(WorkspaceStore.self) private var store
     @Environment(AgentRouter.self) private var router
@@ -376,6 +377,7 @@ public struct ConversationDetailView: View {
             //            WorkspaceChipBar()
             //            #endif
             
+            if !railOwnsTasks {
             if let status = vm.snapshot.backgroundContinuation, status.isWaiting {
                 BackgroundContinuationBanner(status: status, isCancelling: vm.isCancelling) {
                     Task { await vm.cancelTurn() }
@@ -385,6 +387,8 @@ public struct ConversationDetailView: View {
             BackgroundJobsEntry(model: vm.backgroundJobs) { job in
                 store.showInspector(.childStream(.init(childID: job.jobID, kind: .job,
                     title: BackgroundJobPresentation.summary(job.command, text: .init()))))
+            }
+
             }
 
             DraftComposerPanel(

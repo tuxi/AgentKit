@@ -536,6 +536,37 @@ public final class CodeAgentTransport: AgentTransport, CodingTaskReading, Coding
         try await http.getConversationContext(id: id)
     }
 
+    public func sessionRail(scope: SessionRailScope) async throws -> SessionRailSnapshot {
+        try await http.sessionRail(scope: scope)
+    }
+    public func sessionRailOutputs(scope: SessionRailScope, cursor: String?) async throws -> SessionRailOutputs {
+        try await http.sessionRailOutputs(scope: scope, cursor: cursor)
+    }
+    public func sessionRailOutput(scope: SessionRailScope, outputID: String) async throws -> SessionRailOutput {
+        try await http.sessionRailOutput(scope: scope, outputID: outputID)
+    }
+    public func sessionRailConnectors(scope: SessionRailScope) async throws -> SessionRailConnectors {
+        try await http.sessionRailConnectors(scope: scope)
+    }
+    public func sessionRailConnector(scope: SessionRailScope, connectorID: String) async throws -> SessionRailConnector {
+        try await http.sessionRailConnector(scope: scope, connectorID: connectorID)
+    }
+    public func sessionRailChanges(scope: SessionRailScope) async throws -> SessionRailChanges {
+        try await http.sessionRailChanges(scope: scope)
+    }
+    public func sessionRailPatch(scope: SessionRailScope, snapshotID: String, fileID: String) async throws -> SessionRailPatch {
+        try await http.sessionRailPatch(scope: scope, snapshotID: snapshotID, fileID: fileID)
+    }
+    public func sessionRailRequest(scope: SessionRailScope, snapshotID: String?) async throws -> SessionRailRequest {
+        try await http.sessionRailRequest(scope: scope, snapshotID: snapshotID)
+    }
+    public func sessionRailSource(scope: SessionRailScope, snapshotID: String, sourceID: String) async throws -> SessionRailSourceContent {
+        try await http.sessionRailSource(scope: scope, snapshotID: snapshotID, sourceID: sourceID)
+    }
+    public func sessionRailJobs(scope: SessionRailScope, cursor: String?) async throws -> SessionRailJobs {
+        try await http.sessionRailJobs(scope: scope, cursor: cursor)
+    }
+
     public func getWorkspacePermissions(workspacePath: String) async throws -> WorkspacePermissions {
         try await http.getWorkspacePermissions(workspacePath: workspacePath)
     }
@@ -1163,6 +1194,37 @@ public final class DefaultAgentClient: RuntimeClient, CodingTaskReading, CodingT
 
     public func getConversationContext(id: String) async throws -> ConversationContextSnapshot {
         try await transport.getConversationContext(id: id)
+    }
+
+    public func sessionRail(scope: SessionRailScope) async throws -> SessionRailSnapshot {
+        try await transport.sessionRail(scope: scope)
+    }
+    public func sessionRailOutputs(scope: SessionRailScope, cursor: String?) async throws -> SessionRailOutputs {
+        try await transport.sessionRailOutputs(scope: scope, cursor: cursor)
+    }
+    public func sessionRailOutput(scope: SessionRailScope, outputID: String) async throws -> SessionRailOutput {
+        try await transport.sessionRailOutput(scope: scope, outputID: outputID)
+    }
+    public func sessionRailConnectors(scope: SessionRailScope) async throws -> SessionRailConnectors {
+        try await transport.sessionRailConnectors(scope: scope)
+    }
+    public func sessionRailConnector(scope: SessionRailScope, connectorID: String) async throws -> SessionRailConnector {
+        try await transport.sessionRailConnector(scope: scope, connectorID: connectorID)
+    }
+    public func sessionRailChanges(scope: SessionRailScope) async throws -> SessionRailChanges {
+        try await transport.sessionRailChanges(scope: scope)
+    }
+    public func sessionRailPatch(scope: SessionRailScope, snapshotID: String, fileID: String) async throws -> SessionRailPatch {
+        try await transport.sessionRailPatch(scope: scope, snapshotID: snapshotID, fileID: fileID)
+    }
+    public func sessionRailRequest(scope: SessionRailScope, snapshotID: String?) async throws -> SessionRailRequest {
+        try await transport.sessionRailRequest(scope: scope, snapshotID: snapshotID)
+    }
+    public func sessionRailSource(scope: SessionRailScope, snapshotID: String, sourceID: String) async throws -> SessionRailSourceContent {
+        try await transport.sessionRailSource(scope: scope, snapshotID: snapshotID, sourceID: sourceID)
+    }
+    public func sessionRailJobs(scope: SessionRailScope, cursor: String?) async throws -> SessionRailJobs {
+        try await transport.sessionRailJobs(scope: scope, cursor: cursor)
     }
 
     public func getWorkspacePermissions(workspacePath: String) async throws -> WorkspacePermissions {

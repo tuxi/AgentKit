@@ -152,6 +152,12 @@ public final class WorkspaceStore {
 
     /// 与 Agent Runtime 通信的客户端（agent-wire v1）。
     public let client: RuntimeClient
+    public let sessionRail: SessionRailModel
+    public var sessionRailActivityCount: Int {
+        guard let vm = activeConversationViewModel else { return 0 }
+        let jobs = vm.backgroundJobs.isStale ? 0 : vm.backgroundJobs.runningCount
+        return max(jobs, vm.snapshot.backgroundContinuation?.isWaiting == true ? 1 : 0)
+    }
 
     /// Device-local durable state for drafts, model choices and read cursors.
     public let localStateStore: any ConversationLocalStateStore
@@ -353,6 +359,7 @@ public final class WorkspaceStore {
         projects: ProjectsStore = ProjectsStore()
     ) {
         self.client = client
+        self.sessionRail = SessionRailModel(client: client)
         self.usesEmbeddedRuntime = usesEmbeddedRuntime
         self.localStateStore = localStateStore
         self.userAssetPicker = userAssetPicker

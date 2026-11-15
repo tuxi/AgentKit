@@ -18,7 +18,7 @@ import ClientToolProtocol
 
 // MARK: - RuntimeClient protocol
 
-public protocol RuntimeClient: Sendable {
+public protocol RuntimeClient: Sendable, SessionRailReading {
     /// Create a control channel whose complete lifetime is bound to `conversationID`.
     /// New UI code must prefer this over the legacy current-session methods below.
     func makeSessionChannel(conversationID: String) -> any RuntimeSessionChannel
