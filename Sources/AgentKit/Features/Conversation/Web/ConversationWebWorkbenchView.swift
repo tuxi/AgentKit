@@ -246,11 +246,18 @@ struct ConversationWebWorkbenchView: NSViewRepresentable {
             latestTimelineExtensions = timelineExtensions
 
             let resolvedConversationID = conversationID ?? "unbound"
+            let previewArtifactsChanged = latestSnapshot?.previewArtifacts != snapshot.previewArtifacts
+            // The bridge reads this snapshot when the page asks it to resolve a
+            // viewer. A preview artifact can arrive after the tool result with
+            // no other source change; keep it current even when no document is
+            // resent.
+            latestSnapshot = snapshot
             guard sourceGeneration != snapshot.generation
                     || sourceConversationID != resolvedConversationID
                     || sourceWorkspaceRoot != workspaceRoot
                     || sourceWorkspaceID != workspaceID
-                    || sourceExtensionContributions != extensionContributions else {
+                    || sourceExtensionContributions != extensionContributions
+                    || previewArtifactsChanged else {
                 return
             }
 
@@ -277,7 +284,6 @@ struct ConversationWebWorkbenchView: NSViewRepresentable {
                 acknowledgedExtensionContributions = [:]
                 inFlightExtensionContributions = nil
             }
-            latestSnapshot = snapshot
             sourceGeneration = snapshot.generation
             sourceConversationID = resolvedConversationID
             sourceWorkspaceRoot = workspaceRoot
@@ -1024,40 +1030,59 @@ struct ConversationWebWorkbenchView: NSViewRepresentable {
         /// Resolves verified viewer bytes and returns only an opaque,
         /// conversation-scoped preview scheme URL to the isolated frame.
         private func handleResolvePreviewViewerURL(_ body: [String: Any]) {
+            guard let requestID = body["requestID"] as? String,
+                  UUID(uuidString: requestID) != nil else { return }
             guard let conversationID = body["conversationID"] as? String,
-                  conversationID == sourceConversationID,
-                  let artifactID = body["artifactID"] as? String,
+                  conversationID == sourceConversationID else {
+                sendPreviewViewerFailure(
+                    requestID: requestID,
+                    artifactID: (body["artifactID"] as? String) ?? "",
+                    revision: (body["revision"] as? NSNumber)?.intValue ?? 0,
+                    errorCode: "preview_session_mismatch"
+                )
+                return
+            }
+            guard let artifactID = body["artifactID"] as? String,
                   artifactID.utf8.count <= 256,
                   let revision = (body["revision"] as? NSNumber)?.intValue,
-                  revision > 0,
-                  let requestID = body["requestID"] as? String,
-                  UUID(uuidString: requestID) != nil,
-                  let artifact = latestSnapshot?.previewArtifacts.first(where: {
-                      $0.sessionID == conversationID
-                          && $0.artifactID == artifactID
-                          && $0.revision == revision
-                  }),
-                  artifact.kind == .interactiveHTML,
-                  artifact.status == .ready
-            else { return }
+                  revision > 0 else {
+                sendPreviewViewerFailure(
+                    requestID: requestID,
+                    artifactID: (body["artifactID"] as? String) ?? "",
+                    revision: 0,
+                    errorCode: "preview_invalid_request"
+                )
+                return
+            }
+            guard let artifact = latestSnapshot?.previewArtifacts.first(where: {
+                $0.sessionID == conversationID
+                    && $0.artifactID == artifactID
+                    && $0.revision == revision
+            }) else {
+                sendPreviewViewerFailure(
+                    requestID: requestID,
+                    artifactID: artifactID,
+                    revision: revision,
+                    errorCode: "preview_artifact_unavailable"
+                )
+                return
+            }
+            guard artifact.kind == .interactiveHTML, artifact.status == .ready else {
+                sendPreviewViewerFailure(
+                    requestID: requestID,
+                    artifactID: artifactID,
+                    revision: revision,
+                    errorCode: "preview_not_ready"
+                )
+                return
+            }
             guard let resolver = previewViewerResolver else {
-                if let webView {
-                    let response = ResolvePreviewViewerResponse(
-                        type: "previewViewerURLResolved",
-                        requestID: requestID,
-                        artifactID: artifactID,
-                        revision: revision,
-                        url: nil,
-                        errorCode: "preview_unsupported"
-                    )
-                    Task { @MainActor in
-                        await Self.dispatchPreviewResolutionEvent(
-                            "previewViewerURLResolved",
-                            response: response,
-                            webView: webView
-                        )
-                    }
-                }
+                sendPreviewViewerFailure(
+                    requestID: requestID,
+                    artifactID: artifactID,
+                    revision: revision,
+                    errorCode: "preview_unsupported"
+                )
                 return
             }
 
@@ -1120,45 +1145,83 @@ struct ConversationWebWorkbenchView: NSViewRepresentable {
             }
         }
 
+        private func sendPreviewViewerFailure(
+            requestID: String,
+            artifactID: String,
+            revision: Int,
+            errorCode: String
+        ) {
+            guard let webView else { return }
+            let response = ResolvePreviewViewerResponse(
+                type: "previewViewerURLResolved",
+                requestID: requestID,
+                artifactID: artifactID,
+                revision: revision,
+                url: nil,
+                errorCode: errorCode
+            )
+            Task { @MainActor in
+                await Self.dispatchPreviewResolutionEvent(
+                    "previewViewerURLResolved",
+                    response: response,
+                    webView: webView
+                )
+            }
+        }
+
         /// Resolves a verified raster fallback and exposes it through the
         /// existing opaque local-asset scheme token.
         private func handleResolvePreviewAssetURL(_ body: [String: Any]) {
+            guard let requestID = body["requestID"] as? String,
+                  UUID(uuidString: requestID) != nil else { return }
             guard let conversationID = body["conversationID"] as? String,
-                  conversationID == sourceConversationID,
-                  let artifactID = body["artifactID"] as? String,
+                  conversationID == sourceConversationID else {
+                sendPreviewAssetFailure(
+                    requestID: requestID,
+                    artifactID: (body["artifactID"] as? String) ?? "",
+                    revision: (body["revision"] as? NSNumber)?.intValue ?? 0,
+                    assetID: (body["assetID"] as? String) ?? "",
+                    errorCode: "preview_session_mismatch"
+                )
+                return
+            }
+            guard let artifactID = body["artifactID"] as? String,
                   artifactID.utf8.count <= 256,
                   let revision = (body["revision"] as? NSNumber)?.intValue,
                   revision > 0,
                   let assetID = body["assetID"] as? String,
-                  assetID.utf8.count <= 256,
-                  let requestID = body["requestID"] as? String,
-                  UUID(uuidString: requestID) != nil,
-                  let artifact = latestSnapshot?.previewArtifacts.first(where: {
-                      $0.sessionID == conversationID
-                          && $0.artifactID == artifactID
-                          && $0.revision == revision
-                  }),
-                  artifact.fallback?.assetID == assetID
-            else { return }
+                  assetID.utf8.count <= 256 else {
+                sendPreviewAssetFailure(
+                    requestID: requestID,
+                    artifactID: (body["artifactID"] as? String) ?? "",
+                    revision: 0,
+                    assetID: (body["assetID"] as? String) ?? "",
+                    errorCode: "preview_invalid_request"
+                )
+                return
+            }
+            guard let artifact = latestSnapshot?.previewArtifacts.first(where: {
+                $0.sessionID == conversationID
+                    && $0.artifactID == artifactID
+                    && $0.revision == revision
+            }), artifact.fallback?.assetID == assetID else {
+                sendPreviewAssetFailure(
+                    requestID: requestID,
+                    artifactID: artifactID,
+                    revision: revision,
+                    assetID: assetID,
+                    errorCode: "preview_asset_unavailable"
+                )
+                return
+            }
             guard let resolver = previewAssetResolver else {
-                if let webView {
-                    let response = ResolvePreviewAssetResponse(
-                        type: "previewAssetURLResolved",
-                        requestID: requestID,
-                        artifactID: artifactID,
-                        revision: revision,
-                        assetID: assetID,
-                        url: nil,
-                        errorCode: "preview_unsupported"
-                    )
-                    Task { @MainActor in
-                        await Self.dispatchPreviewResolutionEvent(
-                            "previewAssetURLResolved",
-                            response: response,
-                            webView: webView
-                        )
-                    }
-                }
+                sendPreviewAssetFailure(
+                    requestID: requestID,
+                    artifactID: artifactID,
+                    revision: revision,
+                    assetID: assetID,
+                    errorCode: "preview_unsupported"
+                )
                 return
             }
 
@@ -1240,6 +1303,32 @@ struct ConversationWebWorkbenchView: NSViewRepresentable {
                 return preview.error.code
             }
             return "preview_render_failed"
+        }
+
+        private func sendPreviewAssetFailure(
+            requestID: String,
+            artifactID: String,
+            revision: Int,
+            assetID: String,
+            errorCode: String
+        ) {
+            guard let webView else { return }
+            let response = ResolvePreviewAssetResponse(
+                type: "previewAssetURLResolved",
+                requestID: requestID,
+                artifactID: artifactID,
+                revision: revision,
+                assetID: assetID,
+                url: nil,
+                errorCode: errorCode
+            )
+            Task { @MainActor in
+                await Self.dispatchPreviewResolutionEvent(
+                    "previewAssetURLResolved",
+                    response: response,
+                    webView: webView
+                )
+            }
         }
 
         /// Web thumbnail click → open the shared native previewer for the

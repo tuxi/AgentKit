@@ -1676,6 +1676,381 @@ final class PreviewWorkbenchRenderTests: XCTestCase {
         print("[UIPreviewRender] screenshot: \(screenshot.path)")
     }
 
+    // MARK: - Viewer request / failure / late-artifact acceptance
+
+    private final class RecordingPreviewResolver: PreviewViewerResolver, PreviewAssetResolver, @unchecked Sendable {
+        struct ViewerRequest: Equatable {
+            let sessionID: String
+            let artifactID: String
+            let revision: Int
+        }
+
+        private let lock = NSLock()
+        private var recordedViewerRequests: [ViewerRequest] = []
+        private let failViewer: Bool
+        let viewerData: Data
+        let assetData: Data
+
+        init(viewerData: Data, assetData: Data, failViewer: Bool = false) {
+            self.viewerData = viewerData
+            self.assetData = assetData
+            self.failViewer = failViewer
+        }
+
+        var viewerRequests: [ViewerRequest] {
+            lock.withLock { recordedViewerRequests }
+        }
+
+        func resolve(_ request: PreviewViewerRequest) async throws -> PreviewViewerResource {
+            lock.withLock {
+                recordedViewerRequests.append(ViewerRequest(
+                    sessionID: request.sessionID,
+                    artifactID: request.artifactID,
+                    revision: request.revision
+                ))
+            }
+            if failViewer {
+                throw PreviewResourceError(
+                    code: "preview_test_failure",
+                    message: "Forced viewer failure."
+                )
+            }
+            return PreviewViewerResource(
+                sessionID: request.sessionID,
+                artifactID: request.artifactID,
+                revision: request.revision,
+                data: viewerData,
+                statusCode: 200,
+                mimeType: "text/html; charset=utf-8",
+                sizeBytes: viewerData.count,
+                sha256: PreviewRFC8785.sha256(data: viewerData)
+            )
+        }
+
+        func resolveContent(_ request: PreviewAssetRequest) async throws -> PreviewAssetResource {
+            PreviewAssetResource(
+                sessionID: request.sessionID,
+                artifactID: request.artifactID,
+                revision: request.revision,
+                assetID: request.assetID,
+                data: assetData,
+                statusCode: 200,
+                mimeType: "image/png",
+                sizeBytes: assetData.count,
+                sha256: PreviewRFC8785.sha256(data: assetData)
+            )
+        }
+    }
+
+    private final class PreviewSnapshotDriver: ObservableObject {
+        @Published var snapshot: RuntimeSnapshot
+
+        init(snapshot: RuntimeSnapshot) {
+            self.snapshot = snapshot
+        }
+    }
+
+    private struct PreviewSnapshotHostView: View {
+        @ObservedObject var driver: PreviewSnapshotDriver
+        let store: WorkspaceStore
+        let resolver: RecordingPreviewResolver
+        let conversationID: String
+        let workspace: URL
+
+        var body: some View {
+            ConversationWebWorkbenchView(
+                snapshot: driver.snapshot,
+                conversationID: conversationID,
+                workspaceRoot: workspace,
+                previewViewerResolver: resolver,
+                previewAssetResolver: resolver,
+                extensionContributions: [:],
+                timelineExtensions: [],
+                isVisible: true,
+                bottomInset: 0,
+                onFatalFailure: { XCTFail("ConversationWorkbench renderer failed") }
+            )
+            .environment(store)
+        }
+    }
+
+    private struct UIPreviewRenderFixture {
+        let root: URL
+        let artifact: PreviewArtifact
+        let snapshotWithoutArtifact: RuntimeSnapshot
+        let snapshotWithArtifact: RuntimeSnapshot
+        let conversationID: String
+    }
+
+    private func makeUIPreviewRenderFixture() throws -> UIPreviewRenderFixture {
+        let root = try PreviewFixtureManifestRunner.fixtureRoot()
+        let viewerData = try Data(contentsOf: root.appendingPathComponent("viewer.html"))
+        let fallbackData = try Data(contentsOf: root.appendingPathComponent("assets/fallback.png"))
+        let fallbackSHA = String(
+            PreviewRFC8785.sha256(data: fallbackData).dropFirst("sha256:".count)
+        )
+        let conversationID = "ui-preview-render"
+        let lineage = renderLineage()
+        let artifact = try makeRenderArtifact(
+            sessionID: conversationID,
+            callID: "call_ui_preview",
+            title: "DreamLog Duo Home",
+            viewerData: viewerData,
+            fallbackSHA256: fallbackSHA,
+            lineage: lineage
+        )
+        let fallbackAsset = AgentAssetRef(
+            id: "asset_render_fallback",
+            kind: "image",
+            displayName: "fallback.png",
+            workspaceID: "ws_current",
+            workspaceRelativePath: "assets/fallback.png",
+            mimeType: "image/png",
+            sourceCallID: "call_ui_preview"
+        )
+        let tool = ToolNodePayload(
+            callID: "call_ui_preview",
+            toolName: "ui_preview",
+            args: nil,
+            status: .completed,
+            output: "Prepared adaptation preview.",
+            structuredOutput: renderPreviewResult(
+                fallbackPath: "assets/fallback.png",
+                fallbackSHA256: fallbackSHA,
+                lineage: lineage
+            ),
+            assets: [fallbackAsset]
+        )
+        let layoutTurn = ConversationTurn(
+            id: "turn-ui-layout-support",
+            userPrompt: nil,
+            blocks: [.toolGroup(ToolGroup(
+                id: "layout-support",
+                tools: [renderLayoutTool()]
+            ))],
+            footer: nil,
+            isLive: false
+        )
+        let turn = ConversationTurn(
+            id: "turn-ui-preview",
+            userPrompt: MessageNodePayload(role: .user, text: "Build the adaptation preview"),
+            blocks: [.toolGroup(ToolGroup(id: "ui-preview-activity", tools: [tool]))],
+            footer: nil,
+            isLive: false
+        )
+        return UIPreviewRenderFixture(
+            root: root,
+            artifact: artifact,
+            snapshotWithoutArtifact: RuntimeSnapshot(
+                timeline: [],
+                turns: [layoutTurn, turn],
+                previewArtifacts: [],
+                generation: 1
+            ),
+            snapshotWithArtifact: RuntimeSnapshot(
+                timeline: [],
+                turns: [layoutTurn, turn],
+                previewArtifacts: [artifact],
+                generation: 1
+            ),
+            conversationID: conversationID
+        )
+    }
+
+    private func presentUIPreviewWorkbench(
+        snapshot: RuntimeSnapshot,
+        resolver: RecordingPreviewResolver,
+        fixture: UIPreviewRenderFixture
+    ) async throws -> (window: NSWindow, webView: WKWebView, store: WorkspaceStore) {
+        let store = WorkspaceStore(usesEmbeddedRuntime: false)
+        let content = ConversationWebWorkbenchView(
+            snapshot: snapshot,
+            conversationID: fixture.conversationID,
+            workspaceRoot: fixture.root,
+            previewViewerResolver: resolver,
+            previewAssetResolver: resolver,
+            extensionContributions: [:],
+            timelineExtensions: [],
+            isVisible: true,
+            bottomInset: 0,
+            onFatalFailure: { XCTFail("ConversationWorkbench renderer failed") }
+        )
+        .environment(store)
+        let hostingView = NSHostingView(rootView: content)
+        hostingView.frame = NSRect(x: 0, y: 0, width: 900, height: 1_200)
+        let window = NSWindow(
+            contentRect: hostingView.frame,
+            styleMask: [.titled, .closable],
+            backing: .buffered,
+            defer: false
+        )
+        window.contentView = hostingView
+        window.title = "AgentKit UI Preview Viewer Acceptance"
+        window.makeKeyAndOrderFront(nil)
+        hostingView.layoutSubtreeIfNeeded()
+        self.window = window
+        let webView = try await waitForWebView(in: hostingView)
+        try await waitForJavaScript(
+            "document.querySelector('[data-tool-id=\"call_ui_preview\"]') !== null",
+            webView: webView,
+            timeout: 12
+        )
+        _ = try await webView.evaluateJavaScript("""
+        document.querySelectorAll('.turn-process-summary')
+          .forEach((summary) => summary.dispatchEvent(
+            new MouseEvent('click', { bubbles: true, cancelable: true })
+          ));
+        """)
+        _ = try await webView.evaluateJavaScript("""
+        document.querySelector('[data-tool-id="call_ui_preview"] .tool-summary')
+          ?.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true }));
+        """)
+        return (window, webView, store)
+    }
+
+    func testViewerResolutionSendsRequestAndShowsViewer() async throws {
+        let fixture = try makeUIPreviewRenderFixture()
+        let viewerData = try Data(contentsOf: fixture.root.appendingPathComponent("viewer.html"))
+        let fallbackData = try Data(contentsOf: fixture.root.appendingPathComponent("assets/fallback.png"))
+        let resolver = RecordingPreviewResolver(viewerData: viewerData, assetData: fallbackData)
+        let presented = try await presentUIPreviewWorkbench(
+            snapshot: fixture.snapshotWithArtifact,
+            resolver: resolver,
+            fixture: fixture
+        )
+        try await waitForJavaScript(
+            "document.querySelector('.ui-preview-activity') !== null",
+            webView: presented.webView,
+            timeout: 12
+        )
+        try await waitForJavaScript(
+            "document.querySelector('iframe[data-ui-preview-frame=\"preview_p1f_render\"]')?.src.startsWith('agentkit-workbench://preview/') === true",
+            webView: presented.webView,
+            timeout: 12
+        )
+        let requests = resolver.viewerRequests
+        XCTAssertEqual(requests.count, 1)
+        XCTAssertEqual(requests.first?.sessionID, fixture.conversationID)
+        XCTAssertEqual(requests.first?.artifactID, "preview_p1f_render")
+        XCTAssertEqual(requests.first?.revision, 1)
+
+        let document = ConversationWebDocumentBuilder.build(
+            snapshot: fixture.snapshotWithArtifact,
+            conversationID: fixture.conversationID
+        )
+        let preview = try XCTUnwrap(
+            document.turns.last?.blocks.first?.tools.first?.uiPreview
+        )
+        XCTAssertFalse(preview.artifactID.isEmpty)
+        XCTAssertEqual(preview.revision, 1)
+        XCTAssertEqual(preview.presentationState, "interactiveReady")
+    }
+
+    func testViewerFailureShowsErrorFallbackAndRetry() async throws {
+        let fixture = try makeUIPreviewRenderFixture()
+        let viewerData = try Data(contentsOf: fixture.root.appendingPathComponent("viewer.html"))
+        let fallbackData = try Data(contentsOf: fixture.root.appendingPathComponent("assets/fallback.png"))
+        let resolver = RecordingPreviewResolver(
+            viewerData: viewerData,
+            assetData: fallbackData,
+            failViewer: true
+        )
+        let presented = try await presentUIPreviewWorkbench(
+            snapshot: fixture.snapshotWithArtifact,
+            resolver: resolver,
+            fixture: fixture
+        )
+        try await waitForJavaScript(
+            "document.querySelector('.ui-preview-viewer-placeholder')?.textContent.includes('Preview render failed') === true",
+            webView: presented.webView,
+            timeout: 12
+        )
+        let state = try await presented.webView.evaluateJavaScript("""
+        (() => {
+          const placeholder = document.querySelector('.ui-preview-viewer-placeholder');
+          return {
+            text: placeholder?.textContent ?? '',
+            hasRetry: Boolean(placeholder?.querySelector('.ui-preview-retry')),
+            fallbackWidth: document.querySelector('[data-ui-preview-node="fallback"] img')?.naturalWidth ?? 0
+          };
+        })()
+        """) as? [String: Any]
+        XCTAssertTrue((state?["text"] as? String)?.contains("Preview render failed (preview_test_failure)") == true)
+        XCTAssertFalse((state?["text"] as? String)?.contains("Preparing interactive preview") == true)
+        XCTAssertEqual(state?["hasRetry"] as? Bool, true)
+        XCTAssertGreaterThan(state?["fallbackWidth"] as? Int ?? 0, 0)
+        XCTAssertEqual(resolver.viewerRequests.count, 1)
+
+        _ = try await presented.webView.evaluateJavaScript("""
+        document.querySelector('.ui-preview-retry')?.click();
+        """)
+        try await waitForJavaScript(
+            "document.querySelectorAll('.ui-preview-retry').length > 0 && document.querySelector('.ui-preview-viewer-placeholder')?.textContent.includes('Preview render failed') === true",
+            webView: presented.webView,
+            timeout: 12
+        )
+        XCTAssertEqual(resolver.viewerRequests.count, 2)
+    }
+
+    func testLatePreviewArtifactRefreshesViewer() async throws {
+        let fixture = try makeUIPreviewRenderFixture()
+        let viewerData = try Data(contentsOf: fixture.root.appendingPathComponent("viewer.html"))
+        let fallbackData = try Data(contentsOf: fixture.root.appendingPathComponent("assets/fallback.png"))
+        let resolver = RecordingPreviewResolver(viewerData: viewerData, assetData: fallbackData)
+        let driver = PreviewSnapshotDriver(snapshot: fixture.snapshotWithoutArtifact)
+        let store = WorkspaceStore(usesEmbeddedRuntime: false)
+        let content = PreviewSnapshotHostView(
+            driver: driver,
+            store: store,
+            resolver: resolver,
+            conversationID: fixture.conversationID,
+            workspace: fixture.root
+        )
+        let hostingView = NSHostingView(rootView: content)
+        hostingView.frame = NSRect(x: 0, y: 0, width: 900, height: 1_200)
+        let window = NSWindow(
+            contentRect: hostingView.frame,
+            styleMask: [.titled, .closable],
+            backing: .buffered,
+            defer: false
+        )
+        window.contentView = hostingView
+        window.title = "AgentKit UI Preview Late Artifact"
+        window.makeKeyAndOrderFront(nil)
+        hostingView.layoutSubtreeIfNeeded()
+        self.window = window
+        let webView = try await waitForWebView(in: hostingView)
+        try await waitForJavaScript(
+            "document.querySelector('[data-tool-id=\"call_ui_preview\"]') !== null",
+            webView: webView,
+            timeout: 12
+        )
+        _ = try await webView.evaluateJavaScript("""
+        document.querySelectorAll('.turn-process-summary')
+          .forEach((summary) => summary.dispatchEvent(
+            new MouseEvent('click', { bubbles: true, cancelable: true })
+          ));
+        """)
+        _ = try await webView.evaluateJavaScript("""
+        document.querySelector('[data-tool-id="call_ui_preview"] .tool-summary')
+          ?.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true }));
+        """)
+        XCTAssertTrue(resolver.viewerRequests.isEmpty)
+
+        driver.snapshot = fixture.snapshotWithArtifact
+        try await waitForJavaScript(
+            "document.querySelector('.ui-preview-activity') !== null",
+            webView: webView,
+            timeout: 12
+        )
+        try await waitForJavaScript(
+            "document.querySelector('iframe[data-ui-preview-frame=\"preview_p1f_render\"]')?.src.startsWith('agentkit-workbench://preview/') === true",
+            webView: webView,
+            timeout: 12
+        )
+        XCTAssertEqual(resolver.viewerRequests.count, 1)
+    }
+
     private func renderLineage() -> JSONValue {
         .object([
             "schema": .string("ui_preview_lineage.v2"),
