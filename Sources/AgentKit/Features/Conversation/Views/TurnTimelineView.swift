@@ -119,7 +119,12 @@ public struct TurnTimelineView: View {
                     TurnView(
                         turn: turn,
                         conversationID: conversationID,
-                        workspaceRoot: workspaceRoot
+                        workspaceRoot: workspaceRoot,
+                        workspaceID: workspaceID,
+                        previewArtifacts: snapshot.previewArtifactHistory,
+                        allTurns: snapshot.turns,
+                        previewViewerResolver: previewViewerResolver,
+                        previewAssetResolver: previewAssetResolver
                     )
                         .equatable()
                         .id(turn.id)

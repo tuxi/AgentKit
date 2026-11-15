@@ -31,14 +31,45 @@ final class PreviewHTTPResolverTests: XCTestCase {
         super.tearDown()
     }
 
-    private func client() -> RuntimeHTTPClient {
+    private func client(
+        store: any CredentialStore = MemoryCredentialStore()
+    ) -> RuntimeHTTPClient {
         let configuration = URLSessionConfiguration.ephemeral
         configuration.protocolClasses = [PreviewHTTPProtocol.self]
         return RuntimeHTTPClient(
             environment: RuntimeEnvironment(host: "127.0.0.1", port: 8797),
             session: URLSession(configuration: configuration),
-            credentialStore: MemoryCredentialStore(),
+            credentialStore: store,
             credentialTarget: .runtimeAccess("preview-fixture")
+        )
+    }
+
+    func testViewerBearerTokenStaysInHeaderNotInURL() async throws {
+        let secret = "p1f-" + String(repeating: "a", count: 40)
+        let store = MemoryCredentialStore()
+        try await store.set(
+            Credential(kind: .bearer, secret: secret),
+            for: .runtimeAccess("preview-fixture")
+        )
+        let root = try PreviewFixtureManifestRunner.fixtureRoot()
+        let data = try Data(contentsOf: root.appendingPathComponent("viewer.html"))
+        PreviewHTTPProtocol.handler = { request in
+            XCTAssertEqual(
+                request.value(forHTTPHeaderField: "Authorization"),
+                "Bearer \(secret)"
+            )
+            let absolute = request.url?.absoluteString ?? ""
+            XCTAssertFalse(absolute.contains(secret), "bearer token leaked into the URL")
+            XCTAssertNil(request.url?.query, "viewer URL must not carry a query")
+            return (200, ["Content-Type": "text/html; charset=utf-8"], data)
+        }
+
+        _ = try await client(store: store).resolvePreviewViewer(
+            PreviewViewerRequest(
+                sessionID: "session_fixture",
+                artifactID: "preview_fixture_interactive",
+                revision: 1
+            )
         )
     }
 

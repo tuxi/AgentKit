@@ -264,6 +264,20 @@ enum UIPreviewActivityProjection {
 
     // MARK: - Lineage assets
 
+    /// Layout and evidence refs for one tool result, using the same lineage
+    /// document and resolution rules the Web card uses. Nil for explore
+    /// previews (no lineage) or when a layout record is inconsistent.
+    static func relatedAssets(
+        in tool: ToolNodePayload,
+        turns: [ConversationTurn]
+    ) -> RelatedAssets? {
+        guard let document = resultDocument(in: tool),
+              let lineage = document.lineage else {
+            return nil
+        }
+        return resolveRelatedAssets(lineage: lineage, turns: turns)
+    }
+
     /// Resolves the layout JSON and evidence JSON that belong to the lineage.
     /// Returns nil when a matching layout revision carries conflicting source
     /// or evidence identity, so a mismatched record cannot look authoritative.

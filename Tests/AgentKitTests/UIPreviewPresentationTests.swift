@@ -321,6 +321,214 @@ final class UIPreviewPresentationTests: XCTestCase {
         XCTAssertEqual(preview.evidenceJSON?.assetID, evidenceID)
     }
 
+    func testNativeCardModelProjectsValidatedAdaptation() throws {
+        let lineage = validLineage()
+        let layoutTurn = ConversationTurn(
+            id: "layout_turn",
+            userPrompt: nil,
+            blocks: [.toolGroup(ToolGroup(id: "layout_group", tools: [layoutTool]))],
+            footer: nil,
+            isLive: false
+        )
+        let tool = makeTool(
+            toolName: "ui_preview",
+            output: validResult(mode: "adaptation", lineage: lineage),
+            assets: [fallbackAsset]
+        )
+        let previewTurn = ConversationTurn(
+            id: "turn",
+            userPrompt: nil,
+            blocks: [.toolGroup(ToolGroup(id: "group", tools: [tool]))],
+            footer: nil,
+            isLive: false
+        )
+        let artifact = try makeArtifact(mode: "adaptation", lineage: lineage)
+
+        let models = UIPreviewCardModelBuilder.models(
+            turn: previewTurn,
+            allTurns: [layoutTurn, previewTurn],
+            previewArtifacts: [artifact],
+            conversationID: "projection"
+        )
+
+        XCTAssertEqual(models.count, 1)
+        let model = try XCTUnwrap(models.first)
+        XCTAssertEqual(model.callID, "call_preview")
+        XCTAssertEqual(model.title, "DreamLog Duo Home")
+        XCTAssertEqual(model.mode, "adaptation")
+        XCTAssertEqual(model.modeLabel, "Adaptation Preview")
+        XCTAssertEqual(model.artifactID, previewArtifactID)
+        XCTAssertEqual(model.revision, 1)
+        XCTAssertEqual(model.revisionSHA256, artifact.revisionSHA256)
+        XCTAssertEqual(model.presentationState, "interactiveReady")
+        XCTAssertEqual(model.fallback.assetID, fallbackID)
+        XCTAssertEqual(model.fallback.sha256, fallbackSHA)
+        XCTAssertEqual(model.lineage?.target, "duo_folded")
+        XCTAssertEqual(model.lineage?.state, "home")
+        XCTAssertEqual(model.lineage?.targetMatrixID, "matrix_duo_primary")
+        XCTAssertEqual(model.lineage?.targetMatrixTargets, ["duo_folded", "iphone_portrait"])
+        XCTAssertEqual(model.lineage?.approvalState, "user_confirmed")
+        XCTAssertEqual(model.lineage?.approvalEvidenceRef, "approval-note-1")
+        XCTAssertEqual(model.layoutJSON?.id, layoutJSONID)
+        XCTAssertEqual(model.evidenceJSON?.id, evidenceID)
+    }
+
+    func testNativeCardModelRendersOneBlockPerPreviewRevision() throws {
+        let lineage = validLineage()
+        let tool = makeTool(
+            toolName: "ui_preview",
+            output: validResult(mode: "adaptation", lineage: lineage),
+            assets: [fallbackAsset]
+        )
+        let turn = ConversationTurn(
+            id: "turn",
+            userPrompt: nil,
+            blocks: [.toolGroup(ToolGroup(id: "group", tools: [tool, tool]))],
+            footer: nil,
+            isLive: false
+        )
+        let models = UIPreviewCardModelBuilder.models(
+            turn: turn,
+            allTurns: [turn],
+            previewArtifacts: [try makeArtifact(mode: "adaptation", lineage: lineage)],
+            conversationID: "projection"
+        )
+        XCTAssertEqual(models.count, 1)
+        XCTAssertEqual(models.first?.revision, 1)
+    }
+
+    func testNativeCardModelProjectsExploreWithoutLineage() throws {
+        let tool = makeTool(
+            toolName: "ui_preview",
+            output: validResult(mode: "explore"),
+            assets: [fallbackAsset]
+        )
+        let turn = ConversationTurn(
+            id: "turn",
+            userPrompt: nil,
+            blocks: [.toolGroup(ToolGroup(id: "group", tools: [tool]))],
+            footer: nil,
+            isLive: false
+        )
+        let models = UIPreviewCardModelBuilder.models(
+            turn: turn,
+            allTurns: [turn],
+            previewArtifacts: [try makeArtifact(mode: "explore", lineage: nil)],
+            conversationID: "projection"
+        )
+        XCTAssertEqual(models.count, 1)
+        let model = try XCTUnwrap(models.first)
+        XCTAssertEqual(model.modeLabel, "Explore Preview")
+        XCTAssertNil(model.lineage)
+        XCTAssertNil(model.layoutJSON)
+        XCTAssertNil(model.evidenceJSON)
+        XCTAssertEqual(model.fallback.assetID, fallbackID)
+    }
+
+    func testNativeCardAppearsWhenArtifactArrivesAfterResult() throws {
+        let lineage = validLineage()
+        let tool = makeTool(
+            toolName: "ui_preview",
+            output: validResult(mode: "adaptation", lineage: lineage),
+            assets: [fallbackAsset]
+        )
+        let layoutTurn = ConversationTurn(
+            id: "layout_turn",
+            userPrompt: nil,
+            blocks: [.toolGroup(ToolGroup(id: "layout_group", tools: [layoutTool]))],
+            footer: nil,
+            isLive: false
+        )
+        let turn = ConversationTurn(
+            id: "turn",
+            userPrompt: nil,
+            blocks: [.toolGroup(ToolGroup(id: "group", tools: [tool]))],
+            footer: nil,
+            isLive: false
+        )
+
+        XCTAssertTrue(UIPreviewCardModelBuilder.models(
+            turn: turn,
+            allTurns: [layoutTurn, turn],
+            previewArtifacts: [],
+            conversationID: "projection"
+        ).isEmpty)
+
+        let models = UIPreviewCardModelBuilder.models(
+            turn: turn,
+            allTurns: [layoutTurn, turn],
+            previewArtifacts: [try makeArtifact(mode: "adaptation", lineage: lineage)],
+            conversationID: "projection"
+        )
+        XCTAssertEqual(models.count, 1)
+        XCTAssertEqual(models.first?.revision, 1)
+    }
+
+    func testNativeCardModelSuppressesUnvalidatedRecords() throws {
+        let lineage = validLineage()
+        let turn = { (tool: ToolNodePayload) -> ConversationTurn in
+            ConversationTurn(
+                id: "turn",
+                userPrompt: nil,
+                blocks: [.toolGroup(ToolGroup(id: "group", tools: [tool]))],
+                footer: nil,
+                isLive: false
+            )
+        }
+
+        // Adaptation without lineage.
+        XCTAssertTrue(UIPreviewCardModelBuilder.models(
+            turn: turn(makeTool(
+                toolName: "ui_preview",
+                output: validResult(mode: "adaptation"),
+                assets: [fallbackAsset]
+            )),
+            allTurns: [],
+            previewArtifacts: [try makeArtifact(mode: "adaptation", lineage: nil)],
+            conversationID: "projection"
+        ).isEmpty)
+
+        // Explore carrying lineage.
+        XCTAssertTrue(UIPreviewCardModelBuilder.models(
+            turn: turn(makeTool(
+                toolName: "ui_preview",
+                output: validResult(mode: "explore", lineage: lineage),
+                assets: [fallbackAsset]
+            )),
+            allTurns: [],
+            previewArtifacts: [try makeArtifact(mode: "explore", lineage: lineage)],
+            conversationID: "projection"
+        ).isEmpty)
+
+        // Result/artifact fallback identity mismatch.
+        XCTAssertTrue(UIPreviewCardModelBuilder.models(
+            turn: turn(makeTool(
+                toolName: "ui_preview",
+                output: validResult(mode: "adaptation", lineage: lineage),
+                assets: [fallbackAsset]
+            )),
+            allTurns: [],
+            previewArtifacts: [try decodeArtifact(artifactJSON(
+                mode: "adaptation",
+                lineage: lineage,
+                fallbackSHA256: String(repeating: "e", count: 64)
+            ))],
+            conversationID: "projection"
+        ).isEmpty)
+
+        // Missing artifact.
+        XCTAssertTrue(UIPreviewCardModelBuilder.models(
+            turn: turn(makeTool(
+                toolName: "ui_preview",
+                output: validResult(mode: "adaptation", lineage: lineage),
+                assets: [fallbackAsset]
+            )),
+            allTurns: [],
+            previewArtifacts: [],
+            conversationID: "projection"
+        ).isEmpty)
+    }
+
     func testLiveAndReplayProduceSamePreviewAndOneBlock() async throws {
         let lineage = validLineage()
         let tool = makeTool(

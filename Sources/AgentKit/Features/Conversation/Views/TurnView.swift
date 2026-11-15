@@ -14,6 +14,13 @@ struct TurnView: View, Equatable {
     let turn: ConversationTurn
     let conversationID: String?
     let workspaceRoot: URL?
+    let workspaceID: String?
+    /// Accepted preview artifact revisions; the iOS card resolves the exact
+    /// revision its own result describes.
+    let previewArtifacts: [PreviewArtifact]
+    let allTurns: [ConversationTurn]
+    let previewViewerResolver: (any PreviewViewerResolver)?
+    let previewAssetResolver: (any PreviewAssetResolver)?
     @Environment(WorkspaceStore.self) private var store
     @Environment(\.openURL) private var openURL
     @State private var documentState = TranscriptDocumentState()
@@ -29,17 +36,29 @@ struct TurnView: View, Equatable {
     init(
         turn: ConversationTurn,
         conversationID: String? = nil,
-        workspaceRoot: URL? = nil
+        workspaceRoot: URL? = nil,
+        workspaceID: String? = nil,
+        previewArtifacts: [PreviewArtifact] = [],
+        allTurns: [ConversationTurn] = [],
+        previewViewerResolver: (any PreviewViewerResolver)? = nil,
+        previewAssetResolver: (any PreviewAssetResolver)? = nil
     ) {
         self.turn = turn
         self.conversationID = conversationID
         self.workspaceRoot = workspaceRoot
+        self.workspaceID = workspaceID
+        self.previewArtifacts = previewArtifacts
+        self.allTurns = allTurns
+        self.previewViewerResolver = previewViewerResolver
+        self.previewAssetResolver = previewAssetResolver
     }
 
     nonisolated static func == (lhs: TurnView, rhs: TurnView) -> Bool {
         lhs.turn == rhs.turn
             && lhs.conversationID == rhs.conversationID
             && lhs.workspaceRoot == rhs.workspaceRoot
+            && lhs.workspaceID == rhs.workspaceID
+            && lhs.previewArtifacts == rhs.previewArtifacts
     }
 
     // NOTE: no TimelineView(.periodic) here. Rebuilding the transcript on a
@@ -89,6 +108,25 @@ struct TurnView: View, Equatable {
                     isExpanded: $isProcessExpanded
                 )
             }
+            // P1-F: preview cards stay visible even when the process fold is
+            // closed — they are the answer to the turn, not trace noise.
+            if !previewModels.isEmpty {
+                UIPreviewCardSection(
+                    models: previewModels,
+                    conversationID: conversationID,
+                    previewViewerResolver: previewViewerResolver,
+                    previewAssetResolver: previewAssetResolver,
+                    onOpenInspector: { callID in
+                        handleTranscriptAction(.openUIPreview(callID: callID))
+                    },
+                    onOpenAsset: { ref in
+                        let index = AssetIndex(turn: turn)
+                        handleTranscriptAction(
+                            .openAsset(index.reference(forStructuredAsset: ref))
+                        )
+                    }
+                )
+            }
             // Agent response blocks rendered as typed SwiftUI views
             AgentResponseView(
                 turn: turn,
@@ -109,6 +147,18 @@ struct TurnView: View, Equatable {
             bottomRow(copyText: turnCopyText)
         }
         .frame(maxWidth: .infinity, alignment: .leading)
+    }
+
+    /// One `ui_preview_result.v1` card per projected tool result. The builder
+    /// applies the same schema, artifact-revision, lineage and fallback checks
+    /// as the Web renderer, so an inconsistent record yields no card.
+    private var previewModels: [UIPreviewCardModel] {
+        UIPreviewCardModelBuilder.models(
+            turn: turn,
+            allTurns: allTurns.isEmpty ? [turn] : allTurns,
+            previewArtifacts: previewArtifacts,
+            conversationID: conversationID
+        )
     }
 
     /// Plain-text extract for clipboard copy on iOS (no NSAttributedString).
