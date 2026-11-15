@@ -25,7 +25,7 @@ public struct ConversationTurn: Identifiable, Sendable, Equatable {
     public let todos: [TodoItem]
     public let footer: TurnStats?          // nil while no model_finished yet
     public let isLive: Bool                // this turn is still streaming
-    /// Per-invocation trajectory: one `ModelInvocation` per model call in this
+    /// Lightweight request/usage records: one `ModelInvocation` per model call in this
     /// turn, grouped by `invocation_id` (since v1.4 `model_request`). Empty for
     /// streams that predate the event — the timeline renders exactly as before.
     public let invocations: [ModelInvocation]
@@ -213,7 +213,7 @@ public struct TurnWallClock: Sendable, Equatable {
 
 // MARK: - ModelInvocation
 
-/// One model invocation inside a turn — the DSH-style trajectory unit.
+/// Lightweight request identity and usage for one model invocation inside a turn.
 /// Built by `TimelineProjection` by folding `model_request` (request shape) +
 /// `thinking` + `model_finished` (usage) on the shared `invocation_id`.
 /// `index` is the 1-based arrival order within the turn, so `#3` in the UI
@@ -228,6 +228,7 @@ public struct ModelInvocation: Identifiable, Sendable, Equatable {
     public var modelRoute: String? = nil
     /// Tools this invocation actually executed, in arrival order, deduplicated.
     /// Aggregated from `tool` nodes stamped with the same `invocation_id`.
+    /// Legacy API storage; live timeline projection no longer duplicates tool rows here.
     public var executedTools: [String]
     public var promptTokens: Int?
     public var completionTokens: Int?
@@ -237,6 +238,7 @@ public struct ModelInvocation: Identifiable, Sendable, Equatable {
     public var elapsedMs: Int?
     public var err: String?
     /// Authoritative thinking snapshot (latest non-empty `thinking` of this invocation).
+    /// Legacy API storage; thinking is rendered from timeline blocks, not copied here.
     public var thinkingText: String?
 
     public init(id: String, index: Int, request: ModelRequestInfo? = nil,

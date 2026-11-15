@@ -11,7 +11,6 @@ enum ConversationWebAction: Hashable {
     case transcript(turnID: String, action: TranscriptAction)
     case shareTurn(turnID: String)
     case showTurnAssets(turnID: String)
-    case openTrajectory(turnID: String)
     case timelineExtension(extensionID: String, turnID: String, actionID: String)
     case timelineDocument(TimelineWebDocument)
 }
@@ -112,16 +111,6 @@ enum ConversationWebActionDispatcher {
             guard let turn = turns.first(where: { $0.id == turnID }) else { return }
             TurnActionDispatcher(turn: turn, store: store, openURL: openURL)
                 .showTurnAssets()
-
-        case .openTrajectory(let turnID):
-            guard let turn = turns.first(where: { $0.id == turnID }) else { return }
-            let prompt = (turn.userPrompt?.text ?? "")
-                .trimmingCharacters(in: .whitespacesAndNewlines)
-            let title = prompt.isEmpty ? "调用轨迹"
-                : (prompt.count > 24 ? String(prompt.prefix(24)) + "…" : prompt)
-            store.showInspector(.conversationTrajectory(TrajectorySelection(
-                turnID: turnID, title: title
-            )))
 
         case .shareTurn(let turnID):
             guard let turn = turns.first(where: { $0.id == turnID }) else { return }

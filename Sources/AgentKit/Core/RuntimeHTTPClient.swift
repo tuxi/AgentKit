@@ -691,51 +691,54 @@ struct RuntimeHTTPClient: Sendable {
         return try decodeEnvelope(ConversationCompactionResult.self, from: data)
     }
 
+    func compactSessionRailContext(scope: SessionRailScope) async throws -> ConversationCompactionResult {
+        try await sessionRailFetch(scope: scope, suffix: ["compact"], query: [], method: "POST", timeout: 300)
+    }
     func sessionRail(scope: SessionRailScope) async throws -> SessionRailSnapshot {
-        let result: SessionRailSnapshot = try await sessionRailGet(scope: scope, suffix: ["session-rail"], query: [])
+        let result: SessionRailSnapshot = try await sessionRailFetch(scope: scope, suffix: ["session-rail"], query: [])
         guard result.schema == "session-rail/v1", result.conversationID == scope.conversationID, !result.serverID.isEmpty, !result.runtimeInstanceID.isEmpty else { throw SessionRailError.invalidIdentity }
         return result
     }
     func sessionRailOutputs(scope: SessionRailScope, cursor: String?) async throws -> SessionRailOutputs {
-        let result: SessionRailOutputs = try await sessionRailGet(scope: scope, suffix: ["outputs"], query: cursor.map { [URLQueryItem(name: "cursor", value: $0)] } ?? [])
+        let result: SessionRailOutputs = try await sessionRailFetch(scope: scope, suffix: ["outputs"], query: cursor.map { [URLQueryItem(name: "cursor", value: $0)] } ?? [])
         return result
     }
     func sessionRailOutput(scope: SessionRailScope, outputID: String) async throws -> SessionRailOutput {
-        let result: SessionRailOutput = try await sessionRailGet(scope: scope, suffix: ["outputs", outputID], query: [])
+        let result: SessionRailOutput = try await sessionRailFetch(scope: scope, suffix: ["outputs", outputID], query: [])
         return result
     }
     func sessionRailConnectors(scope: SessionRailScope) async throws -> SessionRailConnectors {
-        let result: SessionRailConnectors = try await sessionRailGet(scope: scope, suffix: ["connectors"], query: [])
+        let result: SessionRailConnectors = try await sessionRailFetch(scope: scope, suffix: ["connectors"], query: [])
         return result
     }
     func sessionRailConnector(scope: SessionRailScope, connectorID: String) async throws -> SessionRailConnector {
-        let result: SessionRailConnector = try await sessionRailGet(scope: scope, suffix: ["connectors", connectorID], query: [])
+        let result: SessionRailConnector = try await sessionRailFetch(scope: scope, suffix: ["connectors", connectorID], query: [])
         return result
     }
     func sessionRailChanges(scope: SessionRailScope) async throws -> SessionRailChanges {
-        let result: SessionRailChanges = try await sessionRailGet(scope: scope, suffix: ["changes"], query: [])
+        let result: SessionRailChanges = try await sessionRailFetch(scope: scope, suffix: ["changes"], query: [])
         return result
     }
     func sessionRailPatch(scope: SessionRailScope, snapshotID: String, fileID: String) async throws -> SessionRailPatch {
-        let result: SessionRailPatch = try await sessionRailGet(scope: scope, suffix: ["changes", snapshotID, fileID], query: [])
+        let result: SessionRailPatch = try await sessionRailFetch(scope: scope, suffix: ["changes", snapshotID, fileID], query: [])
         return result
     }
     func sessionRailRequest(scope: SessionRailScope, snapshotID: String?) async throws -> SessionRailRequest {
-        let result: SessionRailRequest = try await sessionRailGet(scope: scope, suffix: ["context", "request"], query: snapshotID.map { [URLQueryItem(name: "snapshot_id", value: $0)] } ?? [])
+        let result: SessionRailRequest = try await sessionRailFetch(scope: scope, suffix: ["context", "request"], query: snapshotID.map { [URLQueryItem(name: "snapshot_id", value: $0)] } ?? [])
         return result
     }
     func sessionRailSource(scope: SessionRailScope, snapshotID: String, sourceID: String) async throws -> SessionRailSourceContent {
-        let result: SessionRailSourceContent = try await sessionRailGet(scope: scope, suffix: ["context", "sources", sourceID, "content"], query: [URLQueryItem(name: "snapshot_id", value: snapshotID)])
+        let result: SessionRailSourceContent = try await sessionRailFetch(scope: scope, suffix: ["context", "sources", sourceID, "content"], query: [URLQueryItem(name: "snapshot_id", value: snapshotID)])
         return result
     }
     func sessionRailJobs(scope: SessionRailScope, cursor: String?) async throws -> SessionRailJobs {
-        let result: SessionRailJobs = try await sessionRailGet(scope: scope, suffix: ["jobs", "history"], query: cursor.map { [URLQueryItem(name: "cursor", value: $0)] } ?? [])
+        let result: SessionRailJobs = try await sessionRailFetch(scope: scope, suffix: ["jobs", "history"], query: cursor.map { [URLQueryItem(name: "cursor", value: $0)] } ?? [])
         return result
     }
-    private func sessionRailGet<T: Decodable & Sendable>(scope: SessionRailScope, suffix: [String], query: [URLQueryItem]) async throws -> T {
+    private func sessionRailFetch<T: Decodable & Sendable>(scope: SessionRailScope, suffix: [String], query: [URLQueryItem], method: String = "GET", timeout: TimeInterval = 15) async throws -> T {
         let segments = [scope.conversationID] + suffix
         guard segments.allSatisfy({ !$0.isEmpty && $0 != "." && $0 != ".." }) else { throw SessionRailError.invalidScope }
-        var request = try await buildRequest("GET", pathArray: ["v1", "conversations"], queryItems: query, timeout: 15)
+        var request = try await buildRequest(method, pathArray: ["v1", "conversations"], queryItems: query, timeout: timeout)
         guard let url = request.url, var parts = URLComponents(url: url, resolvingAgainstBaseURL: false) else { throw SessionRailError.invalidScope }
         let allowed = CharacterSet.alphanumerics.union(CharacterSet(charactersIn: "-._~"))
         parts.percentEncodedPath += "/" + segments.map { $0.addingPercentEncoding(withAllowedCharacters: allowed)! }.joined(separator: "/")

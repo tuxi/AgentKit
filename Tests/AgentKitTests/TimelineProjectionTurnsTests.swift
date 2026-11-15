@@ -148,7 +148,7 @@ final class TimelineProjectionTurnsTests: XCTestCase {
 
     /// P8.9 — 实际调用工具聚合：按 invocation_id 收集该调用名下的工具节点名
     /// （去重保序），与时间线渲染决策一致（跳过 propose_plan / 入口卡）。
-    func testInvocationAggregatesExecutedTools() {
+    func testRetiredTrajectoryDoesNotDuplicateExecutedTools() {
         let turn = "t1"
         let graph = reduce([
             .turnStarted(turnID: turn, text: "q"),
@@ -177,14 +177,13 @@ final class TimelineProjectionTurnsTests: XCTestCase {
         ])
 
         let inv = TimelineProjection().projectTurns(graph).first?.invocations[0]
-        XCTAssertEqual(inv?.executedTools, ["run_command", "read_file"],
-                       "同工具只出现一次（去重），保持首次到达顺序")
+        XCTAssertEqual(inv?.executedTools, [], "Retired trajectory does not duplicate the timeline tool list")
         XCTAssertEqual(inv?.request?.toolNames, ["run_command", "read_file", "grep", "propose_plan"],
                        "request 的 toolNames 仍为全量定义，不受 executedTools 影响")
     }
 
     /// P8.9 — model_request + thinking + model_finished(cached) 折成一张调用卡。
-    func testInvocationFoldsRequestThinkingAndUsage() {
+    func testInvocationKeepsUsageWithoutDuplicatingThinking() {
         let turn = "t1"
         let graph = reduce([
             .turnStarted(turnID: turn, text: "investigate"),
@@ -222,8 +221,11 @@ final class TimelineProjectionTurnsTests: XCTestCase {
         XCTAssertEqual(inv?.request?.toolsPromptChars, 9_600)
         XCTAssertEqual(inv?.request?.temperature, 0.3)
         XCTAssertEqual(inv?.request?.streamed, true)
-        // thinking 归属到该 invocation
-        XCTAssertEqual(inv?.thinkingText, "step one reasoning")
+        XCTAssertNil(inv?.thinkingText, "Retired trajectory does not retain a second thinking body")
+        XCTAssertTrue(t?.blocks.contains { block in
+            if case .thinking(_, let payload) = block { return payload.text == "step one reasoning" }
+            return false
+        } == true, "The original thinking remains visible in the conversation")
         // usage 回填
         XCTAssertEqual(inv?.promptTokens, 24_900)
         XCTAssertEqual(inv?.completionTokens, 1_800)

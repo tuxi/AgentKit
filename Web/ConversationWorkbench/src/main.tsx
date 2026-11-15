@@ -3377,15 +3377,6 @@ function TurnActionsBar({ turn }: { turn: ConversationWebTurn }) {
     actionID?: string;
     focusID?: string;
   }> = [];
-  if (turn.trajectoryActionID) {
-    menuItems.push({
-      key: "trajectory",
-      label: "查看轨迹",
-      value: "›",
-      actionID: turn.trajectoryActionID,
-      focusID: `turn-trajectory:${turn.id}`,
-    });
-  }
   if (footer?.contextTokens) {
     menuItems.push({ key: "context", label: "上下文", value: footer.contextTokens });
   }

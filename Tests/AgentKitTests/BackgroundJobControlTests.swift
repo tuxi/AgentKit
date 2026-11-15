@@ -205,3 +205,28 @@ final class BackgroundJobReconciliationTests: XCTestCase {
         XCTAssertEqual(terminal?.status, .canceled)
     }
 }
+
+extension BackgroundJobsModelTests {
+    private func railRunningJob() throws -> SessionRailJob {
+        try JSONDecoder().decode(SessionRailJob.self, from: Data(#"{"job_id":"job_fixture","turn_id":"turn","call_id":"call_job_fixture","command":"worker","status":"running","live_state":"current_instance","can_control":true,"cancel_requested":false,"duration_ms":4200}"#.utf8))
+    }
+    func testRailCanStopBeforeLegacyListHasLoaded() async throws {
+        let fixture = JobFixture(); let model = BackgroundJobsModel(operations: fixture.operations)
+        model.select("session")
+        await model.stopFromRail(try railRunningJob(), scope: .init(conversationID: "session", runtimeIdentity: "http://localhost:1234"))
+        let canceled = await fixture.cancelCount()
+        XCTAssertEqual(canceled, 1)
+        XCTAssertEqual(model.jobs.first?.status, .running)
+        XCTAssertEqual(model.jobs.first?.cancelRequested, true, "202 is stopping, not terminal")
+    }
+    func testRailNeverCancelsOnDifferentRuntimeOrStaleTerminalOwner() async throws {
+        let fixture = JobFixture(); let model = BackgroundJobsModel(operations: fixture.operations)
+        model.select("session")
+        await model.stopFromRail(try railRunningJob(), scope: .init(conversationID: "session", runtimeIdentity: "http://other.example"))
+        var canceled = await fixture.cancelCount(); XCTAssertEqual(canceled, 0)
+        await fixture.configure(jobs: [job(status: .exited)])
+        await model.stopFromRail(try railRunningJob(), scope: .init(conversationID: "session", runtimeIdentity: "http://localhost:1234"))
+        canceled = await fixture.cancelCount(); XCTAssertEqual(canceled, 0)
+        XCTAssertEqual(model.jobs.first?.status, .exited)
+    }
+}

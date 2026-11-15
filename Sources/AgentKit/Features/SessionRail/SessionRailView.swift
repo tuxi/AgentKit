@@ -8,6 +8,7 @@ import WebKit
 public struct SessionRailView: View {
     @Environment(WorkspaceStore.self) private var store
     @Environment(\.sessionRailIsVisible) private var visible
+    @Environment(\.sessionRailOpenSettings) private var openSettings
     @Environment(\.scenePhase) private var scenePhase
     @State private var search = ""
     private var model: SessionRailModel { store.sessionRail }
@@ -154,20 +155,17 @@ public struct SessionRailView: View {
                 }.frame(maxWidth: .infinity, minHeight: 26).contentShape(Rectangle())
             }.buttonStyle(.plain).help("查看上下文详情；已用量来自上次测量")
             if let capacity, let tokens = value.promptTokens {
+                Button { model.navigate(.context) } label: {
                 ProgressView(value: min(1, max(0, Double(tokens) / Double(capacity))))
-                    .tint(.blue).accessibilityLabel("上次测量的上下文用量")
+                    .tint(.blue).contentShape(Rectangle())
+                }.buttonStyle(.plain).accessibilityLabel("查看上下文用量详情")
             }
             if value.historyState == "history_changed" || value.latestRequestSnapshotID != value.measurementSnapshotID {
                 note("内容已更新，等待新的测量")
             }
             if let request = value.request {
                 ForEach(categoryOrder.filter { request.categories[$0] != nil }, id: \.self) { key in
-                    contextCategory(categoryName(key), tokens: max(0, request.categories[key] ?? 0), capacity: estimateCapacity,
-                                    color: categoryColor(key), estimated: true) {
-                        if key == "mcp_tools" { model.navigate(.tools(snapshotID: request.snapshotID, origin: "mcp")) }
-                        else if key == "system_tools" { model.navigate(.tools(snapshotID: request.snapshotID, origin: "system")) }
-                        else { model.navigate(.context) }
-                    }
+                    contextCompositionRow(key, request: request, capacity: estimateCapacity)
                 }
                 note("组成数量与百分比为估算值，按请求窗口计算。")
                 if request.multimodalUnestimated { note("图片等多模态成本未计入组成估算。") }
@@ -204,6 +202,37 @@ public struct SessionRailView: View {
             }.font(.system(size: 12)).monospacedDigit().padding(.vertical, 3)
                 .frame(maxWidth: .infinity).contentShape(Rectangle())
         }.buttonStyle(.plain).help(title + (estimated ? " · 估算组成" : " · 根据上次测量计算"))
+    }
+    private func contextCompositionRow(_ key: String, request: SessionRailRequest, capacity: Int?) -> some View {
+        let origin = key == "mcp_tools" ? "mcp" : key == "system_tools" ? "system" : nil
+        let previewKey = "context.tools." + key
+        let tools = (request.tools ?? []).filter { $0.origin == origin }
+        return VStack(alignment: .leading, spacing: 5) {
+            HStack(spacing: 2) {
+                contextCategory(categoryName(key), tokens: max(0, request.categories[key] ?? 0), capacity: capacity,
+                                color: categoryColor(key), estimated: true) {
+                    if let origin { model.navigate(.tools(snapshotID: request.snapshotID, origin: origin)) }
+                    else { model.navigate(.composition(snapshotID: request.snapshotID, category: key)) }
+                }
+                if origin != nil {
+                    Button {
+                        withAnimation(.easeInOut(duration: 0.16)) { model.setExpanded(!model.isExpanded(previewKey), for: previewKey) }
+                    } label: {
+                        Image(systemName: model.isExpanded(previewKey) ? "chevron.down" : "chevron.right")
+                            .font(.system(size: 9)).frame(width: 22, height: 24)
+                    }.buttonStyle(.plain).help("展开或收起工具预览")
+                        .accessibilityLabel("展开或收起 " + categoryName(key) + " 工具预览")
+                }
+            }
+            if let origin, model.isExpanded(previewKey) {
+                ForEach(Array(tools.prefix(8)), id: \.name) { tool in
+                    row("wrench.and.screwdriver", tool.name, trailing: "≈\(number(tool.estimatedTokens))") {
+                        model.navigate(.source(snapshotID: request.snapshotID, sourceID: tool.sourceID, title: tool.name))
+                    }
+                }
+                more("查看全部工具") { model.navigate(.tools(snapshotID: request.snapshotID, origin: origin)) }
+            }
+        }
     }
     private func categoryColor(_ key: String) -> Color {
         switch key {
@@ -271,16 +300,38 @@ public struct SessionRailView: View {
         }
     }
     private func jobRow(_ item: SessionRailJob) -> some View {
-        let live = vm?.backgroundJobs.jobs.first { $0.jobID == item.jobID && $0.turnID == item.turnID && $0.callID == item.callID }
-        let stopping = live?.cancelRequested == true || vm?.backgroundJobs.stopping.contains(.init(jobID: item.jobID, turnID: item.turnID, callID: item.callID)) == true
-        return HStack(spacing: 5) {
-            row("terminal", String(item.command.prefix(180)), trailing: stopping ? "停止中" : jobStatus(live?.status ?? item.status)) { model.navigate(.job(item.jobID)) }
-            if let live, live.status == .running {
-                Button { Task { await vm?.backgroundJobs.stop(live.owner); await model.refresh() } } label: { Image(systemName: "stop.circle").frame(width: 24, height: 26) }
-                    .buttonStyle(.plain).help("停止后台任务")
-                    .disabled(stopping || vm?.backgroundJobs.canControl != true || model.error != nil)
+        let owner = BackgroundJobOwner(jobID: item.jobID, turnID: item.turnID, callID: item.callID)
+        let registry = vm?.backgroundJobs
+        let live = registry?.jobs.first { $0.owner == owner }
+        let status = SessionRailJobPresentation.status(snapshot: item.status, registry: registry?.isStale == false ? live?.status : nil)
+        let stopping = status == .running && (item.cancelRequested || live?.cancelRequested == true || registry?.stopping.contains(owner) == true || registry?.resolvingStops.contains(owner) == true)
+        return VStack(alignment: .leading, spacing: 4) {
+            HStack(spacing: 7) {
+                Button { model.navigate(.job(item.jobID)) } label: {
+                    HStack(spacing: 7) {
+                        Image(systemName: "terminal").foregroundStyle(.secondary).frame(width: 17)
+                        Text(BackgroundJobPresentation.summary(item.command, text: .init())).lineLimit(1).truncationMode(.middle)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                    }.font(.system(size: 12)).contentShape(Rectangle())
+                }.buttonStyle(.plain).help(item.command)
+                SessionRailJobDuration(job: item, status: status, liveDuration: live?.durationMs,
+                                       ticks: visible && scenePhase == .active && status == .running)
+                Text(stopping ? "停止中" : jobStatus(status)).font(.system(size: 11)).foregroundStyle(.secondary)
+                    .lineLimit(1).fixedSize()
+                if status == .running {
+                    Button {
+                        guard let scope = model.scope, let registry else { return }
+                        Task { await registry.stopFromRail(item, scope: scope); await model.refresh() }
+                    } label: {
+                        Image(systemName: "stop.circle").font(.system(size: 14)).frame(width: 24, height: 26)
+                    }.buttonStyle(.plain).help(stopping ? "正在等待任务停止确认" : "停止后台任务")
+                        .accessibilityLabel("停止后台任务")
+                        .accessibilityIdentifier("session-rail.job.stop.\(item.jobID)")
+                        .disabled(stopping || !item.canControl || registry == nil || model.error != nil)
+                }
             }
-        }
+            if let error = registry?.stopErrors[owner] { Text(error).font(.system(size: 11)).foregroundStyle(.red) }
+        }.padding(.vertical, 3)
     }
 
     @ViewBuilder private func detail(_ route: SessionRailRoute) -> some View {
@@ -291,6 +342,7 @@ public struct SessionRailView: View {
                        ("工作目录", value.workspace?.runtimeCWD ?? value.workspace?.rootPath ?? "未知"), ("执行策略", value.executionPolicy),
                        ("分支", value.head?.name ?? value.head?.commit ?? "未知")])
                 if let path = value.workspace?.runtimeCWD ?? value.workspace?.rootPath { copyButton("复制工作目录", path) }
+                if let openSettings { Button("管理运行环境") { openSettings(.environment) } }
             }
         case .context:
             if let value = model.snapshot?.sections.context.data {
@@ -298,7 +350,20 @@ public struct SessionRailView: View {
                 facts([("测量时间", value.measuredAt.map(date) ?? "无时间记录"), ("测量模型", value.measurementModel ?? value.snapshot.model.name),
                        ("窗口来源", value.windowSource == "fallback" ? "默认容量" : "配置容量"),
                        ("输入预算", value.snapshot.model.inputTokenBudget.map(number) ?? "未知"), ("输出预留", value.snapshot.model.outputTokenBudget.map(number) ?? "未知"),
-                       ("压缩次数", String(value.snapshot.compaction.totalCount))])
+                       ("压缩次数", String(value.snapshot.compaction.totalCount)), ("自动压缩阈值", contextNumber(value.snapshot.model.compactThreshold)),
+                       ("消息数量", String(value.snapshot.structure.messageCount))])
+                if let last = value.snapshot.compaction.last {
+                    facts([("最近压缩", date(last.at)), ("压缩前", contextNumber(last.beforeTokens)),
+                           ("压缩后", last.afterTokens < 0 ? "等待测量" : contextNumber(last.afterTokens)), ("节省 tokens", contextNumber(last.savedTokens))])
+                } else { note("尚未压缩") }
+                Button {
+                    Task { await model.compactContext { vm?.isTurnActive != false || vm?.isConnected != true } }
+                } label: {
+                    HStack { if model.isCompacting(conversationID) { ProgressView().controlSize(.mini) }; Text(model.isCompacting(conversationID) ? "正在压缩…" : "压缩上下文") }
+                }.disabled(vm?.isTurnActive != false || vm?.isConnected != true || model.isCompacting(conversationID) || model.isRefreshing || model.error != nil)
+                    .help("仅在会话空闲时压缩；保留原始对话记录")
+                if vm?.isTurnActive == true { note("会话运行中，空闲后可压缩上下文。") }
+                if let message = model.compactionMessage { note(message) }
                 if let request = value.request {
                     if request.sourceCoverage != "recorded" { note("来源记录尚不完整") }
                     if request.multimodalUnestimated { note("图片等多模态成本未计入组成估算") }
@@ -321,9 +386,12 @@ public struct SessionRailView: View {
                     VStack(alignment: .leading, spacing: 4) { Text(tool.name).font(.system(size: 12, weight: .medium)); note(tool.description) }.padding(.vertical, 6)
                 }
             }
+        case .composition(_, let category):
+            compositionDetail(category)
         case .tools(_, let origin):
             TextField("搜索工具", text: $search).textFieldStyle(.roundedBorder)
             if let request = model.request {
+                note("快照中实际暴露给模型的工具，数量不是历史调用次数。")
                 ForEach((request.tools ?? []).filter { (origin == nil || $0.origin == origin) && (search.isEmpty || $0.name.localizedCaseInsensitiveContains(search)) }, id: \.name) { tool in
                     row("wrench.and.screwdriver", tool.name, trailing: "≈\(number(tool.estimatedTokens))") {
                         model.navigate(.source(snapshotID: request.snapshotID, sourceID: tool.sourceID, title: tool.name))
@@ -378,6 +446,49 @@ public struct SessionRailView: View {
             }
         }
     }
+    @ViewBuilder private func compositionDetail(_ category: String) -> some View {
+        if let request = model.request {
+            let sources = (request.sources ?? []).filter { $0.kind == category || (category == "skills" && $0.kind == "skills_index") }
+            facts([("模型", request.model), ("请求窗口", contextNumber(request.contextWindow)),
+                   ("组成估算", request.categories[category].map { "≈" + contextNumber($0) } ?? "未记录")])
+            if category == "messages", let context = model.snapshot?.sections.context.data {
+                facts([("当前消息数量", String(context.snapshot.structure.messageCount)), ("当前含压缩摘要", context.snapshot.structure.hasSummary ? "是" : "否")])
+                note("此项包含普通消息、工具结果与摘要等。当前消息数量可能与该请求快照不同；已单列的技能正文不重复计入。")
+            }
+            if category == "skills" {
+                Text("本次请求中的技能正文").font(.system(size: 12, weight: .medium))
+                note("\(sources.filter { $0.kind == "skills" }.count) 份已加载正文；技能索引与正文分开列出。")
+            }
+            if request.sourceCoverage != "recorded" { note("该快照的来源记录不完整，未记录不能视为没有加载。") }
+            if sources.isEmpty { note(category == "messages" ? "当前快照未单独保存普通消息正文。" : "该快照没有可读取的此类来源。") }
+            ForEach(sources.filter { search.isEmpty || $0.label.localizedCaseInsensitiveContains(search) || ($0.displayPath?.localizedCaseInsensitiveContains(search) ?? false) }, id: \.sourceID) { source in
+                row("doc.text", source.displayPath ?? source.label, trailing: source.kind == "skills_index" ? "技能索引" : "≈\(number(source.estimatedTokens))") {
+                    model.navigate(.source(snapshotID: request.snapshotID, sourceID: source.sourceID, title: source.label))
+                }
+            }
+            if category == "skills" {
+                Divider()
+                Text("当前可用技能目录").font(.system(size: 12, weight: .medium))
+                note("目录表示当前配置；已启用不代表正文已进入上方请求快照。")
+                Button(model.skillInventoryLoading ? "正在读取…" : "读取／刷新技能目录") { Task { await model.loadSkillInventory() } }
+                    .disabled(model.skillInventoryLoading)
+                if let error = model.skillInventoryError { note(error) }
+                if let inventory = model.skillInventory {
+                    TextField("搜索技能", text: $search).textFieldStyle(.roundedBorder)
+                    ForEach(inventory.items.filter { search.isEmpty || $0.name.localizedCaseInsensitiveContains(search) || $0.displayName.localizedCaseInsensitiveContains(search) }) { skill in
+                        VStack(alignment: .leading, spacing: 4) {
+                            HStack { Text(skill.displayName).lineLimit(1); Spacer(); Text(skill.enabled ? "已启用" : "未启用").foregroundStyle(.secondary) }.font(.system(size: 12))
+                            note(skill.description)
+                            note("\(skill.scope) · \(skill.status)")
+                        }.padding(.vertical, 5)
+                    }
+                    if inventory.items.isEmpty { note("当前目录没有技能记录。") }
+                    ForEach(inventory.warnings) { note($0.message) }
+                }
+                if let openSettings { Button("管理技能与插件") { openSettings(.skills) } }
+            }
+        }
+    }
     private func row(_ symbol: String, _ label: String, trailing: String?, action: @escaping () -> Void) -> some View {
         Button(action: action) {
             HStack(spacing: 8) {
@@ -404,7 +515,7 @@ public struct SessionRailView: View {
     private let categoryOrder = ["mcp_tools", "system_tools", "system_prompt", "skills", "mcp_server_instructions", "messages", "memory_files", "other_tools"]
     private func categoryName(_ key: String) -> String { ["messages":"Messages", "mcp_tools":"MCP tools", "system_tools":"System tools", "system_prompt":"System prompt", "skills":"Skills", "mcp_server_instructions":"MCP server instructions", "memory_files":"Memory files", "other_tools":"Other tools"][key] ?? key }
     private func categorySymbol(_ key: String) -> String { key.contains("tools") ? "wrench.and.screwdriver" : key == "messages" ? "text.bubble" : "doc.text" }
-    private func title(_ route: SessionRailRoute) -> String { switch route { case .environment: "Environment"; case .context: "Context"; case .connectors: "Connectors"; case .outputs: "Outputs"; case .changes: "Changes"; case .jobs: "Background tasks"; case .tools: "请求中的工具"; case .source(_, _, let title): title; case .connector: "连接详情"; case .output: "产物详情"; case .patch(_, _, let path): path; case .job: "任务详情" } }
+    private func title(_ route: SessionRailRoute) -> String { switch route { case .environment: "Environment"; case .context: "Context"; case .connectors: "Connectors"; case .outputs: "Outputs"; case .changes: "Changes"; case .jobs: "Background tasks"; case .composition(_, let category): categoryName(category); case .tools: "请求中的工具"; case .source(_, _, let title): title; case .connector: "连接详情"; case .output: "产物详情"; case .patch(_, _, let path): path; case .job: "任务详情" } }
 }
 
 /// Use one native button for the whole header, including the trailing summary.

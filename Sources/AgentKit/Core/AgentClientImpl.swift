@@ -536,6 +536,9 @@ public final class CodeAgentTransport: AgentTransport, CodingTaskReading, Coding
         try await http.getConversationContext(id: id)
     }
 
+    public func compactSessionRailContext(scope: SessionRailScope) async throws -> ConversationCompactionResult {
+        try await http.compactSessionRailContext(scope: scope)
+    }
     public func sessionRail(scope: SessionRailScope) async throws -> SessionRailSnapshot {
         try await http.sessionRail(scope: scope)
     }
@@ -1196,6 +1199,9 @@ public final class DefaultAgentClient: RuntimeClient, CodingTaskReading, CodingT
         try await transport.getConversationContext(id: id)
     }
 
+    public func compactSessionRailContext(scope: SessionRailScope) async throws -> ConversationCompactionResult {
+        try await transport.compactSessionRailContext(scope: scope)
+    }
     public func sessionRail(scope: SessionRailScope) async throws -> SessionRailSnapshot {
         try await transport.sessionRail(scope: scope)
     }

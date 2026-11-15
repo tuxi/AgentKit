@@ -71,12 +71,6 @@ struct ConversationWebDocument: Codable, Equatable, Sendable {
         let shareActionID: String?
         let assetsActionID: String?
         let assetCount: Int
-        /// P8.9 — per-invocation trajectory cards (DSH-style). Empty for
-        /// streams that predate `model_request`.
-        let invocations: [Invocation]
-        /// P8.9 — action to open the native trajectory inspector for this turn.
-        /// Present only when `invocations` is non-empty.
-        let trajectoryActionID: String?
         /// 按轮 Fork 入口（`conversation_fork_through_turn_v1`）。Present only when
         /// the Runtime advertises the capability and the turn is not live.
         let forkActionID: String?
@@ -122,28 +116,6 @@ struct ConversationWebDocument: Codable, Equatable, Sendable {
         let expiresAtMilliseconds: Int64?
         let minHeight: Int?
         let preferredAspectRatio: Double?
-    }
-
-    /// P8.9 — one model invocation rendered as a card (request shape → usage → thinking).
-    struct Invocation: Codable, Equatable, Sendable {
-        let id: String
-        let index: Int
-        let model: String?
-        let provider: String?
-        let toolNames: [String]
-        let messageCount: Int?
-        let systemPromptChars: Int?
-        let toolsPromptChars: Int?
-        let temperature: Double?
-        let streamed: Bool?
-        let promptTokens: Int?
-        let completionTokens: Int?
-        let totalTokens: Int?
-        let billingUnits: Int64?
-        let cachedPromptTokens: Int?
-        let elapsedMs: Int?
-        let err: String?
-        let thinkingText: String?
     }
 
     struct UserAsset: Codable, Equatable, Sendable {
@@ -658,7 +630,6 @@ enum ConversationWebDocumentBuilder {
             if let token = turn.copyActionID { tokens.insert(token) }
             if let token = turn.shareActionID { tokens.insert(token) }
             if let token = turn.assetsActionID { tokens.insert(token) }
-            if let token = turn.trajectoryActionID { tokens.insert(token) }
             if let token = turn.forkActionID { tokens.insert(token) }
             for block in turn.blocks {
                 if let token = block.actionID { tokens.insert(token) }
@@ -793,31 +764,6 @@ enum ConversationWebDocumentBuilder {
                 $0(.showTurnAssets(turnID: turn.id))
             },
             assetCount: assets.count,
-            invocations: turn.invocations.map {
-                ConversationWebDocument.Invocation(
-                    id: $0.id,
-                    index: $0.index,
-                    model: $0.request?.modelName,
-                    provider: $0.request?.provider,
-                    toolNames: $0.request?.toolNames ?? [],
-                    messageCount: $0.request?.messageCount,
-                    systemPromptChars: $0.request?.systemPromptChars,
-                    toolsPromptChars: $0.request?.toolsPromptChars,
-                    temperature: $0.request?.temperature,
-                    streamed: $0.request?.streamed,
-                    promptTokens: $0.promptTokens,
-                    completionTokens: $0.completionTokens,
-                    totalTokens: $0.totalTokens,
-                    billingUnits: $0.billingUnits,
-                    cachedPromptTokens: $0.cachedPromptTokens,
-                    elapsedMs: $0.elapsedMs,
-                    err: $0.err,
-                    thinkingText: $0.thinkingText
-                )
-            },
-            trajectoryActionID: turn.invocations.isEmpty ? nil : registerAction.map {
-                $0(.openTrajectory(turnID: turn.id))
-            },
             forkActionID: (!supportsForkThroughTurn || turn.isLive) ? nil : registerAction.map {
                 $0(.transcript(turnID: turn.id, action: .forkConversation(turnID: turn.id)))
             },

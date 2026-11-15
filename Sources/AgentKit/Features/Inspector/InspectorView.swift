@@ -109,10 +109,6 @@ public struct InspectorView: View {
 
                 TimelineDocumentInspectorView(document: document)
 
-            case .conversationTrajectory(let selection):
-
-                TrajectoryInspectorView(selection: selection)
-
             case .uiEvidence(let selection):
 
                 UIEvidenceInspectorView(selection: selection)

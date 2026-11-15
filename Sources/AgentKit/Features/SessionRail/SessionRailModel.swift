@@ -3,6 +3,7 @@ import Observation
 
 public enum SessionRailRoute: Hashable, Sendable {
     case environment, context, connectors, outputs, changes, jobs
+    case composition(snapshotID: String, category: String)
     case tools(snapshotID: String, origin: String?)
     case source(snapshotID: String, sourceID: String, title: String)
     case connector(String), output(String)
@@ -32,6 +33,19 @@ public enum SessionRailRoute: Hashable, Sendable {
     public private(set) var patch: SessionRailPatch?
     public private(set) var expanded: [String: Bool]
     public private(set) var previewHTML: String?
+    public private(set) var skillInventory: RuntimeSkillInventory?
+    public private(set) var skillInventoryError: String?
+    public private(set) var skillInventoryLoading = false
+    public private(set) var compactionMessage: String?
+    public private(set) var compactingConversations: Set<String> = []
+    public func isCompacting(_ conversationID: String?) -> Bool {
+        conversationID.map { compactingConversations.contains($0) } ?? false
+    }
+    func beginCompaction(_ conversationID: String) -> Bool {
+        compactingConversations.insert(conversationID).inserted
+    }
+    func endCompaction(_ conversationID: String) { compactingConversations.remove(conversationID) }
+
     private let client: any RuntimeClient
     private let preferences: UserDefaults
     private var lease = UUID()
@@ -45,7 +59,7 @@ public enum SessionRailRoute: Hashable, Sendable {
         self.client = client; self.preferences = preferences
         expanded = preferences.dictionary(forKey: "sessionRail.expanded.v1") as? [String: Bool] ?? [:]
     }
-    public func isExpanded(_ key: String) -> Bool { expanded[key] ?? (key != "connectors") }
+    public func isExpanded(_ key: String) -> Bool { expanded[key] ?? (key != "connectors" && !key.hasPrefix("context.tools.")) }
     public func setExpanded(_ value: Bool, for key: String) {
         expanded[key] = value; preferences.set(expanded, forKey: "sessionRail.expanded.v1")
     }
@@ -60,6 +74,7 @@ public enum SessionRailRoute: Hashable, Sendable {
     private func invalidateDetail() {
         detailID = UUID(); detailLoading = false; detailError = nil
         connector = nil; output = nil; request = nil; source = nil; patch = nil; previewHTML = nil
+        skillInventory = nil; skillInventoryError = nil; skillInventoryLoading = false
     }
     private func select(_ id: String) {
         guard conversationID != id else { return }
@@ -67,6 +82,7 @@ public enum SessionRailRoute: Hashable, Sendable {
     }
     private func resetSource() {
         generation = UUID(); refreshID = UUID(); scope = nil; snapshot = nil; serverKey = nil
+        compactionMessage = nil
         path = []; outputs = nil; changes = nil; jobs = nil; error = nil; unavailable = false
         invalidateDetail()
     }
@@ -96,6 +112,7 @@ public enum SessionRailRoute: Hashable, Sendable {
             guard refreshID == token, conversationID == id, scope == current, !Task.isCancelled else { return }
             guard value.conversationID == id, value.schema == "session-rail/v1",
                   try await client.backgroundJobRuntimeIdentity() == origin else { throw SessionRailError.invalidIdentity }
+            guard refreshID == token, conversationID == id, scope == current, !Task.isCancelled else { return }
             let key = value.serverID + ":" + value.runtimeInstanceID + ":" + value.workspaceID
             if let serverKey, serverKey != key {
                 generation = UUID(); path = []; outputs = nil; jobs = nil; changes = nil; invalidateDetail()
@@ -140,7 +157,7 @@ public enum SessionRailRoute: Hashable, Sendable {
                 let value = try await client.sessionRailSource(scope: current, snapshotID: snapshotID, sourceID: id)
                 guard valid() else { return }
                 guard value.sourceID == id else { throw SessionRailError.invalidIdentity }; source = value
-            case .tools(let snapshotID, _):
+            case .tools(let snapshotID, _), .composition(let snapshotID, _):
                 let value = try await client.sessionRailRequest(scope: current, snapshotID: snapshotID)
                 guard valid() else { return }
                 guard value.snapshotID == snapshotID else { throw SessionRailError.invalidIdentity }; request = value
@@ -161,6 +178,49 @@ public enum SessionRailRoute: Hashable, Sendable {
                 default: detailError = "暂时无法读取，请重试。"
                 }
             } else { detailError = "暂时无法读取，请重试。" }
+        }
+    }
+    /// Available inventory is loaded only on an explicit user request; it never
+    /// stands in for bodies proven present in a request snapshot.
+    public func loadSkillInventory() async {
+        guard !skillInventoryLoading else { return }
+        guard let current = scope, let manager = client as? any SkillPluginManaging else {
+            skillInventoryError = "当前 Runtime 未提供可用技能目录。"; return
+        }
+        let selected = generation; let token = detailID
+        skillInventoryLoading = true; skillInventoryError = nil
+        defer { if generation == selected, detailID == token { skillInventoryLoading = false } }
+        do {
+            guard try await client.backgroundJobRuntimeIdentity() == current.runtimeIdentity else { throw SessionRailError.invalidIdentity }
+            let value = try await manager.skillInventory(sessionID: current.conversationID)
+            guard generation == selected, detailID == token, scope == current, !Task.isCancelled else { return }
+            guard try await client.backgroundJobRuntimeIdentity() == current.runtimeIdentity,
+                  value.scope.resolved, value.scope.sessionID == current.conversationID else { throw SessionRailError.invalidIdentity }
+            // Skill inventory uses its own opaque workspace-ID namespace. Its
+            // session-bound route resolves the workspace on the Runtime.
+            guard generation == selected, detailID == token, scope == current, !Task.isCancelled else { return }
+            skillInventory = value
+        } catch {
+            if generation == selected, detailID == token, !error.isRequestCancelled { skillInventoryError = "技能目录读取失败，请重试。" }
+        }
+    }
+    public func compactContext(isBusy: @MainActor () -> Bool) async {
+        guard let current = scope, !isBusy(), beginCompaction(current.conversationID) else { return }
+        let selected = generation; compactionMessage = nil
+        defer { endCompaction(current.conversationID) }
+        do {
+            guard try await client.backgroundJobRuntimeIdentity() == current.runtimeIdentity, !isBusy() else { throw SessionRailError.invalidIdentity }
+            let result = try await client.compactSessionRailContext(scope: current)
+            guard generation == selected, scope == current,
+                  try await client.backgroundJobRuntimeIdentity() == current.runtimeIdentity else { return }
+            await refresh()
+            guard generation == selected, scope == current else { return }
+            compactionMessage = result.status == "no_change" ? "当前上下文无需压缩。" : "压缩完成，等待下次请求测量；原始对话记录已保留。"
+        } catch {
+            guard generation == selected, scope == current else { return }
+            if let http = error as? RuntimeHTTPError, case .unexpectedStatus(let code, _) = http, code == 409 {
+                compactionMessage = "会话正在运行，空闲后才能压缩。"
+            } else { compactionMessage = "压缩未确认完成，请刷新上下文后重试。" }
         }
     }
     public func loadMoreOutputs() async {

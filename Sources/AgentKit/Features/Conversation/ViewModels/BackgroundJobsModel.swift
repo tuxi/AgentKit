@@ -32,6 +32,7 @@ final class BackgroundJobsModel {
     private(set) var error: String?
     private(set) var stopErrors: [BackgroundJobOwner: String] = [:]
     private(set) var stopping: Set<BackgroundJobOwner> = []
+    private(set) var resolvingStops: Set<BackgroundJobOwner> = []
     private(set) var conversationID: String?
     private(set) var runtimeIdentity: String?
     var hasHistoricalJobs = false
@@ -52,7 +53,7 @@ final class BackgroundJobsModel {
     func select(_ id: String?) {
         guard conversationID != id else { return }
         generation = UUID(); request = UUID(); conversationID = id; runtimeIdentity = nil
-        jobs = []; stopping = []; stopErrors = [:]; support = .checking
+        jobs = []; stopping = []; resolvingStops = []; stopErrors = [:]; support = .checking
         isStale = true; error = nil; isRefreshing = false; hasHistoricalJobs = false
         poll?.cancel(); poll = nil
     }
@@ -136,6 +137,32 @@ final class BackgroundJobsModel {
             // an explicit refresh before offering another control request.
             isStale = true
             await onSnapshot?(nil)
+        }
+    }
+    /// A visible rail row may arrive before the legacy registry list. Resolve
+    /// that same owner through the existing control model before cancellation.
+    func stopFromRail(_ item: SessionRailJob, scope: SessionRailScope) async {
+        let owner = BackgroundJobOwner(jobID: item.jobID, turnID: item.turnID, callID: item.callID)
+        guard conversationID == scope.conversationID, item.canControl, item.status == .running,
+              !item.turnID.isEmpty, !item.callID.isEmpty, !stopping.contains(owner), !resolvingStops.contains(owner) else { return }
+        let selected = generation
+        resolvingStops.insert(owner)
+        defer { if generation == selected { resolvingStops.remove(owner) } }
+        do {
+            guard try await operations.identity() == scope.runtimeIdentity else { throw BackgroundJobControlError.runtimeChanged }
+            if !canControl || runtimeIdentity != scope.runtimeIdentity || !jobs.contains(where: { $0.owner == owner }) {
+                await refresh(rediscover: true)
+            }
+            guard generation == selected, conversationID == scope.conversationID,
+                  runtimeIdentity == scope.runtimeIdentity else { return }
+            if jobs.contains(where: { $0.owner == owner && $0.status.isTerminal }) { return }
+            guard canControl, jobs.contains(where: { $0.owner == owner && $0.status == .running }) else {
+                stopErrors[owner] = "暂时无法确认任务归属，请刷新后重试。"; return
+            }
+            await stop(owner)
+        } catch {
+            guard generation == selected else { return }
+            isStale = true; stopErrors[owner] = "运行环境已变化，请刷新后重试。"
         }
     }
     private func schedulePoll() {

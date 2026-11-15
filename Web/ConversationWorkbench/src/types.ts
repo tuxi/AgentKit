@@ -276,27 +276,6 @@ export interface ConversationWebLocalAsset {
   transferPolicy: "local_only";
 }
 
-export interface ConversationWebInvocation {
-  id: string;
-  index: number;
-  model?: string;
-  provider?: string;
-  toolNames: string[];
-  messageCount?: number;
-  systemPromptChars?: number;
-  toolsPromptChars?: number;
-  temperature?: number;
-  streamed?: boolean;
-  promptTokens?: number;
-  completionTokens?: number;
-  totalTokens?: number;
-  billingUnits?: number;
-  cachedPromptTokens?: number;
-  elapsedMs?: number;
-  err?: string;
-  thinkingText?: string;
-}
-
 export type PreviewPresentationState =
   | "loading"
   | "interactiveReady"
@@ -350,10 +329,6 @@ export interface ConversationWebTurn {
   shareActionID?: string;
   assetsActionID?: string;
   assetCount: number;
-  /// P8.9 — per-invocation trajectory cards (DSH-style).
-  invocations: ConversationWebInvocation[];
-  /// P8.9 — action to open the native trajectory inspector for this turn.
-  trajectoryActionID?: string;
   /// Wall-clock duration of the turn ("24分40秒"). Absent while live.
   elapsedText?: string;
   processFailureText?: string;

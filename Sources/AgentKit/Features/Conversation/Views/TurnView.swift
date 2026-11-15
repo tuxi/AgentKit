@@ -363,9 +363,6 @@ struct TurnView: View, Equatable {
                 workflowID: workflowID, title: title
             )))
 
-        case .openTrajectory(let turnID):
-            openTrajectory(turnID: turnID)
-
         case .copyBlock(let text):
             Clipboard.copy(text)
 
@@ -398,21 +395,6 @@ struct TurnView: View, Equatable {
                 store.presentConversationForkError(error)
             }
         }
-    }
-
-    /// 打开当轮调用轨迹详情（Inspector 面板）。
-    private func openTrajectory(turnID: String) {
-        let title = turnTitle
-        store.showInspector(.conversationTrajectory(TrajectorySelection(
-            turnID: turnID, title: title
-        )))
-    }
-
-    private var turnTitle: String {
-        let prompt = (turn.userPrompt?.text ?? "")
-            .trimmingCharacters(in: .whitespacesAndNewlines)
-        if prompt.isEmpty { return "调用轨迹" }
-        return prompt.count > 24 ? String(prompt.prefix(24)) + "…" : prompt
     }
 
     private func childStreamPayload(childID: String) -> ChildStreamNodePayload? {

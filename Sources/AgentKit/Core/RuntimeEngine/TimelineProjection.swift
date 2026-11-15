@@ -101,7 +101,8 @@ public struct TimelineProjection: Sendable {
         var hasUsageUnits = false
         var seenInvocationIDs: Set<String> = []
         var sawFinished = false
-        // P8.9 — per-invocation trajectory: fold model_request / thinking /
+        // Keep lightweight request identity and usage for model badges and totals.
+        // Fold model_request /
         // model_finished on the shared invocation_id (reducer-stamped node
         // invocationID, or the metadata copy for lifecycle nodes).
         var invocationOrder: [String] = []
@@ -175,14 +176,6 @@ public struct TimelineProjection: Sendable {
                 // tool it remains a standalone thinking card when flushed.
                 if pendingActivity.isEmpty { activityAnchor = node.id }
                 pendingActivity.append(.thinking(id: node.id, p))
-                // Fold the authoritative snapshot into its invocation (REPLACE:
-                // later non-empty thinking wins — matches the reducer's segment
-                // finalize semantics).
-                if let invID = node.invocationID, !invID.isEmpty {
-                    upsertInvocation(invID) { inv in
-                        if !p.text.isEmpty { inv.thinkingText = p.text }
-                    }
-                }
             case .tool(var p):
                 if let jobID = BackgroundJobPresentation.jobID(for: p) {
                     p.backgroundJobCommand = jobCommands[jobID]
@@ -198,16 +191,6 @@ public struct TimelineProjection: Sendable {
                 // 隐藏发起了子流入口卡的那张工具卡（详情在入口卡 → 子流查看器里看）。
                 if entryCardCallIDs.contains(p.callID) {
                     continue
-                }
-                // P8.9 — fold the executed tool into its invocation (arrival
-                // order, dedup). Skipped for propose_plan / entry cards above,
-                // matching the timeline's render decisions 1:1.
-                if let invID = node.invocationID, !invID.isEmpty {
-                    upsertInvocation(invID) { inv in
-                        if !inv.executedTools.contains(p.toolName) {
-                            inv.executedTools.append(p.toolName)
-                        }
-                    }
                 }
                 // Image viewing is a first-class standalone activity. End the
                 // surrounding collection on both sides so it never reads as a

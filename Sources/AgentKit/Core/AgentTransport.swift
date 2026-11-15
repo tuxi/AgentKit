@@ -172,6 +172,8 @@ public protocol AgentTransport: Sendable, SessionRailReading {
     /// 会话上下文窗口快照（`GET /v1/conversations/{id}/context`）。
     /// 客户端据此实时获知距离压缩还有多远 —— `current.prompt_tokens` 趋近
     /// `model.compact_threshold` 时即将触发压缩。
+    func compactSessionRailContext(scope: SessionRailScope) async throws -> ConversationCompactionResult
+
     func compactConversationContext(id: String) async throws -> ConversationCompactionResult
 
     func getConversationContext(id: String) async throws -> ConversationContextSnapshot
@@ -340,6 +342,8 @@ extension AgentTransport {
     }
 
     /// 默认实现：不支持上下文快照（mock / 旧 backend）。CodeAgentTransport 覆盖。
+    public func compactSessionRailContext(scope: SessionRailScope) async throws -> ConversationCompactionResult { throw RuntimeHTTPError.unsupported }
+
     public func compactConversationContext(id: String) async throws -> ConversationCompactionResult {
         throw RuntimeHTTPError.unsupported
     }

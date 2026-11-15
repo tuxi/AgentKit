@@ -132,15 +132,23 @@ final class SessionRailTests: XCTestCase {
 }
 
 private actor RailReplyGate {
+    var compactionCalls = 0
+    func compact() throws -> ConversationCompactionResult {
+        compactionCalls += 1
+        throw RuntimeHTTPError.unexpectedStatus(409, body: "busy")
+    }
+    func compactCount() -> Int { compactionCalls }
+
     var pending: [String: CheckedContinuation<SessionRailSnapshot, Error>] = [:]
     func read(_ id: String) async throws -> SessionRailSnapshot { try await withCheckedThrowingContinuation { pending[id] = $0 } }
     func has(_ id: String) -> Bool { pending[id] != nil }
     func reply(_ id: String, _ value: SessionRailSnapshot) { pending.removeValue(forKey: id)?.resume(returning: value) }
 }
-private final class RailModelClient: RuntimeClient, @unchecked Sendable {
+private class RailModelClient: RuntimeClient, @unchecked Sendable {
     let gate = RailReplyGate()
     func backgroundJobRuntimeIdentity() async throws -> String { "fixture" }
     func sessionRail(scope: SessionRailScope) async throws -> SessionRailSnapshot { try await gate.read(scope.conversationID) }
+    func compactSessionRailContext(scope: SessionRailScope) async throws -> ConversationCompactionResult { try await gate.compact() }
     func createConversation(workspacePath: String) async throws -> ConversationRef { throw RuntimeHTTPError.unsupported }
     func listConversations() async throws -> [ConversationRef] { [] }
     func renameConversation(id: String, name: String) async throws -> ConversationRef { throw RuntimeHTTPError.unsupported }
@@ -177,5 +185,117 @@ extension SessionRailTests {
         XCTAssertEqual(model.conversationID, "B"); XCTAssertEqual(model.snapshot?.conversationID, "B")
         XCTAssertTrue(model.hasTaskSurface(for: "B")); XCTAssertFalse(model.hasTaskSurface(for: "A"))
         second.cancel(); await second.value
+    }
+}
+
+extension SessionRailTests {
+    func testContextCompactionUsesPinnedPostAndPreservesBusyConflict() async throws {
+        let endpoint = RailEndpoint()
+        let http = client(environment: .init(originProvider: { await endpoint.get() }))
+        let scope = SessionRailScope(conversationID: "session", runtimeIdentity: try await http.backgroundJobRuntimeIdentity())
+        RailHTTPProtocol.handler = { request in
+            XCTAssertEqual(request.httpMethod, "POST")
+            XCTAssertEqual(request.url?.path, "/v1/conversations/session/compact")
+            XCTAssertEqual(request.timeoutInterval, 300)
+            return (409, Data(#"{"code":1,"msg":"busy"}"#.utf8))
+        }
+        do { _ = try await http.compactSessionRailContext(scope: scope); XCTFail("busy was accepted") }
+        catch RuntimeHTTPError.unexpectedStatus(let code, _) { XCTAssertEqual(code, 409) }
+        await endpoint.set("https://other-runtime.example")
+        RailHTTPProtocol.handler = { _ in XCTFail("compaction crossed runtime origins"); return (200, Self.root()) }
+        do { _ = try await http.compactSessionRailContext(scope: scope); XCTFail("stale origin was accepted") } catch {}
+    }
+    @MainActor func testCompactionLockIsPerConversationAndIdempotent() {
+        let model = SessionRailModel(client: RailModelClient(), preferences: UserDefaults(suiteName: "RailLock.\(UUID())")!)
+        XCTAssertTrue(model.beginCompaction("A"))
+        XCTAssertFalse(model.beginCompaction("A"))
+        XCTAssertTrue(model.isCompacting("A")); XCTAssertFalse(model.isCompacting("B"))
+        model.endCompaction("A"); XCTAssertTrue(model.beginCompaction("A"))
+        model.endCompaction("A"); XCTAssertFalse(model.isCompacting("A"))
+    }
+    func testJobDurationStopsAtTerminalAndDoesNotInventUnknownDuration() {
+        let now = Date(timeIntervalSince1970: 1000)
+        XCTAssertEqual(SessionRailJobPresentation.elapsed(status: .running, recorded: 4000, startedAt: "1970-01-01T00:15:00Z", now: now), 100)
+        XCTAssertEqual(SessionRailJobPresentation.elapsed(status: .exited, recorded: 4200, startedAt: "1970-01-01T00:15:00Z", now: now), 4.2)
+        XCTAssertEqual(SessionRailJobPresentation.elapsed(status: .running, recorded: 4000, startedAt: "1970-01-01T00:20:00Z", now: now), 4)
+        XCTAssertNil(SessionRailJobPresentation.elapsed(status: .unknown, recorded: nil, startedAt: nil, now: now))
+        XCTAssertEqual(SessionRailJobPresentation.format(3661), "1:01:01")
+    }
+    @MainActor func testRetiredTrajectoryDoesNotSerializeDuplicateInvocationBodies() throws {
+        let turn = ConversationTurn(id: "turn", userPrompt: nil, blocks: [], footer: nil, isLive: false,
+                                    invocations: [ModelInvocation(id: "inv", index: 1, thinkingText: "legacy-only-thinking")])
+        let document = ConversationWebDocumentBuilder.build(snapshot: RuntimeSnapshot(timeline: [], turns: [turn], generation: 1), conversationID: "session", revision: 1)
+        let encoded = try JSONEncoder().encode(document)
+        let json = try XCTUnwrap(JSONSerialization.jsonObject(with: encoded) as? [String: Any])
+        let rows = try XCTUnwrap(json["turns"] as? [[String: Any]])
+        XCTAssertNil(rows.first?["invocations"]); XCTAssertNil(rows.first?["trajectoryActionID"])
+        XCTAssertFalse(String(decoding: encoded, as: UTF8.self).contains("legacy-only-thinking"))
+    }
+}
+
+private actor RailSkillsFixture {
+    var calls = 0
+    var wrongOwner = false
+    func count() -> Int { calls }
+    func setWrongOwner() { wrongOwner = true }
+    func read(_ id: String?) -> RuntimeSkillInventory {
+        calls += 1
+        return .init(scope: .init(sessionID: wrongOwner ? "another-session" : id,
+                                  workspaceID: "ws_inventory_namespace", resolved: true))
+    }
+}
+private final class RailSkillClient: RailModelClient, SkillPluginManaging, @unchecked Sendable {
+    let skills = RailSkillsFixture()
+    func runtimeCapabilities() async throws -> RuntimeCapabilitySnapshot { .init(capabilities: [:]) }
+    func skillInventory(sessionID: String?) async throws -> RuntimeSkillInventory { await skills.read(sessionID) }
+    func pluginInventory() async throws -> RuntimePluginInventory { throw RuntimeHTTPError.unsupported }
+    func installLocalPlugin(source: String, confirmed: Bool) async throws -> RuntimePluginMutation { throw RuntimeHTTPError.unsupported }
+    func setPluginEnabled(name: String, enabled: Bool) async throws -> RuntimePluginMutation { throw RuntimeHTTPError.unsupported }
+    func uninstallPlugin(name: String) async throws -> RuntimePluginMutation { throw RuntimeHTTPError.unsupported }
+}
+extension SessionRailTests {
+    @MainActor private func selectedRail(_ client: RailModelClient) async throws -> (SessionRailModel, Task<Void, Never>) {
+        let model = SessionRailModel(client: client, preferences: UserDefaults(suiteName: "RailActions.\(UUID())")!)
+        let running = Task { await model.run(conversationID: "session", isBusy: { false }) }
+        for _ in 0..<1000 { if await client.gate.has("session") { break }; try await Task.sleep(for: .milliseconds(1)) }
+        await client.gate.reply("session", try decode(Self.root()))
+        for _ in 0..<1000 { if model.snapshot != nil { break }; try await Task.sleep(for: .milliseconds(1)) }
+        XCTAssertNotNil(model.snapshot)
+        return (model, running)
+    }
+    @MainActor func testAvailableSkillsLoadExplicitlyWithIndependentWorkspaceIDNamespace() async throws {
+        let client = RailSkillClient()
+        let (model, running) = try await selectedRail(client)
+        let before = await client.skills.count(); XCTAssertEqual(before, 0)
+        model.navigate(.composition(snapshotID: "request", category: "skills"))
+        await model.loadSkillInventory()
+        XCTAssertEqual(model.skillInventory?.scope.sessionID, "session")
+        XCTAssertNil(model.skillInventoryError)
+        await client.skills.setWrongOwner(); await model.loadSkillInventory()
+        XCTAssertNotNil(model.skillInventoryError)
+        XCTAssertEqual(model.skillInventory?.scope.sessionID, "session", "Wrong-owner data must not replace the valid inventory")
+        running.cancel(); await running.value
+    }
+    @MainActor func testCompactionNeverDispatchesWhileBusyOrAlreadyCompacting() async throws {
+        let client = RailModelClient()
+        let (model, running) = try await selectedRail(client)
+        await model.compactContext(isBusy: { true })
+        XCTAssertTrue(model.beginCompaction("session"))
+        await model.compactContext(isBusy: { false })
+        var count = await client.gate.compactCount(); XCTAssertEqual(count, 0)
+        model.endCompaction("session")
+        await model.compactContext(isBusy: { false })
+        count = await client.gate.compactCount(); XCTAssertEqual(count, 1)
+        XCTAssertFalse(model.isCompacting("session"))
+        XCTAssertEqual(model.compactionMessage, "会话正在运行，空闲后才能压缩。")
+        running.cancel(); await running.value
+    }
+}
+
+extension SessionRailTests {
+    func testAuthoritativeTerminalSnapshotCannotBeReplacedByOlderRegistryState() {
+        XCTAssertEqual(SessionRailJobPresentation.status(snapshot: .canceled, registry: .running), .canceled)
+        XCTAssertEqual(SessionRailJobPresentation.status(snapshot: .running, registry: .exited), .exited)
+        XCTAssertEqual(SessionRailJobPresentation.status(snapshot: .unknown, registry: nil), .unknown)
     }
 }

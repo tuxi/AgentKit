@@ -114,7 +114,7 @@ final class DraftComposerPanelViewModel {
             return attachment.state == .ready
         }
         return isEnabled && hasContent && attachmentsReady && !isSending
-        && !isTurnRunning && !isContextCompacting && modelSettings.isModelAvailable(selectedModel?.model)
+        && !isTurnRunning && !isContextCompacting && !workspaceStore.sessionRail.isCompacting(sessionID) && modelSettings.isModelAvailable(selectedModel?.model)
     }
     
     var trimmed: String {
@@ -501,12 +501,15 @@ final class DraftComposerPanelViewModel {
     }
 
     func compactContext() {
-        guard let id = sessionID, !isContextCompacting, !isTurnRunning, !isSending else { return }
+        guard let id = sessionID, !isContextCompacting, !isTurnRunning, !isSending,
+              workspaceStore.sessionRail.beginCompaction(id) else { return }
         contextRefreshTask?.cancel()
         isContextLoading = false
         isContextCompacting = true
         contextCompactionMessage = nil
+        let compactionOwner = workspaceStore.sessionRail
         Task { [weak self] in
+            defer { compactionOwner.endCompaction(id) }
             guard let self else { return }
             defer { self.isContextCompacting = false }
             do {

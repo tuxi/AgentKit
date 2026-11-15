@@ -622,22 +622,6 @@ public struct ConversationWorkspaceActions: View {
                 }
                 .disabled(store.activeConversationViewModel?.assetRefs.isEmpty ?? true)
             }
-            Group {
-                Button {
-                    guard let vm = store.activeConversationViewModel else { return }
-                    let raw = (vm.conversation?.name ?? "")
-                        .trimmingCharacters(in: .whitespacesAndNewlines)
-                    store.showInspector(.conversationTrajectory(TrajectorySelection(
-                        turnID: nil,
-                        title: raw.isEmpty ? "调用轨迹" : raw
-                    )))
-                } label: {
-                    Label(AgentKitLocalized.string("conversation.trajectory"), systemImage: "waveform.path.ecg")
-                }
-                .disabled(store.activeConversationViewModel?.snapshot.turns
-                    .allSatisfy { $0.invocations.isEmpty } ?? true)
-                .help("查看对话完整调用轨迹")
-            }
             if includesDetailsButton {
                 Button {
                     store.isInspectorPresented.toggle()

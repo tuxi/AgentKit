@@ -1962,7 +1962,7 @@ final class ConversationWebDocumentTests: XCTestCase {
         XCTAssertEqual(inspection?["hasBar"] as? Bool, true)
         XCTAssertEqual(inspection?["copy"] as? Bool, true)
         XCTAssertEqual(inspection?["share"] as? Bool, true)
-        XCTAssertEqual(inspection?["more"] as? Bool, true, "the trajectory remains accessible")
+        XCTAssertEqual(inspection?["more"] as? Bool, includeStats, "The retired trajectory must not leave an empty menu")
         if includeStats {
             XCTAssertEqual(inspection?["stat"] as? String, "15414.1K")
             XCTAssertEqual(inspection?["tokenTitle"] as? String, "15414.1K\n（缓存 14179.2K）")
@@ -1976,20 +1976,23 @@ final class ConversationWebDocumentTests: XCTestCase {
         XCTAssertEqual(inspection?["overflows"] as? Bool, false)
         XCTAssertEqual(inspection?["timestamp"] as? String, finishedTurn.finishedAtClock)
 
-        _ = try await webView.evaluateJavaScript(
-            "document.querySelector('[data-focus-id^=\"turn-more:\"]').click()"
-        )
-        try await Task.sleep(for: .milliseconds(30))
-        let menuAbove = try await webView.evaluateJavaScript(
-            """
-            (() => {
-              const menu = document.querySelector('.turn-actions-menu')?.getBoundingClientRect();
-              const button = document.querySelector('[data-focus-id^="turn-more:"]')?.getBoundingClientRect();
-              return Boolean(menu && button && menu.height > 0 && menu.bottom <= button.top);
-            })()
-            """
-        ) as? Bool
-        XCTAssertEqual(menuAbove, true, "the last turn's menu opens upward, away from the composer")
+        if includeStats {
+            _ = try await webView.evaluateJavaScript(
+                "document.querySelector('[data-focus-id^=\"turn-more:\"]').click()"
+            )
+            try await Task.sleep(for: .milliseconds(30))
+            let menuAbove = try await webView.evaluateJavaScript(
+                """
+                (() => {
+                  const menu = document.querySelector('.turn-actions-menu')?.getBoundingClientRect();
+                  const button = document.querySelector('[data-focus-id^="turn-more:"]')?.getBoundingClientRect();
+                  return Boolean(menu && button && menu.height > 0 && menu.bottom <= button.top);
+                })()
+                """
+            ) as? Bool
+            XCTAssertEqual(menuAbove, true, "the last turn's menu opens upward, away from the composer")
+
+        }
 
         configuration.userContentController.removeScriptMessageHandler(forName: "agentkitWorkbench")
         _ = webView
