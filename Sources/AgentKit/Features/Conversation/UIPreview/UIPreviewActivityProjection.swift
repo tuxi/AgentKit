@@ -50,7 +50,6 @@ enum UIPreviewActivityProjection {
                   tool: tool,
                   document: document
               ),
-              validateArtifact(artifact, document: document, tool: tool),
               let fallbackAsset = registeredFallbackAsset(
                   document.fallbackAsset,
                   in: tool
@@ -230,12 +229,18 @@ enum UIPreviewActivityProjection {
         tool: ToolNodePayload,
         document: UIPreviewResultDocument
     ) -> PreviewArtifact? {
+        // A scripted or replayed runtime can reuse one call ID across turns
+        // while the artifact keeps accumulating revisions. Pick the revision
+        // this result actually describes — its lineage and fallback identity —
+        // instead of the newest revision of the call, which would otherwise
+        // take every earlier turn's card down with it on replay.
         artifacts
             .filter {
                 $0.callID == tool.callID
                     && $0.title == document.title
                     && $0.kind.rawValue == document.kind
                     && $0.metadata["preview_mode"].string == document.mode
+                    && validateArtifact($0, document: document, tool: tool)
             }
             .max { $0.revision < $1.revision }
     }

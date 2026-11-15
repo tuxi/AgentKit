@@ -87,6 +87,72 @@ final class UIPreviewPresentationTests: XCTestCase {
         XCTAssertNil(preview.evidenceJSON)
     }
 
+    func testReusedCallIDUsesRevisionDescribedByEachResultOnReplay() throws {
+        // A replayed runtime can keep one call ID while the artifact gains a
+        // second revision in a later turn. The earlier turn must keep its own
+        // revision and fallback identity instead of being matched against the
+        // newest revision and losing its card.
+        guard case .object(var revisionTwoLineage) = validLineage() else {
+            return XCTFail("lineage fixture is not an object")
+        }
+        revisionTwoLineage["target"] = .string("iphone_portrait")
+        revisionTwoLineage["state"] = .string("compact")
+
+        let revisionTwoFallbackID = "asset_preview_fallback_r2"
+        let revisionTwoFallbackSHA = String(repeating: "e", count: 64)
+        var revisionTwoJSON = try artifactJSON(
+            mode: "adaptation",
+            lineage: .object(revisionTwoLineage)
+        )
+        revisionTwoJSON["revision"] = .integer(2)
+        revisionTwoJSON["viewer"] = .object([
+            "url": .string("/v1/conversations/projection/previews/\(previewArtifactID)/revisions/2/viewer"),
+            "mime_type": .string("text/html; charset=utf-8"),
+            "size_bytes": .integer(1034),
+            "sha256": .string("sha256:" + String(repeating: "8", count: 64)),
+        ])
+        revisionTwoJSON["fallback"] = .object([
+            "asset_id": .string(revisionTwoFallbackID),
+            "text": .string("Interactive preview unavailable. Showing static evidence."),
+        ])
+        revisionTwoJSON["assets"] = .array([
+            .object([
+                "asset_id": .string(revisionTwoFallbackID),
+                "role": .string("fallback"),
+                "mime_type": .string("image/png"),
+                "size_bytes": .integer(6213),
+                "sha256": .string("sha256:" + revisionTwoFallbackSHA),
+                "content_url": .string(
+                    "/v1/conversations/projection/previews/\(previewArtifactID)/revisions/2/assets/\(revisionTwoFallbackID)/content"
+                ),
+                "width": .integer(200),
+                "height": .integer(400),
+                "alt": .string("Second revision fallback"),
+            ]),
+        ])
+        revisionTwoJSON.removeValue(forKey: "revision_sha256")
+        revisionTwoJSON["revision_sha256"] = .string(
+            try PreviewRFC8785.sha256(.object(revisionTwoJSON))
+        )
+
+        let revisionOne = try makeArtifact(mode: "adaptation", lineage: validLineage())
+        let revisionTwo = try decodeArtifact(revisionTwoJSON)
+        let tool = makeTool(
+            toolName: "ui_preview",
+            output: validResult(mode: "adaptation", lineage: validLineage()),
+            assets: [fallbackAsset]
+        )
+
+        let projected = try project(tool, artifacts: [revisionOne, revisionTwo])
+        let preview = try XCTUnwrap(projected.uiPreview)
+
+        XCTAssertEqual(preview.artifactID, previewArtifactID)
+        XCTAssertEqual(preview.revision, 1)
+        XCTAssertEqual(preview.fallback.assetID, fallbackID)
+        XCTAssertEqual(preview.fallback.sha256, fallbackSHA)
+        XCTAssertEqual(preview.lineage?.target, "duo_folded")
+    }
+
     func testAdaptationWithoutV2LineageIsNeverShownAsFormalPreview() throws {
         for lineage in [JSONValue.null, legacyV1Lineage()] {
             let tool = makeTool(
