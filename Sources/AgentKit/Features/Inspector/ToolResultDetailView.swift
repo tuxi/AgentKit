@@ -53,10 +53,8 @@ struct ToolResultDetailView: View {
                 Divider()
 
                 // Args
-                if let args = p.args {
-                    sectionView("参数") {
-                        argsView(args)
-                    }
+                if p.args != nil {
+                    InspectorPayloadView(tool: p, kind: .inputJSON, title: "参数")
                 }
 
                 // Status & timing
@@ -64,16 +62,12 @@ struct ToolResultDetailView: View {
 
                 // Output
                 if !p.output.isEmpty {
-                    sectionView("结果") {
-                        outputView(p.output)
-                    }
+                    InspectorPayloadView(tool: p, kind: .outputText, title: "结果")
                 }
 
                 // Structured output
-                if let structured = p.structuredOutput {
-                    sectionView("结构化输出") {
-                        argsView(structured)
-                    }
+                if p.structuredOutput != nil {
+                    InspectorPayloadView(tool: p, kind: .structuredOutput, title: "结构化输出")
                 }
 
                 // Error
@@ -114,18 +108,6 @@ struct ToolResultDetailView: View {
         }
     }
 
-    private func argsView(_ json: JSONValue) -> some View {
-        Text(json.prettyPrinted)
-            .font(.system(.body, design: .monospaced))
-            .textSelection(.enabled)
-            .padding(12)
-            .frame(maxWidth: .infinity, alignment: .leading)
-            .background(
-                RoundedRectangle(cornerRadius: 8)
-                    .fill(Color.primary.opacity(0.05))
-            )
-    }
-
     private func statusView(_ p: ToolNodePayload) -> some View {
         HStack(spacing: 12) {
             // Status badge
@@ -159,18 +141,6 @@ struct ToolResultDetailView: View {
 
             Spacer()
         }
-    }
-
-    private func outputView(_ text: String) -> some View {
-        Text(text)
-            .font(.system(.body, design: .monospaced))
-            .textSelection(.enabled)
-            .padding(12)
-            .frame(maxWidth: .infinity, alignment: .leading)
-            .background(
-                RoundedRectangle(cornerRadius: 8)
-                    .fill(Color.primary.opacity(0.05))
-            )
     }
 
     private func actionsView(_ p: ToolNodePayload) -> some View {
@@ -222,28 +192,6 @@ struct ToolResultDetailView: View {
             String(format: "%.1fs", Double(ms) / 1000.0)
         } else {
             "\(ms)ms"
-        }
-    }
-}
-
-// MARK: - JSONValue Pretty Print
-
-private extension JSONValue {
-    var prettyPrinted: String {
-        switch self {
-        case .object, .array:
-            let encoder = JSONEncoder()
-            encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
-            if let data = try? encoder.encode(self),
-               let str = String(data: data, encoding: .utf8) {
-                return str
-            }
-            return "\(self)"
-        case .string(let s):  return s
-        case .number(let n):  return "\(n)"
-        case .integer(let n): return "\(n)"
-        case .bool(let b):    return b ? "true" : "false"
-        case .null:           return "null"
         }
     }
 }

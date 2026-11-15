@@ -554,6 +554,7 @@ final class ImageViewActivityTests: XCTestCase {
         ])
         let snapshot = await engine.currentSnapshot()
         let turn = try XCTUnwrap(snapshot.turns.first)
+        #if os(macOS)
         let store = WorkspaceStore(usesEmbeddedRuntime: false)
         let dispatcher = TurnActionDispatcher(
             turn: turn,
@@ -565,6 +566,9 @@ final class ImageViewActivityTests: XCTestCase {
             return XCTFail("Expected asset Inspector selection")
         }
         XCTAssertEqual(payload.asset.id, expectedAssetID)
+        #else
+        _ = turn
+        #endif
     }
 
     // MARK: - Fixtures and helpers

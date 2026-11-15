@@ -220,7 +220,8 @@ struct UIPreviewCardView: View {
                             sessionID: conversationID,
                             artifactID: model.artifactID,
                             revision: model.revision,
-                            resolver: previewViewerResolver
+                            resolver: previewViewerResolver,
+                            force: true
                         )
                     }
                 }
@@ -322,12 +323,20 @@ final class UIPreviewViewerModel: ObservableObject {
 
     @Published private(set) var phase: Phase = .idle
     private var loadID = UUID()
+    private var currentRequest: LoadRequest?
+
+    private struct LoadRequest: Equatable {
+        let sessionID: String
+        let artifactID: String
+        let revision: Int
+    }
 
     func load(
         sessionID: String?,
         artifactID: String,
         revision: Int,
-        resolver: (any PreviewViewerResolver)?
+        resolver: (any PreviewViewerResolver)?,
+        force: Bool = false
     ) async {
         guard let sessionID, !sessionID.isEmpty else {
             phase = .failed("preview_invalid_request")
@@ -337,6 +346,20 @@ final class UIPreviewViewerModel: ObservableObject {
             phase = .failed("preview_unsupported")
             return
         }
+        let request = LoadRequest(
+            sessionID: sessionID,
+            artifactID: artifactID,
+            revision: revision
+        )
+        if !force, request == currentRequest {
+            switch phase {
+            case .loading, .ready:
+                return
+            case .idle, .failed:
+                break
+            }
+        }
+        currentRequest = request
         let id = UUID()
         loadID = id
         phase = .loading
@@ -394,6 +417,18 @@ final class UIPreviewViewerModel: ObservableObject {
     private static func errorCode(_ error: Error) -> String {
         if let error = error as? PreviewResourceError { return error.code }
         if let error = error as? PreviewHTTPError { return error.error.code }
+        if let error = error as? RuntimeHTTPError {
+            switch error {
+            case .preview(let preview):
+                return preview.error.code
+            case .notFound:
+                return "preview_artifact_missing"
+            case .unexpectedStatus(let status, _):
+                return "preview_http_\(status)"
+            default:
+                return "preview_render_failed"
+            }
+        }
         if let error = error as? ConversationWebPreviewSecurityError { return error.code }
         if let error = error as? PreviewArtifactError { return error.code }
         return "preview_render_failed"
@@ -412,6 +447,15 @@ final class UIPreviewFallbackModel: ObservableObject {
     }
 
     @Published private(set) var phase: Phase = .idle
+    private var currentRequest: LoadRequest?
+
+    private struct LoadRequest: Equatable {
+        let sessionID: String
+        let artifactID: String
+        let revision: Int
+        let assetID: String
+        let expectedSHA256: String?
+    }
 
     func load(
         sessionID: String?,
@@ -425,6 +469,22 @@ final class UIPreviewFallbackModel: ObservableObject {
             phase = .failed
             return
         }
+        let request = LoadRequest(
+            sessionID: sessionID,
+            artifactID: artifactID,
+            revision: revision,
+            assetID: assetID,
+            expectedSHA256: expectedSHA256
+        )
+        if request == currentRequest {
+            switch phase {
+            case .loading, .ready:
+                return
+            case .idle, .failed:
+                break
+            }
+        }
+        currentRequest = request
         phase = .loading
         do {
             let resource = try await resolver.resolveContent(PreviewAssetRequest(

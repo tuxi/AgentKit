@@ -1283,13 +1283,18 @@ struct RuntimeHTTPClient: Sendable {
 /// Authenticated remote resolver adapter shared by the Web preview host.
 struct RuntimePreviewResolver: PreviewViewerResolver, PreviewAssetResolver, Sendable {
     let http: RuntimeHTTPClient
+    var retry = PreviewResolverRetry()
 
     func resolve(_ request: PreviewViewerRequest) async throws -> PreviewViewerResource {
-        try await http.resolvePreviewViewer(request)
+        try await retry.run {
+            try await http.resolvePreviewViewer(request)
+        }
     }
 
     func resolveContent(_ request: PreviewAssetRequest) async throws -> PreviewAssetResource {
-        try await http.resolvePreviewAsset(request)
+        try await retry.run {
+            try await http.resolvePreviewAsset(request)
+        }
     }
 }
 

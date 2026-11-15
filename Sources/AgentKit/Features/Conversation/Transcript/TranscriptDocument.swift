@@ -24,6 +24,7 @@ enum TranscriptAction: Hashable {
     case toggleTool(callID: String, defaultExpanded: Bool = false)
     case toggleThinking(id: String)
     case openArtifact(callID: String)
+    case openToolResult(callID: String)
     case openAsset(AssetReference)
     case openUIEvidence(callID: String)
     case openUILayout(callID: String)

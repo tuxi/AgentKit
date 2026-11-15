@@ -966,6 +966,118 @@ final class UIPreviewPresentationTests: XCTestCase {
         ])
     }
 
+    func testCardModelsDeduplicateLiveAndReplayToolResults() throws {
+        let tool = makeTool(
+            toolName: "ui_preview",
+            output: validResult(mode: "adaptation", lineage: validLineage()),
+            assets: [fallbackAsset]
+        )
+        let artifact = try makeArtifact(mode: "adaptation", lineage: validLineage())
+        let turn = ConversationTurn(
+            id: "turn",
+            userPrompt: nil,
+            blocks: [
+                .toolGroup(ToolGroup(id: "live", tools: [tool])),
+                .toolGroup(ToolGroup(id: "replay", tools: [tool])),
+            ],
+            footer: nil,
+            isLive: false
+        )
+
+        let models = UIPreviewCardModelBuilder.models(
+            turn: turn,
+            allTurns: [turn],
+            previewArtifacts: [artifact],
+            conversationID: "projection"
+        )
+
+        XCTAssertEqual(models.count, 1, "a live+replay merge must not duplicate the Block")
+        XCTAssertEqual(models.first?.id, "call_preview#\(previewArtifactID)r1")
+        XCTAssertEqual(models.first?.revision, 1)
+    }
+
+    func testCardModelUsesTheRevisionTheResultDescribes() throws {
+        guard case .object(var revisionTwoLineage) = validLineage() else {
+            return XCTFail("lineage fixture is not an object")
+        }
+        revisionTwoLineage["target"] = .string("iphone_portrait")
+        var revisionTwoJSON = try artifactJSON(
+            mode: "adaptation",
+            lineage: .object(revisionTwoLineage)
+        )
+        revisionTwoJSON["revision"] = .integer(2)
+        revisionTwoJSON["viewer"] = .object([
+            "url": .string(
+                "/v1/conversations/projection/previews/\(previewArtifactID)/revisions/2/viewer"
+            ),
+            "mime_type": .string("text/html; charset=utf-8"),
+            "size_bytes": .integer(1034),
+            "sha256": .string("sha256:" + String(repeating: "8", count: 64)),
+        ])
+        if case .array(var assets)? = revisionTwoJSON["assets"],
+           case .object(var asset)? = assets.first {
+            asset["content_url"] = .string(
+                "/v1/conversations/projection/previews/\(previewArtifactID)/revisions/2/assets/\(fallbackID)/content"
+            )
+            assets[0] = .object(asset)
+            revisionTwoJSON["assets"] = .array(assets)
+        }
+        revisionTwoJSON.removeValue(forKey: "revision_sha256")
+        revisionTwoJSON["revision_sha256"] = .string(
+            try PreviewRFC8785.sha256(.object(revisionTwoJSON))
+        )
+
+        let tool = makeTool(
+            toolName: "ui_preview",
+            output: validResult(mode: "adaptation", lineage: validLineage()),
+            assets: [fallbackAsset]
+        )
+        let turn = ConversationTurn(
+            id: "turn",
+            userPrompt: nil,
+            blocks: [.toolGroup(ToolGroup(id: "group", tools: [tool]))],
+            footer: nil,
+            isLive: false
+        )
+        let models = UIPreviewCardModelBuilder.models(
+            turn: turn,
+            allTurns: [turn],
+            previewArtifacts: [
+                try makeArtifact(mode: "adaptation", lineage: validLineage()),
+                try decodeArtifact(revisionTwoJSON),
+            ],
+            conversationID: "projection"
+        )
+
+        XCTAssertEqual(models.count, 1)
+        XCTAssertEqual(models.first?.revision, 1)
+        XCTAssertEqual(models.first?.lineage?.target, "duo_folded")
+    }
+
+    func testCardMountWaitsForARegisteredArtifact() throws {
+        let tool = makeTool(
+            toolName: "ui_preview",
+            output: validResult(mode: "adaptation", lineage: validLineage()),
+            assets: [fallbackAsset]
+        )
+        let turn = ConversationTurn(
+            id: "turn",
+            userPrompt: nil,
+            blocks: [.toolGroup(ToolGroup(id: "group", tools: [tool]))],
+            footer: nil,
+            isLive: false
+        )
+
+        let models = UIPreviewCardModelBuilder.models(
+            turn: turn,
+            allTurns: [turn],
+            previewArtifacts: [],
+            conversationID: "projection"
+        )
+
+        XCTAssertTrue(models.isEmpty, "no card may mount before the artifact is registered")
+    }
+
     private func validLineage() -> JSONValue {
         .object([
             "schema": .string("ui_preview_lineage.v2"),
