@@ -48,22 +48,26 @@ public struct InspectorNavigationView: View {
 
     /// 外部传入时，导航历史由 conversation/tab session 持有。
     private let externalPath: InspectorPathState?
+    private let usesNavigationStack: Bool
 
     public init(
         initialSelection: InspectorSelection?,
         fileProvider: (any FileContentProvider)? = nil,
-        pathState: InspectorPathState? = nil
+        pathState: InspectorPathState? = nil,
+        usesNavigationStack: Bool = true
     ) {
         self.initialSelection = initialSelection
         self.fileProvider = fileProvider
         self.externalPath = pathState
+        self.usesNavigationStack = usesNavigationStack
     }
 
     public var body: some View {
         InspectorNavigationContent(
             initialSelection: initialSelection,
             fileProvider: fileProvider,
-            path: externalPath ?? ownedPath
+            path: externalPath ?? ownedPath,
+            usesNavigationStack: usesNavigationStack
         )
     }
 }
@@ -72,17 +76,26 @@ private struct InspectorNavigationContent: View {
     let initialSelection: InspectorSelection?
     let fileProvider: (any FileContentProvider)?
     let path: InspectorPathState
+    let usesNavigationStack: Bool
 
     var body: some View {
         @Bindable var path = path
 
-        NavigationStack(path: $path.path) {
-            InspectorView(selection: initialSelection)
-                .navigationDestination(
-                    for: InspectorDestination.self
-                ) { destination in
-                    destinationView(for: destination)
+        Group {
+            if usesNavigationStack {
+                NavigationStack(path: $path.path) {
+                    InspectorView(selection: initialSelection)
+                        .navigationDestination(for: InspectorDestination.self) { destination in
+                            destinationView(for: destination)
+                        }
                 }
+            } else if let destination = path.path.last {
+                // The macOS workspace owns the back button and window chrome.
+                // Reuse the same destination renderer and conversation-scoped path.
+                destinationView(for: destination)
+            } else {
+                InspectorView(selection: initialSelection)
+            }
         }
         .environment(\.inspectorPathState, path)
         .onChange(of: initialSelection) { _, _ in
