@@ -111,6 +111,37 @@ final class UIPreviewViewerTimingTests: XCTestCase {
         XCTAssertEqual(model.phase, .failed("preview_artifact_missing"))
     }
 
+    func testConcurrentFallbackLoadsShareOneAssetRequest() async {
+        let resolver = CountingAssetResolver(delay: .milliseconds(40))
+        let model = UIPreviewFallbackModel()
+
+        async let first: Void = model.load(
+            sessionID: "session",
+            artifactID: "artifact",
+            revision: 3,
+            assetID: "asset_fallback",
+            expectedSHA256: nil,
+            resolver: resolver
+        )
+        async let second: Void = model.load(
+            sessionID: "session",
+            artifactID: "artifact",
+            revision: 3,
+            assetID: "asset_fallback",
+            expectedSHA256: nil,
+            resolver: resolver
+        )
+        _ = await (first, second)
+
+        let requests = await resolver.requests
+        XCTAssertEqual(requests.count, 1)
+        XCTAssertEqual(requests.first?.assetID, "asset_fallback")
+        if case .ready = model.phase {
+        } else {
+            XCTFail("fallback image did not load")
+        }
+    }
+
     private actor CountingViewerResolver: PreviewViewerResolver {
         nonisolated let delay: Duration
         private let html: String
@@ -147,6 +178,39 @@ final class UIPreviewViewerTimingTests: XCTestCase {
 
         func resolve(_ request: PreviewViewerRequest) async throws -> PreviewViewerResource {
             throw error
+        }
+    }
+
+    private actor CountingAssetResolver: PreviewAssetResolver {
+        nonisolated let delay: Duration
+        private(set) var requests: [PreviewAssetRequest] = []
+
+        init(delay: Duration) {
+            self.delay = delay
+        }
+
+        func resolveContent(_ request: PreviewAssetRequest) async throws -> PreviewAssetResource {
+            requests.append(request)
+            try await Task.sleep(for: delay)
+            guard let data = Data(base64Encoded:
+                "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII="
+            ) else {
+                throw PreviewResourceError(
+                    code: "preview_asset_unavailable",
+                    message: "Fixture image is unavailable."
+                )
+            }
+            return PreviewAssetResource(
+                sessionID: request.sessionID,
+                artifactID: request.artifactID,
+                revision: request.revision,
+                assetID: request.assetID,
+                data: data,
+                statusCode: 200,
+                mimeType: "image/png",
+                sizeBytes: data.count,
+                sha256: PreviewRFC8785.sha256(data: data)
+            )
         }
     }
 }
