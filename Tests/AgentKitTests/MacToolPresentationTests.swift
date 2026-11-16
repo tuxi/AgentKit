@@ -36,7 +36,7 @@ final class MacToolPresentationTests: XCTestCase {
         XCTAssertEqual(MacToolPresentation.countSummary(mixed, text: .init(locale: "zh-Hans")), "执行 1 条命令 · 另有 4 次工具调用")
     }
 
-    func testLiveCollapsedActionChangesWhileExpandedSummaryRemainsAggregate() {
+    func testLiveActionChangesAndCountsRemainFactual() {
         let command = ToolNodePayload(callID: "cmd", toolName: "exec_command", args: .object([
             "cmd": .string("swift test"), "description": .string("验证工具组")]), status: .running)
         let read = ToolNodePayload(callID: "read", toolName: "read_file", args: .object(["path": .string("Sources/App.swift")]), status: .completed)
@@ -50,6 +50,20 @@ final class MacToolPresentationTests: XCTestCase {
         XCTAssertTrue(MacToolPresentation.currentSummary(next, text: text).contains("App.swift"))
         XCTAssertFalse(MacToolPresentation.currentSummary(next, text: text).contains("验证工具组"))
         XCTAssertEqual(MacToolPresentation.expandedSummary(next, text: text), MacToolPresentation.expandedSummary(live, text: text))
+    }
+
+    func testParallelTitleKeepsFirstActiveEntryUntilItCompletes() {
+        let text = ToolTranscriptText(locale: "zh-Hans")
+        func tool(_ id: String, _ title: String, _ status: ToolNodeStatus) -> ToolGroup.Entry {
+            .tool(.init(callID: id, toolName: "exec_command", args: .object(["cmd": .string("swift test"), "description": .string(title)]), status: status))
+        }
+        let group = ToolGroup(id: "g", entries: [tool("done", "旧命令", .completed), tool("first", "检查签名", .running), tool("second", "安装应用", .running)], isCollecting: true)
+        let title = MacToolPresentation.currentSummary(group, text: text)
+        XCTAssertTrue(title.contains("检查签名"))
+        XCTAssertTrue(title.contains(text.text("desktop.parallel", 1)))
+        XCTAssertFalse(title.contains("安装应用"))
+        let next = ToolGroup(id: "g", entries: [tool("done", "旧命令", .completed), tool("first", "检查签名", .completed), tool("second", "安装应用", .running)], isCollecting: true)
+        XCTAssertTrue(MacToolPresentation.currentSummary(next, text: text).contains("安装应用"))
     }
 
     func testSummaryIsBoundedToThreePartsAndCountsAllRemainingCallsOnce() {
@@ -200,7 +214,9 @@ final class MacToolPresentationTests: XCTestCase {
         XCTAssertTrue(MacToolPresentation.isRunning(group))
         XCTAssertFalse(MacToolPresentation.currentSummary(group, text: .init(locale: "en")).isEmpty)
         let collecting = ToolGroup(id: "g", entries: [.tool(failed)], isCollecting: true)
-        XCTAssertEqual(MacToolPresentation.currentSummary(collecting, text: .init(locale: "en")), ToolTranscriptText(locale: "en").text("active.processing"))
+        XCTAssertEqual(MacToolPresentation.currentSummary(collecting, text: .init(locale: "en")), MacToolPresentation.countSummary(collecting, text: .init(locale: "en")))
+        let thinking = ToolGroup(id: "g", entries: [.tool(failed), .thinking(id: "think", .init(text: "next step", isStreaming: true))], isCollecting: true)
+        XCTAssertEqual(MacToolPresentation.currentSummary(thinking, text: .init(locale: "en")), MacToolPresentation.countSummary(thinking, text: .init(locale: "en")))
     }
 
     func testLiveTimingUsesWallClockIntervalAndHistoryRemainsUnknown() throws {

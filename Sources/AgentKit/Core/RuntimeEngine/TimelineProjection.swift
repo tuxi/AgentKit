@@ -101,6 +101,7 @@ public struct TimelineProjection: Sendable {
         var todos: [TodoItem] = []
         var contextTokens = 0, totalTokens = 0, usageUnits: Int64 = 0, footerElapsed = 0, footerCount = 0
         var hasUsageUnits = false
+        var hasTokenUsage = false
         var seenInvocationIDs: Set<String> = []
         var sawFinished = false
         // Keep lightweight request identity and usage for model badges and totals.
@@ -302,6 +303,7 @@ public struct TimelineProjection: Sendable {
                         }
                         sawFinished = true
                         footerCount += 1
+                        hasTokenUsage = hasTokenUsage || ["promptTokens", "completionTokens", "totalTokens"].contains { p.metadata[$0].flatMap(Int.init) != nil }
                         let prompt = p.metadata["promptTokens"].flatMap(Int.init)
                         let completion = p.metadata["completionTokens"].flatMap(Int.init) ?? 0
                         contextTokens = prompt ?? contextTokens
@@ -384,7 +386,7 @@ public struct TimelineProjection: Sendable {
         let footer = sawFinished
             ? TurnStats(contextTokens: contextTokens, totalTokens: totalTokens, usageUnits: usageUnits,
                         hasUsageUnits: hasUsageUnits, elapsedMs: footerElapsed, invocationCount: footerCount,
-                        cachedContextTokens: totalCachedTokens)
+                        cachedContextTokens: totalCachedTokens, hasTokenUsage: hasTokenUsage)
             : nil
         let invocations = invocationOrder.compactMap { invocationByID[$0] }
         let startedAt = wallClock?.startedAt ?? nodes.first.map {
@@ -396,7 +398,7 @@ public struct TimelineProjection: Sendable {
                 Date(timeIntervalSince1970: $0.timestamp)
             }
         #if os(macOS)
-        blocks = ContextMaintenancePresentation.mergeLegacyBlocks(blocks)
+        blocks = TurnOutcomePresentation.normalize(ContextMaintenancePresentation.mergeLegacyBlocks(blocks))
         #endif
         return ConversationTurn(id: turnUID, userPrompt: userPrompt,
                                 blocks: blocks, plans: plans, todos: todos,

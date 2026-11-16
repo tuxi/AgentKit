@@ -91,7 +91,40 @@ final class MacToolGroupRenderTests: XCTestCase {
         _ = try await web.evaluateJavaScript("document.querySelector('\(selector)')?.dispatchEvent(new MouseEvent('click', {bubbles:true,cancelable:true}))")
     }
 
-    func testCurrentActionAndAggregateHeadersSwitchWithoutChangingDisclosure() async throws {
+    func testTurnOutcomesStayCompactAndRevealExactDiagnostics() async throws {
+        let model = ToolGroupRenderModel()
+        let tool = ToolNodePayload(callID: "outcome-cmd", toolName: "exec_command", args: .object(["cmd": .string("swift test")]), status: .completed)
+        let group = ToolGroup(id: "outcome-group", tools: [tool])
+        let budget = "model api error: status=400 type=invalid_request_error This model's maximum context length is 1048576 tokens. However, you requested 393216 output tokens and your prompt contains at least 655361 input tokens."
+        let cancelled = ConversationTurn(id: "cancelled", userPrompt: nil, blocks: [.toolGroup(group), .system(id: "cancelled-state", .init(kind: .modelActivity, text: "已取消 — user_requested", metadata: ["type": "cancelled"]))], footer: nil, isLive: false)
+        let failed = ConversationTurn(id: "failed", userPrompt: nil, blocks: [.system(id: "error-state", .init(kind: .error, text: budget))], footer: .init(contextTokens: 0, totalTokens: 0, elapsedMs: 0, invocationCount: 1, hasTokenUsage: false), isLive: false)
+        model.snapshot = .init(timeline: [], turns: [cancelled, failed], generation: 1)
+        let web = try await present(model, width: 820)
+        try await wait("document.querySelector('.turn-outcome') !== null", in: web)
+        let opened = try await web.evaluateJavaScript("document.querySelectorAll('.turn-outcome-details[open]').length") as? Int
+        XCTAssertEqual(opened, 0)
+        let cancelControls = try await web.evaluateJavaScript("document.querySelector('.turn-cancelled').querySelectorAll('details,svg,button').length") as? Int
+        XCTAssertEqual(cancelControls, 0)
+        let body = try await web.evaluateJavaScript("document.body.innerText") as? String ?? ""
+        XCTAssertFalse(body.contains("user_requested"))
+        try await click(".turn-outcome-details > summary", in: web)
+        try await wait("document.querySelector('.turn-outcome-details[open] dl') !== null", in: web)
+        let facts = try await web.evaluateJavaScript("document.querySelector('.turn-outcome-details dl').innerText") as? String ?? ""
+        XCTAssertTrue(facts.contains("1,048,577"))
+        XCTAssertTrue(facts.contains("1 token"))
+        let rawOpened = try await web.evaluateJavaScript("document.querySelectorAll('.turn-outcome-raw[open]').length") as? Int
+        XCTAssertEqual(rawOpened, 0)
+        try await click(".turn-outcome-raw > summary", in: web)
+        try await wait("document.querySelector('.turn-outcome-raw[open]') !== null", in: web)
+        if let tiff = try await web.takeSnapshot(configuration: nil).tiffRepresentation,
+           let png = NSBitmapImageRep(data: tiff)?.representation(using: .png, properties: [:]),
+           let path = ProcessInfo.processInfo.environment["TOOL_GROUP_SCREENSHOT_DIR"] {
+            try FileManager.default.createDirectory(atPath: path, withIntermediateDirectories: true)
+            try png.write(to: URL(fileURLWithPath: path).appendingPathComponent("turn-outcomes-expanded.png"))
+        }
+    }
+
+    func testCurrentActionStaysWhenOpenedAndFinishingShowsAggregate() async throws {
         func mixedSnapshot(live: Bool, generation: UInt64) -> RuntimeSnapshot {
             let tools: [ToolNodePayload] = [
                 .init(callID: "read", toolName: "read_file", args: .object(["path": .string("Sources/App.swift")]), status: .completed),
@@ -107,21 +140,64 @@ final class MacToolGroupRenderTests: XCTestCase {
         let failure = try await web.evaluateJavaScript("document.querySelector('.tool-group-summary').textContent") as? String
         XCTAssertTrue(failure?.contains(ToolTranscriptText().text("desktop.failures", 1)) == true)
         try await click(".tool-group-summary", in: web)
-        try await wait("document.querySelector('.tool-group').open && !document.querySelector('.tool-group-title').textContent.includes('验证工具组展示')", in: web)
+        try await wait("document.querySelector('.tool-group').open && document.querySelector('.tool-group-title').textContent.includes('验证工具组展示')", in: web)
         let title = try await web.evaluateJavaScript("document.querySelector('.tool-group-title').textContent") as? String
-        XCTAssertTrue(title?.contains("App.swift") == true)
-        XCTAssertTrue(title?.contains("Git") == true)
+        XCTAssertTrue(title?.contains("验证工具组展示") == true)
         model.snapshot = mixedSnapshot(live: false, generation: 2)
         try await wait("document.querySelector('.tool-group').dataset.status !== 'running' && document.querySelector('.tool-group').open", in: web)
         try await click(".tool-group-summary", in: web)
         try await wait("!document.querySelector('.tool-group').open", in: web)
         let completedTitle = try await web.evaluateJavaScript("document.querySelector('.tool-group-title').textContent") as? String
-        XCTAssertEqual(completedTitle, title)
+        XCTAssertTrue(completedTitle?.contains("App.swift") == true)
+        XCTAssertTrue(completedTitle?.contains("Git") == true)
+        XCTAssertNotEqual(completedTitle, title)
         if let tiff = try await web.takeSnapshot(configuration: nil).tiffRepresentation,
            let bitmap = NSBitmapImageRep(data: tiff), let png = bitmap.representation(using: .png, properties: [:]) {
             let dir = URL(fileURLWithPath: ProcessInfo.processInfo.environment["TOOL_GROUP_SCREENSHOT_DIR"] ?? NSTemporaryDirectory())
             try png.write(to: dir.appendingPathComponent("tool-group-summary.png"))
         }
+    }
+
+    func testRunningIndicatorAndSkeletonFollowRealContentAcrossUpdates() async throws {
+        func value(_ phase: Int, output: String = "") -> RuntimeSnapshot {
+            let tool = ToolNodePayload(callID: "live-cmd", toolName: "exec_command", args: .object(["cmd": .string("codesign -dv Payload/Talkify.app"), "description": .string("检查 IPA 签名")]), status: phase < 2 ? .running : .completed, output: output)
+            let group = ToolGroup(id: "live-group", entries: [.tool(tool)], isCollecting: phase < 3)
+            return .init(timeline: [], turns: [.init(id: "live-turn", userPrompt: nil, blocks: [.toolGroup(group)], footer: nil, isLive: phase < 3)], generation: UInt64(phase + (output.isEmpty ? 1 : 10)))
+        }
+        let model = ToolGroupRenderModel()
+        model.snapshot = value(0)
+        let web = try await present(model, width: 490)
+        try await wait("document.querySelectorAll('.tool-group-running > span').length === 4", in: web)
+        let initiallyCollapsed = try await web.evaluateJavaScript("document.querySelectorAll('.activity-skeleton').length") as? Int
+        XCTAssertEqual(initiallyCollapsed, 0)
+        try await click(".tool-group-summary", in: web)
+        try await wait("document.querySelector('.tool-group-pending')?.getBoundingClientRect().height > 0", in: web)
+        let markFits = try await web.evaluateJavaScript("document.querySelector('.tool-group-running').getBoundingClientRect().left >= 0") as? Bool
+        XCTAssertEqual(markFits, true)
+        try await click(".tool-summary", in: web)
+        try await wait("document.querySelector('.tool-output-skeleton')?.getBoundingClientRect().height > 0 && getComputedStyle(document.querySelector('.tool-group-pending')).display === 'none'", in: web)
+        if let tiff = try await web.takeSnapshot(configuration: nil).tiffRepresentation,
+           let png = NSBitmapImageRep(data: tiff)?.representation(using: .png, properties: [:]),
+           let path = ProcessInfo.processInfo.environment["TOOL_GROUP_SCREENSHOT_DIR"] {
+            try FileManager.default.createDirectory(atPath: path, withIntermediateDirectories: true)
+            try png.write(to: URL(fileURLWithPath: path).appendingPathComponent("tool-group-running-skeleton.png"))
+        }
+        model.snapshot = value(1, output: "Authority=Apple Development")
+        try await wait("document.querySelector('.tool-output-frame')?.textContent.includes('Authority=Apple Development') && document.querySelectorAll('.activity-skeleton').length === 0", in: web)
+        model.snapshot = value(2, output: "Authority=Apple Development")
+        try await wait("document.querySelector('.tool-group').dataset.active === 'false' && document.querySelector('.tool-group-pending') !== null", in: web)
+        let gapTitle = try await web.evaluateJavaScript("document.querySelector('.tool-group-title').textContent") as? String
+        XCTAssertFalse(gapTitle?.contains("正在处理") == true)
+        XCTAssertFalse(gapTitle?.contains("检查 IPA 签名") == true)
+        let gapDuration = try await web.evaluateJavaScript("getComputedStyle(document.querySelector('.tool-group-running')).animationDuration") as? String
+        let reducedMotion = try await web.evaluateJavaScript("matchMedia('(prefers-reduced-motion: reduce)').matches") as? Bool
+        XCTAssertEqual(gapDuration, reducedMotion == true ? "0s" : "4.2s")
+        model.snapshot = value(3, output: "Authority=Apple Development")
+        try await wait("document.querySelectorAll('.activity-skeleton,.tool-group-running').length === 0 && document.querySelector('.tool-group').open", in: web)
+        let completeTitle = try await web.evaluateJavaScript("document.querySelector('.tool-group-title').textContent") as? String
+        XCTAssertEqual(completeTitle, gapTitle)
+        let toolRemainsOpen = try await web.evaluateJavaScript("document.querySelector('.tool').open") as? Bool
+        XCTAssertEqual(toolRemainsOpen, true)
     }
 
     func testCommandRowsStaySingleLineAtNarrowWidthsAndKeepFullInputWhenOpened() async throws {
@@ -196,8 +272,9 @@ final class MacToolGroupRenderTests: XCTestCase {
         let row = try await web.evaluateJavaScript("""
         (() => {
           const row = document.querySelector('.background-job-row'), group = document.querySelector('.tool-group-tools');
-          return { count: group.children.length, inside: row.parentElement === group,
-            order: [...group.children].map(e => e.classList.contains('background-job-row') ? 'job' : e.classList.contains('thinking-block') ? 'thought' : 'tool'),
+          const entries = [...group.children].filter(e => e.matches('.tool,.thinking-block,.background-job-row'));
+          return { count: entries.length, inside: row.parentElement === group,
+            order: entries.map(e => e.classList.contains('background-job-row') ? 'job' : e.classList.contains('thinking-block') ? 'thought' : 'tool'),
             icons: row.querySelectorAll('.tool-action-icon').length,
             status: row.querySelector('.tool-status').textContent,
             title: row.querySelector('.tool-title').textContent,

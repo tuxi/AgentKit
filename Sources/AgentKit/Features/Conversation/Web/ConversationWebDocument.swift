@@ -168,6 +168,7 @@ struct ConversationWebDocument: Codable, Equatable, Sendable {
         var activityOrder: [String]? = nil
         var activityThinking: [Block]? = nil
         var activityJobs: [Block]? = nil
+        var outcome: TurnOutcomePresentation? = nil
         var contextMaintenance: ContextMaintenancePresentation? = nil
         /// State-based activity summary used for expanded live groups and for
         /// completed groups. Unlike `title`, it never mirrors one child row.
@@ -762,7 +763,7 @@ enum ConversationWebDocumentBuilder {
             },
             footer: turn.footer.map {
                 ConversationWebDocument.Footer(
-                    totalTokens: String(format: "%.1fK", Double($0.totalTokens) / 1_000),
+                    totalTokens: $0.hasTokenUsage ? String(format: "%.1fK", Double($0.totalTokens) / 1_000) : "—",
                     contextTokens: $0.contextTokens > 0 ? $0.formattedContextTokens : nil,
                     usageUnits: $0.hasUsageUnits ? $0.formattedUsageUnits : nil,
                     elapsed: $0.formattedElapsed,
@@ -1266,19 +1267,21 @@ enum ConversationWebDocumentBuilder {
             )
 
         case .system(let id, let payload):
+            let outcome = TurnOutcomePresentation.make(payload)
             return .init(
                 id: id,
                 kind: .system,
-                text: payload.text,
+                text: outcome?.diagnostic ?? payload.text,
                 title: payload.metadata["type"] == "cancelled" ? nil : payload.kind.rawValue,
                 status: payload.kind == .error ? "failed" : nil,
                 elapsed: nil,
                 tools: [],
                 childStreamKind: nil,
-                actionID: nil,
+                actionID: outcome?.canManageContext == true ? registerAction.map { $0(.transcript(turnID: turn.id, action: .openContextManagement)) } : nil,
                 actionTooltip: nil,
                 inlineActions: [],
-                codeCopyActionIDs: [],
+                codeCopyActionIDs: outcome.flatMap { value in registerAction.map { [$0(.transcript(turnID: turn.id, action: .copyBlock(text: value.diagnostic)))] } } ?? [],
+                outcome: outcome,
                 contextMaintenance: ContextMaintenancePresentation.make(payload, live: turn.isLive),
                 systemKind: payload.kind.rawValue,
                 metadata: payload.metadata.isEmpty ? nil : payload.metadata

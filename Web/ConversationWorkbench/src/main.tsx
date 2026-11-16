@@ -1581,6 +1581,13 @@ function useTailFollow(
   }, [active, container]);
 }
 
+/** Decorative bars never announce each animation frame or imply progress. */
+function ActivitySkeleton({ label, className = "" }: { label?: string; className?: string }): React.JSX.Element {
+  return <div className={`activity-skeleton ${className}`} role="status" aria-label={label}>
+    <span aria-hidden="true" /><span aria-hidden="true" />
+  </div>;
+}
+
 function ToolResultCard({ tool, outputRef }: {
   tool: ConversationWebTool;
   outputRef: (element: HTMLDivElement | null) => void;
@@ -1605,7 +1612,8 @@ function ToolResultCard({ tool, outputRef }: {
       </div> : null}
       {tool.output ? <div ref={outputRef} className="overflow-frame tool-output-frame" data-scroll-id={`tool-output:${tool.id}`} role="region" aria-label={tool.labels?.output} tabIndex={0}>
         <pre><code>{linkifiedActionText(tool.output, tool.outputActions)}</code></pre>
-      </div> : tool.status !== "running" && !tool.dagNodes && !tool.hasResult ? <div className="tool-empty-output">
+      </div> : tool.status === "running" && !tool.dagNodes && !tool.hasResult ? <ActivitySkeleton className="tool-output-skeleton" label={tool.labels?.output} />
+        : tool.status !== "running" && !tool.dagNodes && !tool.hasResult ? <div className="tool-empty-output">
         {failed ? tool.labels?.failedNoOutput : tool.labels?.noOutput}
       </div> : null}
       <div className="tool-result-footer">
@@ -2465,6 +2473,25 @@ function activateSelectableAction(
 // ── Context-management chips & verification blocks (system blocks) ──
 
 /** Context transactions stay one quiet row, with explicit result provenance. */
+function TurnOutcome({ block }: { block: ConversationWebBlock }): React.JSX.Element {
+  const { open, onSummaryClick } = useActivityDisclosure(`outcome:${block.id}`);
+  const value = block.outcome!;
+  if (value.kind === "cancelled") return <aside className="turn-cancelled">{value.title}</aside>;
+  return <aside className="turn-outcome" role="note">
+    <div className="turn-outcome-title">{value.title}</div>
+    {value.message ? <p>{value.message}</p> : null}
+    {block.actionID ? <button className="interactive turn-outcome-context" onClick={() => dispatchAction(block.actionID!)}>{value.contextLabel}</button> : null}
+    <details open={open} className="turn-outcome-details">
+      <summary className="interactive" onClick={onSummaryClick} data-focus-id={`outcome:${block.id}`}>{value.detailsLabel}<span className="disclosure-chevron" aria-hidden="true">›</span></summary>
+      {open ? <div>
+        <dl>{value.facts.map((fact, i) => <div key={i}><dt>{fact.label}</dt><dd>{fact.value}</dd></div>)}</dl>
+        <details className="turn-outcome-raw"><summary className="interactive">{value.rawLabel}<span className="disclosure-chevron" aria-hidden="true">›</span></summary><pre>{value.diagnostic}</pre></details>
+        {block.codeCopyActionIDs[0] ? <button className="interactive" onClick={() => dispatchAction(block.codeCopyActionIDs[0])}>{value.copyLabel}</button> : null}
+      </div> : null}
+    </details>
+  </aside>;
+}
+
 function ContextChip({ block }: { block: ConversationWebBlock }): React.JSX.Element {
   const { open, onSummaryClick } = useActivityDisclosure(`context:${block.id}`);
   const value = block.contextMaintenance;
@@ -2618,7 +2645,12 @@ function ToolGroupBlock({ block, conversationID, turnID }: {
   const tools = new Map(block.tools.map((tool) => [`tool:${tool.id}`, tool]));
   const thinking = new Map((block.activityThinking ?? []).map((item) => [`${item.systemKind === "preMutation" ? "preMutation" : "thinking"}:${item.id}`, item]));
   const jobs = new Map((block.activityJobs ?? []).map(item => [`job:${item.actionTooltip}`, item]));
-  const headerTitle = open ? (block.activitySummary || block.title) : block.title;
+  const headerTitle = block.title;
+  const runningTools = block.tools.filter(tool => tool.status === "running");
+  // Empty output is pending; streaming output already supplies its own visible
+  // activity. The group tail also covers gaps and independent background jobs.
+  const runningJobs = (block.activityJobs ?? []).filter(job => job.status === "running");
+  const pending = block.status === "running" && (runningJobs.length > 0 || runningTools.length === 0 || runningTools.some(tool => !tool.output && !tool.hasResult && !tool.dagNodes));
   const rows: string[][] = [];
   for (const id of block.activityOrder ?? block.tools.map(tool => `tool:${tool.id}`)) {
     const current = tools.get(id);
@@ -2627,9 +2659,11 @@ function ToolGroupBlock({ block, conversationID, turnID }: {
     if (current?.rawName === "job_wait" && current.backgroundJobID && last?.rawName === "job_wait" && last.backgroundJobID === current.backgroundJobID) previous!.push(id);
     else rows.push([id]);
   }
-  return <details className="tool-group" data-status={block.status} open={open} data-anchor-id={`group:${turnID}:${block.id}`}>
+  return <details className="tool-group" data-status={block.status} data-collecting={block.isCollecting} data-active={runningTools.length > 0 || runningJobs.length > 0} open={open} data-anchor-id={`group:${turnID}:${block.id}`}>
     <summary className="interactive tool-group-summary" data-focus-id={`tool-group:${block.id}`} onClick={onSummaryClick}>
-      {block.status === "running" ? <span className="tool-group-running" role="img" aria-label={block.statusText}>•••</span> : null}
+      {block.status === "running" ? <span className="tool-group-running" role="img" aria-label={block.statusText}>
+        <span aria-hidden="true" /><span aria-hidden="true" /><span aria-hidden="true" /><span aria-hidden="true" />
+      </span> : null}
       <span className="tool-group-title" title={headerTitle}>{headerTitle}</span>
       {block.failureText ? <span className="tool-status" data-tone="failed">{block.failureText}</span> : null}
       <GroupElapsed block={block} />
@@ -2653,7 +2687,9 @@ function ToolGroupBlock({ block, conversationID, turnID }: {
         output: waits.map((tool, i) => tool.output ? `${i + 1}. ${tool.output}` : "").filter(Boolean).join("\n\n"),
         copyOutputActionID: undefined, fullOutputActionID: undefined, outputActions: [] };
       return <Tool key={ids[0]} tool={combined} waitRecords={waits} conversationID={conversationID} turnID={turnID} />;
-    })}</div> : null}
+    })}
+      {pending ? <ActivitySkeleton className="tool-group-pending" label={block.statusText} /> : null}
+    </div> : null}
   </details>;
 }
 
@@ -2702,6 +2738,7 @@ const Block = memo(function Block({
         </section>
       );
     case "system":
+      if (block.outcome) return <TurnOutcome block={block} />;
       if (block.systemKind === "contextEdited"
         || block.systemKind === "contextPruned"
         || block.systemKind === "contextCompact") {

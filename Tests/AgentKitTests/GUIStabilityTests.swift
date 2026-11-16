@@ -497,13 +497,15 @@ extension GUIStabilityTests {
     }
 
     @MainActor
-    func testCancelledWebPayloadShowsReasonWithoutInternalKindTitle() async throws {
+    func testCancelledWebPayloadShowsOutcomeWithoutInternalReason() async throws {
         let engine = RuntimeEngine(sessionID: "s1")
         await engine.importHistory([.turnStarted(turnID: "t1", text: "example"),
                                     .turnCancelled(turnID: "t1", reason: "user_requested")])
         let doc = ConversationWebDocumentBuilder.build(snapshot: await engine.currentSnapshot(), conversationID: "s1")
         let cancelled = try XCTUnwrap(doc.turns.first?.blocks.first { $0.metadata?["type"] == "cancelled" })
         XCTAssertNil(cancelled.title)
-        XCTAssertEqual(cancelled.text, "已取消 — user_requested")
+        XCTAssertEqual(cancelled.text, "")
+        XCTAssertEqual(cancelled.outcome?.kind, "cancelled")
+        XCTAssertEqual(cancelled.outcome?.title, ToolTranscriptText().text("outcome.cancelled"))
     }
 }

@@ -21,6 +21,9 @@ private typealias PlatformFont = UIFont
 // MARK: - Transcript Actions
 
 enum TranscriptAction: Hashable {
+    #if os(macOS)
+    case openContextManagement
+    #endif
     case toggleTool(callID: String, defaultExpanded: Bool = false)
     case toggleThinking(id: String)
     case openToolResult(callID: String)
@@ -131,7 +134,9 @@ enum TurnTranscriptBuilder {
 
             case .system(let id, let payload):
                 #if os(macOS)
-                if let maintenance = ContextMaintenancePresentation.make(payload, live: turn.isLive) {
+                if let outcome = TurnOutcomePresentation.make(payload) {
+                    builder.appendOutcome(outcome, id: id, state: state)
+                } else if let maintenance = ContextMaintenancePresentation.make(payload, live: turn.isLive) {
                     let expanded = state.expandedThinkingIDs.contains(id)
                     builder.appendContextMaintenanceSummary(maintenance, expanded: expanded, action: .toggleThinking(id: id))
                     if expanded {
@@ -160,7 +165,11 @@ enum TurnTranscriptBuilder {
 
         if let footer = turn.footer {
             builder.appendBlankLine()
+            #if os(macOS)
+            var parts = [footer.hasTokenUsage ? "\(footer.formattedTotalTokens) tokens" : "—"]
+            #else
             var parts = ["\(footer.formattedTotalTokens) tokens"]
+            #endif
             if footer.hasUsageUnits { parts.append("\(footer.formattedUsageUnits) units") }
             if footer.hasCachedTokens { parts.append("缓存 \(footer.formattedCachedTokens)") }
             parts.append(footer.formattedElapsed)
@@ -432,6 +441,9 @@ enum TurnTranscriptBuilder {
               case .system(_, let payload) = block else {
             return false
         }
+        #if os(macOS)
+        if payload.kind == .error { return false }
+        #endif
         return payload.isTranscriptError
     }
 }
@@ -619,8 +631,7 @@ private struct TranscriptAttributedBuilder {
         let indicator = expanded ? "⌄" : "›"
         #if os(macOS)
         if group.isActivityGroup {
-            let summary = expanded ? MacToolPresentation.expandedSummary(group) : MacToolPresentation.currentSummary(group)
-            if MacToolPresentation.isRunning(group) { appendLinked("••• ", id: id, attributes: metaAttributes) }
+            let summary = MacToolPresentation.currentSummary(group)
             appendLinked(summary, id: id, attributes: toolSummaryAttributes(for: .completed))
             let failures = MacToolPresentation.failureCount(group)
             if failures > 0 { appendLinked(" · " + ToolTranscriptText().text("desktop.failures", failures), id: id, attributes: toolStatusTextAttributes(for: .failed)) }
@@ -685,6 +696,23 @@ private struct TranscriptAttributedBuilder {
     }
 
     #if os(macOS)
+    mutating func appendOutcome(_ value: TurnOutcomePresentation, id: String, state: TranscriptDocumentState) {
+        if value.kind == "cancelled" { appendMeta(value.title); return }
+        append(value.title, attributes: toolStatusTextAttributes(for: .failed))
+        if let message = value.message { appendIndentedLabel(message) }
+        if value.canManageContext { appendActionLine(value.contextLabel, action: .openContextManagement, style: .artifact) }
+        let expanded = state.expandedThinkingIDs.contains(id)
+        appendActionLine(value.detailsLabel + (expanded ? " ⌄" : " ›"), action: .toggleThinking(id: id), style: .artifact)
+        if expanded {
+            for fact in value.facts { appendIndentedLabel(fact.label + " · " + fact.value) }
+            let rawID = id + ":raw"
+            let rawExpanded = state.expandedThinkingIDs.contains(rawID)
+            appendActionLine(value.rawLabel + (rawExpanded ? " ⌄" : " ›"), action: .toggleThinking(id: rawID), style: .artifact)
+            if rawExpanded { appendDesktopScrollableText(.init(callID: "outcome:" + id, output: value.diagnostic, running: false)) }
+            appendActionLine(value.copyLabel, action: .copyBlock(text: value.diagnostic), style: .artifact)
+        }
+    }
+
     mutating func appendContextMaintenanceSummary(_ value: ContextMaintenancePresentation, expanded: Bool, action: TranscriptAction) {
         let id = register(action)
         appendLinked(value.title + " · ", id: id, attributes: toolSummaryAttributes(for: .completed))

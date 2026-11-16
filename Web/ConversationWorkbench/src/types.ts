@@ -251,6 +251,7 @@ export interface ConversationWebBlock {
   activityOrder?: string[];
   activityThinking?: ConversationWebBlock[];
   activityJobs?: ConversationWebBlock[];
+  outcome?: { kind: string; title: string; message?: string; facts: { label: string; value: string }[]; diagnostic: string; canManageContext: boolean; detailsLabel: string; rawLabel: string; copyLabel: string; contextLabel: string };
   contextMaintenance?: { title: string; summary: string; status: string; steps: { label: string; value: string }[]; note?: string };
   /// State-based summary for expanded live groups and completed groups.
   activitySummary?: string;

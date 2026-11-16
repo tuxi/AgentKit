@@ -206,8 +206,6 @@ enum MacToolPresentation {
             return text.text("active.running", title)
                 + (activeTitles.count > 1 ? " · " + text.text("desktop.parallel", activeTitles.count - 1) : "")
         }
-        if group.isThinking { return text.text("thinking") }
-        if group.isCollecting { return text.text("active.processing") }
         return countSummary(group, text: text)
     }
 

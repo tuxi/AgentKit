@@ -2890,7 +2890,7 @@ final class ConversationWebDocumentTests: XCTestCase {
         XCTAssertEqual(activeExpanded?["toolRows"] as? Int, 1)
         XCTAssertEqual(activeExpanded?["toolOpen"] as? Bool, false, "tool detail stays collapsed by default")
         XCTAssertEqual(activeExpanded?["aligned"] as? Bool, true, "group title has no horizontal inset")
-        XCTAssertEqual(activeExpanded?["header"] as? String, ToolTranscriptText().text("desktop.readNamed", "App.swift"))
+        XCTAssertEqual(activeExpanded?["header"] as? String, ToolTranscriptText().text("active.running", ToolTranscriptText().text("desktop.readNamed", "App.swift")))
         XCTAssertFalse((activeExpanded?["header"] as? String)?.contains("operations") ?? true, "expanded header names the actual operation")
         _ = try await webView.evaluateJavaScript("document.querySelector('.tool-group-summary').click()")
         try await Task.sleep(for: .milliseconds(20))

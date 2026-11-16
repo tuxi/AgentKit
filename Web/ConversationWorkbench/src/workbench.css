@@ -393,7 +393,31 @@ summary:active {
 
 /* Only the group-level indicator communicates live activity. Status text
    remains readable, including failure counts while other tools are running. */
-.tool-group-running { color: var(--secondary); position: absolute; left: -20px; letter-spacing: 1px; font-size: 9px; }
+/* One group-level indicator, outside the title's alignment and hit target. */
+.tool-group-running { position: absolute; left: -15px; width: 12px; height: 12px; color: light-dark(rgb(199 112 78), rgb(225 151 119)); pointer-events: none; animation: activity-orbit 2.8s linear infinite; }
+.tool-group-running > span { position: absolute; width: 3px; height: 3px; border-radius: 50%; background: currentColor; animation: activity-breathe 1.6s ease-in-out infinite; }
+.tool-group-running > span:nth-child(1) { left: 1.5px; top: 1.5px; }
+.tool-group-running > span:nth-child(2) { right: 1.5px; top: 1.5px; animation-delay: -.4s; }
+.tool-group-running > span:nth-child(3) { right: 1.5px; bottom: 1.5px; animation-delay: -.8s; }
+.tool-group-running > span:nth-child(4) { left: 1.5px; bottom: 1.5px; animation-delay: -1.2s; }
+/* A slower orbit distinguishes gaps without replacing the factual title. */
+.tool-group[data-collecting="true"][data-active="false"] > summary > .tool-group-running { animation-duration: 4.2s; }
+.activity-skeleton { display: grid; gap: 7px; padding: 16px 4px; }
+.activity-skeleton > span { display: block; width: min(55%, 290px); min-width: 32px; height: 7px; border-radius: 4px; overflow: hidden; position: relative; background: light-dark(rgb(0 0 0 / 6%), rgb(255 255 255 / 8%)); }
+.activity-skeleton > span:nth-child(2) { width: min(32%, 170px); }
+.activity-skeleton > span::after { content: ""; position: absolute; inset: 0; background: linear-gradient(100deg, transparent 5%, light-dark(rgb(255 255 255 / 62%), rgb(255 255 255 / 10%)) 50%, transparent 95%); transform: translateX(-100%); animation: activity-shimmer 2.2s ease-in-out infinite; }
+.activity-skeleton > span:nth-child(2)::after { animation-delay: .12s; }
+.tool-group-pending { padding: 15px 12px; }
+/* The same pending output gets one placeholder, in its opened tool or at the
+   group tail. Never duplicate the placeholder in both places. */
+.tool-group-tools:has(.tool[open] .tool-output-skeleton) > .tool-group-pending { display: none; }
+@keyframes activity-orbit { to { transform: rotate(360deg); } }
+@keyframes activity-breathe { 0%,100% { opacity: .38; } 50% { opacity: 1; } }
+@keyframes activity-shimmer { 65%,100% { transform: translateX(100%); } }
+@media (prefers-reduced-motion: reduce) {
+  .tool-group-running, .tool-group-running > span, .activity-skeleton > span::after { animation: none; }
+  .activity-skeleton > span::after { display: none; }
+}
 .tool-group-elapsed { color: var(--secondary); white-space: nowrap; font-variant-numeric: tabular-nums; }
 
 .tool-group > summary::marker,
@@ -2492,3 +2516,22 @@ button.user-asset-thumbnail {
 .context-maintenance-step dd { margin: 0; overflow-wrap: anywhere; }
 .context-maintenance-note { padding-top: 8px; }
 @media(max-width: 520px) { .context-maintenance-summary { flex-wrap: wrap; } .context-maintenance-result { white-space: normal; overflow-wrap: anywhere; } }
+
+/* Terminal outcomes stay quieter than the content they conclude. */
+.turn-cancelled { color: var(--secondary); padding: 6px 0; }
+.turn-outcome { border: 1px solid var(--border); border-radius: 12px; padding: 14px 16px; margin: 8px 0; }
+.turn-outcome-title { color: var(--danger); font-weight: 500; }
+.turn-outcome p { margin: 6px 0 12px; }
+.turn-outcome button { background: none; border: 0; color: inherit; font: inherit; padding: 0; cursor: pointer; }
+.turn-outcome-context { margin-bottom: 12px; }
+.turn-outcome summary { color: var(--secondary); cursor: pointer; list-style: none; display: flex; align-items: center; gap: 6px; width: fit-content; }
+.turn-outcome summary::-webkit-details-marker { display: none; }
+.turn-outcome dl > div { display: flex; gap: 20px; margin: 6px 0; }
+.turn-outcome dt { min-width: 6em; color: var(--secondary); }
+.turn-outcome dd { margin: 0; font-variant-numeric: tabular-nums; }
+.turn-outcome-raw { margin: 12px 0; }
+.turn-outcome pre { max-height: 240px; overflow: auto; white-space: pre-wrap; overflow-wrap: anywhere; font-size: .9em; user-select: text; }
+
+.turn-outcome details[open] > summary > .disclosure-chevron { transform: rotate(90deg); }
+.turn-outcome dl { margin: 12px 0; }
+.turn-outcome dd { min-width: 0; overflow-wrap: anywhere; }

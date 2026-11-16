@@ -504,8 +504,7 @@ public struct ExecutionReducer: Sendable {
         // compatibility fallback for older runtimes.
         let message = err ?? text
         if let message, !message.isEmpty {
-            let nodeID = "\(resolvedTurnID)_error_\(internalState.nextSystemSeq)"
-            internalState.nextSystemSeq += 1
+            let nodeID = terminalOutcomeID(turnID: resolvedTurnID, graph: graph)
             let metadata = errorCode.map { ["code": $0] } ?? [:]
             let node = GraphNode(
                 id: nodeID,
@@ -515,7 +514,8 @@ public struct ExecutionReducer: Sendable {
                 timestamp: ts,
                 turnID: resolvedTurnID
             )
-            appendNode(node, to: &graph)
+            if graph.nodes[nodeID] == nil { appendNode(node, to: &graph) }
+            else { graph.upsertNode(node) }
             changed.append(nodeID)
         }
 
@@ -569,15 +569,28 @@ public struct ExecutionReducer: Sendable {
         internalState.activeToolCallIDs = []
         graph.setTurnChanges(changes, for: turnID)
         internalState.currentTurnID = nil
-        let nodeID = "\(turnID)_cancelled"
-        if graph.nodes[nodeID] == nil {
-            let text = reason.flatMap { $0.isEmpty ? nil : $0 }.map { "已取消 — \($0)" } ?? "已取消"
-            let payload = SystemPayload(kind: .modelActivity, text: text,
-                                        metadata: ["type": "cancelled"])
-            appendNode(GraphNode(id: nodeID, kind: .system, payload: .system(payload),
-                                 status: .completed, timestamp: ts, turnID: turnID), to: &graph)
+        let nodeID = terminalOutcomeID(turnID: turnID, graph: graph)
+        var resolvedReason = reason
+        if resolvedReason == nil, case .system(let previous)? = graph.nodes[nodeID]?.payload {
+            resolvedReason = previous.metadata["reason"]
         }
+        let text = resolvedReason.flatMap { $0.isEmpty ? nil : $0 }.map { "已取消 — \($0)" } ?? "已取消"
+        let payload = SystemPayload(kind: .modelActivity, text: text,
+                                    metadata: ["type": "cancelled", "reason": resolvedReason ?? ""])
+        let node = GraphNode(id: nodeID, kind: .system, payload: .system(payload),
+                             status: .completed, timestamp: ts, turnID: turnID)
+        if graph.nodes[nodeID] == nil { appendNode(node, to: &graph) }
+        else { graph.upsertNode(node) }
         return changed + [nodeID]
+    }
+
+    /// Protocol IDs can be reused after a server restart. Anchor the outcome
+    /// to this user-input instance, and update it on duplicate terminal events.
+    private func terminalOutcomeID(turnID: String, graph: ExecutionGraph) -> NodeID {
+        let anchor = graph.nodeOrder.reversed().first { id in
+            graph.nodes[id]?.kind == .userInput && graph.nodes[id]?.turnID == turnID
+        } ?? turnID
+        return anchor + "_outcome"
     }
 
     // MARK: - Streaming handlers

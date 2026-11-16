@@ -311,6 +311,11 @@ struct TurnView: View, Equatable {
         case .toggleThinking(let id):
             documentState.toggleThinking(id: id)
 
+        #if os(macOS)
+        case .openContextManagement:
+            guard store.activeConversationViewModel?.snapshot.turns.contains(where: { $0.id == turn.id }) == true else { return }
+            store.requestContextManagement()
+        #endif
         case .openToolResult(let callID):
             #if os(macOS)
             let nodeID = MacToolPresentation.inspectorNodeID(callID: callID, turn: turn, timeline: store.activeConversationViewModel?.snapshot.timeline ?? [])

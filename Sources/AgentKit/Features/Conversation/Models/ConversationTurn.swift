@@ -411,6 +411,7 @@ public struct ToolGroup: Identifiable, Sendable, Equatable {
 /// Turn footer: aggregated from the turn's model_finished events.
 public struct TurnStats: Sendable, Equatable {
     public let contextTokens: Int          // last invocation's prompt size
+    public let hasTokenUsage: Bool
     public let totalTokens: Int            // accumulated provider tokens
     public let usageUnits: Int64           // accumulated billed units
     public let hasUsageUnits: Bool
@@ -422,8 +423,9 @@ public struct TurnStats: Sendable, Equatable {
 
     public init(contextTokens: Int, totalTokens: Int, usageUnits: Int64 = 0,
                 hasUsageUnits: Bool = false, elapsedMs: Int, invocationCount: Int,
-                cachedContextTokens: Int = 0) {
+                cachedContextTokens: Int = 0, hasTokenUsage: Bool = true) {
         self.contextTokens = contextTokens
+        self.hasTokenUsage = hasTokenUsage
         self.totalTokens = totalTokens
         self.usageUnits = usageUnits
         self.hasUsageUnits = hasUsageUnits

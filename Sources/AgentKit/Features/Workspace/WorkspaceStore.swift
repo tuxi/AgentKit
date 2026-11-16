@@ -20,6 +20,15 @@ import ClientToolProtocol
 @MainActor
 @Observable
 public final class WorkspaceStore {
+    #if os(macOS)
+    struct ContextManagementRequest: Equatable { let id: UUID; let conversationID: String }
+    var contextManagementRequest: ContextManagementRequest?
+    func requestContextManagement() {
+        guard let id = activeConversationViewModel?.conversation?.id else { return }
+        contextManagementRequest = .init(id: UUID(), conversationID: id)
+    }
+    #endif
+
 
     // MARK: - Tab & Selection
 

@@ -187,6 +187,13 @@ struct DraftComposerPanel: View {
         }, action: { _, newValue in
             vm.onGeometryChange(width: newValue)
         })
+        #if os(macOS)
+        .onChange(of: workspaceStore.contextManagementRequest) { _, request in
+            guard let request, request.conversationID == vm.sessionID else { return }
+            vm.isContextPresented = true
+            vm.refreshContext()
+        }
+        #endif
         .onChange(of: scenePhase) { _, phase in
             vm.handleScenePhaseChange(phase)
         }

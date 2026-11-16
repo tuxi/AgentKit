@@ -29,6 +29,11 @@ final class TurnActionDispatcher {
             break // NativeTurnTableCellView owns expand/collapse state.
         case .toggleThinking:
             break // Thinking expand/collapse handled by the owning view.
+        #if os(macOS)
+        case .openContextManagement:
+            guard store.activeConversationViewModel?.snapshot.turns.contains(where: { $0.id == turn.id }) == true else { return }
+            store.requestContextManagement()
+        #endif
         case .openToolResult(let callID):
             guard tool(callID: callID) != nil else { return }
             let nodeID = MacToolPresentation.inspectorNodeID(callID: callID, turn: turn, timeline: store.activeConversationViewModel?.snapshot.timeline ?? [])
