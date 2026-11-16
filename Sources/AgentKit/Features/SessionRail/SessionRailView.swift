@@ -275,15 +275,17 @@ public struct SessionRailView: View {
         VStack(alignment: .leading, spacing: 5) {
             if !value.isGitRepository { note("未使用 Git") }
             else {
-                row("plus.forwardslash.minus", "\(value.fileCount) 个文件", trailing: "+\(value.addedLines) −\(value.removedLines)") { model.navigate(.changes) }
+                row("plus.forwardslash.minus", "\(value.fileCount) 个文件", trailing: "+\(value.addedLines) −\(value.removedLines)") { if !store.openWorkspaceChanges() { model.navigate(.changes) } }
                 note(value.uncountedFiles > 0 ? "相对 HEAD · \(value.uncountedFiles) 项无文本行数" : "相对 HEAD")
                 ForEach(compact ? Array(value.files.prefix(3)) : value.files, id: \.fileID) { file in
                     row(file.conflict ? "exclamationmark.triangle" : "doc.text", file.path, trailing: fileStatus(file)) {
-                        model.navigate(.patch(snapshotID: value.snapshotID, fileID: file.fileID, path: file.path))
+                        if !store.openWorkspaceChanges(path: file.path) {
+                            model.navigate(.patch(snapshotID: value.snapshotID, fileID: file.fileID, path: file.path))
+                        }
                     }
                 }
                 if value.fileCount == 0 { note("工作区无变更") }
-                if compact, value.fileCount > 0 { more("查看全部变更") { model.navigate(.changes) } }
+                if compact, value.fileCount > 0 { more("查看全部变更") { if !store.openWorkspaceChanges() { model.navigate(.changes) } } }
             }
         }
     }

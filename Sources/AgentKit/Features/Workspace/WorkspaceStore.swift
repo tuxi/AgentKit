@@ -130,7 +130,7 @@ public final class WorkspaceStore {
     public var isInspectorPresented: Bool = false {
         didSet {
             inspectorWorkspaceState.isPresented = isInspectorPresented
-            if !isInspectorPresented { inspectorWorkspaceState.fileOpenRequest = nil }
+            if !isInspectorPresented { inspectorWorkspaceState.fileOpenRequest = nil; inspectorWorkspaceState.reviewOpenRequest = nil }
             // 产物 selection 是临时详情，不是长期 session。关闭面板时丢弃它，
             // 但保留入口标签、宿主资源身份与各自导航路径。
             if !isInspectorPresented, inspectorSelection != nil {
@@ -143,6 +143,7 @@ public final class WorkspaceStore {
     /// 再切回来会恢复同一批标签与导航路径。
     public private(set) var inspectorWorkspaceState = InspectorWorkspaceState()
     public var workspaceFileNavigationEnabled = false
+    public var workspaceReviewNavigationEnabled = false
     public var workspaceFileNavigationContext: String?
 
     @ObservationIgnored
@@ -1420,9 +1421,20 @@ public final class WorkspaceStore {
     public func showInspector(_ selection: InspectorSelection, preferWorkspaceFile: Bool = true) {
         if preferWorkspaceFile, routeWorkspaceSelection(selection) { return }
         inspectorWorkspaceState.fileOpenRequest = nil
+        inspectorWorkspaceState.reviewOpenRequest = nil
         inspectorWorkspaceState.selectionPathState.popToRoot()
         inspectorSelection = selection
         isInspectorPresented = true
+    }
+
+    /// The host reveals its persistent Changes pane; standalone clients keep the rail detail.
+    @discardableResult public func openWorkspaceChanges(path: String? = nil) -> Bool {
+        guard workspaceReviewNavigationEnabled else { return false }
+        dismissInspector()
+        inspectorWorkspaceState.open(.review)
+        inspectorWorkspaceState.reviewOpenRequest = WorkspaceReviewOpenRequest(path: path, contextID: workspaceFileNavigationContext)
+        isInspectorPresented = true
+        return true
     }
 
     public func dismissInspector() {

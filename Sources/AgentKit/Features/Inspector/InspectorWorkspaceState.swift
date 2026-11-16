@@ -81,6 +81,7 @@ public final class InspectorWorkspaceState {
     public var isPresented: Bool
     public var selection: InspectorSelection?
     public var fileOpenRequest: WorkspaceFileOpenRequest?
+    public var reviewOpenRequest: WorkspaceReviewOpenRequest?
 
     /// 时间线产物详情使用独立 path，避免覆盖任一长期入口标签的导航历史。
     public let selectionPathState: InspectorPathState
@@ -145,4 +146,11 @@ public final class InspectorWorkspaceState {
 
         selectedTabID = tabs[min(closingIndex, tabs.count - 1)].id
     }
+}
+
+public struct WorkspaceReviewOpenRequest: Identifiable, Sendable, Hashable {
+    public let id = UUID()
+    public let path: String?
+    public let contextID: String?
+    public init(path: String? = nil, contextID: String? = nil) { self.path = path; self.contextID = contextID }
 }
