@@ -209,6 +209,9 @@ final class ChildStreamTests: XCTestCase {
         let turns = TimelineProjection().projectTurns(graph)
         let block = turns.flatMap(\.blocks).compactMap { block -> ChildStreamNodePayload? in
             if case .childStream(_, let p) = block { return p }
+            #if os(macOS)
+            if case .toolGroup(let group) = block { return group.backgroundJobs.first }
+            #endif
             return nil
         }.first
         XCTAssertEqual(block?.status, .canceled)
@@ -320,7 +323,7 @@ final class ChildStreamTests: XCTestCase {
 
     // MARK: - 投影：入口卡作为独立 TurnBlock 出现在 turn card 内
 
-    func testProjectionEmitsChildStreamBlock() {
+    func testProjectionPreservesJobEntryAtPlatformDestination() throws {
         var reducer = ExecutionReducer()
         var graph = ExecutionGraph()
         let events: [AgentEvent] = [
@@ -335,11 +338,18 @@ final class ChildStreamTests: XCTestCase {
         XCTAssertEqual(turns.count, 1)
         let childBlocks = turns[0].blocks.compactMap { block -> ChildStreamNodePayload? in
             if case .childStream(_, let payload) = block { return payload }
+            #if os(macOS)
+            if case .toolGroup(let group) = block { return group.backgroundJobs.first }
+            #endif
             return nil
         }
         XCTAssertEqual(childBlocks.count, 1)
-        XCTAssertEqual(childBlocks[0].childID, "job_1")
-        XCTAssertEqual(childBlocks[0].status, .completed)
+        let job = try XCTUnwrap(childBlocks.first)
+        XCTAssertEqual(job.childID, "job_1")
+        XCTAssertEqual(job.status, .completed)
+        #if os(macOS)
+        XCTAssertFalse(turns[0].blocks.contains { if case .childStream = $0 { return true }; return false }, "desktop jobs belong to activity")
+        #endif
     }
 
     // ① 合并：同一委派的 task 工具卡 + childStream 入口卡（共享 call_id）→ 只留入口卡。

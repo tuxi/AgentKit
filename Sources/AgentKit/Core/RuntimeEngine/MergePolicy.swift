@@ -56,7 +56,8 @@ public struct DefaultMergePolicy: MergePolicy {
             previous = ExecutionNode(
                 id: previous.id, kind: .thinking(prevPayload),
                 timestamp: previous.timestamp, turnID: previous.turnID,
-                invocationID: previous.invocationID
+                invocationID: previous.invocationID,
+                firstObservedAt: previous.firstObservedAt, lastObservedAt: node.lastObservedAt
             )
 
         case (.message(var prevPayload), .message(let nextPayload)):
@@ -68,7 +69,8 @@ public struct DefaultMergePolicy: MergePolicy {
             previous = ExecutionNode(
                 id: previous.id, kind: .message(prevPayload),
                 timestamp: previous.timestamp, turnID: previous.turnID,
-                invocationID: previous.invocationID
+                invocationID: previous.invocationID,
+                firstObservedAt: previous.firstObservedAt, lastObservedAt: node.lastObservedAt
             )
 
         case (.system(var prevPayload), .system(let nextPayload)):
@@ -80,7 +82,8 @@ public struct DefaultMergePolicy: MergePolicy {
             previous = ExecutionNode(
                 id: previous.id, kind: .system(prevPayload),
                 timestamp: previous.timestamp, turnID: previous.turnID,
-                invocationID: previous.invocationID
+                invocationID: previous.invocationID,
+                firstObservedAt: previous.firstObservedAt, lastObservedAt: node.lastObservedAt
             )
 
         default:

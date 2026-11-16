@@ -200,6 +200,10 @@ public struct GraphNode: Identifiable, Sendable {
     public var payload: NodePayload
     public var status: NodeStatus
     public var timestamp: TimeInterval
+    /// Live observation time, deliberately absent from replayed nodes. The
+    /// legacy timestamp is updated on every chunk and has no provenance.
+    var firstObservedAt: Date? = nil
+    var lastObservedAt: Date? = nil
     public var turnID: String
     /// v1.2: Identifies which model invocation produced this node.
     /// nil for user messages and turn-boundary events. Set by appendNode.

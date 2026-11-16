@@ -115,7 +115,11 @@ final class ToolSemanticPresentationTests: XCTestCase {
             let presentation = command(shell)
             XCTAssertEqual(presentation.title, "运行命令")
             XCTAssertFalse(presentation.compactLine.contains("very-private"), shell)
+            #if os(macOS)
+            XCTAssertEqual(presentation.detail, CommandDisplayRedactor.redact(shell), shell)
+            #else
             XCTAssertEqual(presentation.detail, "命令预览已隐藏（含敏感参数）", shell)
+            #endif
         }
     }
 

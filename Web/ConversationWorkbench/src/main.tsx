@@ -564,6 +564,7 @@ class ViewportController {
   private static readonly bottomThreshold = 36;
 
   private pinned = true;
+  private readingActivity = false;
   private programmaticUntil = 0;
   private interacting = false;
   private interactionEpoch = 0;
@@ -599,6 +600,7 @@ class ViewportController {
       this.scheduleInteractionEnd();
     };
     const handleWheel = (event: WheelEvent) => {
+      if (event.deltaY > 0 && !(event.target as HTMLElement)?.closest?.(".tool-output-frame")) this.readingActivity = false;
       beginInteraction(event.deltaY < 0);
     };
     const handlePointerDown = () => {
@@ -623,7 +625,7 @@ class ViewportController {
       if (performance.now() < this.programmaticUntil) return;
       if (!this.interacting) beginInteraction(false);
       this.lastEvent = "user-scroll";
-      this.setPinned(this.isAtBottom());
+      this.setPinned(!this.readingActivity && this.isAtBottom());
       if (!this.pinned && window.scrollY < 160 && currentConversationID
           && performance.now() - this.lastReachedTopAt > 600) {
         this.lastReachedTopAt = performance.now();
@@ -741,6 +743,7 @@ class ViewportController {
       return;
     }
     if (forcePinToBottom || snapshot.pinned) {
+      this.readingActivity = false;
       this.lastEvent = forcePinToBottom ? "restore-forced" : "restore-following";
       this.setPinned(true);
       this.scrollToBottom();
@@ -753,7 +756,14 @@ class ViewportController {
     this.scheduleViewportReport();
   }
 
+  beginReadingActivity(): void {
+    this.readingActivity = true;
+    this.setPinned(false);
+    this.cancelScheduledFollow();
+  }
+
   jumpToLatest(): void {
+    this.readingActivity = false;
     this.interactionEpoch += 1;
     this.interacting = false;
     this.setPinned(true);
@@ -765,7 +775,7 @@ class ViewportController {
     this.interactionTimer = window.setTimeout(() => {
       this.interactionTimer = undefined;
       this.interacting = false;
-      this.setPinned(this.isAtBottom());
+      this.setPinned(!this.readingActivity && this.isAtBottom());
       this.lastEvent = this.pinned ? "interaction-ended-at-bottom" : "interaction-ended-reading";
       this.lastAnchor = this.captureAnchor();
       this.scheduleViewportReport(0);
@@ -1379,35 +1389,6 @@ function visibleExecutionStatus(
   }
 }
 
-function compactActivityText(value: string | undefined, limit = 120): string {
-  const compact = (value ?? "")
-    .replace(/```[\s\S]*?```/g, " ")
-    .replace(/`([^`]+)`/g, "$1")
-    .replace(/^[#>*_\s~-]+/gm, "")
-    .replace(/\s+/g, " ")
-    .trim();
-  return compact.length > limit ? `${compact.slice(0, limit - 1)}…` : compact;
-}
-
-function streamingThought(block: ConversationWebBlock): ConversationWebBlock | undefined {
-  return [...(block.activityThinking ?? [])]
-    .reverse()
-    .find((item) => item.status === "streaming");
-}
-
-function activityIcon(block: ConversationWebBlock): string {
-  if (block.status === "failed" || block.tools.some((tool) => tool.status === "failed")) return "×";
-  const icons = new Set(block.tools.map((tool) => tool.icon).filter(Boolean));
-  for (const glyph of ["$", "±", "+", "□", "≡", "⌕"]) {
-    if (icons.has(glyph)) return glyph;
-  }
-  const running = block.tools.find((tool) => tool.status === "running");
-  if (running?.icon) return running.icon;
-  if (streamingThought(block)) return "◇";
-  if (block.isCollecting) return "◇";
-  return "✓";
-}
-
 function ChangeSummary({ value }: { value: string }): React.JSX.Element {
   const counts = /^\+(\d+)\s+-(\d+)$/.exec(value);
   if (!counts) return <span className="tool-change-summary">{value}</span>;
@@ -1505,8 +1486,8 @@ function TodoPanel({
  * The returned `open` value is fully controlled: the summary click handler
  * preventDefaults the native toggle so the browser never fights React.
  */
-// Keep disclosure preferences on the turn, so moving its process blocks under
-// the elapsed-time fold at completion does not discard their user state.
+// Scope disclosure preferences to the conversation and turn, independently of
+// streaming status and whether the parent group is currently visible.
 const TurnDisclosureContext = React.createContext<{
   scope: string;
   expanded: Record<string, boolean>;
@@ -1522,12 +1503,20 @@ function useActivityDisclosure(
   const key = `${context?.scope}:${disclosureID}`;
   const preference = context ? context.expanded[key] : localExpanded;
   const open = preference ?? defaultOpen;
+  const anchor = useRef<{ element: HTMLElement; top: number } | null>(null);
+  useLayoutEffect(() => {
+    const saved = anchor.current;
+    anchor.current = null;
+    if (saved?.element.isConnected) window.scrollBy(0, saved.element.getBoundingClientRect().top - saved.top);
+  }, [open]);
   const onSummaryClick = (event: React.MouseEvent<HTMLElement>) => {
     if (!window.getSelection()?.isCollapsed) {
       event.preventDefault();
       return;
     }
     event.preventDefault();
+    anchor.current = { element: event.currentTarget, top: event.currentTarget.getBoundingClientRect().top };
+    viewportController.beginReadingActivity();
     if (context) context.setExpanded((values) => ({ ...values, [key]: !open }));
     else setLocalExpanded(!open);
   };
@@ -1557,10 +1546,10 @@ function useTailFollow(
     if (!content) return;
 
     const followThreshold = 8;
-    let followTail = true;
+    let followTail = false;
     let lastScrollTop = container.scrollTop;
     const pinToBottom = () => {
-      if (!followTail) return;
+      if (!followTail || window.getSelection()?.isCollapsed === false) return;
       container.scrollTop = container.scrollHeight;
       lastScrollTop = container.scrollTop;
     };
@@ -1596,56 +1585,40 @@ function ToolResultCard({ tool, outputRef }: {
   tool: ConversationWebTool;
   outputRef: (element: HTMLDivElement | null) => void;
 }): React.JSX.Element | null {
-  if (!tool.command && !tool.output && !tool.outcomeText) return null;
+  const input = tool.input ?? tool.command ?? tool.detail;
+  const failed = tool.status === "failed";
   return (
     <div className="tool-result-card" data-kind={tool.resultKind}>
-      {tool.command || tool.output ? (
-        <div ref={outputRef} className="overflow-frame tool-output-frame" data-scroll-id={`tool-output:${tool.id}`}>
-          <div className="tool-result-content-body">
-            {tool.command ? <>
-              <div className="tool-card-caption">{tool.labels?.command}</div>
-              <pre className="tool-command-text" data-scroll-id={`tool-command:${tool.id}`}>
-                <code>{linkifiedActionText(tool.command, tool.commandActions ?? [])}</code>
-              </pre>
-            </> : null}
-            {tool.output ? <pre><code>{linkifiedActionText(tool.output, tool.outputActions)}</code></pre> : null}
+      {input ? <div className="tool-input-panel">
+        <div className="tool-input-header">
+          {tool.command ? <span className="tool-command-prompt" aria-hidden="true">$</span> : null}
+          <div className="tool-input-scroll" data-scroll-id={`tool-command:${tool.id}`} role="region" aria-label={tool.command ? tool.labels?.command : tool.labels?.input} tabIndex={0}>
+            <pre className="tool-command-text"><code>{linkifiedActionText(input, tool.commandActions ?? [])}</code></pre>
+            {tool.inputContext ? <div className="tool-input-context">{tool.inputContext}</div> : null}
           </div>
-        </div>
-      ) : null}
-      {tool.outcomeText || tool.copyOutputActionID ? (
-        <div className="tool-result-footer">
-          {tool.outcomeText ? <span className="tool-result-outcome" data-tone={tool.outcomeTone}>
-            <span aria-hidden="true">{tool.outcomeTone === "completed" ? "✓" : tool.outcomeTone === "failed" ? "!" : "◷"}</span>
-            {tool.outcomeText}
-          </span> : null}
-          {tool.copyOutputActionID ? <ActionButton actionID={tool.copyOutputActionID}
-            focusID={`tool-output-copy:${tool.id}`} tooltip={tool.labels?.copyOutput}>
-            {tool.labels?.copy}
+          {tool.copyInputActionID ? <ActionButton actionID={tool.copyInputActionID} focusID={`tool-input-copy:${tool.id}`}>
+            {tool.command ? tool.labels?.copyCommand : tool.labels?.copyInput}
           </ActionButton> : null}
         </div>
-      ) : null}
+        {tool.inputIsPreview ? <span className="tool-input-preview-label">{tool.labels?.preview}</span> : null}
+        {tool.inputIsRedacted ? <span className="tool-input-preview-label">{tool.labels?.sensitiveValuesHidden}</span> : null}
+      </div> : null}
+      {tool.output ? <div ref={outputRef} className="overflow-frame tool-output-frame" data-scroll-id={`tool-output:${tool.id}`} role="region" aria-label={tool.labels?.output} tabIndex={0}>
+        <pre><code>{linkifiedActionText(tool.output, tool.outputActions)}</code></pre>
+      </div> : tool.status !== "running" && !tool.dagNodes && !tool.hasResult ? <div className="tool-empty-output">
+        {failed ? tool.labels?.failedNoOutput : tool.labels?.noOutput}
+      </div> : null}
+      <div className="tool-result-footer">
+        <span className="tool-result-meta">
+          {failed ? <span className="tool-result-outcome" data-tone="failed">{tool.outcomeText}</span> : null}
+          {tool.elapsed ? <span>{tool.elapsed}</span> : null}
+        </span>
+        <span className="tool-result-actions">
+          {tool.copyOutputActionID ? <ActionButton actionID={tool.copyOutputActionID} focusID={`tool-output-copy:${tool.id}`}>{tool.labels?.copyOutput}</ActionButton> : null}
+          {tool.output && tool.fullOutputActionID ? <ActionButton actionID={tool.fullOutputActionID} focusID={`tool-output-full:${tool.id}`}>{tool.labels?.viewFullOutput}</ActionButton> : null}
+        </span>
+      </div>
     </div>
-  );
-}
-
-function RawToolDetails({ tool }: { tool: ConversationWebTool }): React.JSX.Element {
-  const { open, onSummaryClick } = useActivityDisclosure(`raw:${tool.id}`);
-  return (
-    <details className="tool-raw-details" open={open} data-disclosure-id={`tool-raw:${tool.id}`}>
-      <summary onClick={onSummaryClick} data-focus-id={`tool-raw:${tool.id}`}>
-        {tool.labels?.rawDetails ?? tool.rawName}
-        <span className="disclosure-chevron" aria-hidden="true">›</span>
-      </summary>
-      {open ? <>
-        {tool.rawName ? <section><h4>{tool.labels?.tool}</h4><code>{tool.rawName}</code></section> : null}
-        {tool.arguments ? <section>
-          <h4>{tool.labels?.input}</h4>
-          <div className="overflow-frame code-frame" data-scroll-id={`tool-input:${tool.id}`}>
-            <pre><code>{linkifiedActionText(tool.arguments, tool.argumentActions)}</code></pre>
-          </div>
-        </section> : null}
-      </> : null}
-    </details>
   );
 }
 
@@ -2346,8 +2319,10 @@ function Tool({
   tool,
   conversationID,
   turnID,
+  waitRecords,
 }: {
   tool: ConversationWebTool;
+  waitRecords?: ConversationWebTool[];
   conversationID: string;
   turnID: string;
 }): React.JSX.Element {
@@ -2384,14 +2359,12 @@ function Tool({
             image={structuredImageSource}
             variant="thumbnail"
           />
-        ) : <ToolActionIcon glyph={tool.icon ?? "◇"} />}
+        ) : null}
         <span className="tool-title">{tool.name}</span>
         {tool.changeSummary ? <ChangeSummary value={tool.changeSummary} /> : null}
-        {tool.detail ? <span className="tool-detail-summary">{tool.detail}</span> : null}
         {statusText ? (
           <span className="tool-status" data-tone={tool.status}>{statusText}</span>
         ) : null}
-        {tool.elapsed ? <span className="tool-elapsed">{tool.elapsed}</span> : null}
         <span className="disclosure-chevron" aria-hidden="true">›</span>
       </summary>
       {open ? <div className="tool-detail">
@@ -2425,7 +2398,11 @@ function Tool({
           />
         ) : <>
           <ToolResultCard tool={tool} outputRef={setOutputFrame} />
-          <RawToolDetails tool={tool} />
+          {waitRecords ? <div className="tool-wait-outputs">
+            {waitRecords.map((record, index) => record.fullOutputActionID ? (
+              <ActionButton key={record.id} actionID={record.fullOutputActionID}>{record.labels?.viewFullOutput} {index + 1}</ActionButton>
+            ) : null)}
+          </div> : null}
         </>}
         {tool.dagNodes ? (
           <section className="dag-summary-card">
@@ -2487,30 +2464,23 @@ function activateSelectableAction(
 
 // ── Context-management chips & verification blocks (system blocks) ──
 
-/** Doc emoji per context event; compacted must not reuse the prune icon. */
-function contextChipIcon(kind: string | undefined): string {
-  switch (kind) {
-    case "contextEdited": return "🧹";
-    case "contextPruned": return "✂️";
-    case "contextCompact": return "📄";
-    default: return "";
-  }
-}
-
-/** Lightweight inline chip for context_edited / context_pruned / compacted. */
+/** Context transactions stay one quiet row, with explicit result provenance. */
 function ContextChip({ block }: { block: ConversationWebBlock }): React.JSX.Element {
-  const ineffective = block.metadata?.ineffective === "true";
-  return (
-    <span
-      className="context-chip"
-      data-tone={ineffective ? "warning" : undefined}
-      title={block.text}
-    >
-      <span aria-hidden="true">{contextChipIcon(block.systemKind)}</span>{" "}
-      {block.text}
-      {ineffective ? <span className="context-chip-flag">压缩无效</span> : null}
-    </span>
-  );
+  const { open, onSummaryClick } = useActivityDisclosure(`context:${block.id}`);
+  const value = block.contextMaintenance;
+  if (!value) return <aside className="system-block">{block.text}</aside>;
+  return <details className="context-maintenance" data-status={value.status} open={open}>
+    <summary className="interactive context-maintenance-summary" onClick={onSummaryClick} data-focus-id={`context:${block.id}`}>
+      <span className="context-maintenance-title">{value.title}</span>
+      <span aria-hidden="true">·</span>
+      <span className="context-maintenance-result">{value.summary}</span>
+      <span className="disclosure-chevron" aria-hidden="true">›</span>
+    </summary>
+    {open ? <div className="context-maintenance-body">
+      <dl>{value.steps.map((step, index) => <div className="context-maintenance-step" key={index}><dt>{step.label}</dt><dd>{step.value}</dd></div>)}</dl>
+      {value.note ? <p className="context-maintenance-note">{value.note}</p> : null}
+    </div> : null}
+  </details>;
 }
 
 /** pre_mutation renders as a thinking-style self-check disclosure. */
@@ -2596,11 +2566,10 @@ function ThinkingBlock({ block }: { block: ConversationWebBlock }): React.JSX.El
       open={open}
     >
       <summary
-        className="thinking-summary"
+        className="interactive tool-summary thinking-summary"
         data-focus-id={`thinking:${block.id}`}
         onClick={onSummaryClick}
       >
-        <ToolActionIcon glyph="◇" />
         <span className="thinking-label">{block.title}</span>
         <span className="disclosure-chevron" aria-hidden="true">›</span>
       </summary>
@@ -2617,87 +2586,75 @@ function ThinkingBlock({ block }: { block: ConversationWebBlock }): React.JSX.El
   );
 }
 
-function ToolGroupBlock({
-  block,
-  conversationID,
-  turnID,
-}: {
+function GroupElapsed({ block }: { block: ConversationWebBlock }): React.JSX.Element | null {
+  const [now, setNow] = useState(Date.now);
+  useEffect(() => {
+    if (block.startedAtMilliseconds === undefined || block.finishedAtMilliseconds !== undefined || block.status !== "running") return;
+    const timer = window.setInterval(() => { if (!workbenchSuspended) setNow(Date.now()); }, 1000);
+    return () => window.clearInterval(timer);
+  }, [block.startedAtMilliseconds, block.finishedAtMilliseconds, block.status]);
+  if (block.startedAtMilliseconds === undefined) return null;
+  const end = block.finishedAtMilliseconds ?? now;
+  return <span className="tool-group-elapsed">{formatDuration(Math.max(0, (end - block.startedAtMilliseconds) / 1000))}</span>;
+}
+
+function BackgroundJobRow({ block }: { block: ConversationWebBlock }): React.JSX.Element {
+  return <section className="interactive tool-summary background-job-row" data-job-id={block.actionTooltip}
+    data-status={block.status} role="button" tabIndex={0} data-focus-id={`background-job:${block.id}`}
+    onClick={event => activateSelectableAction(event, block.actionID)}
+    onKeyDown={event => activateSelectableAction(event, block.actionID)}>
+    <span className="tool-title">{block.title}</span>
+    {block.statusText ? <span className="tool-status" data-tone={block.status}>{block.statusText}</span> : null}
+    <span className="disclosure-chevron" aria-hidden="true">›</span>
+  </section>;
+}
+
+function ToolGroupBlock({ block, conversationID, turnID }: {
   block: ConversationWebBlock;
   conversationID: string;
   turnID: string;
 }): React.JSX.Element {
-  // Expanded live groups describe the whole activity. Collapsed live groups
-  // mirror the current action, including a one-line thinking preview.
   const { open, onSummaryClick } = useActivityDisclosure(`group:${block.id}`);
-  const [groupScroll, setGroupScroll] = useState<HTMLDivElement | null>(null);
-  useTailFollow(groupScroll, !!block.isCollecting && open);
   const tools = new Map(block.tools.map((tool) => [`tool:${tool.id}`, tool]));
-  const thinking = new Map((block.activityThinking ?? []).map((item) => [`thinking:${item.id}`, item]));
-  const activeThought = streamingThought(block);
-  const thoughtPreview = compactActivityText(activeThought?.text);
-  const currentTitle = activeThought
-    ? [activeThought.title, thoughtPreview].filter(Boolean).join(" · ")
-    : block.title;
-  const stateTitle = block.activitySummary?.trim() || block.title;
-  const headerTitle = block.isCollecting && !open ? currentTitle : stateTitle;
-  const statusText = block.activityOrder ? undefined : visibleExecutionStatus(block.status, block.statusText);
-  // Collapse only adjacent waits for the same explicit job_id. Narration,
-  // thinking, other tools and activity boundaries keep their original order.
-  const rows: Array<{ ids: string[]; jobID?: string }> = [];
-  for (const id of block.activityOrder ?? block.tools.map((tool) => `tool:${tool.id}`)) {
-    const tool = tools.get(id);
-    const jobID = tool?.rawName === "job_wait" ? tool.backgroundJobID : undefined;
+  const thinking = new Map((block.activityThinking ?? []).map((item) => [`${item.systemKind === "preMutation" ? "preMutation" : "thinking"}:${item.id}`, item]));
+  const jobs = new Map((block.activityJobs ?? []).map(item => [`job:${item.actionTooltip}`, item]));
+  const headerTitle = open ? (block.activitySummary || block.title) : block.title;
+  const rows: string[][] = [];
+  for (const id of block.activityOrder ?? block.tools.map(tool => `tool:${tool.id}`)) {
+    const current = tools.get(id);
     const previous = rows.at(-1);
-    if (jobID && previous?.jobID === jobID) previous.ids.push(id);
-    else rows.push({ ids: [id], jobID });
+    const last = previous ? tools.get(previous[0]) : undefined;
+    if (current?.rawName === "job_wait" && current.backgroundJobID && last?.rawName === "job_wait" && last.backgroundJobID === current.backgroundJobID) previous!.push(id);
+    else rows.push([id]);
   }
-  const renderEntry = (id: string) => {
-    const tool = tools.get(id);
-    if (tool) return <Tool key={id} tool={tool} conversationID={conversationID} turnID={turnID} />;
-    const thought = thinking.get(id);
-    return thought ? <ThinkingBlock key={id} block={thought} /> : null;
-  };
-  return (
-    <details
-      className="tool-group"
-      data-status={block.status}
-      open={open}
-    >
-      <summary
-        className="interactive tool-group-summary"
-        data-focus-id={`tool-group:${block.id}`}
-        onClick={onSummaryClick}
-      >
-        <ToolActionIcon glyph={activityIcon(block)} />
-        <span className="tool-group-title" title={headerTitle}>{headerTitle}</span>
-        {statusText ? (
-          <span className="tool-status" data-tone={block.status}>{statusText}</span>
-        ) : null}
-        <span className="disclosure-chevron" aria-hidden="true">›</span>
-      </summary>
-      <div ref={setGroupScroll} className="tool-group-tools" tabIndex={open ? 0 : undefined} data-scroll-id={`tool-group:${block.id}`}>
-        {open ? rows.map(({ ids }) => {
-          if (ids.length === 1) return renderEntry(ids[0]);
-          if (rows.length === 1) return <div key={ids[0]}>{ids.map(renderEntry)}</div>;
-          const first = tools.get(ids[0])!;
-          const waits = ids.map((id) => tools.get(id)!);
-          const status = waits.some((tool) => tool.status === "failed") ? "failed"
-            : waits.some((tool) => tool.status === "running") ? "running" : "completed";
-          return <details className="job-wait-group" key={ids[0]}
-            data-disclosure-id={`job-waits:${first.id}`} data-status={status}>
-            <summary className="interactive tool-group-summary" data-focus-id={`job-waits:${first.id}`}>
-              <ToolActionIcon glyph={first.icon ?? "◇"} />
-              <span className="tool-group-title">{first.labels?.waitGroup?.replace("{count}", String(ids.length)) ?? `${first.name} · ${ids.length}`}</span>
-              {first.detail ? <span className="tool-detail-summary">{first.detail}</span> : null}
-              {status !== "completed" ? <span className="tool-status" data-tone={status}>{visibleExecutionStatus(status)}</span> : null}
-              <span className="disclosure-chevron" aria-hidden="true">›</span>
-            </summary>
-            {ids.map(renderEntry)}
-          </details>;
-        }) : null}
-      </div>
-    </details>
-  );
+  return <details className="tool-group" data-status={block.status} open={open} data-anchor-id={`group:${turnID}:${block.id}`}>
+    <summary className="interactive tool-group-summary" data-focus-id={`tool-group:${block.id}`} onClick={onSummaryClick}>
+      {block.status === "running" ? <span className="tool-group-running" role="img" aria-label={block.statusText}>•••</span> : null}
+      <span className="tool-group-title" title={headerTitle}>{headerTitle}</span>
+      {block.failureText ? <span className="tool-status" data-tone="failed">{block.failureText}</span> : null}
+      <GroupElapsed block={block} />
+      <span className="disclosure-chevron" aria-hidden="true">›</span>
+    </summary>
+    {open ? <div className="tool-group-tools">{rows.map(ids => {
+      const first = tools.get(ids[0]);
+      if (!first) {
+        const job = jobs.get(ids[0]);
+        if (job) return <BackgroundJobRow key={ids[0]} block={job} />;
+        const thought = thinking.get(ids[0]); return thought ? <ThinkingBlock key={ids[0]} block={thought} /> : null;
+      }
+      if (ids.length === 1) return <Tool key={ids[0]} tool={first} conversationID={conversationID} turnID={turnID} />;
+      const waits = ids.map(id => tools.get(id)!);
+      const last = waits.at(-1)!;
+      const failed = waits.find(tool => tool.status === "failed");
+      const status = waits.some(tool => tool.status === "running") ? "running" : failed ? "failed" : "completed";
+      const combined: ConversationWebTool = { ...last, id: first.id,
+        name: `${first.name} · ${first.labels?.waitingChecks?.replace("{count}", String(ids.length)) ?? ids.length}`,
+        status, statusText: status === "failed" ? failed?.statusText : status === "running" ? waits.find(tool => tool.status === "running")?.statusText : undefined,
+        output: waits.map((tool, i) => tool.output ? `${i + 1}. ${tool.output}` : "").filter(Boolean).join("\n\n"),
+        copyOutputActionID: undefined, fullOutputActionID: undefined, outputActions: [] };
+      return <Tool key={ids[0]} tool={combined} waitRecords={waits} conversationID={conversationID} turnID={turnID} />;
+    })}</div> : null}
+  </details>;
 }
 
 const Block = memo(function Block({
@@ -2921,52 +2878,6 @@ function CollapsibleUserPrompt({
   );
 }
 
-/// Standalone legacy errors stay outside the fold. Activity failures are
-/// counted on the always-visible process header while the activity is folded.
-function isFailureBlock(block: ConversationWebBlock): boolean {
-  // Activity failures stay inside the group and are counted in the outer
-  // process header, which remains visible while the whole process is folded.
-  return !block.activityOrder && (block.status === "failed" || block.status === "cancelled");
-}
-
-/// L1 split: everything before the last non-empty answer block is "process",
-/// the answer itself (plus trailing artifacts and any failures pulled forward)
-/// stays visible. Live turns never split — Codex shows the work while it runs.
-function splitTurnForDisplay(turn: ConversationWebTurn): {
-  process: ConversationWebBlock[];
-  answer: ConversationWebBlock[];
-} {
-  if (turn.isLive) {
-    return { process: [], answer: turn.blocks };
-  }
-
-  let answerIndex = -1;
-  for (let index = turn.blocks.length - 1; index >= 0; index -= 1) {
-    const block = turn.blocks[index];
-    if (block.kind === "markdown" && (block.text ?? "").trim().length > 0) {
-      answerIndex = index;
-      break;
-    }
-  }
-
-  // Tool-only turn: fold the work, surfacing activity failures in the header
-  // and keeping standalone legacy errors outside as before.
-  if (answerIndex < 0) {
-    return {
-      process: turn.blocks.filter((block) => !isFailureBlock(block)),
-      answer: turn.blocks.filter(isFailureBlock),
-    };
-  }
-
-  const failures = turn.blocks.slice(0, answerIndex).filter(isFailureBlock);
-  return {
-    process: turn.blocks.slice(0, answerIndex).filter((block) => !isFailureBlock(block)),
-    answer: [...failures, ...turn.blocks.slice(answerIndex)],
-  };
-}
-
-/// The collapsed header: "用时 24分40秒". Once the server reports a turn
-/// diffstat this becomes "用时 24分40秒 · 编辑 3 个文件".
 /// How many files the change card shows before "再显示 N 个文件" (Codex shows 3).
 const CHANGE_PREVIEW_LIMIT = 3;
 
@@ -3533,7 +3444,7 @@ const Turn = memo(function Turn({
   const headingID = `turn-heading-${turn.id}`;
   const [expandedDisclosures, setExpandedDisclosures] = useState<Record<string, boolean>>({});
   const disclosureContext = React.useMemo(() => ({
-    scope: conversationID,
+    scope: `${conversationID}:${turn.id}`,
     expanded: expandedDisclosures,
     setExpanded: setExpandedDisclosures,
   }), [conversationID, expandedDisclosures]);
@@ -3559,12 +3470,7 @@ const Turn = memo(function Turn({
     }
   }, [turn.localAssets, conversationID]);
 
-  // L1 (Codex-aligned): a finished turn shows its final answer; the work that
-  // produced it folds into one "用时 …" disclosure. Nothing is ever hidden
-  // while the turn is still streaming.
-  const { process, answer } = splitTurnForDisplay(turn);
-  const failedProcessCalls = process.reduce((count, block) =>
-    count + block.tools.filter((tool) => tool.status === "failed").length, 0);
+  // Keep narration and activity mounted in arrival order across completion.
   const previews = turn.previews ?? [];
 
   const renderBlocks = (blocks: ConversationWebBlock[]) =>
@@ -3710,46 +3616,14 @@ const Turn = memo(function Turn({
       ) : null}
       <TurnDisclosureContext.Provider value={disclosureContext}>
       <div className="assistant-lane">
-        {turn.isLive ? (
-          <>
-            <LiveTurnHeader startedAtMilliseconds={turn.startedAtMilliseconds} />
-            {renderBlocks(turn.blocks)}
-            {previewNodes}
-            {todoNode}
-          </>
-        ) : (
-          <>
-            {process.length || todoNode ? (
-              <details
-                className="turn-process"
-                data-disclosure-id={`turn-process:${turn.id}`}
-              >
-                <summary
-                  className="interactive turn-process-summary"
-                  data-focus-id={`turn-process:${turn.id}`}
-                >
-                  <span className="turn-process-label">{processSummaryLabel(turn)}</span>
-                  {failedProcessCalls > 0 ? <span className="tool-status" data-tone="failed">{turn.processFailureText ?? String(failedProcessCalls)}</span> : null}
-                  <span className="disclosure-chevron" aria-hidden="true">›</span>
-                </summary>
-                <div className="turn-process-body">
-                  {renderBlocks(process)}
-                  {todoNode}
-                </div>
-              </details>
-            ) : (turn.elapsedText || turn.changes?.summary || (turn.changes?.filesChanged ?? 0) > 0) ? (
-              <div className="turn-process-summary">
-                <span className="turn-process-label">{processSummaryLabel(turn)}</span>
-              </div>
-            ) : null}
-            {renderBlocks(answer)}
-            {turn.changes ? (
-              <TurnChangesCard turnID={turn.id} changes={turn.changes} />
-            ) : null}
-            {previewNodes}
-            <TurnActionsBar turn={turn} />
-          </>
-        )}
+        {turn.isLive ? <LiveTurnHeader startedAtMilliseconds={turn.startedAtMilliseconds} /> : turn.elapsedText ? (
+          <div className="turn-process-summary"><span className="turn-process-label">{processSummaryLabel(turn)}</span></div>
+        ) : null}
+        {renderBlocks(turn.blocks)}
+        {previewNodes}
+        {todoNode}
+        {!turn.isLive && turn.changes ? <TurnChangesCard turnID={turn.id} changes={turn.changes} /> : null}
+        {!turn.isLive ? <TurnActionsBar turn={turn} /> : null}
       </div>
       </TurnDisclosureContext.Provider>
       {turn.extensionNodes.map((node) => (

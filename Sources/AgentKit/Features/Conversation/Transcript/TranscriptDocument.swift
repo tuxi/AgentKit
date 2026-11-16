@@ -23,6 +23,9 @@ private typealias PlatformFont = UIFont
 enum TranscriptAction: Hashable {
     case toggleTool(callID: String, defaultExpanded: Bool = false)
     case toggleThinking(id: String)
+    #if os(macOS)
+    case openToolResult(callID: String)
+    #endif
     case openArtifact(callID: String)
     case openAsset(AssetReference)
     case openUIEvidence(callID: String)
@@ -112,8 +115,11 @@ enum TurnTranscriptBuilder {
                 previousRenderedBlockWasFailedTool = false
 
             case .thinking(let id, let payload):
-                // Auto-expand during streaming; otherwise respect user toggle.
+                #if os(macOS)
+                let isExpanded = state.expandedThinkingIDs.contains(id)
+                #else
                 let isExpanded = payload.isStreaming || state.expandedThinkingIDs.contains(id)
+                #endif
                 builder.appendThinkingCard(id: id, payload: payload, isExpanded: isExpanded)
                 previousRenderedBlockWasFailedTool = false
 
@@ -125,8 +131,19 @@ enum TurnTranscriptBuilder {
                 appendArtifact(artifact, to: &builder)
                 previousRenderedBlockWasFailedTool = false
 
-            case .system(_, let payload):
+            case .system(let id, let payload):
+                #if os(macOS)
+                if let maintenance = ContextMaintenancePresentation.make(payload, live: turn.isLive) {
+                    let expanded = state.expandedThinkingIDs.contains(id)
+                    builder.appendContextMaintenanceSummary(maintenance, expanded: expanded, action: .toggleThinking(id: id))
+                    if expanded {
+                        for step in maintenance.steps { builder.appendIndentedLabel(step.label + " · " + step.value) }
+                        if let note = maintenance.note { builder.appendIndentedLabel(note) }
+                    }
+                } else { appendSystem(payload, to: &builder) }
+                #else
                 appendSystem(payload, to: &builder)
+                #endif
                 previousRenderedBlockWasFailedTool = false
 
             case .childStream(_, let payload):
@@ -178,37 +195,94 @@ enum TurnTranscriptBuilder {
         to builder: inout TranscriptAttributedBuilder
     ) {
         let expansionID = groupExpansionID(for: group)
-        let expanded = state.isToolExpanded(callID: expansionID, defaultExpanded: group.isCollecting)
+        #if os(macOS)
+        let defaultExpanded = false
+        #else
+        let defaultExpanded = group.isCollecting
+        #endif
+        let expanded = state.isToolExpanded(callID: expansionID, defaultExpanded: defaultExpanded)
         let presentation = ToolTranscriptPresenter.groupPresentation(for: group)
 
         builder.appendToolGroupSummary(
             presentation,
             expanded: expanded,
-            action: .toggleTool(callID: expansionID, defaultExpanded: group.isCollecting)
+            action: .toggleTool(callID: expansionID, defaultExpanded: defaultExpanded),
+            group: group
         )
         if expanded {
             let runs = BackgroundJobPresentation.waitRuns(in: group.entries)
             for run in runs {
+                #if os(macOS)
+                if group.isActivityGroup, run.count > 1,
+                   case .tool(let first)? = run.first {
+                    let waits = run.compactMap { entry -> ToolNodePayload? in
+                        if case .tool(let tool) = entry { return tool }; return nil
+                    }
+                    let status: ToolNodeStatus = waits.contains { $0.status == .running } ? .running
+                        : waits.contains(where: MacToolPresentation.isFailed) ? .failed : .completed
+                    let output = waits.enumerated().map { index, tool in
+                        "\(index + 1). \(tool.status.rawValue)\n\(tool.output)"
+                    }.joined(separator: "\n\n")
+                    let combined = ToolNodePayload(callID: first.callID, toolName: first.toolName,
+                        args: first.args, status: status, output: output)
+                    let base = MacToolPresentation.rowPresentation(combined)
+                    let presentation = ToolTranscriptPresentation(callID: base.callID, family: base.family,
+                        statusTone: base.statusTone, statusText: base.statusText,
+                        title: base.title + " · " + ToolTranscriptText().text("desktop.waitingChecks", waits.count),
+                        detail: nil, elapsed: nil, changeSummary: nil, outputKind: base.outputKind)
+                    let toolExpanded = state.isToolExpanded(callID: first.callID)
+                    builder.appendToolRow(presentation, expanded: toolExpanded, action: .toggleTool(callID: first.callID), nested: true, desktop: true)
+                    if toolExpanded {
+                        appendExpandedTool(combined, presentation: presentation, desktop: true, to: &builder)
+                        for (index, tool) in waits.enumerated() {
+                            builder.appendActionLine("\(index + 1). " + ToolTranscriptText().text("desktop.viewFullOutput"), action: .openToolResult(callID: tool.callID), style: .artifact)
+                        }
+                    }
+                    continue
+                }
+                #endif
+                #if !os(macOS)
                 if runs.count > 1, run.count > 1, let first = run.first {
                     appendMergedToolGroup(ToolGroup(id: "job-waits:\(first.id)", entries: run),
                                           state: state, to: &builder)
                     continue
                 }
+                #endif
                 for entry in run {
+                    #if os(macOS)
+                    if case .preMutation(let id, let payload) = entry {
+                        builder.appendThinkingCard(id: id, payload: .init(text: payload.text, isStreaming: false),
+                            isExpanded: state.expandedThinkingIDs.contains(id), nested: true,
+                            title: ToolTranscriptText().text("desktop.preMutation"))
+                        continue
+                    }
+                    if case .backgroundJob(_, let job) = entry {
+                        builder.appendBackgroundJobRow(job)
+                        continue
+                    }
+                    #endif
                     if case .thinking(let id, let payload) = entry {
-                        builder.appendThinkingCard(id: id, payload: payload,
-                            isExpanded: payload.isStreaming || state.expandedThinkingIDs.contains(id))
+                        #if os(macOS)
+                        let thinkingExpanded = state.expandedThinkingIDs.contains(id)
+                        #else
+                        let thinkingExpanded = payload.isStreaming || state.expandedThinkingIDs.contains(id)
+                        #endif
+                        builder.appendThinkingCard(id: id, payload: payload, isExpanded: thinkingExpanded, nested: true)
                         continue
                     }
                     guard case .tool(let tool) = entry else { continue }
+                    #if os(macOS)
+                    let toolPresentation = MacToolPresentation.rowPresentation(tool)
+                    #else
                     let toolPresentation = ToolTranscriptPresenter.activityPresentation(for: tool)
+                    #endif
                     let toolExpanded = state.expandedToolIDs.contains(tool.callID)
                     builder.appendToolRow(
                         toolPresentation, expanded: toolExpanded,
-                        action: .toggleTool(callID: tool.callID), nested: true
+                        action: .toggleTool(callID: tool.callID), nested: true, desktop: group.isActivityGroup
                     )
                     if toolExpanded {
-                        appendExpandedTool(tool, presentation: toolPresentation, to: &builder)
+                        appendExpandedTool(tool, presentation: toolPresentation, desktop: group.isActivityGroup, to: &builder)
                     }
                 }
             }
@@ -238,8 +312,43 @@ enum TurnTranscriptBuilder {
     private static func appendExpandedTool(
         _ tool: ToolNodePayload,
         presentation: ToolTranscriptPresentation,
+        desktop: Bool = false,
         to builder: inout TranscriptAttributedBuilder
     ) {
+        #if os(macOS)
+        if desktop {
+            let text = ToolTranscriptText()
+            let command = ToolTranscriptPresenter.commandValue(for: tool)
+            let rawInput = MacToolPresentation.input(for: tool)
+            if let rawInput {
+                let preview = command != nil && MacToolPresentation.shouldRedactCommand(rawInput)
+                let input = command != nil ? CommandDisplayRedactor.redact(rawInput) : rawInput
+                let long = input.count > 720 || input.components(separatedBy: "\n").count > 6
+                builder.appendIndentedLabel(command != nil ? "$" : text.text("input"))
+                if long {
+                    builder.appendDesktopToolInput(callID: tool.callID, input: input)
+                } else {
+                    builder.appendCode(input, language: command != nil ? "shell" : "text")
+                }
+                builder.appendActionLine(text.text("desktop." + (command != nil ? "copyCommand" : "copyInput")), action: .copyBlock(text: input), style: .artifact)
+                if preview { builder.appendMeta(" · " + text.text("desktop.sensitiveValuesHidden")) }
+            }
+            if !tool.output.isEmpty {
+                builder.appendDesktopToolOutput(tool)
+                builder.appendActionLine(text.text("copy.output"), action: .copyBlock(text: tool.output), style: .artifact)
+                builder.appendActionLine(text.text("desktop.viewFullOutput"), action: .openToolResult(callID: tool.callID), style: .artifact)
+            } else if let structured = tool.structuredOutput {
+                builder.appendCode(structured.prettyJSONString ?? structured.stringValue, language: "json")
+            } else if tool.status != .running && tool.assets.isEmpty && tool.artifact == nil {
+                builder.appendIndentedLabel(text.text(MacToolPresentation.isFailed(tool) ? "desktop.failedNoOutput" : "desktop.noOutput"))
+            }
+            if let elapsed = tool.elapsedMs { builder.appendMeta(" · \(elapsed)ms") }
+            if let artifact = tool.artifact {
+                builder.appendActionLine(SummaryRenderer.summary(for: artifact), action: .openArtifact(callID: tool.callID), style: .artifact)
+            }
+            return
+        }
+        #endif
         builder.appendIndentedLabel(tool.toolName)
         if let artifact = tool.artifact {
             builder.appendIndentedLabel("Artifact")
@@ -437,17 +546,22 @@ private struct TranscriptAttributedBuilder {
     /// Renders a thinking card — collapsible model reasoning block.
     /// Muted, indented, left-bordered style distinct from the spoken reply.
     /// Streaming blocks auto-expand; completed blocks default to collapsed.
-    mutating func appendThinkingCard(id: String, payload: ThinkingNodePayload, isExpanded: Bool) {
+    mutating func appendThinkingCard(id: String, payload: ThinkingNodePayload, isExpanded: Bool, nested: Bool = false, title: String? = nil) {
         let actionID = register(.toggleThinking(id: id))
         let block = makeBlock(.thinking)
         let indicator = isExpanded ? "⌄" : "›"
-        let label = ToolTranscriptText().thinkingTitle(streaming: payload.isStreaming)
+        let label = title ?? ToolTranscriptText().thinkingTitle(streaming: payload.isStreaming)
 
         // Header row — always visible, clickable to toggle.
         var headerAttrs = thinkingLabelAttributes
         headerAttrs[.transcriptBlock] = block
+        #if os(macOS)
+        if nested { append("\n  ", attributes: toolRailAttributes) }
+        appendLinked("\(label) \(indicator)", id: actionID, attributes: toolTitleAttributes(for: .completed, nested: nested))
+        #else
         appendLinked("◉ ", id: actionID, attributes: headerAttrs)
         appendLinked("\(label) \(indicator)", id: actionID, attributes: thinkingLabelAttributes)
+        #endif
         append("\n", attributes: thinkingLabelAttributes)
 
         // Body — only visible when expanded.
@@ -500,10 +614,27 @@ private struct TranscriptAttributedBuilder {
     mutating func appendToolGroupSummary(
         _ presentation: ToolTranscriptGroupPresentation,
         expanded: Bool,
-        action: TranscriptAction
+        action: TranscriptAction,
+        group: ToolGroup
     ) {
         let id = register(action)
         let indicator = expanded ? "⌄" : "›"
+        #if os(macOS)
+        if group.isActivityGroup {
+            let summary = expanded ? MacToolPresentation.expandedSummary(group) : MacToolPresentation.currentSummary(group)
+            if MacToolPresentation.isRunning(group) { appendLinked("••• ", id: id, attributes: metaAttributes) }
+            appendLinked(summary, id: id, attributes: toolSummaryAttributes(for: .completed))
+            let failures = MacToolPresentation.failureCount(group)
+            if failures > 0 { appendLinked(" · " + ToolTranscriptText().text("desktop.failures", failures), id: id, attributes: toolStatusTextAttributes(for: .failed)) }
+            if let start = group.startedAt {
+                let end = group.finishedAt ?? Date()
+                appendLinked("  " + TurnDurationText.string(seconds: Int(max(0, end.timeIntervalSince(start)))), id: id, attributes: metaAttributes)
+            }
+            appendLinked(" \(indicator)", id: id, attributes: toolChevronAttributes)
+            copyParts.append(summary)
+            return
+        }
+        #endif
         appendLinked(toolIcon(for: .other, tone: presentation.statusTone), id: id, attributes: toolIconAttributes(for: .other, tone: presentation.statusTone))
         appendLinked(" \(presentation.summary)", id: id, attributes: toolSummaryAttributes(for: presentation.statusTone))
         appendLinked(" \(indicator)", id: id, attributes: toolChevronAttributes)
@@ -514,7 +645,8 @@ private struct TranscriptAttributedBuilder {
         _ presentation: ToolTranscriptPresentation,
         expanded: Bool,
         action: TranscriptAction,
-        nested: Bool
+        nested: Bool,
+        desktop: Bool = false
     ) {
         let id = register(action)
         let indicator = expanded ? "⌄" : "›"
@@ -522,24 +654,58 @@ private struct TranscriptAttributedBuilder {
             append("\n  ", attributes: toolRailAttributes)
         }
 
+        let rowStart = attributed.length
+        if !desktop {
         appendLinked(toolIcon(for: presentation.family, tone: presentation.statusTone), id: id, attributes: toolIconAttributes(for: presentation.family, tone: presentation.statusTone))
-        appendLinked(" \(presentation.title)", id: id, attributes: toolTitleAttributes(for: presentation.statusTone, nested: nested))
+        }
+        appendLinked(desktop ? presentation.title : " " + presentation.title, id: id, attributes: toolTitleAttributes(for: presentation.statusTone, nested: nested))
 
         if let changeSummary = presentation.changeSummary {
             appendChangeSummary(changeSummary, id: id)
         }
+        if !desktop {
         if let detail = presentation.detail {
             appendLinked("  \(detail)", id: id, attributes: toolDetailAttributes)
+        }
         }
         if let statusText = presentation.statusText {
             appendLinked("  \(statusText)", id: id, attributes: toolStatusTextAttributes(for: presentation.statusTone))
         }
+        if !desktop {
         if let elapsed = presentation.elapsed {
             appendLinked("  \(elapsed)", id: id, attributes: toolDetailAttributes)
         }
+        }
         appendLinked(" \(indicator)", id: id, attributes: toolChevronAttributes)
+        if desktop {
+            let range = NSRange(location: rowStart, length: attributed.length - rowStart)
+            let style = ((attributed.attribute(.paragraphStyle, at: rowStart, effectiveRange: nil) as? NSParagraphStyle)?.mutableCopy() as? NSMutableParagraphStyle) ?? NSMutableParagraphStyle()
+            style.lineBreakMode = .byTruncatingTail
+            attributed.addAttribute(.paragraphStyle, value: style, range: range)
+        }
         copyParts.append(presentation.compactLine)
     }
+
+    #if os(macOS)
+    mutating func appendContextMaintenanceSummary(_ value: ContextMaintenancePresentation, expanded: Bool, action: TranscriptAction) {
+        let id = register(action)
+        appendLinked(value.title + " · ", id: id, attributes: toolSummaryAttributes(for: .completed))
+        var attributes = toolSummaryAttributes(for: .completed)
+        if value.status == "failed" { attributes[.foregroundColor] = NSColor.systemRed }
+        if value.status == "limited" { attributes[.foregroundColor] = NSColor.systemOrange }
+        appendLinked(value.summary, id: id, attributes: attributes)
+        appendLinked(expanded ? " ⌄" : " ›", id: id, attributes: toolChevronAttributes)
+        copyParts.append(value.title + " · " + value.summary)
+    }
+
+    mutating func appendBackgroundJobRow(_ job: ChildStreamNodePayload) {
+        let tone: ToolTranscriptStatusTone = job.status == .running ? .running : MacToolPresentation.isFailed(job) ? .failed : .completed
+        let presentation = ToolTranscriptPresentation(callID: job.childID, family: .terminal, statusTone: tone,
+            statusText: MacToolPresentation.backgroundJobStatus(job), title: MacToolPresentation.backgroundJobTitle(job),
+            detail: nil, elapsed: nil, changeSummary: nil, outputKind: .terminal)
+        appendToolRow(presentation, expanded: false, action: .openChildStream(childID: job.childID), nested: true, desktop: true)
+    }
+    #endif
 
     /// P8.7 — 子流入口卡行（task 子agent / 后台 job）：
     /// 图标 + 类别 + 一句话摘要 + 状态，整行可点，点击展开子流查看器。
@@ -666,6 +832,29 @@ private struct TranscriptAttributedBuilder {
     /// Code blocks are tagged with `.transcriptBlock` so the text view can
     /// draw a full-width rounded background; horizontal padding comes from
     /// paragraph indents, so the copied text stays clean of manual indents.
+    #if os(macOS)
+    mutating func appendDesktopToolOutput(_ tool: ToolNodePayload) {
+        let value = NativeToolOutputValue(callID: tool.callID, output: tool.output, running: tool.status == .running)
+        appendDesktopScrollableText(value)
+    }
+
+    mutating func appendDesktopToolInput(callID: String, input: String) {
+        appendDesktopScrollableText(NativeToolOutputValue(callID: callID, output: input, running: false, isInput: true))
+    }
+
+    private mutating func appendDesktopScrollableText(_ value: NativeToolOutputValue) {
+        let attachment = NSTextAttachment(data: nil, ofType: nil)
+        let outputHeight = value.height
+        attachment.attachmentCell = MainActor.assumeIsolated { NativeToolOutputCell(height: outputHeight) }
+        let placeholder = NSMutableAttributedString(attachment: attachment)
+        placeholder.addAttribute(.desktopToolOutput, value: value, range: NSRange(location: 0, length: placeholder.length))
+        append("\n", attributes: metaAttributes)
+        attributed.append(placeholder)
+        append("\n", attributes: metaAttributes)
+        copyParts.append(value.output)
+    }
+    #endif
+
     mutating func appendCode(_ text: String, language: String? = nil, recordCopy: Bool = true) {
         let block = makeBlock(.code)
         if let language, !language.isEmpty {

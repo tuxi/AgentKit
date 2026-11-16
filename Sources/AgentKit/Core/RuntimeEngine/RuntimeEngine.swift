@@ -436,7 +436,11 @@ public actor RuntimeEngine {
         }
 
         // Reduce into graph
+        #if os(macOS)
+        let _ = reducer.reduceLive(event, at: Date(), into: &graph)
+        #else
         let _ = reducer.reduce(event, into: &graph)
+        #endif
         if let todoFallback {
             let _ = reducer.reduce(todoFallback, into: &graph)
         }

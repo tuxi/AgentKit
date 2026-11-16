@@ -10,10 +10,17 @@ enum ToolCommandPresentation {
     }
 
     static func preview(_ command: String, text: ToolTranscriptText) -> String {
+        #if os(macOS)
+        ToolTranscriptText.bounded(CommandDisplayRedactor.redact(command), limit: 160)
+        #else
         hasSensitiveArguments(command) ? text.text("hidden") : ToolTranscriptText.bounded(command, limit: 160)
+        #endif
     }
 
     static func hasSensitiveArguments(_ command: String) -> Bool {
+        #if os(macOS)
+        return CommandDisplayRedactor.redact(command) != command
+        #else
         let sample = String(command.prefix(8192)).lowercased()
         let markers = ["password", "passwd", "token", "secret", "api_key", "api-key", "authorization", "bearer ",
                        "credential", "private-key", "access-key", "cookie", "sk-", "ghp_", "github_pat_", "--key", "--auth", "x-auth"]
@@ -21,6 +28,7 @@ enum ToolCommandPresentation {
         // Credentials in URLs or environment assignments are not suitable for a
         // compact preview. Hide the whole preview instead of guessing value bounds.
         return sample.range(of: #"://[^\s/]*@|(^|[\s;])[a-z_][a-z0-9_]*=|(^|\s)(-u|--user)(\s|=)|[?&](?:key|auth|api_key|access_token)="#, options: .regularExpression) != nil
+        #endif
     }
 
     static func summarize(_ command: String, text: ToolTranscriptText) -> Summary? {

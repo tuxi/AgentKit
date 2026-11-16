@@ -398,7 +398,7 @@ final class PreviewWorkbenchRenderTests: XCTestCase {
         """)
         do {
             try await waitForJavaScript(
-                "document.querySelector('.turn-process')?.open === true",
+                "document.querySelector('.turn-process') === null",
                 webView: webView,
                 timeout: 5
             )

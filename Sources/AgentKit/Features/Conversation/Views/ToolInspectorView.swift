@@ -21,6 +21,11 @@ struct ToolInspectorView: View {
         guard let timeline = store.activeConversationViewModel?.snapshot.timeline else {
             return nil
         }
+        #if os(macOS)
+        if let node = timeline.first(where: { $0.id == toolName }), case .tool(let payload) = node.kind {
+            return payload
+        }
+        #endif
         // 优先按 callID 精确匹配，其次按 toolName 匹配
         for node in timeline {
             if case .tool(let p) = node.kind {
@@ -102,10 +107,16 @@ struct ToolInspectorView: View {
                         Text("输出预览")
                             .font(.caption.weight(.semibold))
                             .foregroundStyle(.secondary)
+                        #if os(macOS)
+                        Text(p.output)
+                            .font(.system(.body, design: .monospaced))
+                            .textSelection(.enabled)
+                        #else
                         Text(outputPreview(p.output))
                             .font(.system(.body, design: .monospaced))
                             .foregroundStyle(.secondary)
                             .lineLimit(10)
+                        #endif
                     }
                 }
 

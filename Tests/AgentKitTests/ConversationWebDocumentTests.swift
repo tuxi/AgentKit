@@ -57,7 +57,9 @@ final class ConversationWebDocumentTests: XCTestCase {
         XCTAssertEqual(webTools[0].outcomeText, ToolTranscriptText().text("run.succeeded"))
         XCTAssertEqual(webTools[1].outcomeTone, "failed", "a nonzero exit must never display success")
         XCTAssertEqual(webTools[1].outcomeText, ToolTranscriptText().text("failed.code", 2))
-        XCTAssertEqual(webTools[2].command, ToolTranscriptText().text("hidden"))
+        XCTAssertEqual(webTools[2].command, "curl --token •••••• example.com")
+        XCTAssertEqual(webTools[2].inputIsRedacted, true)
+        XCTAssertEqual(webTools[2].inputIsPreview, false)
         XCTAssertTrue(try XCTUnwrap(webTools[2].arguments).contains("private-fixture-value"), "original args remain in explicitly opened raw details")
     }
 
@@ -1477,20 +1479,20 @@ final class ConversationWebDocumentTests: XCTestCase {
         XCTAssertEqual(inspection?["unnamedInteractive"] as? Int, 0)
         XCTAssertEqual(inspection?["toolGroupCount"] as? Int, 1)
         XCTAssertEqual(inspection?["toolGroupOpen"] as? Bool, true)
-        XCTAssertEqual(inspection?["runningGroupAnimation"] as? String, "tool-working-wave")
-        XCTAssertEqual(inspection?["runningToolAnimation"] as? String, "tool-working-wave")
-        XCTAssertEqual(inspection?["suspendedToolAnimationPaused"] as? String, "paused")
+        XCTAssertEqual(inspection?["runningGroupAnimation"] as? String, "none")
+        XCTAssertEqual(inspection?["runningToolAnimation"] as? String, "none")
+        XCTAssertEqual(inspection?["suspendedToolAnimationPaused"] as? String, "running", "ordinary tool rows have no looping text animation")
         XCTAssertTrue((inspection?["toolGroupTitle"] as? String)?.contains("Read 5 files") == true)
         XCTAssertEqual(inspection?["toolDetailCollapsed"] as? Bool, true)
         XCTAssertEqual(inspection?["toolChromeIsClear"] as? Bool, true)
         XCTAssertEqual(inspection?["toolDotCount"] as? Int, 0)
         XCTAssertEqual(inspection?["completedToolLabelCount"] as? Int, 0)
         XCTAssertEqual(inspection?["editChangeSummary"] as? String, "+2 -1")
-        XCTAssertEqual(inspection?["editElapsed"] as? String, "240ms")
+        XCTAssertNil(inspection?["editElapsed"] as? String, "timing belongs in expanded details")
         XCTAssertEqual(inspection?["subagentKind"] as? String, "Subagent")
         XCTAssertEqual(inspection?["subagentIcon"] as? String, "◇")
         XCTAssertEqual(inspection?["subagentTitle"] as? String, subagent.title)
-        XCTAssertEqual(inspection?["runningGroupIcon"] as? String, "□")
+        XCTAssertNil(inspection?["runningGroupIcon"] as? String, "tool-family icons are removed")
         XCTAssertNotEqual(inspection?["runningGroupIconFill"] as? String, "rgba(0, 0, 0, 0)")
         XCTAssertEqual(inspection?["subagentContainsResult"] as? Bool, false)
         XCTAssertEqual(inspection?["subagentContainsCompleted"] as? Bool, false)
@@ -1701,10 +1703,9 @@ final class ConversationWebDocumentTests: XCTestCase {
         _ = webView
     }
 
-    /// L1 turn summary (Codex-aligned): a finished turn folds the work that
-    /// produced it into one "用时 …" disclosure, keeps the final answer
-    /// visible, and stamps the end time — without losing a single block.
-    func testCompletedTurnFoldsProcessAndKeepsAnswerVisible() async throws {
+    /// macOS keeps process groups and narration mounted in chronological order;
+    /// a turn's elapsed time is metadata, not another disclosure level.
+    func testCompletedTurnKeepsChronologicalBlocksWithoutOuterProcessFold() async throws {
         let ready = expectation(description: "Web renderer handshake")
         let acknowledged = expectation(description: "Web document acknowledgement")
         let probe = ConversationWebBridgeProbe(ready: ready)
@@ -1780,8 +1781,8 @@ final class ConversationWebDocumentTests: XCTestCase {
               return {
                 hasProcess: Boolean(process),
                 processOpen: process?.open ?? null,
-                summary: process?.querySelector('.turn-process-label')?.textContent ?? null,
-                processBlockIDs: [...(body?.querySelectorAll('.turn-block') ?? [])]
+                summary: document.querySelector('.turn-process-summary .turn-process-label')?.textContent ?? null,
+                processBlockIDs: [...document.querySelectorAll('.turn-block')]
                   .map((element) => element.dataset.blockId),
                 answerInProcess: answer ? Boolean(answer.closest('.turn-process')) : null,
                 answerVisible: answer ? answer.getBoundingClientRect().height > 0 : false,
@@ -1794,14 +1795,14 @@ final class ConversationWebDocumentTests: XCTestCase {
             """
         ) as? [String: Any]
 
-        XCTAssertEqual(inspection?["hasProcess"] as? Bool, true)
-        XCTAssertEqual(inspection?["processOpen"] as? Bool, false)
+        XCTAssertEqual(inspection?["hasProcess"] as? Bool, false)
+        XCTAssertNil(inspection?["processOpen"] as? Bool)
         XCTAssertEqual(inspection?["summary"] as? String, "用时 24分40秒")
-        XCTAssertEqual(inspection?["processBlockIDs"] as? [String], ["think-1", "read-1"])
+        XCTAssertEqual(inspection?["processBlockIDs"] as? [String], ["think-1", "read-1", "final-1"])
         XCTAssertEqual(inspection?["answerInProcess"] as? Bool, false)
         XCTAssertEqual(inspection?["answerVisible"] as? Bool, true)
         XCTAssertEqual(inspection?["timestamp"] as? String, foldable.finishedAtClock)
-        // No block is dropped by the fold — only moved.
+        // No block is dropped or moved on completion.
         XCTAssertEqual(inspection?["blockCount"] as? Int, 3)
         // Token telemetry no longer renders inside the fold — the finished
         // turn shows the Codex-style actions bar instead.
@@ -2078,7 +2079,7 @@ final class ConversationWebDocumentTests: XCTestCase {
               const card = document.querySelector('.turn-changes');
               const answer = document.querySelector('[data-block-id="final-diff"]');
               return {
-                summary: document.querySelector('details.turn-process .turn-process-label')?.textContent ?? '',
+                summary: document.querySelector('.turn-process-summary .turn-process-label')?.textContent ?? '',
                 hasCard: Boolean(card),
                 title: card?.querySelector('.turn-changes-title')?.textContent ?? null,
                 totals: card?.querySelector('.turn-changes-totals')?.textContent ?? null,
@@ -2776,17 +2777,17 @@ final class ConversationWebDocumentTests: XCTestCase {
         try await apply(ConversationWebDocumentDiffer.reset(initial), revision: 1)
         _ = try await webView.evaluateJavaScript("document.querySelector('.tool-group-summary').click()")
         try await Task.sleep(for: .milliseconds(30))
-        _ = try await webView.evaluateJavaScript("document.querySelector('.job-wait-group > summary').click()")
+        _ = try await webView.evaluateJavaScript("document.querySelector('[data-tool-id=\"wait-1\"] > summary').click()")
         let updated = document(2, count: 3)
         try await apply(try XCTUnwrap(ConversationWebDocumentDiffer.update(from: initial, to: updated)), revision: 2)
         let inspection = try await webView.evaluateJavaScript(
             """
             (() => {
-              const group = document.querySelector('.job-wait-group');
+              const group = document.querySelector('[data-tool-id="wait-1"]');
               const job = document.querySelector('.child-stream');
               return {
                 open: group?.open,
-                count: group?.querySelectorAll('.tool').length,
+                count: document.querySelectorAll('.tool-summary').length,
                 title: group?.querySelector('summary')?.textContent,
                 rawNamesInGroupTitle: document.querySelector('.tool-group-title')?.textContent.includes('job_wait'),
                 activityIcon: document.querySelector('.tool-group > .tool-group-summary .tool-action-icon')?.textContent,
@@ -2800,22 +2801,22 @@ final class ConversationWebDocumentTests: XCTestCase {
             """
         ) as? [String: Any]
         XCTAssertEqual(inspection?["open"] as? Bool, true, "expansion survives new wait calls")
-        XCTAssertEqual(inspection?["count"] as? Int, 3, "every original wait record is retained")
-        XCTAssertTrue((inspection?["title"] as? String)?.contains(ToolTranscriptText().text("job.wait.count", 3)) == true)
+        XCTAssertEqual(inspection?["count"] as? Int, 2, "one command and one compressed wait row")
+        XCTAssertTrue((inspection?["title"] as? String)?.contains(ToolTranscriptText().text("desktop.waitingChecks", 3)) == true)
         XCTAssertEqual(inspection?["rawNamesInGroupTitle"] as? Bool, false)
-        XCTAssertEqual(inspection?["activityIcon"] as? String, "$")
+        XCTAssertNil(inspection?["activityIcon"] as? String)
         XCTAssertEqual(inspection?["jobCount"] as? Int, 1)
         XCTAssertEqual(inspection?["jobStatus"] as? String, "running")
         XCTAssertEqual(inspection?["jobIcon"] as? String, "$")
         XCTAssertEqual(inspection?["jobTitle"] as? String, ToolTranscriptText().text("job.run", ToolTranscriptText().text("job.python")))
-        XCTAssertEqual(inspection?["waitTime"] as? String, ToolTranscriptText().text("job.wait.elapsed", "1.0s"))
+        XCTAssertNil(inspection?["waitTime"] as? String, "wait timing is not repeated in the compact row")
         let active = document(3, count: 1, waiting: true)
         try await apply(try XCTUnwrap(ConversationWebDocumentDiffer.update(from: updated, to: active)), revision: 3)
         let cleanWait = try await webView.evaluateJavaScript("""
             (() => {
               const group = document.querySelector('.tool-group');
               const wait = group?.querySelector('.tool[data-status="running"]');
-              return !!wait && !wait.querySelector('.tool-result-card')
+              return !!wait && !wait.querySelector('.tool-output-frame') && !wait.querySelector('.tool-empty-output')
                 && !group.querySelector(':scope > summary .tool-status')
                 && !!wait.querySelector('.tool-status');
             })()
@@ -2875,12 +2876,12 @@ final class ConversationWebDocumentTests: XCTestCase {
         let activeExpanded = try await webView.evaluateJavaScript("""
             (() => {
               const group = document.querySelector('.tool-group');
-              const groupIcon = group.querySelector(':scope > summary .tool-action-icon');
-              const toolIcon = group.querySelector('.tool-group-tools .tool-action-icon');
+              const groupIcon = group.querySelector(':scope > summary .tool-group-title');
+              const toolIcon = group.querySelector('.tool-group-tools .tool-title');
               return { open: group.open,
                 toolRows: group.querySelectorAll('.tool-summary').length,
                 toolOpen: !!group.querySelector('.tool').open,
-                aligned: Math.abs(groupIcon.getBoundingClientRect().left - toolIcon.getBoundingClientRect().left) < 0.5,
+                aligned: Math.abs(groupIcon.getBoundingClientRect().left - group.querySelector(':scope > summary').getBoundingClientRect().left) < 0.5,
                 header: group.querySelector('.tool-group-title').textContent,
                 tool: group.querySelector('.tool-title').textContent };
             })()
@@ -2888,9 +2889,9 @@ final class ConversationWebDocumentTests: XCTestCase {
         XCTAssertEqual(activeExpanded?["open"] as? Bool, true, "user can expand a live activity")
         XCTAssertEqual(activeExpanded?["toolRows"] as? Int, 1)
         XCTAssertEqual(activeExpanded?["toolOpen"] as? Bool, false, "tool detail stays collapsed by default")
-        XCTAssertEqual(activeExpanded?["aligned"] as? Bool, true, "group and tool icon columns share one left edge")
-        XCTAssertEqual(activeExpanded?["header"] as? String, "正在读取文件")
-        XCTAssertNotEqual(activeExpanded?["header"] as? String, activeExpanded?["tool"] as? String, "expanded group header summarizes instead of repeating the tool row")
+        XCTAssertEqual(activeExpanded?["aligned"] as? Bool, true, "group title has no horizontal inset")
+        XCTAssertEqual(activeExpanded?["header"] as? String, ToolTranscriptText().text("desktop.readNamed", "App.swift"))
+        XCTAssertFalse((activeExpanded?["header"] as? String)?.contains("operations") ?? true, "expanded header names the actual operation")
         _ = try await webView.evaluateJavaScript("document.querySelector('.tool-group-summary').click()")
         try await Task.sleep(for: .milliseconds(20))
         let hiddenWhileActive = try await webView.evaluateJavaScript("!document.querySelector('.tool-group').open && document.querySelectorAll('.tool-summary').length === 0") as? Bool
@@ -2913,8 +2914,8 @@ final class ConversationWebDocumentTests: XCTestCase {
               const answer = document.querySelector('[data-block-id="after"]');
               return { open: group.open, title: group.querySelector('summary').textContent,
                 processOpen: process?.open, groupInProcess: !!group.closest('.turn-process'),
-                processLabel: process?.querySelector('.turn-process-label')?.textContent,
-                failed: process?.querySelector('[data-tone="failed"]')?.textContent,
+                processLabel: document.querySelector('.turn-process-summary .turn-process-label')?.textContent,
+                failed: group.querySelector(':scope > summary [data-tone="failed"]')?.textContent,
                 answerInProcess: !!answer?.closest('.turn-process'),
                 answerVisible: answer?.getBoundingClientRect().height > 0,
                 order: [...group.querySelector('.tool-group-tools').children].map(e => e.className),
@@ -2922,13 +2923,13 @@ final class ConversationWebDocumentTests: XCTestCase {
             })()
             """) as? [String: Any]
         XCTAssertEqual(inspection?["open"] as? Bool, true, "inner group preference survives completion")
-        XCTAssertEqual(inspection?["processOpen"] as? Bool, false)
-        XCTAssertEqual(inspection?["groupInProcess"] as? Bool, true)
+        XCTAssertNil(inspection?["processOpen"] as? Bool)
+        XCTAssertEqual(inspection?["groupInProcess"] as? Bool, false)
         XCTAssertEqual(inspection?["processLabel"] as? String, "用时 48秒")
-        XCTAssertEqual(inspection?["failed"] as? String, "1 次失败")
+        XCTAssertEqual(inspection?["failed"] as? String, ToolTranscriptText().text("desktop.failures", 1))
         XCTAssertEqual(inspection?["answerInProcess"] as? Bool, false)
         XCTAssertEqual(inspection?["answerVisible"] as? Bool, true)
-        XCTAssertTrue((inspection?["title"] as? String)?.contains("1 失败") == true)
+        XCTAssertTrue((inspection?["title"] as? String)?.contains(ToolTranscriptText().text("desktop.failures", 1)) == true)
         XCTAssertEqual(inspection?["blocks"] as? [String], ["before", "activity", "after"])
         let order = try XCTUnwrap(inspection?["order"] as? [String])
         XCTAssertEqual(order.count, 3)
@@ -2938,7 +2939,7 @@ final class ConversationWebDocumentTests: XCTestCase {
            let png = bitmap.representation(using: .png, properties: [:]) {
             try png.write(to: URL(fileURLWithPath: "/tmp/agentkit-turn-folded.png"))
         }
-        // Opening elapsed time exposes intermediate steps and the nested activity.
+        // Elapsed time is metadata; the activity remains directly visible.
         _ = try await webView.evaluateJavaScript("document.querySelector('.turn-process-summary').click()")
         try await Task.sleep(for: .milliseconds(20))
         let processVisible = try await webView.evaluateJavaScript("document.querySelector('.tool-group').getBoundingClientRect().height > 0") as? Bool
@@ -2979,7 +2980,7 @@ final class ConversationWebDocumentTests: XCTestCase {
         XCTAssertEqual(untouchedLive, false)
         let sealed = document(8, expanded: true, live: false, conversation: "default-activity")
         try await apply(try XCTUnwrap(ConversationWebDocumentDiffer.update(from: untouched, to: sealed)), revision: 8)
-        let untouchedDone = try await webView.evaluateJavaScript("!document.querySelector('.tool-group').open && document.querySelectorAll('.tool-summary').length === 0 && !document.querySelector('.turn-process').open") as? Bool
+        let untouchedDone = try await webView.evaluateJavaScript("!document.querySelector('.tool-group').open && document.querySelectorAll('.tool-summary').length === 0 && !document.querySelector('.turn-process')") as? Bool
         XCTAssertEqual(untouchedDone, true)
 
         // A collapsed live group previews the streaming thought. Expanding the
@@ -3011,7 +3012,7 @@ final class ConversationWebDocumentTests: XCTestCase {
             })()
             """) as? [String: Any]
         XCTAssertEqual(collapsedThought?["open"] as? Bool, false)
-        XCTAssertTrue((collapsedThought?["header"] as? String)?.contains(thoughtText) == true)
+        XCTAssertEqual(collapsedThought?["header"] as? String, ToolTranscriptText().text("thinking"), "streaming reasoning text stays inside its own disclosure")
         XCTAssertEqual(collapsedThought?["thoughtBody"] as? Int, 0)
         let collapsedThoughtSnapshot = try await webView.takeSnapshot(configuration: nil)
         if let data = collapsedThoughtSnapshot.tiffRepresentation, let bitmap = NSBitmapImageRep(data: data),
@@ -3030,7 +3031,7 @@ final class ConversationWebDocumentTests: XCTestCase {
                 thoughtBody: group.querySelectorAll('.thinking-body').length };
             })()
             """) as? [String: Any]
-        XCTAssertEqual(expandedThought?["header"] as? String, "思考中")
+        XCTAssertEqual(expandedThought?["header"] as? String, ToolTranscriptText().text("thinking"))
         XCTAssertEqual(expandedThought?["thoughtOpen"] as? Bool, false)
         XCTAssertEqual(expandedThought?["thoughtLabel"] as? String, "思考中…")
         XCTAssertEqual(expandedThought?["thoughtBody"] as? Int, 0)
@@ -3045,7 +3046,7 @@ final class ConversationWebDocumentTests: XCTestCase {
         XCTAssertTrue(thoughtContent?.contains("Inspecting the current implementation") == true,
                       "expanded thought should begin rendering: \(String(describing: thoughtContent))")
     }
-    func testSemanticToolFixtureUsesSharedTitlesIconsAndOriginalDetails() async throws {
+    func testSemanticToolFixtureUsesClearTitlesSeparateInputWithoutRawDetails() async throws {
         let ready = expectation(description: "semantic fixture Web ready")
         let acknowledged = expectation(description: "semantic fixture accepted")
         let probe = ConversationWebBridgeProbe(ready: ready)
@@ -3100,14 +3101,14 @@ final class ConversationWebDocumentTests: XCTestCase {
               diff: document.querySelector('[data-tool-id="edit"] .tool-change-summary')?.textContent,
               outside: !document.querySelector('[data-block-id="answer"]').closest('.turn-process') }))()
             """) as? [String: Any]
-        XCTAssertEqual(inspection?["titles"] as? [String], tools.map { ToolTranscriptPresenter.presentation(for: $0).title })
-        XCTAssertEqual(inspection?["icons"] as? [String], tools.map { ToolTranscriptPresenter.presentation(for: $0).icon })
+        XCTAssertEqual(inspection?["titles"] as? [String], tools.map { MacToolPresentation.rowTitle($0) })
+        XCTAssertEqual(inspection?["icons"] as? [String], [])
         XCTAssertEqual(inspection?["rawInputsMounted"] as? Int, 0)
         XCTAssertEqual(inspection?["thought"] as? String, ToolTranscriptText().thinkingTitle(streaming: false))
         XCTAssertEqual(inspection?["outside"] as? Bool, true)
         XCTAssertEqual(inspection?["diff"] as? String, "+2 -1")
         let native = TurnTranscriptBuilder.build(turn: turn, state: .init(expandedToolIDs: ["group:semantic-activity"]))
-        for tool in tools { XCTAssertTrue(native.attributedString.string.contains(ToolTranscriptPresenter.presentation(for: tool).title)) }
+        for tool in tools { XCTAssertTrue(native.attributedString.string.contains(MacToolPresentation.rowTitle(tool)), "native desktop uses the same concise action label as Web") }
         for id in ["read", "search", "matches", "failed"] {
             _ = try await webView.evaluateJavaScript("document.querySelector('[data-tool-id=\"\(id)\"] > summary').click()")
         }
@@ -3116,8 +3117,8 @@ final class ConversationWebDocumentTests: XCTestCase {
             (() => {
               const read = document.querySelector('[data-tool-id="read"] .tool-output-frame');
               const run = document.querySelector('[data-tool-id="search"]');
-              return { bounded: read.clientHeight < 200 && read.scrollHeight > read.clientHeight,
-                combinedHeight: run.querySelector('.tool-result-card').getBoundingClientRect().height,
+              return { bounded: read.clientHeight <= 280 && read.scrollHeight > read.clientHeight,
+                commandOutside: !run.querySelector('.tool-output-frame').contains(run.querySelector('.tool-command-text')),
                 footerOutside: !run.querySelector('.tool-result-footer').closest('.tool-output-frame'),
                 raw: document.querySelectorAll('[data-scroll-id^="tool-input:"]').length,
                 source: read.textContent,
@@ -3130,22 +3131,18 @@ final class ConversationWebDocumentTests: XCTestCase {
             })()
             """) as? [String: Any]
         XCTAssertEqual(cards?["bounded"] as? Bool, true)
-        XCTAssertLessThan(cards?["combinedHeight"] as? Double ?? 999, 250, "command and long output share a compact viewport")
+        XCTAssertEqual(cards?["commandOutside"] as? Bool, true, "command remains outside the bounded output viewport")
         XCTAssertEqual(cards?["footerOutside"] as? Bool, true)
         XCTAssertEqual(cards?["raw"] as? Int, 0)
         XCTAssertEqual((cards?["source"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines), sourceOutput)
         XCTAssertEqual((cards?["command"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines), "rg -n 'ColladaConverter' tools")
-        XCTAssertTrue((cards?["outcome"] as? String)?.contains(ToolTranscriptText().text("run.succeeded")) == true)
+        XCTAssertNil(cards?["outcome"] as? String, "successful tools do not repeat a success badge")
         XCTAssertEqual(cards?["failed"] as? String, "failed")
         XCTAssertEqual(cards?["result"] as? String, "search")
-        XCTAssertEqual(cards?["copies"] as? Int, 4)
+        XCTAssertEqual(cards?["copies"] as? Int, 12, "four expanded tools offer copy input, copy output, and full output")
         XCTAssertEqual(cards?["wrap"] as? String, "pre-wrap")
-        _ = try await webView.evaluateJavaScript("document.querySelector('[data-tool-id=\"read\"] .tool-raw-details > summary').click()")
-        try await Task.sleep(for: .milliseconds(20))
-        let original = try await webView.evaluateJavaScript("document.querySelector('[data-tool-id=\"read\"] .tool-raw-details').textContent") as? String
-        XCTAssertTrue(original?.contains("read_file") == true)
-        XCTAssertTrue(original?.contains("CPackReader.cpp") == true)
-        _ = try await webView.evaluateJavaScript("document.querySelector('[data-tool-id=\"read\"] .tool-raw-details > summary').click()")
+        let rawDetailsAbsent = try await webView.evaluateJavaScript("document.querySelector('.tool-raw-details') === null") as? Bool
+        XCTAssertEqual(rawDetailsAbsent, true, "tool cards no longer contain raw parameter disclosures")
         _ = try await webView.evaluateJavaScript("document.querySelector('[data-tool-id=\"failed\"] > summary').click()")
         webView.setFrameSize(.init(width: 640, height: 1400))
         try await Task.sleep(for: .milliseconds(30))
@@ -3177,7 +3174,7 @@ final class ConversationWebDocumentTests: XCTestCase {
            let png = bitmap.representation(using: .png, properties: [:]) {
             try png.write(to: URL(fileURLWithPath: "/tmp/agentkit-detail-polish-dark.png"))
         }
-            // The shared command/output viewport still follows live output, yields
+            // The independent output viewport follows only after scrolling to its tail, yields
         // while the user reads earlier lines, and resumes at the bottom.
         func liveDocument(_ revision: UInt64, output: String) -> ConversationWebDocument {
             let liveTool = ToolNodePayload(callID: "search", toolName: "run_command", args: tools[1].args,
@@ -3204,7 +3201,7 @@ final class ConversationWebDocumentTests: XCTestCase {
         let live = liveDocument(2, output: runOutput)
         try await update(document, live)
         let atTail = try await webView.evaluateJavaScript("(() => { const f = document.querySelector('[data-tool-id=\"search\"] .tool-output-frame'); return f.scrollHeight - f.clientHeight - f.scrollTop < 2; })()") as? Bool
-        XCTAssertEqual(atTail, true)
+        XCTAssertEqual(atTail, false, "changing to streaming does not pull an existing reader to the output tail")
         _ = try await webView.evaluateJavaScript("(() => { const f = document.querySelector('[data-tool-id=\"search\"] .tool-output-frame'); f.scrollTop = 0; f.dispatchEvent(new Event('scroll')); })()")
         let more = liveDocument(3, output: runOutput + "\nnew output while reading")
         try await update(live, more)

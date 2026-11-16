@@ -167,9 +167,14 @@ struct ConversationWebDocument: Codable, Equatable, Sendable {
         var isCollecting: Bool? = nil
         var activityOrder: [String]? = nil
         var activityThinking: [Block]? = nil
+        var activityJobs: [Block]? = nil
+        var contextMaintenance: ContextMaintenancePresentation? = nil
         /// State-based activity summary used for expanded live groups and for
         /// completed groups. Unlike `title`, it never mirrors one child row.
         var activitySummary: String? = nil
+        var failureText: String? = nil
+        var startedAtMilliseconds: Double? = nil
+        var finishedAtMilliseconds: Double? = nil
         /// Raw SystemNodeKind; absent/other kinds render as a plain system aside.
         var systemKind: String? = nil
         /// Present only for system blocks: kind-specific flags and values from
@@ -394,6 +399,13 @@ struct ConversationWebDocument: Codable, Equatable, Sendable {
         var icon: String? = nil
         var labels: [String: String]? = nil
         var command: String? = nil
+        var input: String? = nil
+        var inputContext: String? = nil
+        var hasResult: Bool? = nil
+        var copyInputActionID: String? = nil
+        var fullOutputActionID: String? = nil
+        var inputIsPreview: Bool? = nil
+        var inputIsRedacted: Bool? = nil
         var commandActions: [InlineAction]? = nil
         var resultKind: String? = nil
         var outcomeText: String? = nil
@@ -633,11 +645,15 @@ enum ConversationWebDocumentBuilder {
             if let token = turn.forkActionID { tokens.insert(token) }
             for block in turn.blocks {
                 if let token = block.actionID { tokens.insert(token) }
+                tokens.formUnion((block.activityJobs ?? []).compactMap(\.actionID))
                 tokens.formUnion(block.codeCopyActionIDs)
                 tokens.formUnion(block.inlineActions.map(\.actionID))
                 for tool in block.tools {
                     if let token = tool.artifactActionID { tokens.insert(token) }
                     if let token = tool.copyOutputActionID { tokens.insert(token) }
+                    if let token = tool.copyInputActionID { tokens.insert(token) }
+                    if let token = tool.fullOutputActionID { tokens.insert(token) }
+                    tokens.formUnion((tool.commandActions ?? []).map(\.actionID))
                     if let token = tool.dagOpenActionID { tokens.insert(token) }
                     tokens.formUnion(tool.assetActions.map(\.actionID))
                     tokens.formUnion(tool.argumentActions.map(\.actionID))
@@ -942,7 +958,8 @@ enum ConversationWebDocumentBuilder {
         previousBlock: TurnBlock?,
         previousWebBlock: ConversationWebDocument.Block?,
         assetIndex: () -> AssetIndex,
-        registerAction: ((ConversationWebAction) -> String)?
+        registerAction: ((ConversationWebAction) -> String)?,
+        isGroupedJob: Bool = false
     ) -> ConversationWebDocument.Block {
         switch block {
         case .text(let id, let payload):
@@ -992,6 +1009,7 @@ enum ConversationWebDocumentBuilder {
 
         case .toolGroup(let group):
             let groupPresentation = ToolTranscriptPresenter.groupPresentation(for: group)
+            let desktopText = ToolTranscriptText()
             let previousTools: [ToolNodePayload] = if case .toolGroup(let previousGroup) = previousBlock {
                 previousGroup.tools
             } else {
@@ -1021,8 +1039,7 @@ enum ConversationWebDocumentBuilder {
                 let presentation = ToolTranscriptPresenter.presentation(for: tool)
                 let command = ToolTranscriptPresenter.commandValue(for: tool)
                 let commandForCard = command.map { value in
-                    value.utf8.count > 8192 || ToolCommandPresentation.hasSensitiveArguments(value)
-                        ? ToolCommandPresentation.preview(value, text: ToolTranscriptText()) : value
+                    CommandDisplayRedactor.redact(value)
                 }
                 let resultKind: String = command != nil || presentation.family == .terminal ? "terminal"
                     : presentation.family == .search ? "search"
@@ -1032,8 +1049,17 @@ enum ConversationWebDocumentBuilder {
                     ? tool.exitCode.map { ToolTranscriptText().text("failed.code", $0) } ?? ToolTranscriptText().text("failed")
                     : tool.status == .running && BackgroundJobPresentation.operation(tool.toolName) != "wait" ? ToolTranscriptText().text("running")
                     : resultKind == "terminal" ? ToolTranscriptText().text("run.succeeded") : nil
+                let fullInput = MacToolPresentation.input(for: tool)
+                let inputIsRedacted = command.map { CommandDisplayRedactor.redact($0) != $0 } ?? false
+                let input = commandForCard ?? fullInput
+                let fullOutputActionID: String?
+                #if os(macOS)
+                fullOutputActionID = registerAction.map { $0(.transcript(turnID: turn.id, action: .openToolResult(callID: tool.callID))) }
+                #else
+                fullOutputActionID = nil
+                #endif
                 let arguments = tool.args.flatMap(formattedJSON)
-                let output = tool.output.isEmpty ? nil : tool.output
+                let output = tool.output.isEmpty ? tool.structuredOutput.flatMap(formattedJSON) : tool.output
                 // DAG detection for workflow tools (workflow_definition, etc.)
                 let dag = tryParseDAG(from: tool.output)
                 let dagOpenActionID: String? = dag?.workflowId.flatMap { wfID in
@@ -1077,8 +1103,8 @@ enum ConversationWebDocumentBuilder {
                     id: tool.callID,
                     name: uiPreview.map { "\($0.modeLabel): \($0.title)" }
                         ?? uiLayout?.title ?? uiEvidence?.title ?? imageView?.title
-                        ?? presentation.title,
-                    status: tool.status.rawValue,
+                        ?? MacToolPresentation.rowTitle(tool),
+                    status: resultFailed ? "failed" : tool.status.rawValue,
                     statusText: presentation.statusText,
                     detail: hasStructuredActivity ? nil : presentation.detail,
                     elapsed: hasStructuredActivity ? nil : presentation.elapsed,
@@ -1111,12 +1137,12 @@ enum ConversationWebDocumentBuilder {
                             focusID: "tool:\(tool.callID):asset:\(reference.id)"
                         )
                     },
-                    copyOutputActionID: hasStructuredActivity || tool.status == .running || tool.output.isEmpty
+                    copyOutputActionID: hasStructuredActivity || output == nil
                         ? nil
                         : registerAction.map {
                         $0(.transcript(
                             turnID: turn.id,
-                            action: .copyBlock(text: tool.output)
+                            action: .copyBlock(text: output ?? "")
                         ))
                     },
                     argumentActions: previousTool?.args == tool.args
@@ -1151,8 +1177,17 @@ enum ConversationWebDocumentBuilder {
                              "rawDetails": ToolTranscriptText().text("raw.details"),
                              "copy": ToolTranscriptText().text("copy"),
                              "copyOutput": ToolTranscriptText().text("copy.output"),
-                             "waitGroup": ToolTranscriptText().text("job.wait.group")],
+                             "waitGroup": ToolTranscriptText().text("job.wait.group")].merging(MacToolPresentation.labels()) { _, new in new },
                     command: commandForCard,
+                    input: input,
+                    inputContext: command == nil ? nil : ["workdir", "cwd"].compactMap { key -> String? in
+                        guard case .string(let value)? = tool.args?[key], !value.isEmpty else { return nil }; return value
+                    }.first,
+                    hasResult: tool.artifact != nil || !tool.assets.isEmpty || tool.structuredOutput != nil || dag != nil,
+                    copyInputActionID: input.flatMap { value in registerAction.map { $0(.transcript(turnID: turn.id, action: .copyBlock(text: value))) } },
+                    fullOutputActionID: fullOutputActionID,
+                    inputIsPreview: false,
+                    inputIsRedacted: inputIsRedacted,
                     commandActions: previousTool?.args == tool.args ? previousWebTool?.commandActions : commandForCard.map {
                         inlineActions(text: $0, annotations: [], turnID: turn.id,
                                       assetIndex: assetIndex, registerAction: registerAction)
@@ -1170,9 +1205,8 @@ enum ConversationWebDocumentBuilder {
                 id: group.id,
                 kind: .toolGroup,
                 text: nil,
-                title: groupPresentation.summary,
-                status: group.isThinking && !group.tools.contains(where: { $0.status == .failed })
-                    ? "running" : aggregateStatus(group.tools),
+                title: group.isActivityGroup ? MacToolPresentation.currentSummary(group) : groupPresentation.summary,
+                status: MacToolPresentation.isRunning(group) ? "running" : MacToolPresentation.failureCount(group) > 0 ? "failed" : aggregateStatus(group.tools),
                 elapsed: nil,
                 tools: tools,
                 childStreamKind: nil,
@@ -1180,10 +1214,16 @@ enum ConversationWebDocumentBuilder {
                 actionTooltip: nil,
                 inlineActions: [],
                 codeCopyActionIDs: [],
-                statusText: ToolTranscriptText().text(group.tools.contains(where: { $0.status == .failed }) ? "failed" : "running"),
+                statusText: ToolTranscriptText().text(MacToolPresentation.isRunning(group) ? "running" : MacToolPresentation.failureCount(group) > 0 ? "failed" : "run.succeeded"),
                 isCollecting: group.isCollecting,
                 activityOrder: group.isActivityGroup ? group.entries.map(\.id) : nil,
                 activityThinking: group.entries.compactMap { entry in
+                    if case .preMutation(let id, let payload) = entry {
+                        return .init(id: id, kind: .thinking, text: payload.text,
+                            title: ToolTranscriptText().text("desktop.preMutation"), status: nil,
+                            elapsed: nil, tools: [], childStreamKind: nil, actionID: nil, actionTooltip: nil,
+                            inlineActions: [], codeCopyActionIDs: [], systemKind: payload.kind.rawValue, metadata: payload.metadata)
+                    }
                     guard case .thinking(let id, let payload) = entry else { return nil }
                     return .init(id: id, kind: .thinking, text: payload.text,
                                  title: ToolTranscriptText().thinkingTitle(streaming: payload.isStreaming),
@@ -1191,7 +1231,17 @@ enum ConversationWebDocumentBuilder {
                                  elapsed: nil, tools: [], childStreamKind: nil,
                                  actionID: nil, actionTooltip: nil, inlineActions: [], codeCopyActionIDs: [])
                 },
-                activitySummary: group.isActivityGroup ? groupPresentation.activitySummary : nil
+                activityJobs: group.entries.compactMap { entry in
+                    guard case .backgroundJob(let id, let job) = entry else { return nil }
+                    return makeBlock(.childStream(id: id, job), turn: turn,
+                        previewArtifacts: previewArtifacts, allTurns: allTurns, previousBlock: nil,
+                        previousWebBlock: nil, assetIndex: assetIndex, registerAction: registerAction, isGroupedJob: true)
+                },
+                activitySummary: group.isActivityGroup ? MacToolPresentation.expandedSummary(group) : nil,
+                failureText: MacToolPresentation.failureCount(group) == 0 ? nil
+                    : desktopText.text("desktop.failures", MacToolPresentation.failureCount(group)),
+                startedAtMilliseconds: group.startedAt.map { $0.timeIntervalSince1970 * 1000 },
+                finishedAtMilliseconds: group.finishedAt.map { $0.timeIntervalSince1970 * 1000 }
             )
 
         case .artifact(let id, let artifact):
@@ -1229,6 +1279,7 @@ enum ConversationWebDocumentBuilder {
                 actionTooltip: nil,
                 inlineActions: [],
                 codeCopyActionIDs: [],
+                contextMaintenance: ContextMaintenancePresentation.make(payload, live: turn.isLive),
                 systemKind: payload.kind.rawValue,
                 metadata: payload.metadata.isEmpty ? nil : payload.metadata
             )
@@ -1241,7 +1292,7 @@ enum ConversationWebDocumentBuilder {
                 // the parent DOM also keeps cross-turn selection and VoiceOver
                 // from traversing a duplicated, potentially very large result.
                 text: nil,
-                title: BackgroundJobPresentation.title(payload),
+                title: isGroupedJob ? MacToolPresentation.backgroundJobTitle(payload) : BackgroundJobPresentation.title(payload),
                 status: payload.status.rawValue,
                 elapsed: payload.formattedElapsed.map { payload.kind == .job
                     ? ToolTranscriptText().text("job.elapsed", $0) : $0 },
@@ -1256,7 +1307,8 @@ enum ConversationWebDocumentBuilder {
                 actionTooltip: payload.childID,
                 inlineActions: [],
                 codeCopyActionIDs: [],
-                statusText: payload.status == .unavailable ? ToolTranscriptText().text("jobs.unavailable")
+                statusText: isGroupedJob ? MacToolPresentation.backgroundJobStatus(payload)
+                    : payload.status == .unavailable ? ToolTranscriptText().text("jobs.unavailable")
                     : payload.kind == .job && payload.status == .running ? ToolTranscriptText().text("jobs.status.running") : nil
             )
 
@@ -1284,7 +1336,7 @@ enum ConversationWebDocumentBuilder {
     }
 
     private static func aggregateStatus(_ tools: [ToolNodePayload]) -> String? {
-        if tools.contains(where: { $0.status == .failed }) { return "failed" }
+        if tools.contains(where: MacToolPresentation.isFailed) { return "failed" }
         if tools.contains(where: { $0.status == .running }) { return "running" }
         if tools.allSatisfy({ $0.status == .autoApproved }) { return "autoApproved" }
         return tools.isEmpty ? nil : "completed"

@@ -50,7 +50,13 @@ final class BackgroundJobPresentationTests: XCTestCase {
         XCTAssertEqual(BackgroundJobPresentation.summary("/usr/bin/python3.12 -c 'print(1)'", text: text), "Python 脚本")
         XCTAssertEqual(BackgroundJobPresentation.summary("sh <<'EOF'\nmake\nEOF", text: text), "脚本")
         XCTAssertEqual(BackgroundJobPresentation.summary("npm test", text: text), "npm test")
+        #if os(macOS)
+        let preview = BackgroundJobPresentation.summary("curl --token secret-value example.com", text: text)
+        XCTAssertEqual(preview, "curl --token •••••• example.com")
+        XCTAssertFalse(preview.contains("secret-value"))
+        #else
         XCTAssertEqual(BackgroundJobPresentation.summary("curl --token secret-value example.com", text: text), text.text("hidden"))
+        #endif
     }
 
     func testWaitRunsRequireAdjacentCallsAndAnExplicitMatchingJobID() {
@@ -81,7 +87,11 @@ final class BackgroundJobPresentationTests: XCTestCase {
         func turn() throws -> ConversationTurn { try XCTUnwrap(TimelineProjection().projectTurns(graph, isLive: true).first) }
         let current = try turn()
         let jobs = current.blocks.compactMap { block -> ChildStreamNodePayload? in
-            if case .childStream(_, let payload) = block { return payload }; return nil
+            if case .childStream(_, let payload) = block { return payload }
+            #if os(macOS)
+            if case .toolGroup(let group) = block { return group.backgroundJobs.first }
+            #endif
+            return nil
         }
         XCTAssertEqual(jobs.count, 1)
         XCTAssertEqual(jobs.first?.status, .running, "a returned wait is not a terminal job event")
@@ -93,13 +103,17 @@ final class BackgroundJobPresentationTests: XCTestCase {
         XCTAssertTrue(tools.allSatisfy { $0.backgroundJobCommand == script })
         XCTAssertEqual(ToolTranscriptPresenter.presentation(for: tools[0], locale: "zh-Hans").detail, "Python 脚本")
         let document = ConversationWebDocumentBuilder.build(snapshot: .init(timeline: [], turns: [current]), conversationID: "job")
-        let webJob = try XCTUnwrap(document.turns[0].blocks.first { $0.childStreamKind == "job" })
+        let webJob = try XCTUnwrap(document.turns[0].blocks.flatMap { [$0] + ($0.activityJobs ?? []) }.first { $0.childStreamKind == "job" })
+        #if os(macOS)
+        XCTAssertEqual(webJob.title, MacToolPresentation.backgroundJobTitle(try XCTUnwrap(jobs.first)))
+        #else
         XCTAssertEqual(webJob.title, ToolTranscriptText().text("job.run", ToolTranscriptText().text("job.python")))
+        #endif
         XCTAssertNil(webJob.elapsed)
         _ = reducer.reduce(.jobFinished(turnID: "t1", jobID: "job-1", exitCode: nil, err: nil, elapsedMs: 35_000, text: "exited"), into: &graph)
         let finished = try turn()
         let finalDoc = ConversationWebDocumentBuilder.build(snapshot: .init(timeline: [], turns: [finished]), conversationID: "job")
-        let finalJob = try XCTUnwrap(finalDoc.turns[0].blocks.first { $0.childStreamKind == "job" })
+        let finalJob = try XCTUnwrap(finalDoc.turns[0].blocks.flatMap { [$0] + ($0.activityJobs ?? []) }.first { $0.childStreamKind == "job" })
         XCTAssertEqual(finalJob.status, "completed")
         XCTAssertEqual(finalJob.elapsed, ToolTranscriptText().text("job.elapsed", "35.0s"))
     }

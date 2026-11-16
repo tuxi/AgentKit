@@ -548,7 +548,8 @@ struct MacNativeChatTimeline: NSViewRepresentable {
                     guard let currentRow = self.rows.firstIndex(where: {
                         $0.identity == rowIdentity
                     }) else { return }
-                    self.performViewportMutation(followBottom: self.isPinnedToBottom) {
+                    self.isPinnedToBottom = false
+                    self.performViewportMutation(followBottom: false) {
                         tableView.noteHeightOfRows(
                             withIndexesChanged: IndexSet(integer: currentRow)
                         )
@@ -944,6 +945,7 @@ private final class NativeTurnTableCellView: NSTableCellView {
     private lazy var shareButton = NSButton(frame: .zero)
     private lazy var assetsButton = NSButton(frame: .zero)
     private lazy var forkButton = NSButton(frame: .zero)
+    private var activityTimer: Timer?
     private var representedTurnID: String?
     private var turn: ConversationTurn?
     private var state = TranscriptDocumentState()
@@ -1000,6 +1002,16 @@ private final class NativeTurnTableCellView: NSTableCellView {
         self.turn = turn
         self.dispatcher = dispatcher
         self.onStateChange = onStateChange
+        activityTimer?.invalidate()
+        if turn.blocks.contains(where: { block in
+            if case .toolGroup(let group) = block { return group.startedAt != nil && MacToolPresentation.isRunning(group) }
+            return false
+        }) {
+            activityTimer = Timer.scheduledTimer(withTimeInterval: 1, repeats: true) { [weak self] timer in
+                guard self != nil else { timer.invalidate(); return }
+                MainActor.assumeIsolated { self?.rebuildTranscript() }
+            }
+        }
         rebuildTranscript()
     }
 
@@ -1061,7 +1073,9 @@ private final class NativeTurnTableCellView: NSTableCellView {
 
     private func rebuildTranscript() {
         guard let turn else { return }
-        let transcript = TranscriptCache.shared.transcript(for: turn, state: state)
+        let transcript = activityTimer?.isValid == true
+            ? TurnTranscriptBuilder.build(turn: turn, state: state)
+            : TranscriptCache.shared.transcript(for: turn, state: state)
         self.transcript = transcript
         transcriptView.apply(
             attributedText: transcript.attributedString,

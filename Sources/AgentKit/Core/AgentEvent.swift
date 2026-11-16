@@ -132,6 +132,7 @@ public enum AgentEvent: Sendable {
 
     // ── 上下文 ──
     case reflected(turnID: String?, text: String)
+    case contextMaintenance(turnID: String?, value: ContextMaintenance)
     case compacted(turnID: String?, beforeTokens: Int, afterTokens: Int, savedTokens: Int, summaryChars: Int, ratio: Double, ineffective: Bool)
     /// `context_edited`：清理过期低信号 tool 结果。`text` 形如 "cleared N stale tool results"。
     case contextEdited(turnID: String?, text: String)
@@ -767,10 +768,24 @@ extension AgentEvent {
         case "reflected":
             return .reflected(turnID: turnID, text: wire.text ?? "")
 
+        case "context_maintenance":
+            #if os(macOS)
+            guard let value = wire.contextMaintenance, !value.operationID.isEmpty, value.operationID.count <= 128 else { return nil }
+            return .contextMaintenance(turnID: turnID, value: value)
+            #else
+            return nil
+            #endif
+
         case "context_edited":
+            #if os(macOS)
+            if wire.contextOperationID != nil { return nil }
+            #endif
             return .contextEdited(turnID: turnID, text: wire.text ?? "")
 
         case "context_pruned":
+            #if os(macOS)
+            if wire.contextOperationID != nil { return nil }
+            #endif
             return .contextPruned(
                 turnID: turnID,
                 beforeTokens: wire.beforeTokens ?? 0,
@@ -784,6 +799,9 @@ extension AgentEvent {
             return .verified(turnID: turnID, text: wire.text ?? "")
 
         case "compacted":
+            #if os(macOS)
+            if wire.contextOperationID != nil { return nil }
+            #endif
             return .compacted(
                 turnID: turnID,
                 beforeTokens: wire.beforeTokens ?? 0,

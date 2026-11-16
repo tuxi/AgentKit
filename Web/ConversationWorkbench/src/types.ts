@@ -16,6 +16,13 @@ export interface ConversationWebTool {
   icon?: string;
   labels?: Record<string, string>;
   command?: string;
+  input?: string;
+  inputContext?: string;
+  hasResult?: boolean;
+  copyInputActionID?: string;
+  fullOutputActionID?: string;
+  inputIsPreview?: boolean;
+  inputIsRedacted?: boolean;
   commandActions?: InlineAction[];
   resultKind?: "terminal" | "search" | "file" | "generic";
   outcomeText?: string;
@@ -243,8 +250,13 @@ export interface ConversationWebBlock {
   isCollecting?: boolean;
   activityOrder?: string[];
   activityThinking?: ConversationWebBlock[];
+  activityJobs?: ConversationWebBlock[];
+  contextMaintenance?: { title: string; summary: string; status: string; steps: { label: string; value: string }[]; note?: string };
   /// State-based summary for expanded live groups and completed groups.
   activitySummary?: string;
+  failureText?: string;
+  startedAtMilliseconds?: number;
+  finishedAtMilliseconds?: number;
   childStreamKind?: "task" | "job";
   actionID?: string;
   actionTooltip?: string;

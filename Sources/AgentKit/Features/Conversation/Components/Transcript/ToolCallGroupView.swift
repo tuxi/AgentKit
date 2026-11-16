@@ -73,6 +73,12 @@ struct ToolCallGroupView: View {
                             ScrollView(.vertical) { toolDetailView(tool) }
                                 .frame(maxHeight: 144)
                         }
+                    case .preMutation(_, let payload):
+                        SystemMessageView(payload: payload)
+                    case .backgroundJob(_, let job):
+                        Button { onAction(.openChildStream(childID: job.childID)) } label: {
+                            Text(BackgroundJobPresentation.title(job)).lineLimit(1)
+                        }.buttonStyle(.plain)
                     case .thinking(let id, let payload):
                         ThinkingCardView(id: id, payload: payload,
                             isExpanded: documentState.expandedThinkingIDs.contains(id),

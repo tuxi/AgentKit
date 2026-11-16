@@ -26,6 +26,26 @@ public struct ExecutionReducer: Sendable {
     /// Reduce one AgentEvent into the graph.
     /// - Returns: IDs of newly created or modified nodes (for projection consumers).
     public mutating func reduce(_ event: AgentEvent, into graph: inout ExecutionGraph) -> [NodeID] {
+        reduceEvent(event, into: &graph)
+    }
+
+    /// Used only for live desktop ingestion. History uses reduce(_:into:) so
+    /// replay arrival times can never masquerade as execution duration.
+    mutating func reduceLive(_ event: AgentEvent, at date: Date, into graph: inout ExecutionGraph) -> [NodeID] {
+        let previousNodeCount = graph.nodeOrder.count
+        let changed = reduceEvent(event, into: &graph)
+        let newIDs = Set(graph.nodeOrder.dropFirst(previousNodeCount))
+        for id in changed {
+            guard var node = graph.nodes[id] else { continue }
+            if node.firstObservedAt == nil && !newIDs.contains(id) { continue }
+            if node.firstObservedAt == nil { node.firstObservedAt = date }
+            node.lastObservedAt = date
+            graph.upsertNode(node)
+        }
+        return changed
+    }
+
+    private mutating func reduceEvent(_ event: AgentEvent, into graph: inout ExecutionGraph) -> [NodeID] {
         let ts = Date().timeIntervalSince1970
 
         switch event {
@@ -160,6 +180,32 @@ public struct ExecutionReducer: Sendable {
             return []
 
         // ── Context management (previously ignored!) ──
+        case .contextMaintenance(let turnID, let value):
+            guard !value.operationID.isEmpty, value.operationID.count <= 128,
+                  let data = try? JSONEncoder().encode(value), let json = String(data: data, encoding: .utf8) else { return [] }
+            let id = "context-maintenance:" + value.operationID
+            var metadata = ["maintenance": json]
+            if var existing = graph.nodes[id] {
+                if case .system(let previous) = existing.payload {
+                    var history: [ContextMaintenance] = previous.metadata["maintenanceAttempts"]?.data(using: .utf8)
+                        .flatMap { try? JSONDecoder().decode([ContextMaintenance].self, from: $0) } ?? []
+                    if let raw = previous.metadata["maintenance"]?.data(using: .utf8),
+                       let prior = try? JSONDecoder().decode(ContextMaintenance.self, from: raw),
+                       ["failed", "canceled"].contains(prior.status), prior.status != value.status {
+                        history.append(prior)
+                    }
+                    if !history.isEmpty, let data = try? JSONEncoder().encode(Array(history.suffix(20))),
+                       let raw = String(data: data, encoding: .utf8) { metadata["maintenanceAttempts"] = raw }
+                }
+                existing.payload = .system(.init(kind: .contextCompact, text: "", metadata: metadata))
+                graph.upsertNode(existing)
+            } else {
+                let payload = SystemPayload(kind: .contextCompact, text: "", metadata: metadata)
+                appendNode(.init(id: id, kind: .system, payload: .system(payload), status: .completed,
+                                 timestamp: ts, turnID: turnID ?? internalState.currentTurnID ?? ""), to: &graph)
+            }
+            return [id]
+
         case .compacted(let turnID, let before, let after, let saved, _, let ratio, let ineffective):
             return handleCompacted(turnID: turnID ?? internalState.currentTurnID ?? "",
                                    beforeTokens: before, afterTokens: after,

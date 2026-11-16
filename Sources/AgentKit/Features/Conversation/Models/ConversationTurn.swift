@@ -347,11 +347,17 @@ public struct ToolGroup: Identifiable, Sendable, Equatable {
     public enum Entry: Identifiable, Sendable, Equatable {
         case tool(ToolNodePayload)
         case thinking(id: String, ThinkingNodePayload)
+        /// Desktop activity entry. Jobs retain their child stream identity and
+        /// lifecycle; they are never synthesized into ordinary tool records.
+        case backgroundJob(id: String, ChildStreamNodePayload)
+        case preMutation(id: String, SystemNodePayload)
 
         public var id: String {
             switch self {
             case .tool(let tool): return "tool:\(tool.callID)"
             case .thinking(let id, _): return "thinking:\(id)"
+            case .backgroundJob(_, let job): return "job:\(job.childID)"
+            case .preMutation(let id, _): return "preMutation:\(id)"
             }
         }
     }
@@ -362,6 +368,8 @@ public struct ToolGroup: Identifiable, Sendable, Equatable {
     /// The trailing activity of a live turn is still accepting entries, even
     /// between model invocations when all current tools have finished.
     public let isCollecting: Bool
+    public let startedAt: Date?
+    public let finishedAt: Date?
     public var isThinking: Bool {
         entries.contains { if case .thinking(_, let payload) = $0 { return payload.isStreaming }; return false }
     }
@@ -369,18 +377,26 @@ public struct ToolGroup: Identifiable, Sendable, Equatable {
         entries.compactMap { if case .tool(let tool) = $0 { return tool }; return nil }
     }
 
+    public var backgroundJobs: [ChildStreamNodePayload] {
+        entries.compactMap { if case .backgroundJob(_, let job) = $0 { return job }; return nil }
+    }
+
     public init(id: String, tools: [ToolNodePayload]) {
         self.id = id
         self.entries = tools.map(Entry.tool)
         self.isActivityGroup = false
         self.isCollecting = false
+        self.startedAt = nil
+        self.finishedAt = nil
     }
 
-    public init(id: String, entries: [Entry], isCollecting: Bool = false) {
+    public init(id: String, entries: [Entry], isCollecting: Bool = false, startedAt: Date? = nil, finishedAt: Date? = nil) {
         self.id = id
         self.entries = entries
         self.isActivityGroup = true
         self.isCollecting = isCollecting
+        self.startedAt = startedAt
+        self.finishedAt = finishedAt
     }
 
     public var summary: String {

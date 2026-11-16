@@ -184,9 +184,27 @@ final class ContextEventsTests: XCTestCase {
         }
 
         XCTAssertTrue(systemKinds.contains(.contextEdited), "contextEdited must surface, got \(systemKinds)")
+        #if os(macOS)
+        let maintenance = blocks.compactMap { block -> ContextMaintenancePresentation? in
+            guard case .system(_, let payload) = block else { return nil }
+            return ContextMaintenancePresentation.make(payload, live: false, text: .init(locale: "en"))
+        }
+        XCTAssertEqual(maintenance.count, 1, "adjacent legacy context records share one disclosure")
+        XCTAssertTrue(maintenance.first?.steps.contains { $0.label == "Shorten old tool output" } == true)
+        XCTAssertTrue(maintenance.first?.steps.contains { $0.label == "Context usage" } == true)
+        #else
         XCTAssertTrue(systemKinds.contains(.contextPruned), "contextPruned must surface, got \(systemKinds)")
         XCTAssertTrue(systemKinds.contains(.contextCompact), "contextCompact must surface, got \(systemKinds)")
+        #endif
+        #if os(macOS)
+        XCTAssertFalse(systemKinds.contains(.preMutation), "desktop self-check belongs to activity")
+        XCTAssertTrue(blocks.contains { block in
+            guard case .toolGroup(let group) = block else { return false }
+            return group.entries.contains { if case .preMutation(_, let payload) = $0 { return payload.text == "Edit is additive and safe." }; return false }
+        })
+        #else
         XCTAssertTrue(systemKinds.contains(.preMutation), "preMutation must surface, got \(systemKinds)")
+        #endif
         XCTAssertTrue(systemKinds.contains(.verified), "verified must surface, got \(systemKinds)")
         XCTAssertFalse(systemKinds.contains(.skillLoaded), "skillLoaded stays demoted, got \(systemKinds)")
     }

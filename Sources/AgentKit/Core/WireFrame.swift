@@ -22,6 +22,8 @@ struct WireFrame: Decodable {
     let deadlineMs: Int?
 
     // ── 事件帧字段（有 `kind`）──
+    let contextMaintenance: ContextMaintenance?
+    let contextOperationID: String?
     let kind: String?
     let at: String?
     /// v1.2 §4：会话内单调递增的持久化序号（**有空洞**，底层是共享自增 rowid）。
@@ -128,6 +130,8 @@ struct WireFrame: Decodable {
 
     enum CodingKeys: String, CodingKey {
         case type, kind, at, step, id, server, seq, background
+        case contextMaintenance = "context_maintenance"
+        case contextOperationID = "context_operation_id"
         case text, observation, output, assets, failure, err, error, ratio, todos, chunk
         case artifact, previews
         case toolResult = "tool_result"

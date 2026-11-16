@@ -94,6 +94,8 @@ public struct TimelineProjection: Sendable {
         var blocks: [TurnBlock] = []
         var pendingActivity: [ToolGroup.Entry] = []
         var activityAnchor: String?
+        var activityTimes: [(Date?, Date?)] = []
+        var currentBoundary: Date?
         var previousTurnID: String?
         var plans: [TurnPlan] = []
         var todos: [TodoItem] = []
@@ -142,11 +144,45 @@ public struct TimelineProjection: Sendable {
             }
         )
 
+        #if os(macOS)
+        let jobsByCallID = nodes.reduce(into: [String: ExecutionNode]()) { jobs, node in
+            if case .childStream(let job) = node.kind, job.kind == .job, let callID = job.originCallID {
+                jobs[callID] = node
+            }
+        }
+        var placedJobs: Set<String> = []
+        func appendJob(_ job: ChildStreamNodePayload, id: String, anchor: String, first: Date?, last: Date?) {
+            guard placedJobs.insert(job.childID).inserted else { return }
+            if pendingActivity.isEmpty { activityAnchor = anchor }
+            pendingActivity.append(.backgroundJob(id: id, job))
+            activityTimes.append((first, last))
+        }
+        #endif
+
         func flushActivity(isCollecting: Bool = false) {
             guard !pendingActivity.isEmpty, let anchor = activityAnchor else { return }
-            if pendingActivity.contains(where: { if case .tool = $0 { return true }; return false }) {
+            if pendingActivity.contains(where: { entry in
+                switch entry {
+                case .tool, .backgroundJob, .preMutation: return true
+                case .thinking: return false
+                }
+            }) {
                 // First entry identity never depends on tool count, status or invocation.
-                blocks.append(.toolGroup(ToolGroup(id: "activity:\(turnUID):\(anchor)", entries: pendingActivity, isCollecting: isCollecting)))
+                let knownTimes = !activityTimes.isEmpty && activityTimes.allSatisfy { $0.0 != nil && $0.1 != nil }
+                let started = knownTimes ? activityTimes.compactMap(\.0).min() : nil
+                let active = isCollecting || pendingActivity.contains {
+                    switch $0 {
+                    case .tool(let tool): return tool.status == .running
+                    case .thinking(_, let thought): return thought.isStreaming
+                    case .backgroundJob(_, let job): return job.status == .running
+                    case .preMutation: return false
+                    }
+                }
+                let ended: Date? = knownTimes && !active ? currentBoundary.map { boundary in
+                    max(boundary, activityTimes.compactMap(\.1).max() ?? boundary)
+                } : nil
+                blocks.append(.toolGroup(ToolGroup(id: "activity:\(turnUID):\(anchor)", entries: pendingActivity,
+                    isCollecting: isCollecting, startedAt: active || ended != nil ? started : nil, finishedAt: ended)))
             } else {
                 for entry in pendingActivity {
                     if case .thinking(let id, let payload) = entry {
@@ -155,10 +191,12 @@ public struct TimelineProjection: Sendable {
                 }
             }
             pendingActivity.removeAll()
+            activityTimes.removeAll()
             activityAnchor = nil
         }
 
         for node in nodes {
+            currentBoundary = node.firstObservedAt
             // Partial history can omit a user prompt at a turn boundary.
             // Never let an activity bridge two server turns in that case.
             if let previousTurnID, previousTurnID != node.turnID { flushActivity() }
@@ -176,6 +214,7 @@ public struct TimelineProjection: Sendable {
                 // tool it remains a standalone thinking card when flushed.
                 if pendingActivity.isEmpty { activityAnchor = node.id }
                 pendingActivity.append(.thinking(id: node.id, p))
+                activityTimes.append((node.firstObservedAt, node.lastObservedAt))
             case .tool(var p):
                 if let jobID = BackgroundJobPresentation.jobID(for: p) {
                     p.backgroundJobCommand = jobCommands[jobID]
@@ -188,6 +227,15 @@ public struct TimelineProjection: Sendable {
                 if semanticToolName == "propose_plan" {
                     continue
                 }
+                #if os(macOS)
+                // Replace the launcher at its original position, preserving
+                // the activity anchor as the job bracket arrives or finishes.
+                if let jobNode = jobsByCallID[p.callID], case .childStream(let job) = jobNode.kind {
+                    appendJob(job, id: jobNode.id, anchor: node.id,
+                              first: node.firstObservedAt, last: jobNode.lastObservedAt)
+                    continue
+                }
+                #endif
                 // 隐藏发起了子流入口卡的那张工具卡（详情在入口卡 → 子流查看器里看）。
                 if entryCardCallIDs.contains(p.callID) {
                     continue
@@ -206,10 +254,18 @@ public struct TimelineProjection: Sendable {
                 }
                 if pendingActivity.isEmpty { activityAnchor = node.id }
                 pendingActivity.append(.tool(p))
+                activityTimes.append((node.firstObservedAt, node.lastObservedAt))
             case .artifact(let p):
                 flushActivity()
                 blocks.append(.artifact(id: node.id, p.node))
             case .childStream(let p):
+                #if os(macOS)
+                if p.kind == .job {
+                    appendJob(p, id: node.id, anchor: node.id,
+                              first: node.firstObservedAt, last: node.lastObservedAt)
+                    continue
+                }
+                #endif
                 // 子流入口卡：内嵌在 turn card 中的折叠卡片（Claude Code 式）。
                 flushActivity()
                 blocks.append(.childStream(id: node.id, p))
@@ -229,6 +285,14 @@ public struct TimelineProjection: Sendable {
                     plans.append(plan)
                 }
             case .system(let p):
+                #if os(macOS)
+                if p.kind == .preMutation {
+                    if pendingActivity.isEmpty { activityAnchor = node.id }
+                    pendingActivity.append(.preMutation(id: node.id, p))
+                    activityTimes.append((node.firstObservedAt, node.lastObservedAt))
+                    continue
+                }
+                #endif
                 if p.kind == .modelActivity, let phase = p.metadata["phase"] {
                     // Model lifecycle → footer / spinner, never a block.
                     if phase == "finished" {
@@ -313,6 +377,7 @@ public struct TimelineProjection: Sendable {
                 }
             }
         }
+        currentBoundary = isLive ? nil : wallClock?.finishedAt ?? nodes.last?.lastObservedAt
         flushActivity(isCollecting: isLive)
         blocks = mergeAdjacentNarration(blocks)
 
@@ -330,6 +395,9 @@ public struct TimelineProjection: Sendable {
             : wallClock?.finishedAt ?? nodes.last.map {
                 Date(timeIntervalSince1970: $0.timestamp)
             }
+        #if os(macOS)
+        blocks = ContextMaintenancePresentation.mergeLegacyBlocks(blocks)
+        #endif
         return ConversationTurn(id: turnUID, userPrompt: userPrompt,
                                 blocks: blocks, plans: plans, todos: todos,
                                 footer: footer, isLive: isLive, invocations: invocations,
@@ -505,7 +573,8 @@ public struct TimelineProjection: Sendable {
         return ExecutionNode(
             id: graphNode.id, kind: kind,
             timestamp: graphNode.timestamp, turnID: graphNode.turnID,
-            invocationID: graphNode.invocationID
+            invocationID: graphNode.invocationID,
+            firstObservedAt: graphNode.firstObservedAt, lastObservedAt: graphNode.lastObservedAt
         )
     }
 

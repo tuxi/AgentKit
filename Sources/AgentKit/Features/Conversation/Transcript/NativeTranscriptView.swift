@@ -484,6 +484,7 @@ final class NativeTranscriptTextView: NSTextView, NSTextViewDelegate {
     private var measuredTextVersion = -1
     private var lastMeasuredWidth: CGFloat = 0
     private var lastMeasuredSize = CGSize.zero
+    private var toolOutputs: [String: NativeToolOutputScrollView] = [:]
 
     init(onAction: @escaping (TranscriptAction) -> Void) {
         let textStorage = NSTextStorage()
@@ -530,6 +531,7 @@ final class NativeTranscriptTextView: NSTextView, NSTextViewDelegate {
         let savedSelection = selectedRanges
         let result = TranscriptTextApplier.apply(attributedText, to: storage)
         if result != .noChange {
+            needsLayout = true
             textVersion += 1
             (textContainer as? TranscriptTextContainer)?.invalidateUserPromptLayouts()
         }
@@ -546,6 +548,8 @@ final class NativeTranscriptTextView: NSTextView, NSTextViewDelegate {
     /// layout manager can still describe a transcript rendered by this view in
     /// an earlier reuse cycle.
     func resetForReuse() {
+        toolOutputs.values.forEach { $0.removeFromSuperview() }
+        toolOutputs.removeAll()
         actions.removeAll(keepingCapacity: true)
         lastApplied = nil
         textStorage?.setAttributedString(NSAttributedString())
@@ -597,6 +601,23 @@ final class NativeTranscriptTextView: NSTextView, NSTextViewDelegate {
         measuredTextVersion = textVersion
         lastMeasuredSize = CGSize(width: width, height: height)
         return lastMeasuredSize
+    }
+
+    override func layout() {
+        super.layout()
+        guard let storage = textStorage, let manager = layoutManager, let container = textContainer else { return }
+        var liveIDs = Set<String>()
+        storage.enumerateAttribute(.desktopToolOutput, in: NSRange(location: 0, length: storage.length)) { value, range, _ in
+            guard let value = value as? NativeToolOutputValue else { return }
+            liveIDs.insert(value.identity)
+            let scroller = toolOutputs[value.identity] ?? NativeToolOutputScrollView(frame: .zero)
+            if scroller.superview == nil { addSubview(scroller); toolOutputs[value.identity] = scroller }
+            let glyphs = manager.glyphRange(forCharacterRange: range, actualCharacterRange: nil)
+            let rect = manager.boundingRect(forGlyphRange: glyphs, in: container)
+            scroller.frame = NSRect(x: 8, y: rect.minY + textContainerInset.height, width: max(1, bounds.width - 16), height: value.height)
+            scroller.update(value)
+        }
+        for id in Array(toolOutputs.keys) where !liveIDs.contains(id) { toolOutputs.removeValue(forKey: id)?.removeFromSuperview() }
     }
 
     func textView(_ textView: NSTextView, clickedOnLink link: Any, at charIndex: Int) -> Bool {

@@ -29,6 +29,10 @@ final class TurnActionDispatcher {
             break // NativeTurnTableCellView owns expand/collapse state.
         case .toggleThinking:
             break // Thinking expand/collapse handled by the owning view.
+        case .openToolResult(let callID):
+            guard tool(callID: callID) != nil else { return }
+            let nodeID = MacToolPresentation.inspectorNodeID(callID: callID, turn: turn, timeline: store.activeConversationViewModel?.snapshot.timeline ?? [])
+            store.showInspector(.tool(nodeID))
         case .openArtifact(let callID):
             guard let artifact = artifact(callID: callID) else { return }
             openInInspector(artifact)
@@ -143,6 +147,8 @@ final class TurnActionDispatcher {
             if case .childStream(_, let payload) = block, payload.childID == childID {
                 return payload
             }
+            if case .toolGroup(let group) = block,
+               let payload = group.backgroundJobs.first(where: { $0.childID == childID }) { return payload }
         }
         return nil
     }
