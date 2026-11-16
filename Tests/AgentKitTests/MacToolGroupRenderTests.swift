@@ -124,6 +124,123 @@ final class MacToolGroupRenderTests: XCTestCase {
         }
     }
 
+    func testLargeCollapsedHistoryExpandsOnlyClickedGroup() async throws {
+        let groups: [TurnBlock] = (0..<40).map { g in
+            let tools = (0..<120).map { i in
+                ToolNodePayload(callID: "perf-\(g)-\(i)", toolName: "exec_command", args: .object(["cmd": .string("swift test --filter Case\(i)")]), status: .completed, output: String(repeating: "output line\n", count: 30))
+            }
+            return .toolGroup(.init(id: "perf-group-\(g)", entries: tools.map(ToolGroup.Entry.tool)))
+        }
+        let model = ToolGroupRenderModel()
+        model.snapshot = .init(timeline: [], turns: [.init(id: "perf-turn", userPrompt: nil, blocks: groups, footer: nil, isLive: false)], generation: 1)
+        let web = try await present(model)
+        try await wait("document.querySelectorAll('.tool-group').length === 40", in: web)
+        _ = try await web.evaluateJavaScript("""
+        (() => {
+          const target = document.querySelector('[data-block-id="perf-group-20"] .tool-group-summary');
+          target.scrollIntoView({block:'center'});
+          window.__perfTarget = target;
+          window.__perfTop = target.getBoundingClientRect().top;
+          const start = performance.now();
+          const observer = new MutationObserver(() => {
+            if (document.querySelectorAll('.tool-summary').length === 120) {
+              window.__perfReady = performance.now() - start;
+              observer.disconnect();
+            }
+          });
+          observer.observe(target.parentElement, {childList:true,subtree:true});
+          target.click();
+          window.__perfSync = performance.now() - start;
+        })()
+        """)
+        try await wait("window.__perfReady !== undefined", in: web)
+        let metrics = try await web.evaluateJavaScript("({sync:window.__perfSync,ready:window.__perfReady,groups:document.querySelectorAll('.tool-group[open]').length,clicked:document.querySelector('[data-block-id=\"perf-group-20\"] .tool-group').open,shift:Math.abs(window.__perfTarget.getBoundingClientRect().top-window.__perfTop),outputs:document.querySelectorAll('.tool-output-frame').length})") as? [String: Any]
+        print("DISCLOSURE_PERFORMANCE \(metrics ?? [:])")
+        XCTAssertEqual(metrics?["groups"] as? Int, 1)
+        XCTAssertEqual(metrics?["clicked"] as? Bool, true)
+        XCTAssertEqual(metrics?["outputs"] as? Int, 0)
+        XCTAssertLessThan(metrics?["shift"] as? Double ?? 100, 2)
+        try await click("[data-block-id=\"perf-group-20\"] .tool-group-summary", in: web)
+        try await wait("document.querySelectorAll('.tool-summary').length === 0", in: web)
+        try await click("[data-block-id=\"perf-group-19\"] .tool-group-summary", in: web)
+        try await wait("document.querySelector('[data-block-id=\"perf-group-19\"] .tool-group').open && !document.querySelector('[data-block-id=\"perf-group-20\"] .tool-group').open", in: web)
+    }
+
+    func testExistingTextSelectionDoesNotSwallowDisclosureClick() async throws {
+        let model = ToolGroupRenderModel()
+        model.snapshot = snapshot(live: false, count: 3, output: "preserve output")
+        let web = try await present(model)
+        _ = try await web.evaluateJavaScript("""
+        (() => {
+          const range = document.createRange();
+          range.selectNodeContents(document.querySelector('.tool-group-title'));
+          window.getSelection().removeAllRanges(); window.getSelection().addRange(range);
+          document.querySelector('.tool-group-summary').click();
+        })()
+        """)
+        try await wait("document.querySelector('.tool-group').open", in: web)
+        let selected = try await web.evaluateJavaScript("window.getSelection().toString()") as? String
+        XCTAssertFalse(selected?.isEmpty ?? true, "disclosure must not destroy an existing selection")
+    }
+
+    func testDragSelectionAndRapidDisclosureActivationsRemainIndependent() async throws {
+        let model = ToolGroupRenderModel()
+        model.snapshot = snapshot(live: false, count: 3, output: "preserve output")
+        let web = try await present(model)
+        _ = try await web.evaluateJavaScript("""
+        (() => {
+          const header = document.querySelector('.tool-group-summary');
+          window.getSelection().removeAllRanges();
+          header.dispatchEvent(new PointerEvent('pointerdown', {bubbles:true,clientX:10,clientY:10}));
+          const range = document.createRange(); range.selectNodeContents(header.querySelector('.tool-group-title'));
+          window.getSelection().addRange(range);
+          header.dispatchEvent(new MouseEvent('click', {bubbles:true,cancelable:true,detail:1,clientX:80,clientY:10}));
+        })()
+        """)
+        let afterDrag = try await web.evaluateJavaScript("document.querySelector('.tool-group').open") as? Bool
+        XCTAssertEqual(afterDrag, false, "dragging text must not toggle the group")
+        try await click(".tool-group-summary", in: web)
+        try await wait("document.querySelector('.tool-group').open", in: web)
+        _ = try await web.evaluateJavaScript("document.querySelector('.tool-group-summary').click(); document.querySelector('.tool-group-summary').click()")
+        try await wait("document.querySelector('.tool-group').open", in: web)
+        let afterDoubleClick = try await web.evaluateJavaScript("document.querySelector('.tool-group').open") as? Bool
+        XCTAssertEqual(afterDoubleClick, true, "two activations must toggle twice rather than both using stale state")
+    }
+
+    func testPatchDoesNotRestorePreviousGroupFocusOverNewActivation() async throws {
+        func value(marker: Bool) -> RuntimeSnapshot {
+            var blocks: [TurnBlock] = ["first", "second"].map { id in
+                .toolGroup(.init(id: id, entries: [.tool(.init(callID: "focus-\(id)", toolName: "exec_command", args: .object(["cmd": .string("pwd")]), status: .completed))]))
+            }
+            if marker { blocks.append(.text(id: "patch-marker", .init(role: .assistant, text: "Patch applied"))) }
+            return .init(timeline: [], turns: [.init(id: "focus-turn", userPrompt: nil, blocks: blocks, footer: nil, isLive: false)], generation: marker ? 2 : 1)
+        }
+        let model = ToolGroupRenderModel()
+        model.snapshot = value(marker: false)
+        let web = try await present(model)
+        let first = ConversationWebDocumentBuilder.build(snapshot: value(marker: false), conversationID: "tool-group-design", revision: 10000)
+        let second = ConversationWebDocumentBuilder.build(snapshot: value(marker: true), conversationID: "tool-group-design", revision: 10001)
+        let reset = try JSONEncoder().encode(ConversationWebDocumentDiffer.reset(first)).base64EncodedString()
+        _ = try await web.evaluateJavaScript("window.AgentKitWorkbench.applyUpdateBase64('\(reset)')")
+        try await wait("document.querySelectorAll('.tool-group').length === 2", in: web)
+        try await Task.sleep(for: .milliseconds(100))
+        let patch = try JSONEncoder().encode(XCTUnwrap(ConversationWebDocumentDiffer.update(from: first, to: second))).base64EncodedString()
+        _ = try await web.evaluateJavaScript("""
+        (() => {
+          window.getSelection().removeAllRanges();
+          document.querySelector('[data-block-id="first"] .tool-group-summary').focus();
+          window.AgentKitWorkbench.applyUpdateBase64('\(patch)');
+          const target = document.querySelector('[data-block-id="second"] .tool-group-summary');
+          target.focus(); target.click();
+        })()
+        """)
+        try await wait("document.querySelector('[data-block-id=\"patch-marker\"]') !== null && document.querySelector('[data-block-id=\"second\"] .tool-group').open", in: web)
+        try await Task.sleep(for: .milliseconds(100))
+        let state = try await web.evaluateJavaScript("({correctFocus:document.activeElement === document.querySelector('[data-block-id=\"second\"] .tool-group-summary'),firstOpen:document.querySelector('[data-block-id=\"first\"] .tool-group').open})") as? [String: Any]
+        XCTAssertEqual(state?["correctFocus"] as? Bool, true)
+        XCTAssertEqual(state?["firstOpen"] as? Bool, false)
+    }
+
     func testCurrentActionStaysWhenOpenedAndFinishingShowsAggregate() async throws {
         func mixedSnapshot(live: Bool, generation: UInt64) -> RuntimeSnapshot {
             let tools: [ToolNodePayload] = [

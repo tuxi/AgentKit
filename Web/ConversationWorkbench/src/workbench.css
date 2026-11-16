@@ -2535,3 +2535,7 @@ button.user-asset-thumbnail {
 .turn-outcome details[open] > summary > .disclosure-chevron { transform: rotate(90deg); }
 .turn-outcome dl { margin: 12px 0; }
 .turn-outcome dd { min-width: 0; overflow-wrap: anywhere; }
+
+/* The viewport controller owns anchoring. A second browser correction during
+   disclosure would move the next click target underneath the pointer. */
+html { overflow-anchor: none; }

@@ -1,5 +1,7 @@
 import React, {
   memo,
+  useCallback,
+  useDeferredValue,
   useEffect,
   useLayoutEffect,
   useRef,
@@ -758,8 +760,18 @@ class ViewportController {
 
   beginReadingActivity(): void {
     this.readingActivity = true;
+    this.interactionEpoch += 1;
+    this.lastAnchor = null;
     this.setPinned(false);
     this.cancelScheduledFollow();
+  }
+
+  preserveReadingAnchor(element: HTMLElement, top: number): void {
+    const delta = element.getBoundingClientRect().top - top;
+    if (Math.abs(delta) > 0.5) this.performProgrammaticScroll(() => window.scrollBy(0, delta));
+    const target = element.closest<HTMLElement>("[data-anchor-id]");
+    if (target?.dataset.anchorId) this.lastAnchor = { id: target.dataset.anchorId, top: target.getBoundingClientRect().top };
+    this.scheduleViewportReport();
   }
 
   jumpToLatest(): void {
@@ -1488,39 +1500,60 @@ function TodoPanel({
  */
 // Scope disclosure preferences to the conversation and turn, independently of
 // streaming status and whether the parent group is currently visible.
-const TurnDisclosureContext = React.createContext<{
-  scope: string;
-  expanded: Record<string, boolean>;
-  setExpanded: React.Dispatch<React.SetStateAction<Record<string, boolean>>>;
-} | null>(null);
+/** Stable keyed subscriptions keep a click local to its disclosure. The store
+ * belongs to the turn, so unmounting a collapsed group preserves child choices. */
+class DisclosureStore {
+  private values = new Map<string, boolean>();
+  private listeners = new Map<string, Set<() => void>>();
+  get(key: string, fallback: boolean): boolean { return this.values.get(key) ?? fallback; }
+  subscribe(key: string, listener: () => void): () => void {
+    const listeners = this.listeners.get(key) ?? new Set<() => void>();
+    listeners.add(listener);
+    this.listeners.set(key, listeners);
+    return () => { listeners.delete(listener); if (!listeners.size) this.listeners.delete(key); };
+  }
+  toggle(key: string, fallback: boolean): void {
+    this.values.set(key, !this.get(key, fallback));
+    this.listeners.get(key)?.forEach(listener => listener());
+  }
+}
+const TurnDisclosureContext = React.createContext<{ scope: string; store: DisclosureStore } | null>(null);
 
-function useActivityDisclosure(
-  disclosureID: string,
-  defaultOpen = false,
-): { open: boolean; onSummaryClick: (event: React.MouseEvent<HTMLElement>) => void } {
-  const [localExpanded, setLocalExpanded] = useState<boolean | undefined>(undefined);
+function useActivityDisclosure(disclosureID: string, defaultOpen = false) {
   const context = React.useContext(TurnDisclosureContext);
+  const [localStore] = useState(() => new DisclosureStore());
+  const store = context?.store ?? localStore;
   const key = `${context?.scope}:${disclosureID}`;
-  const preference = context ? context.expanded[key] : localExpanded;
-  const open = preference ?? defaultOpen;
+  const subscribe = useCallback((listener: () => void) => store.subscribe(key, listener), [store, key]);
+  const snapshot = useCallback(() => store.get(key, defaultOpen), [store, key, defaultOpen]);
+  const open = useSyncExternalStore(subscribe, snapshot, snapshot);
   const anchor = useRef<{ element: HTMLElement; top: number } | null>(null);
+  const gesture = useRef<{ x: number; y: number } | null>(null);
   useLayoutEffect(() => {
     const saved = anchor.current;
     anchor.current = null;
-    if (saved?.element.isConnected) window.scrollBy(0, saved.element.getBoundingClientRect().top - saved.top);
+    if (saved?.element.isConnected) viewportController.preserveReadingAnchor(saved.element, saved.top);
   }, [open]);
+  const onPointerDown = (event: React.PointerEvent<HTMLElement>) => {
+    gesture.current = { x: event.clientX, y: event.clientY };
+  };
   const onSummaryClick = (event: React.MouseEvent<HTMLElement>) => {
-    if (!window.getSelection()?.isCollapsed) {
+    const selection = window.getSelection();
+    const down = gesture.current;
+    gesture.current = null;
+    // Preserve drag-to-select, but an old selection elsewhere must never make
+    // a mouse/keyboard activation silently stop working.
+    if (event.detail > 0 && down && selection && !selection.isCollapsed
+        && Math.hypot(event.clientX - down.x, event.clientY - down.y) > 4) {
       event.preventDefault();
       return;
     }
     event.preventDefault();
     anchor.current = { element: event.currentTarget, top: event.currentTarget.getBoundingClientRect().top };
     viewportController.beginReadingActivity();
-    if (context) context.setExpanded((values) => ({ ...values, [key]: !open }));
-    else setLocalExpanded(!open);
+    store.toggle(key, defaultOpen);
   };
-  return { open, onSummaryClick };
+  return { open, onSummaryClick, onPointerDown };
 }
 
 /**
@@ -2323,7 +2356,7 @@ function UIPreviewActivity({
   );
 }
 
-function Tool({
+const Tool = memo(function Tool({
   tool,
   conversationID,
   turnID,
@@ -2341,7 +2374,7 @@ function Tool({
     ?? tool.uiLayout?.overlay ?? tool.uiPreview?.fallback;
   // Tool rows stay compact by default, including while they run. The parent
   // group header communicates the current action without expanding detail.
-  const { open, onSummaryClick } = useActivityDisclosure(`tool:${tool.id}`);
+  const { open, onSummaryClick, onPointerDown } = useActivityDisclosure(`tool:${tool.id}`);
   // While the tool runs, follow the newest log lines inside the bounded output
   // frame; scrolling up to read pauses the follow until the user returns to
   // the bottom (see useTailFollow).
@@ -2357,7 +2390,7 @@ function Tool({
       <summary
         className="interactive tool-summary"
         data-focus-id={`tool:${tool.id}`}
-        onClick={onSummaryClick}
+        onClick={onSummaryClick} onPointerDown={onPointerDown}
       >
         {structuredImageSource ? (
           <ImageViewPreview
@@ -2458,7 +2491,7 @@ function Tool({
       </div> : null}
     </details>
   );
-}
+});
 
 function activateSelectableAction(
   event: React.MouseEvent | React.KeyboardEvent,
@@ -2474,7 +2507,7 @@ function activateSelectableAction(
 
 /** Context transactions stay one quiet row, with explicit result provenance. */
 function TurnOutcome({ block }: { block: ConversationWebBlock }): React.JSX.Element {
-  const { open, onSummaryClick } = useActivityDisclosure(`outcome:${block.id}`);
+  const { open, onSummaryClick, onPointerDown } = useActivityDisclosure(`outcome:${block.id}`);
   const value = block.outcome!;
   if (value.kind === "cancelled") return <aside className="turn-cancelled">{value.title}</aside>;
   return <aside className="turn-outcome" role="note">
@@ -2482,7 +2515,7 @@ function TurnOutcome({ block }: { block: ConversationWebBlock }): React.JSX.Elem
     {value.message ? <p>{value.message}</p> : null}
     {block.actionID ? <button className="interactive turn-outcome-context" onClick={() => dispatchAction(block.actionID!)}>{value.contextLabel}</button> : null}
     <details open={open} className="turn-outcome-details">
-      <summary className="interactive" onClick={onSummaryClick} data-focus-id={`outcome:${block.id}`}>{value.detailsLabel}<span className="disclosure-chevron" aria-hidden="true">›</span></summary>
+      <summary className="interactive" onClick={onSummaryClick} onPointerDown={onPointerDown} data-focus-id={`outcome:${block.id}`}>{value.detailsLabel}<span className="disclosure-chevron" aria-hidden="true">›</span></summary>
       {open ? <div>
         <dl>{value.facts.map((fact, i) => <div key={i}><dt>{fact.label}</dt><dd>{fact.value}</dd></div>)}</dl>
         <details className="turn-outcome-raw"><summary className="interactive">{value.rawLabel}<span className="disclosure-chevron" aria-hidden="true">›</span></summary><pre>{value.diagnostic}</pre></details>
@@ -2493,11 +2526,11 @@ function TurnOutcome({ block }: { block: ConversationWebBlock }): React.JSX.Elem
 }
 
 function ContextChip({ block }: { block: ConversationWebBlock }): React.JSX.Element {
-  const { open, onSummaryClick } = useActivityDisclosure(`context:${block.id}`);
+  const { open, onSummaryClick, onPointerDown } = useActivityDisclosure(`context:${block.id}`);
   const value = block.contextMaintenance;
   if (!value) return <aside className="system-block">{block.text}</aside>;
   return <details className="context-maintenance" data-status={value.status} open={open}>
-    <summary className="interactive context-maintenance-summary" onClick={onSummaryClick} data-focus-id={`context:${block.id}`}>
+    <summary className="interactive context-maintenance-summary" onClick={onSummaryClick} onPointerDown={onPointerDown} data-focus-id={`context:${block.id}`}>
       <span className="context-maintenance-title">{value.title}</span>
       <span aria-hidden="true">·</span>
       <span className="context-maintenance-result">{value.summary}</span>
@@ -2567,7 +2600,7 @@ function VerifiedBlock({ block }: { block: ConversationWebBlock }): React.JSX.El
 }
 
 function ThinkingBlock({ block }: { block: ConversationWebBlock }): React.JSX.Element | null {
-  const { open, onSummaryClick } = useActivityDisclosure(`thinking:${block.id}`);
+  const { open, onSummaryClick, onPointerDown } = useActivityDisclosure(`thinking:${block.id}`);
   const streaming = block.status === "streaming";
   const [scrollPanel, setScrollPanel] = useState<HTMLDivElement | null>(null);
 
@@ -2595,7 +2628,7 @@ function ThinkingBlock({ block }: { block: ConversationWebBlock }): React.JSX.El
       <summary
         className="interactive tool-summary thinking-summary"
         data-focus-id={`thinking:${block.id}`}
-        onClick={onSummaryClick}
+        onClick={onSummaryClick} onPointerDown={onPointerDown}
       >
         <span className="thinking-label">{block.title}</span>
         <span className="disclosure-chevron" aria-hidden="true">›</span>
@@ -2641,11 +2674,33 @@ function ToolGroupBlock({ block, conversationID, turnID }: {
   conversationID: string;
   turnID: string;
 }): React.JSX.Element {
-  const { open, onSummaryClick } = useActivityDisclosure(`group:${block.id}`);
+  const { open, onSummaryClick, onPointerDown } = useActivityDisclosure(`group:${block.id}`);
+  const deferredOpen = useDeferredValue(open);
+  const large = (block.activityOrder?.length ?? block.tools.length) > 80;
+  const ready = !large || deferredOpen;
+  const headerTitle = block.title;
+  const hasActive = block.status === "running" && (block.tools.some(tool => tool.status === "running") || (block.activityJobs ?? []).some(job => job.status === "running"));
+  return <details className="tool-group" data-status={block.status} data-collecting={block.isCollecting} data-active={hasActive} open={open} data-anchor-id={`group:${turnID}:${block.id}`}>
+    <summary className="interactive tool-group-summary" data-focus-id={`tool-group:${block.id}`} onClick={onSummaryClick} onPointerDown={onPointerDown}>
+      {block.status === "running" ? <span className="tool-group-running" role="img" aria-label={block.statusText}>
+        <span aria-hidden="true" /><span aria-hidden="true" /><span aria-hidden="true" /><span aria-hidden="true" />
+      </span> : null}
+      <span className="tool-group-title" title={headerTitle}>{headerTitle}</span>
+      {block.failureText ? <span className="tool-status" data-tone="failed">{block.failureText}</span> : null}
+      <GroupElapsed block={block} />
+      <span className="disclosure-chevron" aria-hidden="true">›</span>
+    </summary>
+    {open ? ready ? <ToolGroupContents block={block} conversationID={conversationID} turnID={turnID} />
+      : <div className="tool-group-tools" aria-busy="true"><ActivitySkeleton label={block.title} /></div> : null}
+  </details>;
+}
+
+const ToolGroupContents = memo(function ToolGroupContents({ block, conversationID, turnID }: {
+  block: ConversationWebBlock; conversationID: string; turnID: string;
+}): React.JSX.Element {
   const tools = new Map(block.tools.map((tool) => [`tool:${tool.id}`, tool]));
   const thinking = new Map((block.activityThinking ?? []).map((item) => [`${item.systemKind === "preMutation" ? "preMutation" : "thinking"}:${item.id}`, item]));
   const jobs = new Map((block.activityJobs ?? []).map(item => [`job:${item.actionTooltip}`, item]));
-  const headerTitle = block.title;
   const runningTools = block.tools.filter(tool => tool.status === "running");
   // Empty output is pending; streaming output already supplies its own visible
   // activity. The group tail also covers gaps and independent background jobs.
@@ -2659,17 +2714,7 @@ function ToolGroupBlock({ block, conversationID, turnID }: {
     if (current?.rawName === "job_wait" && current.backgroundJobID && last?.rawName === "job_wait" && last.backgroundJobID === current.backgroundJobID) previous!.push(id);
     else rows.push([id]);
   }
-  return <details className="tool-group" data-status={block.status} data-collecting={block.isCollecting} data-active={runningTools.length > 0 || runningJobs.length > 0} open={open} data-anchor-id={`group:${turnID}:${block.id}`}>
-    <summary className="interactive tool-group-summary" data-focus-id={`tool-group:${block.id}`} onClick={onSummaryClick}>
-      {block.status === "running" ? <span className="tool-group-running" role="img" aria-label={block.statusText}>
-        <span aria-hidden="true" /><span aria-hidden="true" /><span aria-hidden="true" /><span aria-hidden="true" />
-      </span> : null}
-      <span className="tool-group-title" title={headerTitle}>{headerTitle}</span>
-      {block.failureText ? <span className="tool-status" data-tone="failed">{block.failureText}</span> : null}
-      <GroupElapsed block={block} />
-      <span className="disclosure-chevron" aria-hidden="true">›</span>
-    </summary>
-    {open ? <div className="tool-group-tools">{rows.map(ids => {
+  return <div className="tool-group-tools">{rows.map(ids => {
       const first = tools.get(ids[0]);
       if (!first) {
         const job = jobs.get(ids[0]);
@@ -2689,9 +2734,8 @@ function ToolGroupBlock({ block, conversationID, turnID }: {
       return <Tool key={ids[0]} tool={combined} waitRecords={waits} conversationID={conversationID} turnID={turnID} />;
     })}
       {pending ? <ActivitySkeleton className="tool-group-pending" label={block.statusText} /> : null}
-    </div> : null}
-  </details>;
-}
+    </div>;
+});
 
 const Block = memo(function Block({
   block,
@@ -3479,12 +3523,10 @@ const Turn = memo(function Turn({
   conversationID: string;
 }) {
   const headingID = `turn-heading-${turn.id}`;
-  const [expandedDisclosures, setExpandedDisclosures] = useState<Record<string, boolean>>({});
   const disclosureContext = React.useMemo(() => ({
     scope: `${conversationID}:${turn.id}`,
-    expanded: expandedDisclosures,
-    setExpanded: setExpandedDisclosures,
-  }), [conversationID, expandedDisclosures]);
+    store: new DisclosureStore(),
+  }), [conversationID, turn.id]);
   const localAssets = turn.localAssets ?? [];
   useSyncExternalStore(
     subscribeLocalAssetURLs,
@@ -3964,8 +4006,12 @@ function App(): React.JSX.Element {
           || restoration.revision !== conversation.revision) return;
       restoreExpandedDisclosures(restoration.expandedDisclosures);
       restoreHorizontalOffsets(restoration.horizontalOffsets);
-      restoreSelection(restoration.selection);
-      restoreFocusedElement(restoration.focusID);
+      // An activation after capture owns focus/selection as well as scroll.
+      // Never restore the previous group's focus over a newer user choice.
+      if (restoration.viewport.interactionEpoch === viewportController.diagnostics().interactionEpoch) {
+        restoreSelection(restoration.selection);
+        restoreFocusedElement(restoration.focusID);
+      }
       viewportController.restore(restoration.viewport, restoration.forcePinToBottom);
       document.documentElement.classList.add("workbench-ready");
       postToNative({
