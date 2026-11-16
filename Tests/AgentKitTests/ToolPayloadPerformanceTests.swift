@@ -92,6 +92,7 @@ final class ToolPayloadPerformanceTests: XCTestCase {
 
     @MainActor
     func testExpandedLargeFailedPreviewLayoutStaysUnderOneSecond() {
+        warmUpLayout()
         let tool = largeFailedPreviewTool()
         let group = ToolGroup(id: "group_probe", tools: [tool])
         let state = TranscriptDocumentState(expandedToolIDs: [
@@ -112,6 +113,7 @@ final class ToolPayloadPerformanceTests: XCTestCase {
 
     @MainActor
     func testExpandedDetailWithSummaryDoesNotRenderFullPayload() {
+        warmUpLayout()
         let tool = largeFailedPreviewTool(htmlBytes: 2_000_000)
         let summary = ToolPayloadSummaryBuilder.make(tool: tool)
         let input = summary.input!
@@ -212,6 +214,7 @@ final class ToolPayloadPerformanceTests: XCTestCase {
 
     @MainActor
     func testRepeatedExpandCollapseAndSteadyLayoutStayBounded() {
+        warmUpLayout()
         let tool = largeFailedPreviewTool(htmlBytes: 5_000_000)
         let group = ToolGroup(id: "group_probe", tools: [tool])
         var durations: [Duration] = []
@@ -252,6 +255,14 @@ final class ToolPayloadPerformanceTests: XCTestCase {
             try await Task.sleep(for: .milliseconds(5))
         }
         XCTAssertNotNil(model.summary)
+    }
+
+    @MainActor
+    private func warmUpLayout() {
+        _ = layoutDuration(
+            of: Text("warm-up"),
+            size: CGSize(width: 32, height: 32)
+        )
     }
 
     @MainActor
