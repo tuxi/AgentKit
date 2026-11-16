@@ -64,7 +64,9 @@ struct PreviewFixtureManifestRunner {
         )
         if FileManager.default.fileExists(atPath: sibling.path) { return sibling }
 
-        let home = FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent(
+        let hostHome = ProcessInfo.processInfo.environment["SIMULATOR_HOST_HOME"]
+            ?? NSHomeDirectory()
+        let home = URL(fileURLWithPath: hostHome).appendingPathComponent(
             "Documents/work/git/code-agent/docs/capability-runtime-upgrade/fixtures/preview/v1"
         )
         if FileManager.default.fileExists(atPath: home.path) { return home }

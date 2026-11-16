@@ -127,53 +127,7 @@ struct ToolCallGroupView: View {
 
     @ViewBuilder
     private func toolDetailView(_ tool: ToolNodePayload) -> some View {
-        VStack(alignment: .leading, spacing: 4) {
-            Text(tool.toolName).font(.caption2).foregroundStyle(.tertiary)
-            // Args (if available)
-            if let args = tool.args, !args.isEmpty {
-                Text(ToolTranscriptText().text("input"))
-                    .font(.caption2.weight(.semibold))
-                    .foregroundStyle(.tertiary)
-                MarkdownRenderer(text: args.prettyPrinted, baseFont: .caption)
-            }
-            // Output — DAG component for workflow tools, markdown for others
-            if !tool.output.isEmpty {
-                if let dag = tryParseDAG(from: tool.output) {
-                    workflowToolDAGView(dag: dag, toolName: tool.toolName)
-                } else {
-                    Text(ToolTranscriptText().text("output"))
-                        .font(.caption2.weight(.semibold))
-                        .foregroundStyle(.tertiary)
-                        .padding(.top, 2)
-                    MarkdownRenderer(text: tool.output, baseFont: .caption)
-                }
-            }
-            // Error
-            if tool.status == .failed {
-                HStack(spacing: 4) {
-                    Image(systemName: "exclamationmark.triangle.fill")
-                        .font(.caption2)
-                    Text(ToolTranscriptText().text("failed"))
-                        .font(.caption2)
-                    if let code = tool.exitCode {
-                        Text("(exit \(code))")
-                            .font(.caption2)
-                            .foregroundStyle(.tertiary)
-                    }
-                }
-                .foregroundStyle(.red)
-                .padding(.top, 2)
-            }
-            // Elapsed
-            if let elapsed = tool.elapsedMs {
-                Text("耗时 \(elapsed)ms")
-                    .font(.caption2)
-                    .foregroundStyle(.tertiary)
-                    .padding(.top, 1)
-            }
-        }
-        .padding(.horizontal, 10)
-        .padding(.vertical, 6)
+        ToolDetailRowView(tool: tool, onAction: onAction)
 
         if tool.callID != group.tools.last?.callID {
             Divider()
@@ -184,15 +138,22 @@ struct ToolCallGroupView: View {
     // MARK: - Workflow tool DAG rendering
 
     /// 尝试从工具输出 JSON 解析 DAG 定义（兼容 `workflow_definition`、`workflow_plan_ready` 等格式）。
-    private func tryParseDAG(from jsonString: String) -> ToolResultDAGData? {
-        guard let data = jsonString.data(using: .utf8),
+    /// Large outputs are never decoded here: the expanded row already bounds
+    /// them behind a summary, and decoding every body pass would repeat that
+    /// cost on the main thread.
+    fileprivate static func parseDAG(from jsonString: String) -> ToolResultDAGData? {
+        guard jsonString.utf8.count <= 64 * 1024,
+              jsonString.contains("\"nodes\""),
+              let data = jsonString.data(using: .utf8),
               let dag = try? JSONDecoder().decode(ToolResultDAGData.self, from: data),
               !dag.nodes.isEmpty else { return nil }
         return dag
     }
 
-    @ViewBuilder
-    private func workflowToolDAGView(dag: ToolResultDAGData, toolName: String) -> some View {
+    fileprivate static func dagView(
+        _ dag: ToolResultDAGData,
+        toolName: String
+    ) -> some View {
         let nodes = dag.nodes.map { wn in
             WorkflowNode(
                 name: wn.name,
@@ -203,7 +164,7 @@ struct ToolCallGroupView: View {
         }
         let edges = (dag.edges ?? []).map { WorkflowEdge(from: $0.from, to: $0.to) }
 
-        VStack(alignment: .leading, spacing: 6) {
+        return VStack(alignment: .leading, spacing: 6) {
             HStack(spacing: 6) {
                 Image(systemName: "flowchart.fill")
                     .font(.caption2)
@@ -233,6 +194,157 @@ struct ToolCallGroupView: View {
     }
 }
 
+// MARK: - Expanded tool detail
+
+/// Expanded detail for one tool call. The payload summary renders first and
+/// the full input/output is formatted lazily, off the main actor, and cached
+/// per call. A failed `ui_preview` call can carry megabytes of HTML in both
+/// its arguments and its echoed error; that payload must never be encoded or
+/// laid out synchronously on expansion.
+private struct ToolDetailRowView: View {
+    let tool: ToolNodePayload
+    let onAction: (TranscriptAction) -> Void
+
+    @StateObject private var model = ToolPayloadDetailModel()
+    @State private var expandedKinds: Set<ToolPayloadKind> = []
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 4) {
+            HStack(spacing: 6) {
+                Text(tool.toolName)
+                    .font(.caption2)
+                    .foregroundStyle(.tertiary)
+                Spacer(minLength: 4)
+                Button {
+                    onAction(.openToolResult(callID: tool.callID))
+                } label: {
+                    Label("Inspector", systemImage: "info.circle")
+                        .font(.caption2)
+                }
+                .buttonStyle(.plain)
+                .foregroundStyle(.secondary)
+            }
+
+            if let failure = model.summary?.failure {
+                failureView(failure)
+            }
+
+            if let summary = model.summary {
+                if let input = summary.input {
+                    ToolPayloadDetailSection(
+                        title: ToolTranscriptText().text("input"),
+                        kind: .inputJSON,
+                        summary: input,
+                        tool: tool,
+                        model: model,
+                        isExpanded: expansion(.inputJSON),
+                        maxHeight: 96,
+                        horizontalScroll: true
+                    )
+                }
+                outputSection(summary.output)
+            }
+
+            if tool.status == .failed, model.summary?.failure == nil {
+                HStack(spacing: 4) {
+                    Image(systemName: "exclamationmark.triangle.fill")
+                        .font(.caption2)
+                    Text(ToolTranscriptText().text("failed"))
+                        .font(.caption2)
+                    if let code = tool.exitCode {
+                        Text("(exit \(code))")
+                            .font(.caption2)
+                            .foregroundStyle(.tertiary)
+                    }
+                }
+                .foregroundStyle(.red)
+                .padding(.top, 2)
+            }
+
+            if let elapsed = tool.elapsedMs {
+                Text("耗时 \(elapsed)ms")
+                    .font(.caption2)
+                    .foregroundStyle(.tertiary)
+                    .padding(.top, 1)
+            }
+        }
+        .padding(.horizontal, 10)
+        .padding(.vertical, 6)
+        .task(id: ToolPayloadDetailModel.contentKey(tool)) {
+            model.prepare(tool: tool)
+        }
+        .onChange(of: model.summary) { _, summary in
+            guard let summary else { return }
+            if let input = summary.input, input.isInlineFriendly {
+                expandedKinds.insert(.inputJSON)
+            }
+        }
+    }
+
+    @ViewBuilder
+    private func outputSection(_ summary: ToolPayloadSummary?) -> some View {
+        if !tool.output.isEmpty {
+            if let summary {
+                if !summary.isInlineFriendly {
+                    ToolPayloadDetailSection(
+                        title: ToolTranscriptText().text("output"),
+                        kind: .outputText,
+                        summary: summary,
+                        tool: tool,
+                        model: model,
+                        isExpanded: expansion(.outputText),
+                        maxHeight: 96,
+                        horizontalScroll: false
+                    )
+                } else if let dag = ToolCallGroupView.parseDAG(from: tool.output) {
+                    ToolCallGroupView.dagView(dag, toolName: tool.toolName)
+                } else {
+                    Text(ToolTranscriptText().text("output"))
+                        .font(.caption2.weight(.semibold))
+                        .foregroundStyle(.tertiary)
+                        .padding(.top, 2)
+                    MarkdownRenderer(text: tool.output, baseFont: .caption)
+                }
+            } else {
+                ProgressView()
+                    .controlSize(.small)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+            }
+        }
+    }
+
+    private func failureView(_ failure: ToolFailureSummary) -> some View {
+        HStack(alignment: .top, spacing: 4) {
+            Image(systemName: "exclamationmark.triangle.fill")
+                .font(.caption2)
+            VStack(alignment: .leading, spacing: 1) {
+                Text(failure.label)
+                    .font(.caption2)
+                    .lineLimit(2)
+                Text(failure.sizeLabel + (tool.exitCode.map { " · exit \($0)" } ?? ""))
+                    .font(.caption2)
+                    .foregroundStyle(.tertiary)
+            }
+            Spacer(minLength: 0)
+        }
+        .foregroundStyle(.red)
+        .padding(.top, 1)
+    }
+
+    private func expansion(_ kind: ToolPayloadKind) -> Binding<Bool> {
+        Binding(
+            get: { expandedKinds.contains(kind) },
+            set: { isOn in
+                if isOn {
+                    expandedKinds.insert(kind)
+                } else {
+                    expandedKinds.remove(kind)
+                }
+            }
+        )
+    }
+}
+
 // MARK: - Tool result DAG detection types
 
 /// 工具输出中 DAG 定义的轻量 Decodable（workflow_definition / workflow_plan_ready 等格式）。
@@ -257,34 +369,4 @@ private struct ToolResultDAGNode: Decodable {
 private struct ToolResultDAGEdge: Decodable {
     let from: String
     let to: String
-}
-
-private extension JSONValue {
-    var isEmpty: Bool {
-        switch self {
-        case .object(let d): return d.isEmpty
-        case .array(let a): return a.isEmpty
-        case .string(let s): return s.isEmpty
-        case .null: return true
-        case .bool, .number, .integer: return false
-        }
-    }
-
-    var prettyPrinted: String {
-        switch self {
-        case .object, .array:
-            let encoder = JSONEncoder()
-            encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
-            if let data = try? encoder.encode(self),
-               let str = String(data: data, encoding: .utf8) {
-                return "```json\n\(str)\n```"
-            }
-            return "\(self)"
-        case .string(let s): return s
-        case .number(let n): return "\(n)"
-        case .integer(let n): return "\(n)"
-        case .bool(let b): return b ? "true" : "false"
-        case .null: return "null"
-        }
-    }
 }

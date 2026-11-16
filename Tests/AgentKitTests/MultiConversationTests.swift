@@ -1,3 +1,4 @@
+#if os(macOS)
 import XCTest
 @testable import AgentKit
 
@@ -1760,3 +1761,4 @@ private final class InMemoryAttentionReadStore: ConversationAttentionReadStore, 
     func lastNotifiedApprovalSequence(for sessionID: String) -> Int64? { notifiedApproval[sessionID] }
     func setLastNotifiedApprovalSequence(_ sequence: Int64, for sessionID: String) { notifiedApproval[sessionID] = sequence }
 }
+#endif

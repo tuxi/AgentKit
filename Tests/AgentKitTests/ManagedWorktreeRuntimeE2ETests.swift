@@ -1,3 +1,4 @@
+#if os(macOS)
 import Foundation
 import XCTest
 @testable import AgentKit
@@ -406,3 +407,4 @@ private final class RealRuntimeProcess: @unchecked Sendable {
         throw RuntimeE2EError.healthTimeout
     }
 }
+#endif

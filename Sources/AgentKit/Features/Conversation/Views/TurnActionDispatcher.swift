@@ -36,6 +36,9 @@ final class TurnActionDispatcher {
         case .openArtifact(let callID):
             guard let artifact = artifact(callID: callID) else { return }
             openInInspector(artifact)
+        case .openToolResult(let callID):
+            guard tool(callID: callID) != nil else { return }
+            store.showInspector(.tool(callID))
         case .openAsset(let reference):
             openAsset(reference)
         case .openUIEvidence(let callID):

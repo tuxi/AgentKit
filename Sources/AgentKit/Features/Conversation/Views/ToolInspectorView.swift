@@ -66,20 +66,12 @@ struct ToolInspectorView: View {
                 }
 
                 // Args
-                if let args = p.args {
-                    VStack(alignment: .leading, spacing: 8) {
-                        Text("参数")
-                            .font(.caption.weight(.semibold))
-                            .foregroundStyle(.secondary)
-                        Text(args.prettyPrinted)
-                            .font(.system(.body, design: .monospaced))
-                            .padding(12)
-                            .frame(maxWidth: .infinity, alignment: .leading)
-                            .background(
-                                RoundedRectangle(cornerRadius: 8)
-                                    .fill(Color.primary.opacity(0.05))
-                            )
-                    }
+                if p.args != nil {
+                    InspectorPayloadView(
+                        tool: p,
+                        kind: .inputJSON,
+                        title: "参数"
+                    )
                 }
 
                 Divider()
@@ -215,29 +207,7 @@ struct ToolInspectorView: View {
     }
 
     private func outputPreview(_ text: String) -> String {
-        let preview = text.prefix(500)
-        return text.count > 500 ? String(preview) + "\n…" : String(preview)
-    }
-}
-
-// MARK: - JSONValue Pretty Print
-
-private extension JSONValue {
-    var prettyPrinted: String {
-        switch self {
-        case .object, .array:
-            let encoder = JSONEncoder()
-            encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
-            if let data = try? encoder.encode(self),
-               let str = String(data: data, encoding: .utf8) {
-                return str
-            }
-            return "\(self)"
-        case .string(let s):  return s
-        case .number(let n):  return "\(n)"
-        case .integer(let n): return "\(n)"
-        case .bool(let b):    return b ? "true" : "false"
-        case .null:           return "null"
-        }
+        guard text.utf8.count > 500 else { return text }
+        return String(text.prefix(500)) + "\n…"
     }
 }
