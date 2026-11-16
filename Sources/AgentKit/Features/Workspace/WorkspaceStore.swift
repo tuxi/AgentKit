@@ -130,6 +130,7 @@ public final class WorkspaceStore {
     public var isInspectorPresented: Bool = false {
         didSet {
             inspectorWorkspaceState.isPresented = isInspectorPresented
+            if !isInspectorPresented { inspectorWorkspaceState.fileOpenRequest = nil }
             // 产物 selection 是临时详情，不是长期 session。关闭面板时丢弃它，
             // 但保留入口标签、宿主资源身份与各自导航路径。
             if !isInspectorPresented, inspectorSelection != nil {
@@ -141,6 +142,8 @@ public final class WorkspaceStore {
     /// 当前 conversation 的 Inspector 会话。切换 conversation 时替换引用，
     /// 再切回来会恢复同一批标签与导航路径。
     public private(set) var inspectorWorkspaceState = InspectorWorkspaceState()
+    public var workspaceFileNavigationEnabled = false
+    public var workspaceFileNavigationContext: String?
 
     @ObservationIgnored
     private var inspectorWorkspaceStates: [String: InspectorWorkspaceState] = [:]
@@ -1414,7 +1417,9 @@ public final class WorkspaceStore {
     }
 
     /// 点击对话详情里的某个内容时调用，弹出右侧检查器。
-    public func showInspector(_ selection: InspectorSelection) {
+    public func showInspector(_ selection: InspectorSelection, preferWorkspaceFile: Bool = true) {
+        if preferWorkspaceFile, routeWorkspaceSelection(selection) { return }
+        inspectorWorkspaceState.fileOpenRequest = nil
         inspectorWorkspaceState.selectionPathState.popToRoot()
         inspectorSelection = selection
         isInspectorPresented = true

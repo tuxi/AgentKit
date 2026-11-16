@@ -80,6 +80,7 @@ public final class InspectorWorkspaceState {
     public var selectedTabID: InspectorTabState.ID?
     public var isPresented: Bool
     public var selection: InspectorSelection?
+    public var fileOpenRequest: WorkspaceFileOpenRequest?
 
     /// 时间线产物详情使用独立 path，避免覆盖任一长期入口标签的导航历史。
     public let selectionPathState: InspectorPathState

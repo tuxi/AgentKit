@@ -56,6 +56,7 @@ final class TurnActionDispatcher {
         case .openURL(let raw):
             openExternalURL(raw)
         case .openPath(let path):
+            if store.openWorkspaceFile(path: path) { return }
             if let artifact = artifact(path: path) {
                 openInInspector(artifact)
             } else {
@@ -180,6 +181,7 @@ final class TurnActionDispatcher {
                 Clipboard.copy(reference.target)
             }
         case .filePath:
+            if store.openWorkspaceFile(path: reference.target) { return }
             if let artifact = artifact(path: reference.target) {
                 openInInspector(artifact)
             } else if let asset = AssetIndex(turn: turn).structuredAsset(path: reference.target) {
@@ -233,6 +235,7 @@ final class TurnActionDispatcher {
               ["http", "https", "file"].contains(url.scheme?.lowercased() ?? "") else {
             return false
         }
+        if url.isFileURL, store.openWorkspaceFile(path: raw) { return true }
         openURL(url)
         return true
     }

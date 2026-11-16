@@ -261,11 +261,15 @@ public struct SessionRailView: View {
             if value.items.isEmpty { note(value.coverage == "legacy_incomplete" ? "暂未找到可证明的产物" : "尚无生成产物") }
             ForEach(compact ? Array(value.items.prefix(5)) : value.items, id: \.outputID) { item in
                 row(item.kind == "image" ? "photo" : item.kind == "preview" ? "rectangle.on.rectangle" : "doc", item.title,
-                    trailing: item.state == "deleted" ? "已删除" : nil) { model.navigate(.output(item.outputID)) }
+                    trailing: item.state == "deleted" ? "已删除" : nil) { openOutput(item) }
             }
             if compact, value.totalCount > 0 { more("查看全部 \(value.totalCount) 个产物") { model.navigate(.outputs) } }
             if !compact, value.nextCursor != nil { more("显示更多") { Task { await model.loadMoreOutputs() } }.disabled(model.detailLoading) }
         }
+    }
+    private func openOutput(_ item: SessionRailOutput) {
+        if let request = item.workspaceFileRequest, store.openWorkspaceFile(request) { return }
+        model.navigate(.output(item.outputID))
     }
     private func changes(_ value: SessionRailChanges, compact: Bool) -> some View {
         VStack(alignment: .leading, spacing: 5) {
@@ -410,8 +414,10 @@ public struct SessionRailView: View {
                 Text(value.title).font(.headline).textSelection(.enabled)
                 facts([("内容方式", value.contentMode == "immutable" ? "不可变产物版本" : "工作区当前文件"), ("来源轮次", value.latest.turnID),
                        ("写入/版本记录", String(value.versionCount)), ("更新时间", date(value.latest.updatedAt))])
-                if let asset = value.latest.asset, value.state != "deleted" {
-                    Button("打开产物预览") { store.showInspector(.asset(.init(asset: asset, conversationID: conversationID))) }
+                if value.contentMode == "live_workspace", value.state != "deleted", let path = value.relativePath {
+                    Button("在 Files 中打开") { _ = store.openWorkspaceFile(path: path, line: value.latest.asset?.range?.startLine, isDirectory: value.kind == "directory") }
+                } else if let asset = value.latest.asset, value.state != "deleted" {
+                    Button("打开产物预览") { store.showInspector(.asset(.init(asset: asset, conversationID: conversationID)), preferWorkspaceFile: value.contentMode == "live_workspace") }
                 } else if value.state == "deleted" { note("最后记录为已删除，历史报告不包含旧文件字节。") }
                 else if value.latest.artifact == nil { note("旧记录未保存可读取的资源引用。") }
                 if let artifact = value.latest.artifact {
@@ -427,8 +433,9 @@ public struct SessionRailView: View {
             }
         case .changes:
             if let value = model.changes { changes(value, compact: false) }
-        case .patch:
+        case .patch(_, _, let path):
             if let value = model.patch {
+                Button("在 Files 中打开当前文件") { _ = store.openWorkspaceFile(path: path) }
                 if value.state == "untracked" { note("未跟踪文件，尚无相对 HEAD 的文本 diff。") }
                 else if value.state == "binary" { note("二进制变更，没有文本行数。") }
                 else if value.state == "submodule" { note("子模块引用或工作区发生变化。") }
