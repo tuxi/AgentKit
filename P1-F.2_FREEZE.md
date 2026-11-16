@@ -18,6 +18,13 @@ change.
 
 Feature commits: `5a27f6b`, `0e4c013`, `c00b7e9`.
 
+`f1e2f2b` is a **steady-state performance test harness change only**: it warms a
+trivial hosted view before the layout assertions so they measure post-warm-up
+rendering. It is not evidence about real app cold start and must not be read as
+such. The P1-F.2 before/after numbers (7.91 s → 0.51–0.80 s) come from app-level
+acceptance; real cold start remains covered there, and the test-only warm-up
+neither replaces nor masks that measurement.
+
 `main`'s session-rail, background-job, pre-mutation, and Inspector workspace
 changes are preserved. The merge was performed in an isolated scratch worktree;
 the original dirty AgentKit checkout was not modified.
