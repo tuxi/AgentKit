@@ -219,6 +219,10 @@ private struct ToolDetailRowView: View {
                 .foregroundStyle(.secondary)
             }
 
+            if let failure = model.summary?.failure {
+                failureView(failure)
+            }
+
             if let summary = model.summary {
                 if let input = summary.input {
                     ToolPayloadDetailSection(
@@ -235,7 +239,7 @@ private struct ToolDetailRowView: View {
                 outputSection(summary.output)
             }
 
-            if tool.status == .failed {
+            if tool.status == .failed, model.summary?.failure == nil {
                 HStack(spacing: 4) {
                     Image(systemName: "exclamationmark.triangle.fill")
                         .font(.caption2)
@@ -301,6 +305,24 @@ private struct ToolDetailRowView: View {
                     .frame(maxWidth: .infinity, alignment: .leading)
             }
         }
+    }
+
+    private func failureView(_ failure: ToolFailureSummary) -> some View {
+        HStack(alignment: .top, spacing: 4) {
+            Image(systemName: "exclamationmark.triangle.fill")
+                .font(.caption2)
+            VStack(alignment: .leading, spacing: 1) {
+                Text(failure.label)
+                    .font(.caption2)
+                    .lineLimit(2)
+                Text(failure.sizeLabel + (tool.exitCode.map { " · exit \($0)" } ?? ""))
+                    .font(.caption2)
+                    .foregroundStyle(.tertiary)
+            }
+            Spacer(minLength: 0)
+        }
+        .foregroundStyle(.red)
+        .padding(.top, 1)
     }
 
     private func expansion(_ kind: ToolPayloadKind) -> Binding<Bool> {

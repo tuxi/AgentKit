@@ -42,7 +42,8 @@ final class ToolPayloadPerformanceTests: XCTestCase {
     }
 
     private func largeFailedPreviewTool(
-        htmlBytes: Int = 5_000_000
+        htmlBytes: Int = 5_000_000,
+        structuredError: JSONValue? = nil
     ) -> ToolNodePayload {
         let html = largeHTML(approximateBytes: htmlBytes)
         let args: JSONValue = .object([
@@ -64,6 +65,7 @@ final class ToolPayloadPerformanceTests: XCTestCase {
             args: args,
             status: .failed,
             output: output,
+            structuredOutput: structuredError,
             exitCode: 1,
             elapsedMs: 42
         )
@@ -168,14 +170,103 @@ final class ToolPayloadPerformanceTests: XCTestCase {
         XCTAssertEqual(counter.value, 1, "identical payloads must not be formatted twice")
     }
 
+    func testFailureSummaryShowsCodeMessageAndSizeWithoutFullPayload() throws {
+        let tool = largeFailedPreviewTool(
+            htmlBytes: 3_000_000,
+            structuredError: .object([
+                "error": .object([
+                    "code": .string("preview_digest_mismatch"),
+                    "message": .string("Viewer digest did not match."),
+                ]),
+            ])
+        )
+        let summary = ToolPayloadSummaryBuilder.make(tool: tool)
+        let failure = try XCTUnwrap(summary.failure)
+        XCTAssertEqual(failure.code, "preview_digest_mismatch")
+        XCTAssertEqual(failure.message, "Viewer digest did not match.")
+        XCTAssertGreaterThan(failure.byteCount, 3_000_000)
+        XCTAssertLessThan(failure.label.utf8.count, 300)
+        XCTAssertFalse(failure.label.contains("<section"))
+
+        let firstLine = ToolPayloadSummaryBuilder.make(
+            tool: largeFailedPreviewTool(htmlBytes: 1_000_000)
+        ).failure
+        XCTAssertNil(firstLine?.code)
+        XCTAssertEqual(firstLine?.message, "ui_preview failed: preview_digest_mismatch")
+    }
+
+    @MainActor
+    func testPreparationDoesNotFormatPayload() async throws {
+        let tool = largeFailedPreviewTool(htmlBytes: 3_000_000)
+        let model = ToolPayloadDetailModel()
+        model.prepare(tool: tool)
+        try await waitForSummary(model)
+
+        XCTAssertNotNil(model.summary)
+        XCTAssertTrue(
+            model.payloads.isEmpty,
+            "expanding must not format the full payload"
+        )
+        XCTAssertTrue(model.loadingKinds.isEmpty)
+    }
+
+    @MainActor
+    func testRepeatedExpandCollapseAndSteadyLayoutStayBounded() {
+        let tool = largeFailedPreviewTool(htmlBytes: 5_000_000)
+        let group = ToolGroup(id: "group_probe", tools: [tool])
+        var durations: [Duration] = []
+
+        for expanded in [true, false, true, false, true, false, true, false, true, false] {
+            let state = TranscriptDocumentState(expandedToolIDs: expanded ? [
+                "group_probe", tool.callID,
+            ] : [])
+            let view = ToolCallGroupView(
+                group: group,
+                documentState: .constant(state),
+                onAction: { _ in }
+            )
+            durations.append(layoutDuration(of: view, size: CGSize(width: 390, height: 640)))
+        }
+
+        // Repeated layout passes approximate body/layout churn while scrolling.
+        for _ in 0..<20 {
+            let state = TranscriptDocumentState(expandedToolIDs: [
+                "group_probe", tool.callID,
+            ])
+            let view = ToolCallGroupView(
+                group: group,
+                documentState: .constant(state),
+                onAction: { _ in }
+            )
+            durations.append(layoutDuration(of: view, size: CGSize(width: 390, height: 640)))
+        }
+
+        XCTAssertLessThan(durations.max() ?? .zero, .seconds(1))
+        XCTAssertLessThan(durations.reduce(Duration.zero, +), .seconds(10))
+    }
+
+    @MainActor
+    private func waitForSummary(_ model: ToolPayloadDetailModel) async throws {
+        let deadline = ContinuousClock().now + .seconds(2)
+        while model.summary == nil, ContinuousClock().now < deadline {
+            try await Task.sleep(for: .milliseconds(5))
+        }
+        XCTAssertNotNil(model.summary)
+    }
+
     @MainActor
     private func layoutDuration<V: View>(of view: V, size: CGSize) -> Duration {
         let start = ContinuousClock().now
         #if canImport(UIKit)
         let host = UIHostingController(rootView: view)
+        let window = UIWindow(frame: CGRect(origin: .zero, size: size))
+        window.rootViewController = host
+        window.isHidden = false
         host.view.frame = CGRect(origin: .zero, size: size)
         host.view.setNeedsLayout()
         host.view.layoutIfNeeded()
+        window.layoutIfNeeded()
+        window.isHidden = true
         #else
         let host = NSHostingView(rootView: view)
         host.frame = NSRect(x: 0, y: 0, width: size.width, height: size.height)

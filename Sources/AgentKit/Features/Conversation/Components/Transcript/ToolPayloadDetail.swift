@@ -36,6 +36,26 @@ struct ToolPayloadSummary: Equatable, Sendable {
 struct ToolPayloadDetailSummary: Equatable, Sendable {
     let input: ToolPayloadSummary?
     let output: ToolPayloadSummary?
+    let failure: ToolFailureSummary?
+}
+
+/// Compact failure facts for a failed tool call. The transcript shows the
+/// code/message and payload size; the raw payload stays in the Inspector.
+struct ToolFailureSummary: Equatable, Sendable {
+    let code: String?
+    let message: String
+    let byteCount: Int
+
+    var label: String {
+        [code, message].compactMap { value -> String? in
+            guard let value, !value.isEmpty else { return nil }
+            return value
+        }.joined(separator: " · ")
+    }
+
+    var sizeLabel: String {
+        ByteCountFormatter.string(fromByteCount: Int64(byteCount), countStyle: .file)
+    }
 }
 
 enum ToolPayloadDetailMetrics {
@@ -59,8 +79,63 @@ enum ToolPayloadSummaryBuilder {
     static func make(tool: ToolNodePayload) -> ToolPayloadDetailSummary {
         ToolPayloadDetailSummary(
             input: tool.args.flatMap { make(json: $0) },
-            output: tool.output.isEmpty ? nil : make(text: tool.output)
+            output: tool.output.isEmpty ? nil : make(text: tool.output),
+            failure: tool.status == .failed ? makeFailure(tool) : nil
         )
+    }
+
+    private static func makeFailure(_ tool: ToolNodePayload) -> ToolFailureSummary? {
+        let bytes = tool.output.utf8.count
+        if case .object(let root)? = tool.structuredOutput {
+            if case .object(let error)? = root["error"] {
+                if let failure = failure(
+                    code: error["code"]?.string,
+                    message: error["message"]?.string ?? error["reason"]?.string,
+                    bytes: bytes
+                ) {
+                    return failure
+                }
+            }
+            if let failure = failure(
+                code: root["code"]?.string,
+                message: root["message"]?.string ?? root["error"]?.string,
+                bytes: bytes
+            ) {
+                return failure
+            }
+        }
+        let firstLine = firstLine(of: tool.output)
+        guard !firstLine.isEmpty else { return nil }
+        return ToolFailureSummary(code: nil, message: firstLine, byteCount: bytes)
+    }
+
+    private static func failure(
+        code: String?,
+        message: String?,
+        bytes: Int
+    ) -> ToolFailureSummary? {
+        let normalizedCode = code?.trimmingCharacters(in: .whitespacesAndNewlines)
+        let normalizedMessage = message?.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard normalizedCode?.isEmpty == false || normalizedMessage?.isEmpty == false else {
+            return nil
+        }
+        return ToolFailureSummary(
+            code: normalizedCode.flatMap { $0.isEmpty ? nil : bounded($0) },
+            message: bounded(normalizedMessage ?? ""),
+            byteCount: bytes
+        )
+    }
+
+    private static func firstLine(of text: String) -> String {
+        guard !text.isEmpty else { return "" }
+        let head = text.prefix(512)
+        let line = head.split(whereSeparator: \.isNewline).first.map(String.init) ?? String(head)
+        return bounded(line.trimmingCharacters(in: .whitespacesAndNewlines))
+    }
+
+    private static func bounded(_ value: String) -> String {
+        guard value.count > 240 else { return value }
+        return String(value.prefix(237)) + "…"
     }
 
     static func make(json value: JSONValue) -> ToolPayloadSummary? {
