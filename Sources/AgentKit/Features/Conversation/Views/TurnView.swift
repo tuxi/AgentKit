@@ -311,18 +311,18 @@ struct TurnView: View, Equatable {
         case .toggleThinking(let id):
             documentState.toggleThinking(id: id)
 
-        #if os(macOS)
         case .openToolResult(let callID):
+            #if os(macOS)
             let nodeID = MacToolPresentation.inspectorNodeID(callID: callID, turn: turn, timeline: store.activeConversationViewModel?.snapshot.timeline ?? [])
             store.showInspector(.tool(nodeID))
-        #endif
+            #else
+            guard tool(callID: callID) != nil else { return }
+            store.showInspector(.tool(callID))
+            #endif
+
         case .openArtifact(let callID):
             guard let artifact = artifact(callID: callID) else { return }
             openInInspector(artifact)
-
-        case .openToolResult(let callID):
-            guard tool(callID: callID) != nil else { return }
-            store.showInspector(.tool(callID))
 
         case .openAsset(let reference):
             openAsset(reference)
