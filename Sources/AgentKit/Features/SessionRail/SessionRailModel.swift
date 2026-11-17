@@ -1,5 +1,6 @@
 import Foundation
 import Observation
+import OSLog
 
 public enum SessionRailRoute: Hashable, Sendable {
     case environment, context, connectors, outputs, changes, jobs
@@ -46,13 +47,63 @@ public enum SessionRailRoute: Hashable, Sendable {
     }
     func endCompaction(_ conversationID: String) { compactingConversations.remove(conversationID) }
 
+    private static let logger = Logger(subsystem: "com.agentkit", category: "SessionRail")
     private let client: any RuntimeClient
     private let preferences: UserDefaults
+    @ObservationIgnored private var visiblePresentations: Set<UUID> = []
+    @ObservationIgnored private var pollingTask: Task<Void, Never>?
+    @ObservationIgnored private var pollingConversationID: String?
+    @ObservationIgnored private var presentationIsBusy: @MainActor () -> Bool = { false }
+
+    /// Retained panes report visibility explicitly. SwiftUI can cancel a view's
+    /// task without recreating that pane, so the view must not own the poller.
+    public func setPresentationActive(_ presentationID: UUID, conversationID: String?,
+                                      isBusy: @escaping @MainActor () -> Bool = { false }) {
+        Self.logger.info("[session-rail] presentation active=\(conversationID != nil) owners_before=\(self.visiblePresentations.count)")
+        guard let conversationID else {
+            visiblePresentations.remove(presentationID)
+            if visiblePresentations.isEmpty {
+                pollingTask?.cancel(); pollingTask = nil; pollingConversationID = nil
+            }
+            return
+        }
+        visiblePresentations.insert(presentationID)
+        presentationIsBusy = isBusy
+        guard pollingTask == nil || pollingConversationID != conversationID else { return }
+        pollingTask?.cancel()
+        pollingConversationID = conversationID
+        pollingTask = Task { [weak self] in
+            guard let self else { return }
+            await self.run(conversationID: conversationID) { [weak self] in
+                self?.presentationIsBusy() ?? false
+            }
+        }
+    }
+
     private var lease = UUID()
     private var generation = UUID()
     private var refreshID = UUID()
     private var detailID = UUID()
     private var serverKey: String?
+    // Root summaries only: detail routes and mutable controls are never cached.
+    @ObservationIgnored private var cachedSnapshots: [String: SessionRailSnapshot] = [:]
+    @ObservationIgnored private var recentConversations: [String] = []
+    @ObservationIgnored private var cacheOrigin: String?
+    @ObservationIgnored private var cacheRuntimeInstance: String?
+
+    private func remember(_ value: SessionRailSnapshot) {
+        let instance = value.serverID + ":" + value.runtimeInstanceID
+        if let previous = cacheRuntimeInstance, previous != instance {
+            cachedSnapshots.removeAll(); recentConversations.removeAll()
+        }
+        cacheRuntimeInstance = instance
+        cachedSnapshots[value.conversationID] = value
+        recentConversations.removeAll { $0 == value.conversationID }
+        recentConversations.append(value.conversationID)
+        while recentConversations.count > 8 {
+            cachedSnapshots.removeValue(forKey: recentConversations.removeFirst())
+        }
+    }
     public var route: SessionRailRoute? { path.last }
     public var stateID: UUID { generation }
     public init(client: any RuntimeClient, preferences: UserDefaults = .standard) {
@@ -87,9 +138,15 @@ public enum SessionRailRoute: Hashable, Sendable {
         invalidateDetail()
     }
     public func run(conversationID: String, isBusy: @escaping @MainActor () -> Bool) async {
+        // A disappearing presentation must not take ownership from its replacement.
+        guard !Task.isCancelled else { return }
         let owner = UUID(); lease = owner
         select(conversationID)
-        defer { if lease == owner { isRefreshing = false } }
+        Self.logger.info("[session-rail] poll started")
+        defer {
+            Self.logger.info("[session-rail] poll ended cancelled=\(Task.isCancelled)")
+            if lease == owner { isRefreshing = false }
+        }
         while !Task.isCancelled, lease == owner {
             await refresh()
             do { try await Task.sleep(for: isBusy() ? .seconds(5) : .seconds(20)) } catch { return }
@@ -99,16 +156,36 @@ public enum SessionRailRoute: Hashable, Sendable {
         guard let id = conversationID else { return }
         let token = UUID(); refreshID = token; let selected = generation
         isRefreshing = true
-        defer { if refreshID == token { isRefreshing = false } }
+        let trace = String(token.uuidString.prefix(8))
+        let started = ProcessInfo.processInfo.systemUptime
+        Self.logger.info("[session-rail] refresh \(trace, privacy: .public) started cached=\(self.snapshot != nil)")
+        defer {
+            let elapsed = Int((ProcessInfo.processInfo.systemUptime - started) * 1000)
+            Self.logger.info("[session-rail] refresh \(trace, privacy: .public) ended ms=\(elapsed) cancelled=\(Task.isCancelled) superseded=\(self.refreshID != token)")
+            if refreshID == token { isRefreshing = false }
+        }
         do {
             let origin = try await client.backgroundJobRuntimeIdentity()
             guard selected == generation, id == conversationID, refreshID == token, !Task.isCancelled else { return }
             if let old = scope, old.runtimeIdentity != origin {
                 resetSource(); refreshID = token; isRefreshing = true
             }
+            if cacheOrigin != origin {
+                cachedSnapshots.removeAll(); recentConversations.removeAll()
+                cacheRuntimeInstance = nil; cacheOrigin = origin
+            }
             let current = SessionRailScope(conversationID: id, runtimeIdentity: origin)
             scope = current
+            // Validate the authority before restoring anything, then keep it visible
+            // while a fresh snapshot is fetched. Selection already reset detail state.
+            if snapshot == nil, let cached = cachedSnapshots[id] {
+                snapshot = cached
+                serverKey = cached.serverID + ":" + cached.runtimeInstanceID + ":" + cached.workspaceID
+                recentConversations.removeAll { $0 == id }; recentConversations.append(id)
+            }
+            Self.logger.info("[session-rail] refresh \(trace, privacy: .public) requesting snapshot")
             let value = try await client.sessionRail(scope: current)
+            Self.logger.info("[session-rail] refresh \(trace, privacy: .public) snapshot returned")
             guard refreshID == token, conversationID == id, scope == current, !Task.isCancelled else { return }
             guard value.conversationID == id, value.schema == "session-rail/v1",
                   try await client.backgroundJobRuntimeIdentity() == origin else { throw SessionRailError.invalidIdentity }
@@ -118,14 +195,22 @@ public enum SessionRailRoute: Hashable, Sendable {
                 generation = UUID(); path = []; outputs = nil; jobs = nil; changes = nil; invalidateDetail()
             }
             serverKey = key; snapshot = value; unavailable = false; error = nil
+            remember(value)
         } catch {
-            guard refreshID == token, conversationID == id, !error.isRequestCancelled else { return }
+            let diagnostic = error as NSError
+            Self.logger.error("[session-rail] refresh \(trace, privacy: .public) failed domain=\(diagnostic.domain, privacy: .public) code=\(diagnostic.code)")
+            guard refreshID == token, conversationID == id, !Task.isCancelled else { return }
+            if error.isRequestCancelled {
+                self.error = snapshot == nil ? "读取已中断，请重试。" : "更新已中断，已保留上次数据。"
+                return
+            }
+            let failureMessage = snapshot == nil ? "暂时无法读取会话信息，请重试。" : "刷新失败，已保留上次数据。"
             if let http = error as? RuntimeHTTPError {
                 switch http {
                 case .notFound, .unsupported: unavailable = true; self.error = "当前 Runtime 尚未提供 Session rail，请更新 Runtime 后重试。"
-                default: self.error = "刷新失败，已保留上次数据。"
+                default: self.error = failureMessage
                 }
-            } else { self.error = "刷新失败，已保留上次数据。" }
+            } else { self.error = failureMessage }
         }
     }
     public func loadDetail() async {

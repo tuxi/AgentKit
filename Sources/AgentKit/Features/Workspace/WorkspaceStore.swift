@@ -1482,8 +1482,14 @@ public final class WorkspaceStore {
         return true
     }
 
-    public func dismissInspector() {
+    /// Clear transient detail without closing a host-owned workspace pane.
+    /// macOS uses this on conversation changes to avoid false → true visibility.
+    public func clearInspectorSelection() {
         inspectorSelection = nil
+    }
+
+    public func dismissInspector() {
+        clearInspectorSelection()
         isInspectorPresented = false
     }
 }

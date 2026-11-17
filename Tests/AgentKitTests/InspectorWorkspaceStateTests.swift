@@ -94,3 +94,17 @@ final class InspectorWorkspaceStateTests: XCTestCase {
         XCTAssertEqual(terminal.pathState.path, [.filePreview(filePath: "output.log")])
     }
 }
+
+
+extension InspectorWorkspaceStateTests {
+    func testClearingTransientDetailDoesNotCloseHostPane() {
+        let store = WorkspaceStore()
+        let tab = store.inspectorWorkspaceState.open(.files)
+        store.showInspector(.todo("temporary"))
+        store.clearInspectorSelection()
+        XCTAssertNil(store.inspectorSelection)
+        XCTAssertTrue(store.isInspectorPresented)
+        XCTAssertTrue(store.inspectorWorkspaceState.isPresented)
+        XCTAssertEqual(store.inspectorWorkspaceState.selectedTab?.id, tab.id)
+    }
+}

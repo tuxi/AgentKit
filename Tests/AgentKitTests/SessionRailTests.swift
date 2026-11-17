@@ -1,5 +1,9 @@
 import Foundation
 import XCTest
+#if os(macOS)
+import SwiftUI
+import AppKit
+#endif
 @testable import AgentKit
 
 private final class RailHTTPProtocol: URLProtocol, @unchecked Sendable {
@@ -143,10 +147,14 @@ private actor RailReplyGate {
     func read(_ id: String) async throws -> SessionRailSnapshot { try await withCheckedThrowingContinuation { pending[id] = $0 } }
     func has(_ id: String) -> Bool { pending[id] != nil }
     func reply(_ id: String, _ value: SessionRailSnapshot) { pending.removeValue(forKey: id)?.resume(returning: value) }
+    func fail(_ id: String, _ error: Error) { pending.removeValue(forKey: id)?.resume(throwing: error) }
+    private var origin = "fixture"
+    func identity() -> String { origin }
+    func setIdentity(_ value: String) { origin = value }
 }
 private class RailModelClient: RuntimeClient, @unchecked Sendable {
     let gate = RailReplyGate()
-    func backgroundJobRuntimeIdentity() async throws -> String { "fixture" }
+    func backgroundJobRuntimeIdentity() async throws -> String { await gate.identity() }
     func sessionRail(scope: SessionRailScope) async throws -> SessionRailSnapshot { try await gate.read(scope.conversationID) }
     func compactSessionRailContext(scope: SessionRailScope) async throws -> ConversationCompactionResult { try await gate.compact() }
     func createConversation(workspacePath: String) async throws -> ConversationRef { throw RuntimeHTTPError.unsupported }
@@ -299,3 +307,237 @@ extension SessionRailTests {
         XCTAssertEqual(SessionRailJobPresentation.status(snapshot: .unknown, registry: nil), .unknown)
     }
 }
+
+
+extension SessionRailTests {
+    @MainActor private func waitForRailRequest(_ id: String, client: RailModelClient) async throws {
+        for _ in 0..<1000 {
+            if await client.gate.has(id) { return }
+            try await Task.sleep(for: .milliseconds(1))
+        }
+        XCTFail("Session rail did not request \(id)")
+        throw URLError(.timedOut)
+    }
+
+    @MainActor private func loadRail(_ id: String, model: SessionRailModel, client: RailModelClient,
+                                    instance: String = "instance") async throws {
+        let task = Task { await model.run(conversationID: id, isBusy: { false }) }
+        try await waitForRailRequest(id, client: client)
+        let data = String(decoding: Self.root(conversation: id), as: UTF8.self)
+            .replacingOccurrences(of: "\"runtime_instance_id\":\"instance\"", with: "\"runtime_instance_id\":\"\(instance)\"")
+        await client.gate.reply(id, try decode(Data(data.utf8)))
+        for _ in 0..<1000 {
+            if !model.isRefreshing { break }
+            try await Task.sleep(for: .milliseconds(1))
+        }
+        XCTAssertEqual(model.snapshot?.conversationID, id)
+        XCTAssertFalse(model.isRefreshing)
+        task.cancel(); await task.value
+    }
+
+    @MainActor func testReturningToConversationShowsCachedRootWhileRefreshing() async throws {
+        let client = RailModelClient()
+        let model = SessionRailModel(client: client)
+        try await loadRail("A", model: model, client: client)
+        model.navigate(.context)
+        try await loadRail("B", model: model, client: client)
+        let task = Task { await model.run(conversationID: "A", isBusy: { false }) }
+        try await waitForRailRequest("A", client: client)
+        XCTAssertEqual(model.snapshot?.conversationID, "A")
+        XCTAssertTrue(model.isRefreshing)
+        XCTAssertNil(model.route)
+        await client.gate.fail("A", URLError(.notConnectedToInternet))
+        for _ in 0..<1000 {
+            if model.error != nil { break }
+            try await Task.sleep(for: .milliseconds(1))
+        }
+        XCTAssertNotNil(model.error)
+        XCTAssertEqual(model.snapshot?.conversationID, "A")
+        task.cancel(); await task.value
+    }
+
+    @MainActor func testReopeningSameConversationRetainsRootAndDetailRoute() async throws {
+        let client = RailModelClient()
+        let model = SessionRailModel(client: client)
+        try await loadRail("A", model: model, client: client)
+        model.navigate(.context)
+        let task = Task { await model.run(conversationID: "A", isBusy: { false }) }
+        try await waitForRailRequest("A", client: client)
+        XCTAssertEqual(model.snapshot?.conversationID, "A")
+        XCTAssertEqual(model.route, .context)
+        task.cancel()
+        await client.gate.fail("A", URLError(.cancelled))
+        await task.value
+        XCTAssertNil(model.error)
+    }
+
+    @MainActor func testRuntimeChangeNeverRestoresPreviousAuthorityCache() async throws {
+        let client = RailModelClient()
+        let model = SessionRailModel(client: client)
+        try await loadRail("A", model: model, client: client)
+        try await loadRail("B", model: model, client: client)
+        await client.gate.setIdentity("other-runtime")
+        let task = Task { await model.run(conversationID: "A", isBusy: { false }) }
+        try await waitForRailRequest("A", client: client)
+        XCTAssertNil(model.snapshot)
+        task.cancel(); await client.gate.fail("A", URLError(.cancelled)); await task.value
+    }
+
+    @MainActor func testServerRestartEvictsOtherConversationSnapshots() async throws {
+        let client = RailModelClient()
+        let model = SessionRailModel(client: client)
+        try await loadRail("A", model: model, client: client)
+        try await loadRail("B", model: model, client: client, instance: "restarted")
+        let task = Task { await model.run(conversationID: "A", isBusy: { false }) }
+        try await waitForRailRequest("A", client: client)
+        XCTAssertNil(model.snapshot)
+        task.cancel(); await client.gate.fail("A", URLError(.cancelled)); await task.value
+    }
+
+    @MainActor func testSnapshotCacheEvictsLeastRecentlyVisitedConversation() async throws {
+        let client = RailModelClient()
+        let model = SessionRailModel(client: client)
+        for index in 0..<9 { try await loadRail(String(index), model: model, client: client) }
+        let task = Task { await model.run(conversationID: "0", isBusy: { false }) }
+        try await waitForRailRequest("0", client: client)
+        XCTAssertNil(model.snapshot)
+        task.cancel(); await client.gate.fail("0", URLError(.cancelled)); await task.value
+    }
+
+    @MainActor func testCancelledPresentationCannotSelectAnotherConversation() async throws {
+        let client = RailModelClient()
+        let model = SessionRailModel(client: client)
+        try await loadRail("A", model: model, client: client)
+        let obsolete = Task {
+            withUnsafeCurrentTask { $0?.cancel() }
+            await model.run(conversationID: "B", isBusy: { false })
+        }
+        await obsolete.value
+        XCTAssertEqual(model.conversationID, "A")
+        XCTAssertEqual(model.snapshot?.conversationID, "A")
+        let dispatched = await client.gate.has("B")
+        XCTAssertFalse(dispatched)
+    }
+
+    @MainActor func testTransportCancellationWhileStillVisibleShowsRetryInsteadOfEndlessLoading() async throws {
+        let client = RailModelClient()
+        let model = SessionRailModel(client: client)
+        let task = Task { await model.run(conversationID: "A", isBusy: { false }) }
+        try await waitForRailRequest("A", client: client)
+        await client.gate.fail("A", URLError(.cancelled))
+        for _ in 0..<1000 {
+            if !model.isRefreshing { break }
+            try await Task.sleep(for: .milliseconds(1))
+        }
+        XCTAssertNil(model.snapshot)
+        XCTAssertNotNil(model.error)
+        XCTAssertFalse(model.isRefreshing)
+        task.cancel(); await task.value
+    }
+}
+
+
+extension SessionRailTests {
+    @MainActor func testViewTaskCancellationDoesNotCancelVisiblePresentationLoad() async throws {
+        let client = RailModelClient()
+        let model = SessionRailModel(client: client)
+        let pane = UUID()
+        let viewTask = Task { model.setPresentationActive(pane, conversationID: "A") }
+        await viewTask.value
+        try await waitForRailRequest("A", client: client)
+        viewTask.cancel()
+        await client.gate.reply("A", try decode(Self.root(conversation: "A")))
+        for _ in 0..<1000 {
+            if model.snapshot != nil { break }
+            try await Task.sleep(for: .milliseconds(1))
+        }
+        XCTAssertEqual(model.snapshot?.conversationID, "A")
+        model.setPresentationActive(pane, conversationID: nil)
+    }
+
+    @MainActor func testDisappearingDockedPaneCannotCancelFloatingReplacement() async throws {
+        let client = RailModelClient()
+        let model = SessionRailModel(client: client)
+        let docked = UUID(), floating = UUID()
+        model.setPresentationActive(docked, conversationID: "A")
+        try await waitForRailRequest("A", client: client)
+        model.setPresentationActive(floating, conversationID: "A")
+        model.setPresentationActive(docked, conversationID: nil)
+        await client.gate.reply("A", try decode(Self.root(conversation: "A")))
+        for _ in 0..<1000 {
+            if model.snapshot != nil { break }
+            try await Task.sleep(for: .milliseconds(1))
+        }
+        XCTAssertEqual(model.snapshot?.conversationID, "A")
+        model.setPresentationActive(floating, conversationID: nil)
+    }
+
+    @MainActor func testVisiblePresentationSwitchRejectsLatePreviousConversation() async throws {
+        let client = RailModelClient()
+        let model = SessionRailModel(client: client)
+        let pane = UUID()
+        model.setPresentationActive(pane, conversationID: "A")
+        try await waitForRailRequest("A", client: client)
+        model.setPresentationActive(pane, conversationID: "B")
+        try await waitForRailRequest("B", client: client)
+        await client.gate.reply("B", try decode(Self.root(conversation: "B")))
+        await client.gate.reply("A", try decode(Self.root(conversation: "A")))
+        for _ in 0..<1000 {
+            if model.snapshot != nil { break }
+            try await Task.sleep(for: .milliseconds(1))
+        }
+        XCTAssertEqual(model.snapshot?.conversationID, "B")
+        model.setPresentationActive(pane, conversationID: nil)
+    }
+}
+
+
+#if os(macOS)
+private struct RailLifecycleFixture: View {
+    @Environment(WorkspaceStore.self) private var store
+    let visible: Bool
+    var body: some View {
+        SessionRailView()
+            .environment(\.sessionRailIsVisible, visible)
+            .environment(\.scenePhase, .active)
+            .environment(\.conversationUsesSessionRail,
+                         store.sessionRail.hasTaskSurface(for: store.selectedConversation?.id))
+    }
+}
+
+extension SessionRailTests {
+    @MainActor func testHostedRailUpdatesAfterResponsesAndVisibilityTransactions() async throws {
+        _ = NSApplication.shared
+        let client = RailModelClient()
+        let store = WorkspaceStore(client: client, usesEmbeddedRuntime: false)
+        let host = NSHostingView(rootView: RailLifecycleFixture(visible: true).environment(store))
+        host.frame = NSRect(x: 0, y: 0, width: 340, height: 600)
+        let window = NSWindow(contentRect: NSRect(x: -10000, y: -10000, width: 340, height: 600),
+                              styleMask: [.borderless], backing: .buffered, defer: false)
+        window.isReleasedWhenClosed = false
+        window.contentView = host
+        window.orderFront(nil)
+        defer { window.close() }
+
+        for id in ["host-A", "host-B", "host-A", "host-C"] {
+            store.selectedConversation = ConversationRef(id: id, workspacePath: "/tmp")
+            // Several presentation changes in a single transaction must settle
+            // on visible, even while selection and response publication redraw.
+            host.rootView = RailLifecycleFixture(visible: false).environment(store)
+            host.layoutSubtreeIfNeeded()
+            host.rootView = RailLifecycleFixture(visible: true).environment(store)
+            host.layoutSubtreeIfNeeded()
+            try await waitForRailRequest(id, client: client)
+            await client.gate.reply(id, try decode(Self.root(conversation: id)))
+            for _ in 0..<1000 {
+                if store.sessionRail.snapshot?.conversationID == id && !store.sessionRail.isRefreshing { break }
+                try await Task.sleep(for: .milliseconds(1))
+            }
+            host.layoutSubtreeIfNeeded()
+            XCTAssertEqual(store.sessionRail.conversationID, id)
+            XCTAssertEqual(store.sessionRail.snapshot?.conversationID, id)
+            XCTAssertFalse(store.sessionRail.isRefreshing)
+        }
+    }
+}
+#endif

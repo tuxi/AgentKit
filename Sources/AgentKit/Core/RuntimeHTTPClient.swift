@@ -776,6 +776,15 @@ struct RuntimeHTTPClient: Sendable {
         return result
     }
     private func sessionRailFetch<T: Decodable & Sendable>(scope: SessionRailScope, suffix: [String], query: [URLQueryItem], method: String = "GET", timeout: TimeInterval = 15) async throws -> T {
+        let logger = Logger(subsystem: "com.agentkit", category: "SessionRail")
+        let trace = String(UUID().uuidString.prefix(8))
+        let started = ProcessInfo.processInfo.systemUptime
+        var stage = "prepare"
+        logger.info("[session-rail] http \(trace, privacy: .public) started")
+        defer {
+            let elapsed = Int((ProcessInfo.processInfo.systemUptime - started) * 1000)
+            logger.info("[session-rail] http \(trace, privacy: .public) ended stage=\(stage, privacy: .public) ms=\(elapsed) cancelled=\(Task.isCancelled)")
+        }
         let segments = [scope.conversationID] + suffix
         guard segments.allSatisfy({ !$0.isEmpty && $0 != "." && $0 != ".." }) else { throw SessionRailError.invalidScope }
         var request = try await buildRequest(method, pathArray: ["v1", "conversations"], queryItems: query, timeout: timeout)
@@ -784,19 +793,31 @@ struct RuntimeHTTPClient: Sendable {
         parts.percentEncodedPath += "/" + segments.map { $0.addingPercentEncoding(withAllowedCharacters: allowed)! }.joined(separator: "/")
         request.url = parts.url
         try await validateJobScope(request, identity: scope.runtimeIdentity)
+        stage = "await_headers"
+        logger.info("[session-rail] http \(trace, privacy: .public) dispatched")
         let (bytes, response) = try await session.bytes(for: request)
+        let headerMS = Int((ProcessInfo.processInfo.systemUptime - started) * 1000)
+        let status = (response as? HTTPURLResponse)?.statusCode ?? 0
+        logger.info("[session-rail] http \(trace, privacy: .public) headers ms=\(headerMS) status=\(status)")
+        stage = "receive_body"
         var body = Data()
         for try await byte in bytes {
             guard body.count < 12 * 1024 * 1024 else { throw RuntimeHTTPError.invalidResponse }
             body.append(byte)
         }
+        let bodyMS = Int((ProcessInfo.processInfo.systemUptime - started) * 1000)
+        logger.info("[session-rail] http \(trace, privacy: .public) body ms=\(bodyMS) bytes=\(body.count)")
+        stage = "validate_scope"
         try validateHTTP(response, data: body)
         try await validateJobScope(request, identity: scope.runtimeIdentity)
-        return try await Task.detached(priority: .userInitiated) {
+        stage = "decode"
+        let value = try await Task.detached(priority: .userInitiated) {
             let envelope = try JSONDecoder().decode(RuntimeEnvelope<T>.self, from: body)
             guard envelope.code == 0, let data = envelope.data else { throw RuntimeHTTPError.invalidResponse }
             return data
         }.value
+        stage = "complete"
+        return value
     }
 
     func getConversationContext(id: String) async throws -> ConversationContextSnapshot {

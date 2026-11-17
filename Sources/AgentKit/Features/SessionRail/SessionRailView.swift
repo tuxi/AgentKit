@@ -3,6 +3,7 @@ import SwiftUI
 import AppKit
 import ClientToolProtocol
 import WebKit
+import OSLog
 
 /// Shared native content for a docked pane or the click-to-open rail popup.
 public struct SessionRailView: View {
@@ -11,6 +12,7 @@ public struct SessionRailView: View {
     @Environment(\.sessionRailOpenSettings) private var openSettings
     @Environment(\.scenePhase) private var scenePhase
     @State private var search = ""
+    @State private var presentationID = UUID()
     private var model: SessionRailModel { store.sessionRail }
     private var conversationID: String? { store.selectedConversation?.id }
     private var vm: ConversationViewModel? {
@@ -51,10 +53,20 @@ public struct SessionRailView: View {
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
         .background(Color(nsColor: .windowBackgroundColor))
+        // Apply visibility after the current render transaction. onChange must
+        // not synchronously publish model selection back into this view tree.
         .task(id: taskKey) {
-            guard visible, scenePhase == .active, let conversationID else { return }
-            await model.run(conversationID: conversationID) { vm?.isTurnActive == true || (vm?.backgroundJobs.runningCount ?? 0) > 0 }
+            guard !Task.isCancelled else { return }
+            Logger(subsystem: "com.agentkit", category: "SessionRail").info(
+                "[session-rail] view visible=\(visible) scene_active=\(scenePhase == .active) selected=\(conversationID != nil)")
+            let currentVM = vm
+            model.setPresentationActive(presentationID,
+                conversationID: visible && scenePhase == .active ? conversationID : nil
+            ) { [weak currentVM] in
+                currentVM?.isTurnActive == true || (currentVM?.backgroundJobs.runningCount ?? 0) > 0
+            }
         }
+        .onDisappear { model.setPresentationActive(presentationID, conversationID: nil) }
         .task(id: "\(visible)|\(scenePhase == .active)|\(model.snapshot?.snapshotID ?? "")") {
             guard visible, scenePhase == .active, model.conversationID == conversationID,
                   model.hasTaskSurface(for: conversationID) else { return }
