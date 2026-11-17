@@ -24,6 +24,7 @@ public struct ConversationTimelineView: View {
     public var body: some View {
         TurnTimelineView(
             snapshot: viewModel.snapshot,
+            composerPresentations: viewModel.composerMessagePresentations,
             timelineExtensions: viewModel.timelineExtensions,
             conversationID: viewModel.conversation?.id,
             workspaceRoot: viewModel.workspaceRootURL,

@@ -67,6 +67,7 @@ public final class ConversationViewModel {
 
     /// Latest snapshot from the engine — primary UI data source.
     public private(set) var snapshot: RuntimeSnapshot = .empty(sessionID: "")
+    public private(set) var composerMessagePresentations: [String: ComposerMessagePresentation] = [:]
     public private(set) var hasMoreOlderHistory = false
     public private(set) var historyMayBeIncomplete = false
     public private(set) var isLoadingOlderHistory = false
@@ -386,6 +387,7 @@ public final class ConversationViewModel {
             composerSelectedModelID = nil
         }
         self.snapshot = .empty(sessionID: conversation.id)
+        self.composerMessagePresentations = (try? localStateStore.state(for: .session(conversation.id)))?.composerMessages ?? [:]
         detailFetchTask?.cancel()
         hasMoreOlderHistory = false
         historyMayBeIncomplete = false
@@ -959,7 +961,8 @@ public final class ConversationViewModel {
         let matchingPendingRequestID = try? localStateStore
             .state(for: .session(sessionID))?
             .composerDraft.pendingSubmission?.requestID
-        try? localStateStore.acceptSubmission(key: .session(sessionID), requestID: requestID)
+        try? localStateStore.acceptSubmission(key: .session(sessionID), requestID: requestID, turnID: turnID)
+        composerMessagePresentations = (try? localStateStore.state(for: .session(sessionID)))?.composerMessages ?? [:]
         if matchingPendingRequestID == requestID {
             lastAcceptedSubmissionRequestID = requestID
         }

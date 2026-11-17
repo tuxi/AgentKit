@@ -323,6 +323,7 @@ export interface ConversationWebPreview {
 export interface ConversationWebTurn {
   id: string;
   userPrompt?: string;
+  fileReferences?: { id: string; path: string; relativePath?: string; isDirectory: boolean }[];
   userAssets: ConversationWebUserAsset[];
   localAssets?: ConversationWebLocalAsset[];
   blocks: ConversationWebBlock[];

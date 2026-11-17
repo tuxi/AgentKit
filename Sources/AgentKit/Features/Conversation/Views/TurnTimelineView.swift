@@ -14,6 +14,7 @@ import SwiftUI
 
 public struct TurnTimelineView: View {
     let snapshot: RuntimeSnapshot
+    let composerPresentations: [String: ComposerMessagePresentation]
     let timelineExtensions: [any TimelineExtension]
     /// Stable conversation identity. The Web renderer uses this to distinguish
     /// a newly opened conversation from a streaming update.
@@ -36,6 +37,7 @@ public struct TurnTimelineView: View {
 
     public init(
         snapshot: RuntimeSnapshot,
+        composerPresentations: [String: ComposerMessagePresentation] = [:],
         timelineExtensions: [any TimelineExtension] = [],
         conversationID: String? = nil,
         workspaceRoot: URL? = nil,
@@ -47,6 +49,7 @@ public struct TurnTimelineView: View {
         onReachedTop: (@MainActor () -> Void)? = nil
     ) {
         self.snapshot = snapshot
+        self.composerPresentations = composerPresentations
         self.timelineExtensions = timelineExtensions
         self.conversationID = conversationID
         self.workspaceRoot = workspaceRoot
@@ -76,15 +79,19 @@ public struct TurnTimelineView: View {
         if didWebRendererFail {
             MacNativeChatTimeline(
                 snapshot: snapshot,
+                composerPresentations: composerPresentations,
                 timelineExtensions: timelineExtensions,
                 conversationID: conversationID,
                 workspaceRoot: workspaceRoot,
                 bottomInset: bottomInset,
                 onReachedTop: onReachedTop
             )
+            .frame(maxWidth: MacConversationLayout.shellMaximumWidth)
+            .frame(maxWidth: .infinity)
         } else {
             ConversationWebWorkbenchView(
                 snapshot: snapshot,
+                composerPresentations: composerPresentations,
                 conversationID: conversationID,
                 workspaceRoot: workspaceRoot,
                 workspaceID: workspaceID,

@@ -122,6 +122,9 @@ public struct ComposerSubmissionSnapshot: Codable, Sendable, Equatable {
     public var revision: Int64
     public var text: String
     public var attachmentIDs: [String]
+    public var fileReferenceIDs: [UUID] = []
+    public var draftText: String?
+    public var presentation: ComposerMessagePresentation? = nil
     public var model: String?
     public var assets: [UserAssetRef]
     public var localAssets: [LocalUserAssetRef]
@@ -131,6 +134,8 @@ public struct ComposerSubmissionSnapshot: Codable, Sendable, Equatable {
         revision: Int64,
         text: String,
         attachmentIDs: [String],
+        fileReferenceIDs: [UUID] = [],
+        draftText: String? = nil,
         model: String? = nil,
         assets: [UserAssetRef] = [],
         localAssets: [LocalUserAssetRef] = []
@@ -139,13 +144,15 @@ public struct ComposerSubmissionSnapshot: Codable, Sendable, Equatable {
         self.revision = revision
         self.text = text
         self.attachmentIDs = attachmentIDs
+        self.fileReferenceIDs = fileReferenceIDs
+        self.draftText = draftText
         self.model = model
         self.assets = assets
         self.localAssets = localAssets
     }
 
     private enum CodingKeys: String, CodingKey {
-        case requestID, revision, text, attachmentIDs, model, assets, localAssets
+        case requestID, revision, text, attachmentIDs, fileReferenceIDs, draftText, model, assets, localAssets, presentation
     }
 
     public init(from decoder: Decoder) throws {
@@ -154,6 +161,9 @@ public struct ComposerSubmissionSnapshot: Codable, Sendable, Equatable {
         revision = try values.decodeIfPresent(Int64.self, forKey: .revision) ?? 0
         text = try values.decodeIfPresent(String.self, forKey: .text) ?? ""
         attachmentIDs = try values.decodeIfPresent([String].self, forKey: .attachmentIDs) ?? []
+        fileReferenceIDs = try values.decodeIfPresent([UUID].self, forKey: .fileReferenceIDs) ?? []
+        draftText = try values.decodeIfPresent(String.self, forKey: .draftText)
+        presentation = try values.decodeIfPresent(ComposerMessagePresentation.self, forKey: .presentation)
         model = try values.decodeIfPresent(String.self, forKey: .model)
         assets = try values.decodeIfPresent([UserAssetRef].self, forKey: .assets) ?? []
         localAssets = try values.decodeIfPresent([LocalUserAssetRef].self, forKey: .localAssets) ?? []
@@ -172,6 +182,9 @@ public protocol UserAssetUploading: Sendable {
 }
 
 public struct ComposerDraft: Codable, Sendable, Equatable {
+    public var imagesAsPaths: Bool = false
+    public var tokens: [ComposerToken] = []
+    public var fileReferences: [ComposerFileReference] = []
     public var text: String
     public var attachments: [DraftAttachmentReference]
     public var workspaceID: String?
@@ -217,13 +230,16 @@ public struct ComposerDraft: Codable, Sendable, Equatable {
     }
 
     private enum CodingKeys: String, CodingKey {
-        case text, attachments, workspaceID, workspacePath, workspaceBranch
+        case fileReferences, tokens, text, attachments, workspaceID, workspacePath, workspaceBranch, imagesAsPaths
         case executionPolicy, wantsManagedWorktree, managedWorktreeBaseRef
         case managedWorktreeSuggestedName, clientRequestID, revision, pendingSubmission, updatedAt
     }
 
     public init(from decoder: Decoder) throws {
         let values = try decoder.container(keyedBy: CodingKeys.self)
+        imagesAsPaths = try values.decodeIfPresent(Bool.self, forKey: .imagesAsPaths) ?? false
+        tokens = try values.decodeIfPresent([ComposerToken].self, forKey: .tokens) ?? []
+        fileReferences = try values.decodeIfPresent([ComposerFileReference].self, forKey: .fileReferences) ?? []
         text = try values.decodeIfPresent(String.self, forKey: .text) ?? ""
         attachments = try values.decodeIfPresent([DraftAttachmentReference].self, forKey: .attachments) ?? []
         workspaceID = try values.decodeIfPresent(String.self, forKey: .workspaceID)
@@ -246,13 +262,15 @@ public struct ComposerDraft: Codable, Sendable, Equatable {
 /// `actual_model` describe what a completed Turn used and must never be written
 /// back into this selection.
 public enum ComposerModelSelectionMode: String, Codable, Sendable {
-    /// Omit `model` from the request and let the Runtime resolve its own default.
+    /// Follow the active catalog default. Submission freezes its current value
+    /// without persisting it as an explicit per-conversation choice.
     case followDefault = "follow_default"
     /// Send the user's explicit model (and reasoning override) with the request.
     case explicit
 }
 
 public struct ConversationLocalState: Codable, Sendable, Equatable {
+    public var composerMessages: [String: ComposerMessagePresentation] = [:]
     /// Bump when the meaning of `modelSelectionMode` changes. Versioned explicit
     /// choices are trusted; unversioned explicit values came from older,
     /// ambiguous migration paths and must be normalized once.
@@ -304,7 +322,7 @@ public struct ConversationLocalState: Codable, Sendable, Equatable {
     }
 
     private enum CodingKeys: String, CodingKey {
-        case composerDraft, selectedModelID, modelSelectionMode, composerSelectionVersion
+        case composerDraft, selectedModelID, modelSelectionMode, composerSelectionVersion, composerMessages
         case reasoningEffort, recentModelIDs, lastReadSequence
         case lastSeenTerminalSequence, lastNotifiedTerminalSequence
         case lastNotifiedApprovalSequence, updatedAt
@@ -313,6 +331,7 @@ public struct ConversationLocalState: Codable, Sendable, Equatable {
     public init(from decoder: Decoder) throws {
         let values = try decoder.container(keyedBy: CodingKeys.self)
         composerDraft = try values.decodeIfPresent(ComposerDraft.self, forKey: .composerDraft) ?? ComposerDraft()
+        composerMessages = try values.decodeIfPresent([String: ComposerMessagePresentation].self, forKey: .composerMessages) ?? [:]
         selectedModelID = try values.decodeIfPresent(String.self, forKey: .selectedModelID)
         modelSelectionMode = try values.decodeIfPresent(ComposerModelSelectionMode.self, forKey: .modelSelectionMode)
         composerSelectionVersion = try values.decodeIfPresent(Int.self, forKey: .composerSelectionVersion)

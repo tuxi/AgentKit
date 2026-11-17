@@ -14,6 +14,7 @@ import WebKit
 @MainActor
 struct ConversationWebWorkbenchView: NSViewRepresentable {
     let snapshot: RuntimeSnapshot
+    var composerPresentations: [String: ComposerMessagePresentation] = [:]
     let conversationID: String?
     let workspaceRoot: URL?
     var workspaceID: String? = nil
@@ -82,6 +83,7 @@ struct ConversationWebWorkbenchView: NSViewRepresentable {
         )
         context.coordinator.replaceSnapshot(
             snapshot,
+            composerPresentations: composerPresentations,
             conversationID: conversationID,
             workspaceRoot: workspaceRoot,
             workspaceID: workspaceID,
@@ -99,6 +101,7 @@ struct ConversationWebWorkbenchView: NSViewRepresentable {
         context.coordinator.onReachedTop = onReachedTop
         context.coordinator.replaceSnapshot(
             snapshot,
+            composerPresentations: composerPresentations,
             conversationID: conversationID,
             workspaceRoot: workspaceRoot,
             workspaceID: workspaceID,
@@ -230,8 +233,11 @@ struct ConversationWebWorkbenchView: NSViewRepresentable {
             onReachedTop = nil
         }
 
+        private var sourceComposerPresentations: [String: ComposerMessagePresentation] = [:]
+
         func replaceSnapshot(
             _ snapshot: RuntimeSnapshot,
+            composerPresentations: [String: ComposerMessagePresentation] = [:],
             conversationID: String?,
             workspaceRoot: URL?,
             workspaceID: String?,
@@ -240,6 +246,8 @@ struct ConversationWebWorkbenchView: NSViewRepresentable {
             store: WorkspaceStore,
             openURL: OpenURLAction
         ) {
+            let presentationsChanged = sourceComposerPresentations != composerPresentations
+            sourceComposerPresentations = composerPresentations
             workspaceStore = store
             self.openURL = openURL
             latestTurns = snapshot.turns
@@ -257,7 +265,8 @@ struct ConversationWebWorkbenchView: NSViewRepresentable {
                     || sourceWorkspaceRoot != workspaceRoot
                     || sourceWorkspaceID != workspaceID
                     || sourceExtensionContributions != extensionContributions
-                    || previewArtifactsChanged else {
+                    || previewArtifactsChanged
+                    || presentationsChanged else {
                 return
             }
 
@@ -673,6 +682,7 @@ struct ConversationWebWorkbenchView: NSViewRepresentable {
             }
             let buildResult = ConversationWebDocumentBuilder.buildWithStableTurns(
                 snapshot: latestSnapshot,
+                composerPresentations: sourceComposerPresentations,
                 conversationID: sourceConversationID,
                 revision: revision,
                 extensionContributions: sourceExtensionContributions,

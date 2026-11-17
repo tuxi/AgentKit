@@ -82,16 +82,23 @@ public struct ConversationDetailView: View {
                 draftComposer
             }
 #else
-            ScrollView {
-                VStack(spacing: 18) {
-                    Spacer(minLength: 120)
-                    draftTitleView
-                    draftComposer
-                    draftFailureBanner
-                    Spacer(minLength: 180)
+            VStack(spacing: 0) {
+                ScrollView {
+                    VStack(spacing: 18) {
+                        Spacer(minLength: 120)
+                        draftTitleView
+                        draftFailureBanner
+                        Spacer(minLength: 180)
+                    }
+                    .frame(maxWidth: .infinity)
                 }
-                .frame(maxWidth: .infinity)
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+
+                // Keep the editor at the same bottom edge as an active chat;
+                // only the welcome content participates in scrolling.
+                draftComposer
             }
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
 //            .background(.bar)
             .background(Color(nsColor: colorScheme == .dark
                               ? NSColor.windowBackgroundColor
@@ -223,7 +230,7 @@ public struct ConversationDetailView: View {
                 banner
                 residentTimelines(activeViewModel: vm, bottomInset: bottomBarHeight)
             }
-            .padding(.horizontal, 20)
+            .padding(.horizontal, MacConversationLayout.outerInset)
             .background(Color(nsColor: colorScheme == .dark
                               ? NSColor.windowBackgroundColor
                               : NSColor(

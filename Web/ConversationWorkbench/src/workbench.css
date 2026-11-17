@@ -2539,3 +2539,40 @@ button.user-asset-thumbnail {
 /* The viewport controller owns anchoring. A second browser correction during
    disclosure would move the next click target underneath the pointer. */
 html { overflow-anchor: none; }
+
+.user-file-references {
+  display: flex;
+  justify-content: safe flex-end;
+  gap: 8px;
+  overflow-x: auto;
+  padding: 4px 0 8px;
+  margin-left: auto;
+  max-width: 100%;
+}
+.user-file-reference {
+  flex: 0 0 176px;
+  min-width: 0;
+  padding: 10px 12px;
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  background: var(--subtle);
+}
+.user-file-reference-name { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.user-file-reference-kind { color: var(--secondary); font-size: var(--font-caption); }
+.user-file-reference-path { display: block; color: var(--secondary); font-size: 11px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+/* Images and path references share one scroll surface and one height. */
+.user-attachment-strip { flex-wrap: nowrap; align-items: center; }
+.user-attachment-strip > .user-file-reference {
+  flex: 0 0 176px;
+  height: 76px;
+  padding: 8px 10px;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  gap: 2px;
+  overflow: hidden;
+  line-height: 1.25;
+}
+.user-attachment-strip .user-file-reference-name { font-size: 13px; }
+.user-attachment-strip .user-file-reference-kind { font-size: 11px; }

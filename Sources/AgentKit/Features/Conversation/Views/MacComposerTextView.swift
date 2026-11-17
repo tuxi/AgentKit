@@ -29,9 +29,20 @@ struct MacComposerTextView: NSViewRepresentable {
     let maxHeight: CGFloat
     /// 回车发送。是否满足发送条件由调用方在闭包内判断。
     let onSend: () -> Void
-    /// 拖拽图片到输入框时回调（仅图片走附件流程）。返回 true 表示接受拖放。
-    /// 非图片文件/目录不经过此回调 —— 其完整路径会直接插入为输入框文本。
+    /// Host classifies dropped images and path references without uploading.
+    /// A missing callback preserves plain path insertion for legacy callers.
     var onFileDrop: (([URL]) -> Bool)? = nil
+
+    var onDropTargetChange: ((Bool) -> Void)? = nil
+    var suggestionText: String? = nil
+    var onDismissSuggestion: (() -> Void)? = nil
+    var completionScope = ""
+    var onImagePaste: ((Data) -> Void)? = nil
+    var tokens: Binding<[ComposerToken]> = .constant([])
+    var queryCompletions: ((String, String, Int64) async throws -> ComposerCompletionResult)? = nil
+    var resolveReference: ((ComposerCompletionItem) async throws -> ComposerCompletionItem)? = nil
+    var onCompletionAction: ((String) -> Void)? = nil
+    var onFocusChange: ((Bool) -> Void)? = nil
 
     func makeCoordinator() -> Coordinator { Coordinator(self) }
 
@@ -46,18 +57,31 @@ struct MacComposerTextView: NSViewRepresentable {
         let textView = ComposerNSTextView()
         textView.delegate = context.coordinator
         textView.string = text
-        textView.font = .preferredFont(forTextStyle: .body)
+        textView.font = .systemFont(ofSize: 14)
+        let paragraph = NSMutableParagraphStyle()
+        paragraph.minimumLineHeight = 21
+        paragraph.maximumLineHeight = 21
+        textView.defaultParagraphStyle = paragraph
+        textView.textStorage?.addAttribute(.paragraphStyle, value: paragraph, range: NSRange(location: 0, length: (text as NSString).length))
+        textView.typingAttributes[.paragraphStyle] = paragraph
         textView.drawsBackground = false
         textView.isRichText = false
         textView.allowsUndo = true
-        textView.textContainerInset = NSSize(width: 4, height: 6)
+        textView.textContainerInset = NSSize(width: 0, height: 2)
         textView.isVerticallyResizable = true
         textView.isHorizontallyResizable = false
         textView.textContainer?.widthTracksTextView = true
         textView.textContainer?.heightTracksTextView = false
         textView.autoresizingMask = [.width]
+        textView.suggestionText = suggestionText
         textView.placeholderString = placeholder
+        textView.onFocusChange = { focused in
+            onFocusChange?(focused)
+            if !focused { context.coordinator.closeCompletions() }
+        }
         textView.onSend = onSend
+        textView.onDropTargetChange = onDropTargetChange
+        textView.onImagePaste = onImagePaste
         textView.onFileDrop = onFileDrop
         textView.onTextInserted = { [weak textView] in
             guard let textView else { return }
@@ -75,6 +99,7 @@ struct MacComposerTextView: NSViewRepresentable {
     }
 
     func updateNSView(_ scrollView: NSScrollView, context: Context) {
+        if context.coordinator.parent.completionScope != completionScope { context.coordinator.closeCompletions() }
         context.coordinator.parent = self
         guard let textView = scrollView.documentView as? ComposerNSTextView else { return }
 
@@ -85,16 +110,29 @@ struct MacComposerTextView: NSViewRepresentable {
         if textView.string != text, !textView.hasMarkedText() {
             textView.string = text
         }
+        textView.suggestionText = suggestionText
         textView.placeholderString = placeholder
         textView.isEditable = isEnabled
-        textView.isSelectable = isEnabled
+        textView.isSelectable = true
+        textView.onFocusChange = { focused in
+            onFocusChange?(focused)
+            if !focused { context.coordinator.closeCompletions() }
+        }
         textView.onSend = onSend
+        textView.onDropTargetChange = onDropTargetChange
+        textView.onImagePaste = onImagePaste
         textView.onFileDrop = onFileDrop
         textView.onTextInserted = { [weak textView] in
             guard let textView else { return }
             context.coordinator.parent.text = textView.string
         }
         context.coordinator.recalculateHeight()
+        context.coordinator.applyTokenAppearance()
+    }
+
+    static func dismantleNSView(_ scrollView: NSScrollView, coordinator: Coordinator) {
+        coordinator.closeCompletions()
+        (scrollView.documentView as? NSTextView)?.undoManager?.removeAllActions(withTarget: coordinator)
     }
 
     // MARK: - Coordinator
@@ -104,13 +142,219 @@ struct MacComposerTextView: NSViewRepresentable {
 
         var parent: MacComposerTextView
         weak var textView: ComposerNSTextView?
+        private var measuredText: String?
+        private var measuredWidth: CGFloat = -1
+        private var measuredMaximum: CGFloat = -1
+        private var heightRevision = 0
+        private var completionTask: Task<Void, Never>?
+        private var completionRevision: Int64 = 0
+        private var completionRange: NSRange?
+        private var completionPanel: MacComposerCompletionPanel?
+        private var completionMonitor: Any?
+        private let completionState = MacComposerCompletionState()
+        private var replacingToken = false
+        private var appliedTokens: [ComposerToken]?
+        private var appearanceText: String?
 
         init(_ parent: MacComposerTextView) { self.parent = parent }
 
         func textDidChange(_ notification: Notification) {
             guard let tv = notification.object as? NSTextView else { return }
             parent.text = tv.string
+            applyTokenAppearance()
             recalculateHeight()
+            updateCompletions()
+        }
+
+        func textView(_ textView: NSTextView, shouldChangeTextIn affectedCharRange: NSRange, replacementString: String?) -> Bool {
+            guard let replacementString else { return true }
+            let replacementLength = (replacementString as NSString).length
+            let affected = affectedCharRange
+            if replacementLength == 0, affected.length > 0, !replacingToken,
+               let token = parent.tokens.wrappedValue.first(where: { NSIntersectionRange(NSRange(location: $0.location, length: $0.length), affected).length > 0 }) {
+                replacingToken = true
+                textView.insertText("", replacementRange: NSUnionRange(affected, NSRange(location: token.location, length: token.length)))
+                replacingToken = false
+                return false
+            }
+            let previousTokens = parent.tokens.wrappedValue
+            let updatedTokens = previousTokens.compactMap { token -> ComposerToken? in
+                var token = token
+                let tokenRange = NSRange(location: token.location, length: token.length)
+                if NSIntersectionRange(tokenRange, affected).length > 0 { return nil }
+                if affected.length == 0 && affected.location > token.location && affected.location < NSMaxRange(tokenRange) { return nil }
+                if token.location >= NSMaxRange(affected) { token.location += replacementLength - affected.length }
+                return token
+            }
+            if previousTokens != updatedTokens {
+                registerTokenUndo(previousTokens)
+                parent.tokens.wrappedValue = updatedTokens
+            }
+            return true
+        }
+
+        private func registerTokenUndo(_ tokens: [ComposerToken]) {
+            textView?.undoManager?.registerUndo(withTarget: self) { target in
+                MainActor.assumeIsolated {
+                    target.registerTokenUndo(target.parent.tokens.wrappedValue)
+                    target.parent.tokens.wrappedValue = tokens
+                    target.appliedTokens = nil
+                    target.applyTokenAppearance()
+                }
+            }
+        }
+
+        func textViewDidChangeSelection(_ notification: Notification) {
+            guard let tv = textView, let range = completionRange else { return }
+            let caret = tv.selectedRange()
+            if caret.length > 0 || caret.location < range.location || caret.location > NSMaxRange(range) { closeCompletions() }
+        }
+
+        func applyTokenAppearance() {
+            guard let tv = textView, !tv.hasMarkedText(), let storage = tv.textStorage else { return }
+            let tokens = parent.tokens.wrappedValue
+            guard appliedTokens != tokens || appearanceText != tv.string else { return }
+            appliedTokens = tokens; appearanceText = tv.string
+            var coloredRanges: [NSRange] = []
+            storage.enumerateAttribute(.foregroundColor, in: NSRange(location: 0, length: storage.length)) { color, range, _ in
+                if let color = color as? NSColor, !color.isEqual(NSColor.labelColor) { coloredRanges.append(range) }
+            }
+            storage.beginEditing()
+            storage.removeAttribute(.toolTip, range: NSRange(location: 0, length: storage.length))
+            for range in coloredRanges { storage.addAttribute(.foregroundColor, value: NSColor.labelColor, range: range) }
+            for token in parent.tokens.wrappedValue {
+                guard token.location >= 0, token.length > 0, token.location <= storage.length, token.length <= storage.length - token.location else { continue }
+                let range = NSRange(location: token.location, length: token.length)
+                storage.addAttribute(.foregroundColor, value: NSColor.systemBlue, range: range)
+                storage.addAttribute(.toolTip, value: token.item.kind == "conversation" ? "引用最近 3 轮的消息片段；重新选择可更新快照。" : token.item.detail, range: range)
+            }
+            storage.endEditing()
+            tv.typingAttributes[.foregroundColor] = NSColor.labelColor
+        }
+
+        func closeCompletions() {
+            completionTask?.cancel(); completionTask = nil
+            completionRevision += 1
+            if let panel = completionPanel { panel.parent?.removeChildWindow(panel); panel.orderOut(nil) }
+            if let completionMonitor { NSEvent.removeMonitor(completionMonitor); self.completionMonitor = nil }
+            completionRange = nil
+        }
+
+        private func updateCompletions() {
+            guard let tv = textView, !tv.hasMarkedText(), let query = parent.queryCompletions else { closeCompletions(); return }
+            let text = tv.string as NSString
+            let caret = tv.selectedRange().location
+            guard tv.selectedRange().length == 0, caret <= text.length else { closeCompletions(); return }
+            let prefix = text.substring(to: caret)
+            let word = prefix.split(whereSeparator: { $0.isWhitespace }).last.map(String.init) ?? ""
+            let kind: String
+            let queryText: String
+            let range: NSRange
+            if prefix.trimmingCharacters(in: .whitespaces).hasPrefix("/"), !prefix.trimmingCharacters(in: .whitespaces).contains(where: { $0.isWhitespace }) {
+                let value = prefix.trimmingCharacters(in: .whitespaces)
+                kind = "command"; queryText = String(value.dropFirst()); range = NSRange(location: caret - (value as NSString).length, length: (value as NSString).length)
+            } else if word.hasPrefix("@"), !prefix.hasSuffix(" "), !prefix.hasSuffix("\n") {
+                kind = "reference"; queryText = String(word.dropFirst()); range = NSRange(location: caret - (word as NSString).length, length: (word as NSString).length)
+            } else { closeCompletions(); return }
+            guard queryText.utf8.count <= 512 else { closeCompletions(); return }
+            closeCompletions()
+            completionRange = range
+            let revision = completionRevision
+            completionTask = Task { @MainActor [weak self] in
+                do {
+                    try await Task.sleep(for: .milliseconds(120))
+                    let result = try await query(kind, queryText, revision)
+                    guard let self, !Task.isCancelled, self.completionRevision == revision else { return }
+                    self.completionState.items = result.items
+                    self.completionState.selected = 0
+                    self.completionState.message = result.items.isEmpty ? "没有匹配项" : (result.truncated ? "输入更多字符以缩小范围" : nil)
+                    self.showCompletions(kind: kind)
+                } catch {
+                    guard let self, !Task.isCancelled, self.completionRevision == revision else { return }
+                    self.completionState.items = []
+                    self.completionState.message = "当前环境暂不支持补全"
+                    self.showCompletions(kind: kind)
+                }
+            }
+        }
+
+        private func showCompletions(kind: String) {
+            guard let tv = textView, let window = tv.window else { return }
+            let width = min(max(240, window.contentView?.bounds.width ?? 320), kind == "command" ? 340 : 640)
+            let view = NSHostingView(rootView: MacComposerCompletionList(state: completionState, width: width))
+            let panel = completionPanel ?? MacComposerCompletionPanel(contentRect: .zero, styleMask: [.borderless, .nonactivatingPanel], backing: .buffered, defer: true)
+            panel.isReleasedWhenClosed = false
+            panel.hasShadow = true
+            panel.backgroundColor = .windowBackgroundColor
+            panel.hidesOnDeactivate = true
+            panel.contentView = view
+            panel.isOpaque = false
+            panel.backgroundColor = .clear
+            view.wantsLayer = true
+            view.layer?.cornerRadius = 12
+            view.layer?.masksToBounds = true
+            let size = view.fittingSize
+            let anchor = window.convertToScreen(tv.convert(tv.bounds, to: nil))
+            let visible = window.screen?.visibleFrame ?? window.frame
+            let x = min(max(anchor.minX, visible.minX + 8), visible.maxX - size.width - 8)
+            let y = anchor.maxY + 8 + size.height <= visible.maxY ? anchor.maxY + 8 : max(visible.minY, anchor.minY - size.height - 8)
+            panel.setFrame(NSRect(origin: NSPoint(x: x, y: y), size: size), display: true)
+            if panel.parent == nil { window.addChildWindow(panel, ordered: .above) }
+            panel.orderFront(nil)
+            completionPanel = panel
+            if completionMonitor == nil {
+                completionMonitor = NSEvent.addLocalMonitorForEvents(matching: [.leftMouseDown, .rightMouseDown]) { [weak self] event in
+                    MainActor.assumeIsolated {
+                        guard let self, let tv = self.textView else { return }
+                        if event.window !== self.completionPanel {
+                            let insideEditor = event.window === tv.window && tv.bounds.contains(tv.convert(event.locationInWindow, from: nil))
+                            if !insideEditor { self.closeCompletions() }
+                        }
+                    }
+                    return event
+                }
+            }
+            completionState.onSelect = { [weak self] item in self?.chooseCompletion(item) }
+        }
+
+        private func chooseCompletion(_ item: ComposerCompletionItem) {
+            if item.kind == "conversation", item.contextText == nil {
+                guard let resolve = parent.resolveReference else { return }
+                completionTask?.cancel()
+                let revision = completionRevision
+                completionState.items = []
+                completionState.message = "正在读取引用…"
+                showCompletions(kind: "reference")
+                completionTask = Task { @MainActor [weak self] in
+                    do {
+                        let resolved = try await resolve(item)
+                        guard let self, !Task.isCancelled, self.completionRevision == revision else { return }
+                        self.insertCompletion(resolved)
+                    } catch {
+                        guard let self, !Task.isCancelled, self.completionRevision == revision else { return }
+                        self.completionState.message = "无法读取此引用，请重试或按 Esc 关闭"
+                    }
+                }
+                return
+            }
+            insertCompletion(item)
+        }
+
+        private func insertCompletion(_ item: ComposerCompletionItem) {
+            guard let tv = textView, let range = completionRange else { return }
+            closeCompletions()
+            if item.action != "insert" {
+                guard ["model", "permissions", "skills"].contains(item.action) else { return }
+                tv.insertText("", replacementRange: range)
+                parent.onCompletionAction?(item.action)
+                return
+            }
+            let previousTokens = parent.tokens.wrappedValue
+            tv.insertText(item.insertText + " ", replacementRange: range)
+            registerTokenUndo(previousTokens)
+            parent.tokens.wrappedValue.append(ComposerToken(location: range.location, length: (item.insertText as NSString).length, item: item, workspacePath: parent.completionScope))
+            parent.text = tv.string
+            applyTokenAppearance()
         }
 
         /// 基于 layoutManager 的实际排版高度做自适应，clamp 到 [min, max]。
@@ -118,15 +362,22 @@ struct MacComposerTextView: NSViewRepresentable {
             guard let tv = textView,
                   let layoutManager = tv.layoutManager,
                   let container = tv.textContainer else { return }
+            guard measuredText != tv.string || measuredWidth != tv.bounds.width || measuredMaximum != parent.maxHeight else { return }
+            measuredText = tv.string
+            measuredWidth = tv.bounds.width
+            measuredMaximum = parent.maxHeight
             layoutManager.ensureLayout(for: container)
             let used = layoutManager.usedRect(for: container).height
             let inset = tv.textContainerInset.height * 2
             let target = min(max(used + inset, parent.minHeight), parent.maxHeight)
             if abs(parent.height - target) > 0.5 {
+                heightRevision += 1
+                let revision = heightRevision
                 let newHeight = target
                 // 延后一拍，避免在 SwiftUI 视图更新周期内直接改 @Binding。
                 Task { @MainActor [weak self] in
-                    self?.parent.height = newHeight
+                    guard let self, self.heightRevision == revision else { return }
+                    self.parent.height = newHeight
                 }
             }
         }
@@ -135,6 +386,28 @@ struct MacComposerTextView: NSViewRepresentable {
         /// 注意：IME 组字期间，回车用于选定候选词，input context 会消化该事件，
         /// 根本不会走到这里 —— 因此中文/联想输入永远不会误发。
         func textView(_ textView: NSTextView, doCommandBy commandSelector: Selector) -> Bool {
+            guard !textView.hasMarkedText() else { return false }
+            if completionPanel?.isVisible == true {
+                if commandSelector == #selector(NSResponder.moveDown(_:)) || commandSelector == #selector(NSResponder.moveUp(_:)) {
+                    let count = completionState.items.count
+                    if count > 0 { completionState.selected = (completionState.selected + (commandSelector == #selector(NSResponder.moveDown(_:)) ? 1 : count - 1)) % count }
+                    return true
+                }
+                if commandSelector == #selector(NSResponder.cancelOperation(_:)) { closeCompletions(); return true }
+                if commandSelector == #selector(NSResponder.insertNewline(_:)) || commandSelector == #selector(NSResponder.insertTab(_:)) {
+                    if completionState.items.indices.contains(completionState.selected) { chooseCompletion(completionState.items[completionState.selected]) }
+                    return true
+                }
+            }
+            if textView.string.isEmpty, let suggestion = parent.suggestionText, !suggestion.isEmpty {
+                if commandSelector == #selector(NSResponder.insertTab(_:)) {
+                    textView.insertText(suggestion, replacementRange: textView.selectedRange())
+                    parent.text = textView.string
+                    parent.onDismissSuggestion?()
+                    return true
+                }
+                if commandSelector == #selector(NSResponder.cancelOperation(_:)) { parent.onDismissSuggestion?(); return true }
+            }
             if commandSelector == #selector(NSResponder.insertNewline(_:)) {
                 let shiftHeld = NSApp.currentEvent?.modifierFlags.contains(.shift) ?? false
                 if shiftHeld {
@@ -156,10 +429,40 @@ struct MacComposerTextView: NSViewRepresentable {
 /// 完整路径直接插入为输入框文本。
 final class ComposerNSTextView: NSTextView {
 
+    var suggestionText: String? { didSet { if string.isEmpty { needsDisplay = true } } }
+
     var placeholderString: String = "" {
         didSet { if string.isEmpty { needsDisplay = true } }
     }
+    var onFocusChange: ((Bool) -> Void)?
+
+    override func becomeFirstResponder() -> Bool {
+        let result = super.becomeFirstResponder()
+        if result { onFocusChange?(true) }
+        return result
+    }
+
+    override func resignFirstResponder() -> Bool {
+        let result = super.resignFirstResponder()
+        if result { onFocusChange?(false) }
+        return result
+    }
+
     var onSend: (() -> Void)?
+    var onDropTargetChange: ((Bool) -> Void)?
+    var onImagePaste: ((Data) -> Void)?
+
+    override func paste(_ sender: Any?) {
+        guard isEditable else { return }
+        let pasteboard = NSPasteboard.general
+        if let urls = fileURLs(from: pasteboard), let onFileDrop, onFileDrop(urls) { return }
+        if let onImagePaste, let data = pasteboard.data(forType: .png) ?? pasteboard.data(forType: .tiff) {
+            onImagePaste(data)
+            return
+        }
+        super.paste(sender)
+    }
+
     var onFileDrop: (([URL]) -> Bool)?
     /// Called after text is programmatically inserted (e.g., via drag-drop).
     /// Allows the SwiftUI binding to be updated.
@@ -167,7 +470,9 @@ final class ComposerNSTextView: NSTextView {
 
     override func draw(_ dirtyRect: NSRect) {
         super.draw(dirtyRect)
-        guard string.isEmpty, !placeholderString.isEmpty else { return }
+        guard string.isEmpty else { return }
+        let placeholder = suggestionText ?? placeholderString
+        guard !placeholder.isEmpty else { return }
         let attrs: [NSAttributedString.Key: Any] = [
             .foregroundColor: NSColor.placeholderTextColor,
             .font: font ?? .preferredFont(forTextStyle: .body),
@@ -175,7 +480,15 @@ final class ComposerNSTextView: NSTextView {
         let padding = textContainer?.lineFragmentPadding ?? 0
         let origin = NSPoint(x: textContainerInset.width + padding,
                              y: textContainerInset.height)
-        placeholderString.draw(at: origin, withAttributes: attrs)
+        let paragraph = NSMutableParagraphStyle()
+        paragraph.lineBreakMode = .byTruncatingTail
+        var displayAttrs = attrs
+        displayAttrs[.paragraphStyle] = paragraph
+        let markerWidth: CGFloat = suggestionText == nil ? 0 : 30
+        placeholder.draw(in: NSRect(x: origin.x, y: origin.y, width: max(0, bounds.width - origin.x - markerWidth), height: 24), withAttributes: displayAttrs)
+        if suggestionText != nil {
+            "⇥".draw(at: NSPoint(x: max(origin.x, bounds.width - 22), y: origin.y), withAttributes: attrs)
+        }
     }
 
     // MARK: - Drag Destination
@@ -183,6 +496,8 @@ final class ComposerNSTextView: NSTextView {
     private var isDropTargeted = false {
         didSet {
             guard isDropTargeted != oldValue else { return }
+            onDropTargetChange?(isDropTargeted)
+            if onDropTargetChange != nil { return }
             wantsLayer = true
             layer?.borderWidth = isDropTargeted ? 2 : 0
             layer?.borderColor = isDropTargeted
@@ -193,7 +508,7 @@ final class ComposerNSTextView: NSTextView {
     }
 
     override func draggingEntered(_ sender: NSDraggingInfo) -> NSDragOperation {
-        guard let urls = fileURLs(from: sender.draggingPasteboard),
+        guard isEditable, let urls = fileURLs(from: sender.draggingPasteboard),
               !urls.isEmpty,
               canAcceptDrop(urls) else {
             return []
@@ -203,7 +518,7 @@ final class ComposerNSTextView: NSTextView {
     }
 
     override func draggingUpdated(_ sender: NSDraggingInfo) -> NSDragOperation {
-        guard let urls = fileURLs(from: sender.draggingPasteboard),
+        guard isEditable, let urls = fileURLs(from: sender.draggingPasteboard),
               !urls.isEmpty,
               canAcceptDrop(urls) else {
             isDropTargeted = false
@@ -223,8 +538,10 @@ final class ComposerNSTextView: NSTextView {
 
     override func performDragOperation(_ sender: NSDraggingInfo) -> Bool {
         isDropTargeted = false
-        guard let urls = fileURLs(from: sender.draggingPasteboard),
+        guard isEditable, let urls = fileURLs(from: sender.draggingPasteboard),
               !urls.isEmpty else { return false }
+
+        if let onFileDrop { return onFileDrop(urls) }
 
         let pathURLs = urls.filter { !Self.isImageFile($0) }
         let imageURLs = urls.filter { Self.isImageFile($0) }
@@ -259,10 +576,9 @@ final class ComposerNSTextView: NSTextView {
 
         let caret = min(max(selectedRange.location, 0), (fullText as NSString).length)
         var insertion = joined
-        if caret > 0 && caret <= fullText.count {
-            let index  = fullText.index(fullText.startIndex, offsetBy: caret - 1)
-            let prev = fullText[index]
-            if !prev.isWhitespace {
+        if caret > 0 {
+            let preceding = (fullText as NSString).substring(to: caret)
+            if preceding.last?.isWhitespace == false {
                 insertion = " " + insertion
             }
         }

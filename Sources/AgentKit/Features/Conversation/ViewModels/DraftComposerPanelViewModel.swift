@@ -7,6 +7,10 @@
 
 import Foundation
 import SwiftUI
+#if os(macOS)
+import AppKit
+import UniformTypeIdentifiers
+#endif
 
 @MainActor
 @Observable
@@ -25,6 +29,9 @@ final class DraftComposerPanelViewModel {
     // MARK: - Published State (View binds to these)
     
     var text = ""
+    var tokens: [ComposerToken] = []
+    var fileReferences: [ComposerFileReference] = []
+    var attachmentIssue: String?
     var attachments: [DraftAttachmentReference] = []
     /// Input intent. `.followDefault` means the next request omits `model`.
     private(set) var selectionMode: ComposerModelSelectionMode = .followDefault
@@ -40,6 +47,7 @@ final class DraftComposerPanelViewModel {
             return explicitModel
         }
     }
+    private(set) var hasPendingSubmission = false
     var isSending = false
     var isTurnRunning = false
     var isEnabled: Bool
@@ -83,9 +91,10 @@ final class DraftComposerPanelViewModel {
     
     // macOS-specific
 #if os(macOS)
-    var composerHeight: CGFloat = 56
-    private let composerMinHeight: CGFloat = 56
-    private let composerMaxHeight: CGFloat = 150
+    weak var composerUndoManager: UndoManager?
+    var composerHeight: CGFloat = 24
+    private let composerMinHeight: CGFloat = 24
+    private let composerMaxHeight: CGFloat = 336
 #endif
     
     // Computed
@@ -103,9 +112,17 @@ final class DraftComposerPanelViewModel {
         return nil
     }
     
+    var isSubmitting: Bool {
+#if os(macOS)
+        isSending || hasPendingSubmission
+#else
+        isSending
+#endif
+    }
+
     var canSend: Bool {
-        let hasContent = !trimmed.isEmpty || !attachments.isEmpty
-        let attachmentsReady = attachments.allSatisfy { attachment in
+        let hasContent = !trimmed.isEmpty || !attachments.isEmpty || !fileReferences.isEmpty
+        let attachmentsReady = imagesAsPaths || attachments.allSatisfy { attachment in
             if attachment.delivery == .localOnly {
                 return attachment.state == .local
                 || attachment.state == .ready
@@ -113,10 +130,47 @@ final class DraftComposerPanelViewModel {
             }
             return attachment.state == .ready
         }
-        return isEnabled && hasContent && attachmentsReady && !isSending
+        return isEnabled && hasContent && attachmentsReady && !isSubmitting
+        && textWithinLimit && attachmentIssue == nil && imageInputIssue == nil && referenceLimitIssue == nil
         && !isTurnRunning && !isContextCompacting && !workspaceStore.sessionRail.isCompacting(sessionID) && modelSettings.isModelAvailable(selectedModel?.model)
     }
     
+    private var textWithinLimit: Bool {
+#if os(macOS)
+        trimmed.count <= 100_000
+#else
+        true
+#endif
+    }
+
+    var referenceLimitIssue: String? {
+#if os(macOS)
+        let count = attachments.count + fileReferences.count + tokens.filter { ["file", "directory", "conversation"].contains($0.item.kind) }.count
+        if count > 16 { return "附件与引用合计最多 16 个，请移除多余项目。" }
+#endif
+        return nil
+    }
+
+    var imagesAsPaths: Bool {
+#if os(macOS)
+        guard let id = selectedModel?.model, let model = modelSettings.descriptor(for: id) else { return false }
+        return !model.inputModalities.contains(.image)
+#else
+        return false
+#endif
+    }
+
+    var submissionFileReferences: [ComposerFileReference] {
+        ComposerMessageContent.referenceFiles(files: fileReferences, attachments: attachments, imagesAsPaths: imagesAsPaths)
+    }
+
+    var imageInputIssue: String? {
+        if imagesAsPaths, submissionFileReferences.count != fileReferences.count + attachments.count {
+            return "无法取得图片的本地路径，请重新添加该图片。"
+        }
+        return nil
+    }
+
     var trimmed: String {
         text.trimmingCharacters(in: .whitespacesAndNewlines)
     }
@@ -137,6 +191,15 @@ final class DraftComposerPanelViewModel {
                 modelIDs: group.models.map({ $0.model })
             )
         }
+    }
+
+    /// Freeze the displayed effective model for this request. Following the
+    /// catalog default remains a preference, not an omitted transport value.
+    var submissionModel: UnifiedModel? {
+        guard let selected = selectedModel else { return nil }
+        let alias = modelSettings.getWireModelID(for: selected.model)
+            ?? modelSettings.runtimeAlias(for: selected.model) ?? selected.model
+        return UnifiedModel(model: alias, reasoningEffort: modelSettings.validatedReasoningEffort(selected.reasoningEffort, for: selected.model))
     }
 
     var modelSelection: ComposerModelSelection {
@@ -218,6 +281,9 @@ final class DraftComposerPanelViewModel {
     }
     
     func onDisappear() {
+#if os(macOS)
+        composerUndoManager?.removeAllActions(withTarget: self)
+#endif
         if voiceService.state == .recording {
             voiceService.cancelRecording()
         }
@@ -265,22 +331,23 @@ final class DraftComposerPanelViewModel {
     func selectModel(_ modelID: String, reasoningEffort: ModelReasoningEffort?) {
         guard !modelID.isEmpty else { return }
         hadNoLocalState = false
-        let model = UnifiedModel(model: modelID, reasoningEffort: reasoningEffort)
+        let effort = modelSettings.validatedReasoningEffort(reasoningEffort ?? modelSettings.rememberedReasoningEffort(for: modelID), for: modelID)
+        let model = UnifiedModel(model: modelID, reasoningEffort: effort)
         applySelection(.explicit(model))
 
         modelSettings.didUseModel(
             modelID,
-            reasoningEffort: reasoningEffort,
+            reasoningEffort: effort,
             conversation: conversationViewModel?.conversation?.id ?? ""
         )
-        persistModel(modelID, reasoningEffort: reasoningEffort)
+        persistModel(modelID, reasoningEffort: effort)
         if let wireModel = modelSettings.getWireModelID(for: modelID) {
             onModelChange?(wireModel)
         }
     }
 
-    /// User chose to let the Runtime resolve its configured default. Persist the
-    /// intent and remove any explicit model/reasoning leftover.
+    /// Follow the catalog default while keeping the preference unpinned. The
+    /// effective model is frozen only when a request is submitted.
     func selectRuntimeDefault() {
         applySelection(.followDefault)
         persistSelection(.followDefault)
@@ -305,14 +372,41 @@ final class DraftComposerPanelViewModel {
     }
     
     func effectiveReasoningEffort(for modelID: String, supported: [ModelReasoningEffort]) -> ModelReasoningEffort? {
-        if modelID == selectedModel?.model,
-           let override = storedReasoningEffortOverride,
-           supported.contains(override) {
-            return override
-        }
+        if isCurrentModel(modelID), let override = selectedModel?.reasoningEffort,
+           let valid = modelSettings.validatedReasoningEffort(override, for: modelID) { return valid }
+        if isCurrentModel(modelID), let override = storedReasoningEffortOverride,
+           let valid = modelSettings.validatedReasoningEffort(override, for: modelID) { return valid }
         return modelSettings.descriptor(for: modelID)?.reasoningEffort
     }
-    
+
+    func isCurrentModel(_ modelID: String) -> Bool {
+        guard let selected = selectedModel?.model else { return false }
+        return (modelSettings.descriptor(for: selected)?.id ?? selected)
+            == (modelSettings.descriptor(for: modelID)?.id ?? modelID)
+    }
+
+    func resetReasoningEffort(for modelID: String) {
+        modelSettings.clearRememberedReasoningEffort(for: modelID)
+        selectModel(modelID, reasoningEffort: nil)
+    }
+
+    private func selectionForEditor(state: ConversationLocalState?) -> ComposerModelSelection {
+        let stored = modelSettings.composerSelection(selectedModelID: state?.selectedModelID,
+            storedMode: state?.modelSelectionMode, storedVersion: state?.composerSelectionVersion,
+            reasoningEffort: state?.reasoningEffort)
+        guard isDraft, state?.composerDraft.pendingSubmission == nil else { return stored }
+        guard modelSettings.hasResolvedModelCatalog else { return stored }
+        let hasContent = !(state?.composerDraft.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ?? true)
+            || !(state?.composerDraft.attachments.isEmpty ?? true)
+            || !(state?.composerDraft.fileReferences.isEmpty ?? true)
+            || !(state?.composerDraft.tokens.isEmpty ?? true)
+        if stored.mode == .explicit, let id = stored.model?.model, modelSettings.isModelAvailable(id),
+           hasContent || modelSettings.lastSelectedModel == nil { return stored }
+        if let recent = modelSettings.lastSelectedModel, modelSettings.isModelAvailable(recent.model),
+           let model = modelSettings.modelForNewConversation { return .explicit(model) }
+        return .followDefault
+    }
+
     private var storedReasoningEffortOverride: ModelReasoningEffort? {
         guard let key = loadedStateKey,
               let raw = try? workspaceStore.localStateStore.state(for: key)?.reasoningEffort,
@@ -329,26 +423,48 @@ final class DraftComposerPanelViewModel {
         }
         
         guard canSend else { return }
-        let selection = modelSelection
+        let modelForSubmission = submissionModel
 
-        let toSend = String(trimmed.prefix(100000))
-        submittedTextSnapshot = toSend
+#if os(macOS)
+        let submittedRawText = text
+#else
+        let submittedRawText = trimmed
+#endif
+        let submittedDraftText = trimmed
+#if os(macOS)
+        var toSend = submittedDraftText
+#else
+        let toSend = String(submittedDraftText.prefix(100000))
+#endif
+#if os(macOS)
+        let contexts = tokens.compactMap(\.item.contextText)
+        guard contexts.count <= 3 else { attachmentIssue = "最多引用 3 个对话，请移除多余引用。"; return }
+        toSend = ComposerMessageContent.modelText(text: submittedDraftText, files: submissionFileReferences, tokens: tokens)
+        guard toSend.count <= 100_000 else { attachmentIssue = "正文与引用内容合计超过 100,000 字符，请缩短后发送。"; return }
+#endif
+        submittedTextSnapshot = submittedRawText
         
-        // Optimistic clear
+        let sendingAssets = imagesAsPaths ? [] : readyAssets
+#if os(iOS)
         text = ""
-        let sendingAssets = readyAssets
         attachments = []
-        if let key = loadedStateKey {
-            persist(text: "", for: key)
-        }
+        if let key = loadedStateKey { persist(text: "", for: key) }
+#else
+        persistCurrentText()
+#endif
         isSending = true
         
         Task {
-            let accepted = await onSend(toSend, selection.model, sendingAssets)
+            let accepted = await onSend(toSend, modelForSubmission, sendingAssets)
             if !accepted {
-                restoreSubmittedText(toSend)
+                restoreSubmittedText(submittedRawText)
                 refreshAttachmentsFromLocalState()
             }
+#if os(macOS)
+            if accepted, let key = persistenceKey {
+                hasPendingSubmission = (try? workspaceStore.localStateStore.state(for: key))?.composerDraft.pendingSubmission != nil || conversationViewModel?.isLocallyQueued == true
+            }
+#endif
             isSending = false
         }
     }
@@ -369,26 +485,43 @@ final class DraftComposerPanelViewModel {
     }
     
     func reconcileAcceptedSubmission() {
+        hasPendingSubmission = false
         pendingSaveTask?.cancel()
-        DispatchQueue.main.async { [weak self] in
-            guard let self else { return }
-            if let submittedTextSnapshot, !submittedTextSnapshot.isEmpty {
-                if self.text == submittedTextSnapshot {
-                    self.text = ""
-                } else if self.text.hasPrefix(submittedTextSnapshot) {
-                    self.text.removeFirst(submittedTextSnapshot.count)
-                    self.text = self.text.trimmingCharacters(in: .whitespacesAndNewlines)
-                }
-                self.submittedTextSnapshot = nil
-                self.refreshAttachmentsFromLocalState()
-                self.persistCurrentText()
-            } else {
-                self.restoreLocalState(persistOutgoingText: false)
+#if os(macOS)
+        reconcileAcceptedDraft()
+#else
+        DispatchQueue.main.async { [weak self] in self?.reconcileAcceptedDraft() }
+#endif
+    }
+
+    private func reconcileAcceptedDraft() {
+        // Compare the exact editor snapshot before accepting the next draft;
+        // wire normalization must not determine whether the editor is cleared.
+        if let submittedTextSnapshot, !submittedTextSnapshot.isEmpty {
+            if text == submittedTextSnapshot {
+                text = ""
+                tokens = []
             }
+#if os(iOS)
+            if !text.isEmpty && text.hasPrefix(submittedTextSnapshot) {
+                text.removeFirst(submittedTextSnapshot.count)
+                text = text.trimmingCharacters(in: .whitespacesAndNewlines)
+            }
+#endif
+            self.submittedTextSnapshot = nil
+            if let key = loadedStateKey,
+               let state = try? workspaceStore.localStateStore.state(for: key) {
+                fileReferences = state.composerDraft.fileReferences
+            }
+            refreshAttachmentsFromLocalState()
+            persistCurrentText()
+        } else {
+            restoreLocalState(persistOutgoingText: false)
         }
     }
-    
+
     func handleSubmissionRejected() {
+        hasPendingSubmission = false
         if let snapshot = submittedTextSnapshot, !snapshot.isEmpty,
            let key = loadedStateKey,
            (try? workspaceStore.localStateStore.state(for: key))?
@@ -403,6 +536,12 @@ final class DraftComposerPanelViewModel {
     // MARK: - Attachments
     
     func pickAttachments() {
+#if os(macOS)
+        let panel = NSOpenPanel()
+        panel.canChooseFiles = true; panel.canChooseDirectories = true; panel.allowsMultipleSelection = true
+        guard panel.runModal() == .OK else { return }
+        handleDroppedImages(panel.urls)
+#else
         guard let key = persistenceKey else { return }
         Task {
             await workspaceStore.selectUserAssets(
@@ -412,16 +551,41 @@ final class DraftComposerPanelViewModel {
                 self?.refreshAttachmentsFromLocalState()
             }
         }
+#endif
     }
     
     func handleDroppedImages(_ urls: [URL]) {
+        var imageURLs = urls
+#if os(macOS)
+        attachmentIssue = nil
+        guard !isSubmitting else { return }
+        let workspacePath = isDraft ? workspaceStore.draft?.workspace?.url.path : conversationViewModel?.conversation?.workspacePath
+        imageURLs = []
+        for url in urls {
+            let values = try? url.resourceValues(forKeys: [.isDirectoryKey, .contentTypeKey])
+            let isImage = values?.contentType?.conforms(to: .image) == true
+                || UTType(filenameExtension: url.pathExtension)?.conforms(to: .image) == true
+            if values?.isDirectory != true && isImage { imageURLs.append(url); continue }
+            guard attachments.count + fileReferences.count < 16 else { attachmentIssue = "最多添加 16 个附件或文件引用"; break }
+            if !fileReferences.contains(where: { $0.path == url.path }) {
+                fileReferences.append(ComposerFileReference(path: url.path, workspacePath: workspacePath, isDirectory: values?.isDirectory == true))
+            }
+        }
+        persistCurrentText()
+        let currentImages = attachments.count
+        if currentImages + imageURLs.count > 4 {
+            attachmentIssue = "最多添加 4 张图片，请移除多余项目后重试"
+            imageURLs = Array(imageURLs.prefix(max(0, 4 - currentImages)))
+        }
+#endif
+        guard !imageURLs.isEmpty else { return }
         guard let key = persistenceKey,
               workspaceStore.canStageLocalUserAssets else { return }
         let remainingSlots = maxFilesCount - attachments.count
         guard remainingSlots > 0 else { return }
         Task {
             await workspaceStore.addDroppedFiles(
-                urls,
+                imageURLs,
                 for: key,
                 maxFilesCount: maxFilesCount
             ) { [weak self] in
@@ -430,6 +594,22 @@ final class DraftComposerPanelViewModel {
         }
     }
     
+#if os(macOS)
+    func importPastedImage(_ data: Data) {
+        guard !isSubmitting, attachments.count < 4, let key = persistenceKey else { return }
+        Task {
+            let url = FileManager.default.temporaryDirectory.appendingPathComponent("composer-" + UUID().uuidString + ".png")
+            defer { try? FileManager.default.removeItem(at: url) }
+            do {
+                try await Task.detached(priority: .userInitiated) { try data.write(to: url, options: .atomic) }.value
+                await workspaceStore.addDroppedFiles([url], for: key, maxFilesCount: 4) { [weak self] in
+                    self?.refreshAttachmentsFromLocalState()
+                }
+            } catch { attachmentIssue = "无法读取粘贴的图片，请重试。" }
+        }
+    }
+#endif
+
     func removeAttachment(_ id: String) {
         attachments.removeAll { $0.id == id }
         persistCurrentDraft()
@@ -445,6 +625,9 @@ final class DraftComposerPanelViewModel {
     }
     
     func canOfferGatewayUpload(for attachment: DraftAttachmentReference) -> Bool {
+#if os(macOS)
+        return false
+#else
         guard workspaceStore.canUploadUserAssetsToGateway,
               attachment.delivery == .localOnly,
               attachment.state != .uploading,
@@ -455,6 +638,7 @@ final class DraftComposerPanelViewModel {
         || name.hasSuffix(".png")
         || attachment.localAsset?.mimeType == "image/jpeg"
         || attachment.localAsset?.mimeType == "image/png"
+#endif
     }
     
     func requestGatewayUpload(_ id: String) {
@@ -590,24 +774,37 @@ final class DraftComposerPanelViewModel {
         isRestoringLocalState = true
         defer { isRestoringLocalState = false }
         
+#if os(macOS)
+        if let key, let existing = try? workspaceStore.localStateStore.state(for: key),
+           existing.composerDraft.pendingSubmission == nil,
+           existing.composerDraft.attachments.contains(where: { $0.delivery == .gateway }) {
+            try? workspaceStore.localStateStore.updateState(for: key) { state in
+                for index in state.composerDraft.attachments.indices where state.composerDraft.attachments[index].delivery == .gateway {
+                    state.composerDraft.attachments[index].delivery = .localOnly
+                    state.composerDraft.attachments[index].readyAsset = nil
+                    state.composerDraft.attachments[index].localAsset = nil
+                    state.composerDraft.attachments[index].state = .local
+                    state.composerDraft.attachments[index].progress = nil
+                }
+            }
+        }
+#endif
         let state = key.flatMap { try? workspaceStore.localStateStore.state(for: $0) }
+        hasPendingSubmission = state?.composerDraft.pendingSubmission != nil
         hadNoLocalState = (state == nil)
         text = state?.composerDraft.text ?? ""
+        tokens = state?.composerDraft.tokens ?? []
+        fileReferences = state?.composerDraft.fileReferences ?? []
         attachments = state.map { visibleAttachments(from: $0) } ?? []
-        submittedTextSnapshot = state?.composerDraft.pendingSubmission?.text
+        submittedTextSnapshot = state?.composerDraft.pendingSubmission?.draftText ?? state?.composerDraft.pendingSubmission?.text
 
-        let selection = modelSettings.composerSelection(
-            selectedModelID: state?.selectedModelID,
-            storedMode: state?.modelSelectionMode,
-            storedVersion: state?.composerSelectionVersion,
-            reasoningEffort: state?.reasoningEffort
-        )
+        let selection = selectionForEditor(state: state)
         applySelection(selection)
 
         // Legacy and unversioned state has no durable provenance. Migrate it
         // once so a stale automatic value cannot keep routing turns.
         if key != nil,
-           state?.composerSelectionVersion != ConversationLocalState.currentComposerSelectionVersion {
+           isDraft || state?.composerSelectionVersion != ConversationLocalState.currentComposerSelectionVersion {
             persistSelection(selection)
         }
     }
@@ -628,8 +825,14 @@ final class DraftComposerPanelViewModel {
     }
     
     private func persist(text: String, for key: ConversationLocalStateKey) {
+        let tokenSnapshot = tokens
+        let fileSnapshot = fileReferences
+        let pathDelivery = imagesAsPaths
         try? workspaceStore.localStateStore.updateState(for: key) { state in
+            state.composerDraft.imagesAsPaths = pathDelivery
             state.composerDraft.text = text
+            state.composerDraft.tokens = tokenSnapshot
+            state.composerDraft.fileReferences = fileSnapshot
         }
     }
     
@@ -638,7 +841,13 @@ final class DraftComposerPanelViewModel {
         guard let key = loadedStateKey else { return }
         let textSnapshot = text
         let attachmentSnapshot = attachments
+        let tokenSnapshot = tokens
+        let fileSnapshot = fileReferences
+        let pathDelivery = imagesAsPaths
         try? workspaceStore.localStateStore.updateState(for: key) { state in
+            state.composerDraft.imagesAsPaths = pathDelivery
+            state.composerDraft.tokens = tokenSnapshot
+            state.composerDraft.fileReferences = fileSnapshot
             state.composerDraft.text = textSnapshot
             state.composerDraft.attachments = attachmentSnapshot
             state.composerDraft.revision += 1
@@ -681,17 +890,13 @@ final class DraftComposerPanelViewModel {
     func handleModelSettingsChange(newIDs: [String]) {
         guard let key = loadedStateKey,
               let state = try? workspaceStore.localStateStore.state(for: key),
-              state.composerSelectionVersion != ConversationLocalState.currentComposerSelectionVersion else { return }
-        let selection = modelSettings.composerSelection(
-            selectedModelID: state.selectedModelID,
-            storedMode: state.modelSelectionMode,
-            storedVersion: state.composerSelectionVersion,
-            reasoningEffort: state.reasoningEffort
-        )
+              state.composerDraft.pendingSubmission == nil else { return }
+        guard isDraft || state.composerSelectionVersion != ConversationLocalState.currentComposerSelectionVersion else { return }
+        let selection = selectionForEditor(state: state)
         applySelection(selection)
         persistSelection(selection)
     }
-    
+
     // MARK: - Turn Running
     
     func setTurnRunning(_ running: Bool) {
@@ -703,7 +908,13 @@ final class DraftComposerPanelViewModel {
     
     // MARK: - Constants
     
-    var maxFilesCount: Int { 15 }
+    var maxFilesCount: Int {
+#if os(macOS)
+        16
+#else
+        15
+#endif
+    }
     var composerControlSpacing: CGFloat {
 #if os(macOS)
         12

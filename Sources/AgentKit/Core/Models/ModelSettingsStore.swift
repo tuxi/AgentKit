@@ -39,6 +39,8 @@ public final class ModelSettingsStore {
     // MARK: - Private
 
     private static let lastModelKey = "code_agent.model.last_selected"
+    private static let effortMemoryKey = "code_agent.model.efforts.v1"
+    private var effortMemory: [String: String] = [:]
     private static let knownModelDisplayNamesKey = "code_agent.model.known_display_names.v1"
 
     private let defaults: UserDefaults
@@ -86,6 +88,7 @@ public final class ModelSettingsStore {
     // MARK: - Persistence
     
     private func loadLastSelected() {
+        effortMemory = defaults.dictionary(forKey: Self.effortMemoryKey) as? [String: String] ?? [:]
         if let data = defaults.data(forKey: Self.lastModelKey) {
             let decoder = JSONDecoder()
 
@@ -203,7 +206,8 @@ public final class ModelSettingsStore {
         !runtimeDefaultModelID.isEmpty
     }
 
-    /// The model the Runtime will use when a request omits `model`.
+    /// Effective default displayed from the active catalog. Composer submissions
+    /// freeze this model rather than assuming a daemon has the same default.
     public var runtimeDefaultModelID: String {
         if let unifiedModels {
             if let unifiedDefaultModelID,
@@ -223,7 +227,7 @@ public final class ModelSettingsStore {
     public var runtimeDefaultModel: UnifiedModel? {
         let id = runtimeDefaultModelID
         guard !id.isEmpty else { return nil }
-        return UnifiedModel(model: id, reasoningEffort: nil)
+        return UnifiedModel(model: id, reasoningEffort: rememberedReasoningEffort(for: id))
     }
 
     /// Matches both the stable catalog ID and its `provider/wire` presentation.
@@ -317,8 +321,13 @@ public final class ModelSettingsStore {
 
     /// 用户选择模型时调用。持久化到本地缓存。
     public func didUseModel(_ modelID: String, reasoningEffort: ModelReasoningEffort?, conversation: String) {
-        setUserModel(modelID, reasoningEffort: reasoningEffort, for: conversation)
-        self.lastSelectedModel = UnifiedModel(model: modelID, reasoningEffort: reasoningEffort)
+        let effort = validatedReasoningEffort(reasoningEffort, for: modelID)
+        if let effort {
+            effortMemory[descriptor(for: modelID)?.id ?? modelID] = effort.rawValue
+            defaults.set(effortMemory, forKey: Self.effortMemoryKey)
+        }
+        setUserModel(modelID, reasoningEffort: effort, for: conversation)
+        self.lastSelectedModel = UnifiedModel(model: modelID, reasoningEffort: effort)
         persistLastSelected()
     }
 
@@ -415,41 +424,53 @@ public final class ModelSettingsStore {
     }
 
     /// 新对话时使用的模型 ID。
-    /// 优先 Gateway 默认模型 → 回退上次选择的模型 → 回退列表第一个。
-    /// 设计意图：新建对话应使用服务端指定的默认模型，而非继承其他对话的选择。
+    /// 新任务优先沿用全局最近一次有效的用户选择；无记录或不可用时使用目录默认模型。
     public var modelForNewConversation: UnifiedModel? {
-        if let unifiedModels {
-            if let unifiedDefaultModelID,
-               unifiedModels.contains(where: { $0.id == unifiedDefaultModelID }) {
-                return UnifiedModel(model: unifiedDefaultModelID, reasoningEffort: nil)
-            }
-            if let stored = lastSelectedModel,
-               unifiedModels.contains(where: {
-                   $0.model == stored.model
-               }) {
-                return stored
-            }
-            if let model = unifiedModels.first?.model, !model.isEmpty {
-                return UnifiedModel(model: model, reasoningEffort: unifiedModels.first?.reasoningEffort)
-            }
-            return nil
+        if let stored = lastSelectedModel, isModelAvailable(stored.model) {
+            let id = descriptor(for: stored.model)?.id ?? stored.model
+            return UnifiedModel(model: id, reasoningEffort: rememberedReasoningEffort(for: id)
+                ?? validatedReasoningEffort(stored.reasoningEffort, for: id))
         }
-        if let def = gatewayDefaultModel, let models = gatewayModels,
-           models.contains(where: {
-               $0.model == def && $0.available != false
-           }) {
-            return UnifiedModel(model: def, reasoningEffort: nil)
+        return runtimeDefaultModel
+    }
+
+    public func availableReasoningEfforts(for modelID: String) -> [ModelReasoningEffort] {
+        guard let model = descriptor(for: modelID), model.supportsReasoning else { return [] }
+        let values = (model.canDisableReasoning == true ? [ModelReasoningEffort.off] : [])
+            + (model.supportedReasoningEfforts ?? []).filter { $0 != .off || model.canDisableReasoning == true }
+        return values.reduce(into: []) { if !$0.contains($1) { $0.append($1) } }
+    }
+
+    public func validatedReasoningEffort(_ effort: ModelReasoningEffort?, for modelID: String) -> ModelReasoningEffort? {
+        guard let effort else { return nil }
+        guard let model = descriptor(for: modelID) else { return effort }
+        guard model.supportsReasoning else { return nil }
+        if effort == .off { return model.canDisableReasoning == true ? effort : nil }
+        // A legacy catalog without an effort range cannot invalidate a saved value.
+        guard let supported = model.supportedReasoningEfforts else { return effort }
+        return supported.contains(effort) ? effort : nil
+    }
+
+    public func rememberedReasoningEffort(for modelID: String) -> ModelReasoningEffort? {
+        let id = descriptor(for: modelID)?.id ?? modelID
+        if let value = effortMemory[id], let effort = ModelReasoningEffort(rawValue: value) {
+            return validatedReasoningEffort(effort, for: modelID)
         }
-        if let stored = lastSelectedModel,
-           let models = gatewayModels, models.contains(where: {
-               $0.model == stored.model && $0.available != false
-           }) {
-            return stored
-        }
-        if let first = gatewayModels?.first(where: { $0.available != false }) {
-            return UnifiedModel(model: first.id, reasoningEffort: nil)
+        if let last = lastSelectedModel,
+           (descriptor(for: last.model)?.id ?? last.model) == id {
+            return validatedReasoningEffort(last.reasoningEffort, for: modelID)
         }
         return nil
+    }
+
+    public func clearRememberedReasoningEffort(for modelID: String) {
+        let id = descriptor(for: modelID)?.id ?? modelID
+        effortMemory.removeValue(forKey: id)
+        defaults.set(effortMemory, forKey: Self.effortMemoryKey)
+        if let last = lastSelectedModel, (descriptor(for: last.model)?.id ?? last.model) == id {
+            lastSelectedModel = UnifiedModel(model: last.model, reasoningEffort: nil)
+            persistLastSelected()
+        }
     }
 
     /// Existing sessions that have never selected a model use the Gateway

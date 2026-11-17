@@ -274,11 +274,14 @@ extension ConversationLocalStateStore {
         input: AgentInput
     ) throws -> ComposerSubmissionSnapshot {
         let current = try state(for: key)?.composerDraft ?? ComposerDraft()
-        let snapshot = ComposerSubmissionSnapshot(
+        let referenceFiles = ComposerMessageContent.referenceFiles(files: current.fileReferences, attachments: current.attachments, imagesAsPaths: current.imagesAsPaths)
+        let isComposerPayload = ComposerMessageContent.modelText(text: current.text, files: referenceFiles, tokens: current.tokens) == input.text
+        var snapshot = ComposerSubmissionSnapshot(
             requestID: input.requestID ?? "",
             revision: current.revision,
             text: input.text ?? "",
             attachmentIDs: current.attachments.compactMap { attachment in
+                if current.imagesAsPaths && isComposerPayload { return attachment.id }
                 switch attachment.delivery {
                 case .gateway:
                     guard let readyAsset = attachment.readyAsset,
@@ -293,14 +296,21 @@ extension ConversationLocalStateStore {
                 }
                 return attachment.id
             },
+            fileReferenceIDs: current.fileReferences.map(\.id),
+            draftText: current.text,
             model: input.model,
             assets: input.assets,
             localAssets: input.localAssets
         )
+        let hasReferences = !referenceFiles.isEmpty || current.tokens.contains { $0.item.contextText != nil }
+        if hasReferences && isComposerPayload {
+            snapshot.presentation = ComposerMessagePresentation(text: current.text.trimmingCharacters(in: .whitespacesAndNewlines), fileReferences: referenceFiles, modelText: snapshot.text)
+        }
+        let pendingSnapshot = snapshot
         try updateState(for: key) { state in
-            state.composerDraft.pendingSubmission = snapshot
+            state.composerDraft.pendingSubmission = pendingSnapshot
             for index in state.composerDraft.attachments.indices
-                where snapshot.attachmentIDs.contains(state.composerDraft.attachments[index].id) {
+                where pendingSnapshot.attachmentIDs.contains(state.composerDraft.attachments[index].id) {
                 if state.composerDraft.attachments[index].state == .ready {
                     state.composerDraft.attachments[index].state = .sending
                 }
@@ -309,12 +319,15 @@ extension ConversationLocalStateStore {
         return snapshot
     }
 
-    func acceptSubmission(key: ConversationLocalStateKey, requestID: String) throws {
+    func acceptSubmission(key: ConversationLocalStateKey, requestID: String, turnID: String? = nil) throws {
         try updateState(for: key) { state in
             guard let snapshot = state.composerDraft.pendingSubmission,
                   snapshot.requestID == requestID else { return }
 
-            if state.composerDraft.text == snapshot.text {
+            if let turnID, !turnID.isEmpty, let presentation = snapshot.presentation {
+                state.composerMessages[turnID] = presentation
+            }
+            if state.composerDraft.text == (snapshot.draftText ?? snapshot.text) {
                 state.composerDraft.text = ""
             } else if !snapshot.text.isEmpty,
                       state.composerDraft.text.hasPrefix(snapshot.text) {
@@ -322,6 +335,9 @@ extension ConversationLocalStateStore {
                 state.composerDraft.text = state.composerDraft.text
                     .trimmingCharacters(in: .whitespacesAndNewlines)
             }
+            let acceptedFileIDs = Set(snapshot.fileReferenceIDs)
+            state.composerDraft.fileReferences.removeAll { acceptedFileIDs.contains($0.id) }
+            if state.composerDraft.text.isEmpty { state.composerDraft.tokens = [] }
             let acceptedIDs = Set(snapshot.attachmentIDs)
             state.composerDraft.attachments.removeAll { acceptedIDs.contains($0.id) }
             state.composerDraft.pendingSubmission = nil

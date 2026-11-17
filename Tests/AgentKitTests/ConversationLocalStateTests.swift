@@ -171,8 +171,8 @@ final class ConversationLocalStateTests: XCTestCase {
         XCTAssertEqual(settings.getModel(with: "conversation-b")?.model, "model-2")
         XCTAssertEqual(
             settings.getModel(with: nil)?.model,
-            "model-default",
-            "new drafts use the Gateway default"
+            "model-2",
+            "new drafts inherit the latest user selection across conversations"
         )
 
         let reopened = ModelSettingsStore(

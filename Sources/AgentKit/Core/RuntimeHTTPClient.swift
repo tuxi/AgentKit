@@ -239,6 +239,46 @@ struct RuntimeHTTPClient: Sendable {
         return try decodeEnvelope(RuntimeCapabilitySnapshot.self, from: data)
     }
 
+    func composerValidatePaths(_ scope: ComposerQuery, paths: [String]) async throws {
+        struct Body: Encodable { let session_id: String?; let workspace_path: String?; let paths: [String] }
+        let request = try await buildRequest("POST", pathComponents: "v1/composer/paths/validate", body: Body(session_id: scope.sessionID, workspace_path: scope.workspacePath, paths: paths), timeout: 15)
+        let (data, response) = try await session.data(for: request)
+        try validateHTTP(response, data: data)
+    }
+
+    func composerReference(_ scope: ComposerQuery, sourceSessionID: String) async throws -> ComposerReferenceSnapshot {
+        struct Body: Encodable {
+            let session_id: String?
+            let workspace_path: String?
+            let source_session_id: String
+        }
+        let request = try await buildRequest("POST", pathComponents: "v1/composer/reference", body: Body(session_id: scope.sessionID, workspace_path: scope.workspacePath, source_session_id: sourceSessionID), timeout: 15)
+        let (data, response) = try await session.data(for: request)
+        try validateHTTP(response, data: data)
+        let result = try decodeEnvelope(ComposerReferenceSnapshot.self, from: data)
+        guard result.sessionID == sourceSessionID else { throw RuntimeHTTPError.unsupported }
+        return result
+    }
+
+    func composerSuggestion(sessionID: String, turnID: String) async throws -> ComposerSuggestion {
+        struct Body: Encodable { let turn_id: String }
+        let request = try await buildRequest("POST", pathArray: ["v1", "conversations", sessionID, "composer", "suggestion"], body: Body(turn_id: turnID), timeout: 25)
+        let (data, response) = try await session.data(for: request)
+        try validateHTTP(response, data: data)
+        let result = try decodeEnvelope(ComposerSuggestion.self, from: data)
+        guard result.sessionID == sessionID, result.turnID == turnID else { throw RuntimeHTTPError.unsupported }
+        return result
+    }
+
+    func composerQuery(_ query: ComposerQuery) async throws -> ComposerCompletionResult {
+        let request = try await buildRequest("POST", pathComponents: "v1/composer/query", body: query, timeout: 15)
+        let (data, response) = try await session.data(for: request)
+        try validateHTTP(response, data: data)
+        let result = try decodeEnvelope(ComposerCompletionResult.self, from: data)
+        guard result.schema == "composer-query/v1", result.revision == query.revision else { throw RuntimeHTTPError.unsupported }
+        return result
+    }
+
     // MARK: - Skill & plugin management
 
     /// `GET /v1/runtime/skills?session_id=...`.

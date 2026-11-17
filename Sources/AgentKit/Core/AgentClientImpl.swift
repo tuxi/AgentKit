@@ -1297,3 +1297,29 @@ public final class DefaultAgentClient: RuntimeClient, CodingTaskReading, CodingT
         transport.previewAssetResolver()
     }
 }
+
+// MARK: - Composer discovery
+extension CodeAgentTransport {
+    public func composerValidatePaths(_ scope: ComposerQuery, paths: [String]) async throws { try await http.composerValidatePaths(scope, paths: paths) }
+    public func composerReference(_ scope: ComposerQuery, sourceSessionID: String) async throws -> ComposerReferenceSnapshot {
+        try await http.composerReference(scope, sourceSessionID: sourceSessionID)
+    }
+    public func composerSuggestion(sessionID: String, turnID: String) async throws -> ComposerSuggestion {
+        try await http.composerSuggestion(sessionID: sessionID, turnID: turnID)
+    }
+    public func composerQuery(_ query: ComposerQuery) async throws -> ComposerCompletionResult {
+        try await http.composerQuery(query)
+    }
+}
+extension DefaultAgentClient {
+    public func composerValidatePaths(_ scope: ComposerQuery, paths: [String]) async throws { try await transport.composerValidatePaths(scope, paths: paths) }
+    public func composerReference(_ scope: ComposerQuery, sourceSessionID: String) async throws -> ComposerReferenceSnapshot {
+        try await transport.composerReference(scope, sourceSessionID: sourceSessionID)
+    }
+    public func composerSuggestion(sessionID: String, turnID: String) async throws -> ComposerSuggestion {
+        try await transport.composerSuggestion(sessionID: sessionID, turnID: turnID)
+    }
+    public func composerQuery(_ query: ComposerQuery) async throws -> ComposerCompletionResult {
+        try await transport.composerQuery(query)
+    }
+}

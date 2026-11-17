@@ -14,6 +14,13 @@ import UniformTypeIdentifiers
 
 struct WorkspaceChipBar: View {
 
+    var compactComposer = false
+    var forceCompactComposer = false
+    var iconOnlyComposer = false
+    @Environment(\.composerEnvironmentName) private var environmentName
+    @Environment(\.composerEnvironmentSymbol) private var environmentSymbol
+    @Environment(\.sessionRailOpenSettings) private var openEnvironmentSettings
+
     @Environment(\.horizontalSizeClass) private var horizontalSizeClass
     @Environment(WorkspaceStore.self) private var store
     @State private var isImporterPresented = false
@@ -40,7 +47,10 @@ struct WorkspaceChipBar: View {
             }
             .scrollIndicators(.hidden)
             #else
-            chipRow
+            if compactComposer {
+                if forceCompactComposer { compactNarrowRow }
+                else { ViewThatFits(in: .horizontal) { chipRow; compactNarrowRow } }
+            } else { chipRow }
             #endif
         }
         .onGeometryChange(for: CGFloat.self, of: { proxy in
@@ -130,6 +140,52 @@ struct WorkspaceChipBar: View {
         }
     }
 
+    private var compactNarrowRow: some View {
+        HStack(spacing: 6) {
+            Button { openEnvironmentSettings?(.environment) } label: {
+                Image(systemName: environmentSymbol).frame(width: 24, height: 28)
+            }
+            .buttonStyle(.plain).help(environmentName).disabled(openEnvironmentSettings == nil)
+            switch mode {
+            case .draftEmpty:
+                workspaceMenu {
+                    if iconOnlyComposer { Image(systemName: "folder.badge.plus").frame(width: 24, height: 28) }
+                    else { Label("选择工作区", systemImage: "folder.badge.plus").font(.caption) }
+                }
+            case .draftReady(let workspace):
+                workspaceMenu {
+                    HStack(spacing: 4) {
+                        Image(systemName: "folder")
+                        if !iconOnlyComposer { Text(workspace.name.count > 12 ? String(workspace.name.prefix(4)) + "…" + String(workspace.name.suffix(4)) : workspace.name).lineLimit(1).truncationMode(.middle).frame(width: 100) }
+                    }.font(.caption).help(workspace.url.path)
+                }
+                .frame(width: iconOnlyComposer ? 28 : 128)
+                .clipped()
+                if store.supportsManagedWorktreeCreation && !iconOnlyComposer { managedWorktreeControl }
+                Menu {
+                    if iconOnlyComposer && store.supportsManagedWorktreeCreation {
+                        Toggle("Worktree", isOn: Binding(get: { store.draft?.usesManagedWorktree == true }, set: { store.setDraftManagedWorktreeEnabled($0) }))
+                            .disabled(store.isPreparingWorkspace || store.workspaceGitCheckout?.isGitRepository == false)
+                        Divider()
+                    }
+                    branchMenu(currentBranch: store.workspaceGitCheckout?.head.name ?? workspace.branch)
+                    if !store.supportsManagedWorktreeCreation {
+                        Text(worktreeUnavailableHelp)
+                        Button("重新检查 Worktree 能力") { Task { await store.refreshRuntimeState() } }
+                    }
+                } label: { Image(systemName: "ellipsis").frame(width: 20, height: 28) }
+                    .menuStyle(.borderlessButton).menuIndicator(.hidden)
+            case .committing(let workspace):
+                Text(workspace.name).lineLimit(1).font(.caption)
+                ProgressView().controlSize(.small)
+            case .frozen(let name, _, _):
+                Text(name).lineLimit(1).font(.caption)
+            case .hidden: EmptyView()
+            }
+            Spacer(minLength: 0)
+        }
+    }
+
     private var chipRow: some View {
         HStack(spacing: 6) {
             content
@@ -141,8 +197,8 @@ struct WorkspaceChipBar: View {
             }
             Spacer(minLength: 0)
         }
-        .padding(.horizontal, 12)
-        .padding(.vertical, 6)
+        .padding(.horizontal, compactComposer ? 0 : 12)
+        .padding(.vertical, compactComposer ? 0 : 6)
     }
 
     // MARK: - Mode
@@ -200,7 +256,7 @@ struct WorkspaceChipBar: View {
             } else if let branch = ws.branch {
                 chip(icon: "arrow.triangle.branch", text: branch)
             }
-            if horizontalSizeClass == .regular {
+            if compactComposer || horizontalSizeClass == .regular {
                 
                 managedWorktreeControl
             }
@@ -234,8 +290,16 @@ struct WorkspaceChipBar: View {
         }
     }
 
+    @ViewBuilder
     private var localChip: some View {
-        chip(icon: "desktopcomputer", text: "Local")
+        if compactComposer {
+            Button { openEnvironmentSettings?(.environment) } label: {
+                chip(icon: environmentSymbol, text: environmentName)
+            }
+            .buttonStyle(.plain)
+            .help(environmentName)
+            .disabled(openEnvironmentSettings == nil)
+        } else { chip(icon: "desktopcomputer", text: "Local") }
     }
 
     private func branchMenu(currentBranch: String?) -> some View {
@@ -338,7 +402,23 @@ struct WorkspaceChipBar: View {
     @ViewBuilder
     private var managedWorktreeControl: some View {
         if store.supportsManagedWorktreeCreation {
+#if os(macOS)
+            if compactComposer {
+                Toggle("Worktree", isOn: Binding(
+                    get: { store.draft?.usesManagedWorktree == true },
+                    set: { store.setDraftManagedWorktreeEnabled($0) }
+                ))
+                .toggleStyle(.checkbox).controlSize(.small)
+                .fixedSize()
+                .disabled(store.isPreparingWorkspace || store.workspaceGitCheckout?.isGitRepository == false)
+                .contextMenu {
+                    Button("从当前 HEAD 创建") { store.setDraftManagedWorktreeBaseRef(.head) }
+                    Button("从远程默认分支创建") { store.setDraftManagedWorktreeBaseRef(.fresh) }
+                }
+            } else { managedWorktreeMenu }
+#else
             managedWorktreeMenu
+#endif
         } else {
             let isLoading = store.runtimeCapabilityDiscoveryState == .idle
                 || store.runtimeCapabilityDiscoveryState == .loading
@@ -538,8 +618,10 @@ struct WorkspaceChipBar: View {
     ) -> some View {
         HStack(spacing: 3) {
             Image(systemName: icon)
-            if contentWidth >= 380 {
+            if compactComposer || contentWidth >= 380 {
                 Text(text)
+                    .frame(maxWidth: compactComposer ? 150 : nil)
+                    .truncationMode(.middle)
                     .font(.caption)
                     .lineLimit(1)
                 if showsChevron {
@@ -549,10 +631,10 @@ struct WorkspaceChipBar: View {
                 }
             }
         }
-        .padding(.horizontal, 8)
+        .padding(.horizontal, compactComposer ? 2 : 8)
         .padding(.vertical, 4)
         .background(
-            prominent
+            compactComposer ? AnyShapeStyle(Color.clear) : prominent
                 ? AnyShapeStyle(Color.accentColor.opacity(0.18))
                 : AnyShapeStyle(.quaternary)
         )

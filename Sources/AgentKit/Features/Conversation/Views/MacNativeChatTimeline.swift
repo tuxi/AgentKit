@@ -17,6 +17,7 @@ import ClientToolProtocol
 @MainActor
 struct MacNativeChatTimeline: NSViewRepresentable {
     let snapshot: RuntimeSnapshot
+    var composerPresentations: [String: ComposerMessagePresentation] = [:]
     let timelineExtensions: [any TimelineExtension]
     let conversationID: String?
     let workspaceRoot: URL?
@@ -115,7 +116,7 @@ struct MacNativeChatTimeline: NSViewRepresentable {
         var rows: [TimelineRow] = []
 
         for turn in snapshot.turns {
-            rows.append(.turn(turn))
+            rows.append(.turn(turn.withComposerPresentation(composerPresentations[turn.runtimeTurnID])))
             for timelineExtension in timelineExtensions {
                 if let content = timelineExtension.makeContent(for: turn.id) {
                     rows.append(.extensionContent(

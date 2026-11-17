@@ -20,6 +20,7 @@ import ClientToolProtocol
 @MainActor
 @Observable
 public final class WorkspaceStore {
+    public var composerSubmissionIssue: ComposerSubmissionIssue?
     #if os(macOS)
     struct ContextManagementRequest: Equatable { let id: UUID; let conversationID: String }
     var contextManagementRequest: ContextManagementRequest?
@@ -583,6 +584,11 @@ public final class WorkspaceStore {
         workspaceRoot: URL,
         onStateChange: @escaping @MainActor @Sendable () -> Void = {}
     ) async throws -> (assets: [UserAssetRef], localAssets: [LocalUserAssetRef]) {
+#if os(macOS)
+        if try localStateStore.state(for: key)?.composerDraft.imagesAsPaths == true {
+            return ([], [])
+        }
+#endif
         guard let coordinator = userAssetDraftCoordinator else {
             let attachments = try localStateStore.state(for: key)?.composerDraft.attachments ?? []
             guard attachments.isEmpty else {
@@ -610,8 +616,12 @@ public final class WorkspaceStore {
         onStateChange: @escaping @MainActor @Sendable () -> Void = {}
     ) async -> Bool {
         guard let conversation = viewModel.conversation else { return false }
+        composerSubmissionIssue = nil
         do {
             let key = ConversationLocalStateKey.session(conversation.id)
+#if os(macOS)
+            try await prepareComposerReferences(for: key, sessionID: conversation.id, sourceRoot: conversation.workspacePath, finalRoot: conversation.workspacePath)
+#endif
             let payload = try await prepareUserAssets(
                 for: key,
                 workspaceRoot: URL(fileURLWithPath: conversation.workspacePath, isDirectory: true),
@@ -625,6 +635,7 @@ public final class WorkspaceStore {
                 localAssets: payload.localAssets
             ))
         } catch {
+            composerSubmissionIssue = ComposerSubmissionIssue(key: .session(conversation.id), message: (error as? AgentInputRejection)?.message ?? "无法发送，请检查引用文件与执行环境后重试。")
             return false
         }
     }
@@ -1262,6 +1273,7 @@ public final class WorkspaceStore {
             draft?.state = .failed("当前 Runtime 暂不支持托管 Worktree。")
             return
         }
+        composerSubmissionIssue = nil
         draft?.state = .committing
         var createdConversation: ConversationRef?
         do {
@@ -1290,6 +1302,9 @@ public final class WorkspaceStore {
                 model: model
             )
             try localStateStore.migrateDraft(current.id, to: ref.id)
+#if os(macOS)
+            try await prepareComposerReferences(for: .session(ref.id), sessionID: ref.id, sourceRoot: workspace.url.path, finalRoot: ref.workspacePath)
+#endif
             let preparedAssets = try await prepareUserAssets(
                 for: .session(ref.id),
                 workspaceRoot: URL(fileURLWithPath: ref.workspacePath, isDirectory: true)
@@ -1299,7 +1314,10 @@ public final class WorkspaceStore {
             // 防止因 WAL 时序或状态覆盖导致 active view 显示回退到默认模型（Bug 1）。
             try? localStateStore.updateState(for: .session(ref.id)) { state in
                 state.composerSelectionVersion = ConversationLocalState.currentComposerSelectionVersion
-                if let model, !model.model.isEmpty {
+                if state.modelSelectionMode == .followDefault {
+                    state.selectedModelID = nil
+                    state.reasoningEffort = nil
+                } else if let model, !model.model.isEmpty {
                     state.modelSelectionMode = .explicit
                     state.selectedModelID = model.model
                     state.reasoningEffort = model.reasoningEffort?.rawValue
@@ -1331,6 +1349,7 @@ public final class WorkspaceStore {
             draft = nil
             await refreshConversationList()
         } catch {
+            composerSubmissionIssue = ComposerSubmissionIssue(key: createdConversation.map { .session($0.id) } ?? .draft(current.id), message: (error as? AgentInputRejection)?.message ?? "任务未能提交，请检查引用文件与执行环境后重试。")
             if let createdConversation,
                (try? localStateStore.state(for: .session(createdConversation.id))) != nil {
                 // createConversation succeeded and the durable draft already moved

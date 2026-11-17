@@ -167,14 +167,7 @@ struct DraftComposerPanel: View {
             
             composerContent(vm)
             
-#if os(macOS)
-            if vm.isDraft {
-                WorkspaceChipBar()
-                    .padding(.horizontal, 8)
-                    .padding(.vertical, 3)
-                    .background(Color.draftPanelFooterBackground)
-            }
-#endif
+
         }
         .onAppear {
             vm.onAppear()
@@ -196,6 +189,9 @@ struct DraftComposerPanel: View {
         #endif
         .onChange(of: scenePhase) { _, phase in
             vm.handleScenePhaseChange(phase)
+        }
+        .onChange(of: draftRevision) { _, _ in
+            vm.restoreLocalState()
         }
         .onChange(of: isTurnRunning) { _, newValue in
             vm.setTurnRunning(newValue)
@@ -253,6 +249,13 @@ struct DraftComposerPanel: View {
     
     @ViewBuilder
     private func composerContent(_ vm: DraftComposerPanelViewModel) -> some View {
+        #if os(macOS)
+        MacComposerSurface(vm: vm, placeholder: placeholder)
+            .onChange(of: vm.text) { _, value in
+                guard let key = vm.loadedStateKey else { return }
+                vm.scheduleTextSave(value, for: key)
+            }
+        #else
         VStack(spacing: 8) {
             if vm.voiceService.state == .recording || vm.voiceService.state == .transcribing {
                 VoiceRecordingOverlay(
@@ -516,6 +519,7 @@ struct DraftComposerPanel: View {
             guard let key = vm.loadedStateKey else { return }
             vm.scheduleTextSave(newValue, for: key)
         }
+        #endif
     }
     
     // MARK: - Input Field
@@ -922,15 +926,12 @@ struct DraftComposerSurfaceModifier: ViewModifier {
     func body(content: Content) -> some View {
 #if os(macOS)
         content
-            .background(colorScheme == .dark ?         Color(NSColor(
-                calibratedRed: 44.0 / 255.0,
-                green: 44.0 / 255.0,
-                blue: 46.0 / 255.0,
-                alpha: 1
-            )) : Color(NSColor.windowBackgroundColor))
-            .clipShape(RoundedRectangle(cornerRadius: 20, style: .continuous))
-            .padding()
-            .shadow(color: .black.opacity(0.10), radius: 20, y: 10)
+            // Match the text edges inside the web timeline's centered shell.
+            .padding(.horizontal, MacConversationLayout.contentInset)
+            .frame(maxWidth: MacConversationLayout.shellMaximumWidth)
+            .padding(.horizontal, MacConversationLayout.outerInset)
+            .frame(maxWidth: .infinity)
+            .padding(.vertical, 12)
 #else
         content
         // 1. 强依赖 Material，使用 .thinMaterial 可以让背景颜色适度渗透

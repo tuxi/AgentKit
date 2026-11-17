@@ -34,7 +34,7 @@ import ClientToolProtocol
 /// attach(sessionID) = bind to existing server session (NOT create)
 /// disconnect()      = release transport binding (session lives on server)
 /// ```
-public protocol AgentTransport: Sendable, SessionRailReading {
+public protocol AgentTransport: Sendable, SessionRailReading, ComposerReading {
     /// Session 标识类型。默认为 `String`（`ConversationRef.id`）。
     associatedtype SessionID = String
 

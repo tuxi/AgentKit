@@ -325,7 +325,7 @@ extension GUIStabilityTests {
     }
 
     @MainActor
-    func testComposerFollowsRuntimeDefaultAndOmitsModelOnSend() async throws {
+    func testComposerFollowsCatalogDefaultAndPinsModelOnSend() async throws {
         let suite = "GUIStabilityTests.\(UUID().uuidString)"
         let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
         defer { defaults.removePersistentDomain(forName: suite) }
@@ -375,7 +375,7 @@ extension GUIStabilityTests {
         composer.send()
         for _ in 0..<100 where sendCount == 0 { await Task.yield() }
         XCTAssertEqual(sendCount, 1)
-        XCTAssertNil(sentModel, "follow-default must omit model on the wire")
+        XCTAssertEqual(sentModel?.model, settings.getWireModelID(for: descriptors[0].id), "the request must use the same effective model as the composer")
         let state = try XCTUnwrap(localState.state(for: .session(conversation.id)))
         XCTAssertEqual(state.modelSelectionMode, .followDefault)
         XCTAssertNil(state.selectedModelID)

@@ -59,6 +59,8 @@ struct ConversationWebDocument: Codable, Equatable, Sendable {
         let userPrompt: String?
         let userAssets: [UserAsset]
         let localAssets: [LocalAsset]
+        var fileReferences: [ComposerFileReference]? = nil
+        var composerPayloadDigest: String? = nil
         let blocks: [Block]
         /// First-class preview cards associated with this turn. Nil/empty keeps
         /// older encoded documents and preview-free turns byte-compatible.
@@ -509,6 +511,7 @@ enum ConversationWebDocumentBuilder {
 
     static func build(
         snapshot: RuntimeSnapshot,
+        composerPresentations: [String: ComposerMessagePresentation] = [:],
         conversationID: String?,
         revision: UInt64? = nil,
         extensionContributions: [String: [TimelineWebContribution]] = [:],
@@ -519,6 +522,7 @@ enum ConversationWebDocumentBuilder {
     ) -> ConversationWebDocument {
         buildResult(
             snapshot: snapshot,
+            composerPresentations: composerPresentations,
             conversationID: conversationID,
             revision: revision,
             extensionContributions: extensionContributions,
@@ -534,6 +538,7 @@ enum ConversationWebDocumentBuilder {
     /// to let the differ skip unchanged turns in O(1).
     static func buildWithStableTurns(
         snapshot: RuntimeSnapshot,
+        composerPresentations: [String: ComposerMessagePresentation] = [:],
         conversationID: String?,
         revision: UInt64? = nil,
         extensionContributions: [String: [TimelineWebContribution]] = [:],
@@ -544,6 +549,7 @@ enum ConversationWebDocumentBuilder {
     ) -> BuildResult {
         buildResult(
             snapshot: snapshot,
+            composerPresentations: composerPresentations,
             conversationID: conversationID,
             revision: revision,
             extensionContributions: extensionContributions,
@@ -556,6 +562,7 @@ enum ConversationWebDocumentBuilder {
 
     private static func buildResult(
         snapshot: RuntimeSnapshot,
+        composerPresentations: [String: ComposerMessagePresentation],
         conversationID: String?,
         revision: UInt64?,
         extensionContributions: [String: [TimelineWebContribution]],
@@ -592,12 +599,26 @@ enum ConversationWebDocumentBuilder {
                 let previousDocumentTurn = reuseSource.flatMap {
                     index < $0.document.turns.count ? $0.document.turns[index] : nil
                 }
+                let presentation = composerPresentations[turn.runtimeTurnID].flatMap { candidate -> ComposerMessagePresentation? in
+                    guard let prompt = turn.userPrompt else { return nil }
+                    // Stream deltas leave the user prompt unchanged. Reuse an
+                    // already verified presentation instead of rehashing it.
+                    if previousTurn?.id == turn.id, previousTurn?.userPrompt == prompt,
+                       previousDocumentTurn?.composerPayloadDigest == candidate.payloadDigest,
+                       previousDocumentTurn?.userPrompt == candidate.text,
+                       previousDocumentTurn?.fileReferences == candidate.fileReferences {
+                        return candidate
+                    }
+                    return candidate.matches(prompt.text) ? candidate : nil
+                }
                 // ui_preview tool cards read preview artifacts and assets from
                 // outside the turn, so a reused turn could hold a stale card
                 // when an artifact arrives after the tool result.
                 if let previousTurn,
                    previousDocumentTurn?.id == turn.id,
                    uiPreviewCallIDs.isEmpty,
+                   previousDocumentTurn?.userPrompt == (presentation?.text ?? turn.userPrompt?.text),
+                   previousDocumentTurn?.fileReferences == presentation?.fileReferences,
                    (reuseSource?.extensionContributions[turn.id] ?? []) == contributions,
                    (previousDocumentTurn?.previews ?? []) == previews,
                    isContentUnchanged(previousTurn, turn) {
@@ -606,6 +627,7 @@ enum ConversationWebDocumentBuilder {
                 }
                 return makeTurn(
                     turn,
+                    presentation: presentation,
                     previews: previews,
                     previewArtifacts: turnPreviewArtifacts,
                     allTurns: snapshot.turns,
@@ -670,6 +692,7 @@ enum ConversationWebDocumentBuilder {
 
     private static func makeTurn(
         _ turn: ConversationTurn,
+        presentation: ComposerMessagePresentation?,
         previews: [ConversationWebDocument.Preview],
         previewArtifacts: [PreviewArtifact],
         allTurns: [ConversationTurn],
@@ -706,7 +729,7 @@ enum ConversationWebDocumentBuilder {
         }
         return ConversationWebDocument.Turn(
             id: turn.id,
-            userPrompt: turn.userPrompt?.text,
+            userPrompt: presentation?.text ?? turn.userPrompt?.text,
             userAssets: turn.userPrompt?.userAssets.map { asset in
                 ConversationWebDocument.UserAsset(
                     assetID: asset.assetID,
@@ -727,6 +750,8 @@ enum ConversationWebDocumentBuilder {
                     transferPolicy: asset.transferPolicy.rawValue
                 )
             } ?? [],
+            fileReferences: presentation?.fileReferences,
+            composerPayloadDigest: presentation?.payloadDigest,
             blocks: turn.blocks.enumerated().map { blockIndex, block in
                 let previousBlock = previousTurn.flatMap {
                     blockIndex < $0.blocks.count ? $0.blocks[blockIndex] : nil

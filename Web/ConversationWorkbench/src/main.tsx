@@ -3591,11 +3591,9 @@ const Turn = memo(function Turn({
       aria-labelledby={headingID}
     >
       <h2 className="visually-hidden" id={headingID}>Conversation turn</h2>
-      {turn.userAssets.length > 0 ? (
-        <div
-          className="user-asset-strip"
-          data-scroll-id={`user-assets:${turn.id}`}
-        >
+      {turn.userAssets.length > 0 || localAssets.length > 0 || turn.fileReferences?.length ? (
+        <div className="local-asset-group">
+          <div className="user-asset-strip user-attachment-strip" data-scroll-id={`local-assets:${turn.id}`} aria-label="附件与文件引用">
           {turn.userAssets.map((asset) => {
             const resolvedURL = pendingAssetURLs.get(asset.assetID);
             const src = asset.previewURL || (resolvedURL || undefined);
@@ -3633,15 +3631,6 @@ const Turn = memo(function Turn({
               </button>
             );
           })}
-        </div>
-      ) : null}
-      {localAssets.length > 0 ? (
-        <div className="local-asset-group">
-          <div className="local-asset-privacy-label">
-            <span aria-hidden="true">🔒</span>
-            <span>本地处理 · 文件不会自动上传</span>
-          </div>
-          <div className="user-asset-strip" data-scroll-id={`local-assets:${turn.id}`}>
             {localAssets.map((asset) => {
               const resolved = pendingLocalAssetURLs.get(
                 localAssetCacheKey(conversationID, asset.id),
@@ -3687,6 +3676,16 @@ const Turn = memo(function Turn({
                 </div>
               );
             })}
+          {turn.fileReferences?.map((file) => {
+            const path = file.relativePath ?? file.path;
+            const name = path.split("/").filter(Boolean).at(-1) ?? path;
+            const kind = file.isDirectory ? "目录" : (name.includes(".") ? name.split(".").at(-1)!.toUpperCase() : "文件");
+            return <div className="user-file-reference" key={file.id} title={path}>
+              <span className="user-file-reference-name">{name}</span>
+              <span className="user-file-reference-kind">{kind}</span>
+              <span className="user-file-reference-path">{path}</span>
+            </div>;
+          })}
           </div>
         </div>
       ) : null}
