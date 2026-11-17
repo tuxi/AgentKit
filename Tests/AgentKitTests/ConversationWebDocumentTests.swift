@@ -1461,7 +1461,8 @@ final class ConversationWebDocumentTests: XCTestCase {
         XCTAssertEqual(inspection?["tableOverflows"] as? Bool, true)
         XCTAssertEqual(inspection?["tableLabel"] as? String, "table")
         XCTAssertEqual(inspection?["codeLanguage"] as? String, "swift")
-        XCTAssertEqual(inspection?["rootFontSize"] as? String, "14px")
+        // Approved macOS reading typography: 15px body with a 25px line height.
+        XCTAssertEqual(inspection?["rootFontSize"] as? String, "15px")
         XCTAssertEqual(inspection?["codeOverflowY"] as? String, "hidden")
         XCTAssertEqual(inspection?["tableOverflowY"] as? String, "hidden")
         XCTAssertEqual(inspection?["horizontalScrollbarRevealed"] as? Bool, true)

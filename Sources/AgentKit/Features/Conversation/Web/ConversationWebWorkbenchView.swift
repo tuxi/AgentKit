@@ -366,42 +366,13 @@ struct ConversationWebWorkbenchView: NSViewRepresentable {
             )
         }
 
-        /// The detail page's main background is SwiftUI `.bar` material, which
-        /// is live-blurred and cannot be sampled offscreen (materials only
-        /// render inside a window — an offscreen snapshot yields a constant,
-        /// appearance-independent value). Since the macOS WKWebView canvas must
-        /// be opaque anyway, approximate `.bar` with fixed solid colors per
-        /// appearance: near-white in light mode, #2C2C2E in dark (matching the
-        /// hand-tuned value previously used).
+        /// Match the native canvas immediately, including the first frame of
+        /// a system appearance change; do not sample a dynamic material color.
         @MainActor
-        private static func resolvedHostBackgroundHex(
-            for appearance: NSAppearance?
-        ) -> String? {
-            let isDark = appearance?.bestMatch(from: [.darkAqua, .aqua])
-                == .darkAqua
-            if isDark {
-               return "#1E1E1E" // "#1E1E1E"是NSColor.windowBackgroundColor在Dark主题时算出来的hex颜色值，为什么使用"#1E1E1E"而不是windowBackgroundColor，因为在系统切换主题时，首次拿到的ex(from: windowBackgroundColor)是#FFFFFF，导致错误的显示出白色
-            } else {
-                let color = NSColor(
-                    calibratedRed: 249.0 / 255.0,
-                    green: 249.0 / 255.0,
-                    blue: 249.0 / 255.0,
-                    alpha: 1
-                )
-                return hex(from: color)
-            }
-        }
-
-        /// Colorspace-safe hex conversion: some NSColors (e.g. `clear`,
-        /// grayscale/profile colors) reject `redComponent` with an exception
-        /// unless converted first. Returns nil when conversion fails so the
-        /// caller keeps the previous value instead of crashing.
-        private static func hex(from color: NSColor) -> String? {
-            guard let srgb = color.usingColorSpace(.sRGB) else { return nil }
-            let r = Int((srgb.redComponent * 255).rounded())
-            let g = Int((srgb.greenComponent * 255).rounded())
-            let b = Int((srgb.blueComponent * 255).rounded())
-            return String(format: "#%02X%02X%02X", r, g, b)
+        private static func resolvedHostBackgroundHex(for appearance: NSAppearance?) -> String? {
+            MacConversationAppearance.canvasHex(
+                isDark: appearance?.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua
+            )
         }
 
         func installSecurityRulesAndLoadShell() {

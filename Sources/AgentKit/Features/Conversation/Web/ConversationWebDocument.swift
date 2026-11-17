@@ -93,6 +93,7 @@ struct ConversationWebDocument: Codable, Equatable, Sendable {
         var model: String? = nil
         var modelRoute: String? = nil
         var processFailureText: String? = nil
+        var userCopyActionID: String? = nil
     }
 
     /// Presentation-only projection of a PreviewArtifact. Model-authored HTML
@@ -663,6 +664,7 @@ enum ConversationWebDocumentBuilder {
         var tokens = Set<String>()
         for turn in document.turns {
             if let token = turn.copyActionID { tokens.insert(token) }
+            if let token = turn.userCopyActionID { tokens.insert(token) }
             if let token = turn.shareActionID { tokens.insert(token) }
             if let token = turn.assetsActionID { tokens.insert(token) }
             if let token = turn.forkActionID { tokens.insert(token) }
@@ -815,7 +817,10 @@ enum ConversationWebDocumentBuilder {
             changes: ConversationWebDocument.WebTurnChanges(turn.changes),
             model: turn.modelName,
             modelRoute: turn.modelRoute,
-            processFailureText: turn.processFailureSummary
+            processFailureText: turn.processFailureSummary,
+            userCopyActionID: (presentation?.text ?? turn.userPrompt?.text).flatMap { text in
+                registerAction?(.transcript(turnID: turn.id, action: .copyBlock(text: text)))
+            }
         )
     }
 

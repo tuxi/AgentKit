@@ -93,14 +93,7 @@ public struct ConversationDetailView: View {
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
 //            .background(.bar)
-            .background(Color(nsColor: colorScheme == .dark
-                              ? NSColor.windowBackgroundColor
-                              : NSColor(
-                                calibratedRed: 249.0 / 255.0,
-                                green: 249.0 / 255.0,
-                                blue: 249.0 / 255.0,
-                                alpha: 1
-                              )))
+            .background(MacConversationAppearance.canvasColor(isDark: colorScheme == .dark))
 #endif
         }
         .scrollDismissesKeyboard(.interactively)
@@ -232,14 +225,7 @@ public struct ConversationDetailView: View {
                 residentTimelines(activeViewModel: vm, bottomInset: bottomBarHeight)
             }
             .padding(.horizontal, MacConversationLayout.outerInset)
-            .background(Color(nsColor: colorScheme == .dark
-                              ? NSColor.windowBackgroundColor
-                              : NSColor(
-                                calibratedRed: 249.0 / 255.0,
-                                green: 249.0 / 255.0,
-                                blue: 249.0 / 255.0,
-                                alpha: 1
-                              )))
+            .background(MacConversationAppearance.canvasColor(isDark: colorScheme == .dark))
             activeBottomBar(vm: vm, isPaused: isPaused, isArchived: isArchived)
             // Measure the floating bar's own height directly. A PreferenceKey
             // set from a `.background` GeometryReader does not propagate on
@@ -299,6 +285,7 @@ public struct ConversationDetailView: View {
         : AgentKitLocalized.string("conversation.input_message")
     }
     
+    #if os(iOS)
     private func nextSendModelLabel(_ vm: ConversationViewModel) -> String {
         switch vm.composerSelectionMode {
         case .followDefault:
@@ -318,10 +305,13 @@ public struct ConversationDetailView: View {
         }
     }
 
+    #endif
+
     /// Bottom bar shared by both macOS (inline VStack) and iOS (safeAreaInset).
     @ViewBuilder
     private func activeBottomBar(vm: ConversationViewModel, isPaused: Bool, isArchived: Bool) -> some View {
         VStack(spacing: 0) {
+#if os(iOS)
             if let resolved = vm.modelIdentity.resolvedModel {
                 VStack(alignment: .leading, spacing: 2) {
                     Text("下次发送：\(nextSendModelLabel(vm))")
@@ -336,6 +326,7 @@ public struct ConversationDetailView: View {
                 .frame(maxWidth: .infinity, alignment: .leading)
                 .padding(.horizontal, 12)
             }
+#endif
             ZStack(alignment: .bottom) {
                 // ── ask_user ──
                 if let askUser = vm.snapshot.pendingAskUser {
@@ -466,26 +457,8 @@ public struct ConversationDetailView: View {
                 }
                 .ignoresSafeArea(edges: .bottom)
 #else
-                ZStack(alignment: .top) {
-                    Color.clear
-                        .background(.ultraThinMaterial) // 叠加轻微毛玻璃效果
-                        .mask {
-                            LinearGradient(
-                                colors: [.clear, .black.opacity(0.6), .black],
-                                startPoint: .top,
-                                endPoint: .bottom
-                            )
-                        }
-                    
-                    // 顶部分隔线（极轻微，增强物理边界感）
-                    LinearGradient(
-                        colors: [.clear, Color.primary.opacity(0.08), .clear],
-                        startPoint: .leading,
-                        endPoint: .trailing
-                    )
-                    .frame(height: 1)
-                }
-                .ignoresSafeArea(edges: .bottom)
+                MacConversationAppearance.canvasColor(isDark: colorScheme == .dark)
+                    .ignoresSafeArea(edges: .bottom)
 #endif
             }
         }

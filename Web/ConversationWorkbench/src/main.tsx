@@ -29,6 +29,7 @@ import type {
 } from "./types";
 import { protocolVersion } from "./types";
 import "./workbench.css";
+import "./conversation-appearance.css";
 
 let currentRevision = 0;
 let currentConversationID: string | undefined;
@@ -2907,12 +2908,16 @@ function ExtensionNode({ node }: { node: ConversationWebExtensionNode }): React.
   );
 }
 
-function CollapsibleUserPrompt({
+const CollapsibleUserPrompt = memo(function CollapsibleUserPrompt({
   turnID,
   text,
+  copyActionID,
+  startedAtMilliseconds,
 }: {
   turnID: string;
   text: string;
+  copyActionID?: string;
+  startedAtMilliseconds?: number;
 }) {
   const [expanded, setExpanded] = useState(false);
   const [canToggle, setCanToggle] = useState(false);
@@ -2935,29 +2940,48 @@ function CollapsibleUserPrompt({
   }, [text, expanded]);
 
   return (
-    <div className="user-prompt">
-      <div
-        ref={contentRef}
-        className={`user-prompt-content ${expanded ? "is-expanded" : ""}`}
-        data-selection-id={`turn:${turnID}:user`}
-      >
-        {text}
-      </div>
-
-      {canToggle ? (
-        <button
-          type="button"
-          className="user-prompt-toggle"
-          data-focus-id={`user-prompt-toggle:${turnID}`}
-          aria-expanded={expanded}
-          onClick={() => setExpanded((value) => !value)}
+    <div className="user-message">
+      <div className="user-prompt">
+        <div
+          ref={contentRef}
+          className={`user-prompt-content ${expanded ? "is-expanded" : ""}`}
+          data-selection-id={`turn:${turnID}:user`}
         >
-          {expanded ? "收起" : "显示更多"}
-        </button>
-      ) : null}
+          {text}
+        </div>
+
+        {canToggle ? (
+          <button
+            type="button"
+            className="user-prompt-toggle"
+            data-focus-id={`user-prompt-toggle:${turnID}`}
+            aria-expanded={expanded}
+            onClick={() => setExpanded((value) => !value)}
+          >
+            {expanded ? "收起" : "显示更多"}
+          </button>
+        ) : null}
+      </div>
+      <div className="user-message-actions">
+        {startedAtMilliseconds != null ? (
+          <time dateTime={new Date(startedAtMilliseconds).toISOString()}>
+            {new Date(startedAtMilliseconds).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}
+          </time>
+        ) : null}
+        {copyActionID ? (
+          <button type="button" className="turn-actions-icon interactive"
+            aria-label="拷贝消息" title="拷贝消息" data-focus-id={`user-copy:${turnID}`}
+            onClick={() => dispatchAction(copyActionID)}>
+            <svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.4" aria-hidden="true">
+              <rect x="5.5" y="5.5" width="8" height="8" rx="1.5" />
+              <path d="M10.5 5.5v-2A1.5 1.5 0 0 0 9 2H4A1.5 1.5 0 0 0 2.5 3.5v5A1.5 1.5 0 0 0 4 10h1.5" />
+            </svg>
+          </button>
+        ) : null}
+      </div>
     </div>
   );
-}
+});
 
 /// How many files the change card shows before "再显示 N 个文件" (Codex shows 3).
 const CHANGE_PREVIEW_LIMIT = 3;
@@ -3557,6 +3581,7 @@ const Turn = memo(function Turn({
       <div
         className="turn-block"
         data-block-id={block.id}
+        data-block-kind={block.kind}
         data-selection-id={`block:${block.id}`}
         key={block.id}
       >
@@ -3690,7 +3715,8 @@ const Turn = memo(function Turn({
         </div>
       ) : null}
       {turn.userPrompt ? (
-        <CollapsibleUserPrompt turnID={turn.id} text={turn.userPrompt} />
+        <CollapsibleUserPrompt turnID={turn.id} text={turn.userPrompt}
+          copyActionID={turn.userCopyActionID} startedAtMilliseconds={turn.startedAtMilliseconds} />
       ) : null}
       <TurnDisclosureContext.Provider value={disclosureContext}>
       <div className="assistant-lane">
@@ -3865,6 +3891,15 @@ function App(): React.JSX.Element {
             return;
           }
 
+          // A rapid successor can arrive after React laid out the previous
+          // update but before its deferred restoration/ack task. Complete that
+          // viewport transaction first: otherwise content growth is mistaken
+          // for a reader leaving the bottom. restore() still yields to any
+          // gesture that happened after the pending snapshot was captured.
+          const pendingViewport = pendingRestoration.current;
+          if (pendingViewport?.revision === currentRevision) {
+            viewportController.restore(pendingViewport.viewport, pendingViewport.forcePinToBottom);
+          }
           const capturedViewport = viewportController.capture();
           const replacedRoots = replacedDOMRoots(update);
           const recoveredViewport = isReset && update.recoveryViewport

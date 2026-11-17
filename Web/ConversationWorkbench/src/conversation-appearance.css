@@ -1,0 +1,102 @@
+/* macOS reading surface. Geometry/interaction for tools remains in workbench.css. */
+:root {
+  --background: var(--workbench-background, light-dark(#ffffff, #1f2023));
+  --text: light-dark(#27282b, #e8e9ed);
+  --secondary: light-dark(#6b6e74, #b0b3ba);
+  --muted: light-dark(#73767c, #a4a8b1);
+  --font-body: 15px;
+  --font-ui: 13.5px;
+  --font-caption: 12px;
+  --font-code: 12.5px;
+  --subtle: light-dark(#f2f3f4, #2b2d32);
+  --tool-surface: light-dark(#f7f8f9, #27292e);
+  --border: light-dark(#e7e8eb, #393c43);
+  --code-background: light-dark(#f2f3f5, #2b2d32);
+  line-height: 25px;
+}
+
+.turn { margin-bottom: 36px; }
+.user-message {
+  width: fit-content;
+  max-width: min(86%, 620px);
+  margin: 0 0 24px auto;
+}
+.user-prompt {
+  max-width: 100%;
+  margin: 0 0 0 auto;
+  padding: 14px 16px;
+  border: 0;
+  border-radius: 14px;
+}
+.user-prompt-content { line-height: 25px; max-height: 150px; }
+.user-prompt-content.is-expanded { max-height: none; }
+.user-prompt-toggle {
+  margin: 8px 0 0;
+  font-size: var(--font-caption);
+  line-height: 20px;
+}
+.user-message-actions {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 6px;
+  height: 20px;
+  margin-top: 7px;
+  color: var(--muted);
+  font-size: var(--font-caption);
+  line-height: 20px;
+}
+.user-message-actions .turn-actions-icon { width: 24px; height: 20px; }
+
+.turn-block { margin-bottom: 14px; }
+.turn-block:has(> .tool-group),
+.turn-block:has(> .child-stream) { margin-block: 20px; }
+/* Adjacent tool blocks share one outer gap. */
+.turn-block:has(> .tool-group) + .turn-block:has(> .tool-group) { margin-top: 0; }
+p, ul, ol, blockquote { margin-bottom: 14px; }
+.turn-block > :last-child { margin-bottom: 0; }
+h1, h2, h3, h4 {
+  font-size: 16px;
+  line-height: 24px;
+  font-weight: 600;
+  margin: 20px 0 10px;
+}
+.turn-block > :is(h1, h2, h3, h4):first-child { margin-top: 0; }
+.turn-block > :is(ul, ol) li { margin-bottom: 6px; }
+.turn-block > :is(ul, ol) li:last-child { margin-bottom: 0; }
+/* Long file names and identifiers wrap without widening the reading column. */
+.turn-block[data-block-kind="markdown"] :not(pre) > code {
+  white-space: normal;
+  overflow-wrap: anywhere;
+  word-break: break-all;
+  -webkit-box-decoration-break: clone;
+  box-decoration-break: clone;
+}
+.turn-block > .overflow-frame:not(:last-child) { margin-bottom: 14px; }
+.code-frame pre { line-height: 21px; }
+.tool-group, .tool, .child-stream { line-height: 22px; }
+.tool-group-tools > .background-job-row,
+.tool-group-tools > :is(.tool, .thinking-block) > .tool-summary {
+  min-height: 36px;
+  padding-block: 6px;
+}
+.turn-live-header, .turn-process-summary {
+  padding: 0;
+  border-bottom: 0;
+  font-size: var(--font-caption);
+  line-height: 20px;
+  color: var(--muted);
+}
+.turn-live-header { margin-bottom: 16px; }
+.turn-process-summary { margin-bottom: 16px; }
+.turn-actions { margin-top: 7px; font-size: var(--font-caption); line-height: 20px; }
+/* Keep geometry and tab stops intact; keyboard focus reveals the controls.
+   Open action menus remain visible even when the pointer leaves the turn. */
+@media (hover: hover) {
+  .turn-actions, .user-message-actions { opacity: 0; pointer-events: none; }
+  .turn:hover .turn-actions,
+  .turn:focus-within .turn-actions,
+  .turn-actions:has([aria-expanded="true"]),
+  .user-message:hover .user-message-actions,
+  .user-message:focus-within .user-message-actions { opacity: 1; pointer-events: auto; }
+}

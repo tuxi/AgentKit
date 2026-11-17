@@ -1,11 +1,7 @@
 :root {
   color-scheme: light dark;
-  /* Canvas background. The native host injects the detail page's resolved
-     main background color (sampled from the .bar material on macOS) as
-     --workbench-background via window.AgentKitWorkbench.setHostBackground().
-     macOS WKWebView cannot be truly transparent, so the canvas must be an
-     opaque approximation of the host material; these fallbacks cover the
-     first paint / export until the host injects. */
+  /* Structural defaults; conversation-appearance.css owns the reading palette.
+     The native host injects its matching opaque canvas via setHostBackground(). */
   --background: var(
     --workbench-background,
     light-dark(rgb(249 249 249), rgb(44 44 46))

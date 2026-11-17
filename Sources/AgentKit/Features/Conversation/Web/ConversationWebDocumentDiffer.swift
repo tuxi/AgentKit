@@ -276,6 +276,7 @@ enum ConversationWebDocumentDiffer {
     ) -> Bool {
         lhs.id == rhs.id
             && lhs.userPrompt == rhs.userPrompt
+            && lhs.userCopyActionID == rhs.userCopyActionID
             && lhs.userAssets == rhs.userAssets
             && lhs.localAssets == rhs.localAssets
             && lhs.fileReferences == rhs.fileReferences
