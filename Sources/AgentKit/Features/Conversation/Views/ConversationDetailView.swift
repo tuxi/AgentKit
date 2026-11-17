@@ -18,6 +18,7 @@ public struct ConversationDetailView: View {
     @Environment(\.conversationUsesWorkspaceHeader) private var usesWorkspaceHeader
     @Environment(\.conversationUsesSessionRail) private var railOwnsTasks
     @Environment(\.colorScheme) private var colorScheme
+    @Environment(\.composerDiagnostic) private var composerDiagnostic
     @Environment(WorkspaceStore.self) private var store
     @Environment(AgentRouter.self) private var router
     @Environment(ModelSettingsStore.self) private var modelSettings
@@ -83,16 +84,8 @@ public struct ConversationDetailView: View {
             }
 #else
             VStack(spacing: 0) {
-                ScrollView {
-                    VStack(spacing: 18) {
-                        Spacer(minLength: 120)
-                        draftTitleView
-                        draftFailureBanner
-                        Spacer(minLength: 180)
-                    }
-                    .frame(maxWidth: .infinity)
-                }
-                .frame(maxWidth: .infinity, maxHeight: .infinity)
+                MacDraftLandingView()
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
 
                 // Keep the editor at the same bottom edge as an active chat;
                 // only the welcome content participates in scrolling.
@@ -138,6 +131,14 @@ public struct ConversationDetailView: View {
         }
     }
     
+    private var draftConnectionBlocksSubmission: Bool {
+#if os(macOS)
+        composerDiagnostic?.blocksSubmission == true
+#else
+        false
+#endif
+    }
+
     private var draftComposer: some View {
         DraftComposerPanel(
             workspaceStore: store,
@@ -145,7 +146,7 @@ public struct ConversationDetailView: View {
             viewModel: viewModel,
             draftRevision: store.draftNavigationRevision,
             placeholder: store.isPreparingWorkspace ? AgentKitLocalized.string("conversation.preparing_workspace") : AgentKitLocalized.string("conversation.describe_placeholder"),
-            isEnabled: (store.draft?.canCommit ?? false) && !store.isPreparingWorkspace,
+            isEnabled: (store.draft?.canCommit ?? false) && !store.isPreparingWorkspace && !draftConnectionBlocksSubmission,
             isDraft: true,
             onSend: { text, model, assets in
                 await store.commitDraft(firstMessage: text, model: model, assets: assets)

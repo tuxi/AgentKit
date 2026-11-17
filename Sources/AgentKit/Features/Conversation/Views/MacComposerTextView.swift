@@ -59,8 +59,6 @@ struct MacComposerTextView: NSViewRepresentable {
         textView.string = text
         textView.font = .systemFont(ofSize: 14)
         let paragraph = NSMutableParagraphStyle()
-        paragraph.minimumLineHeight = 21
-        paragraph.maximumLineHeight = 21
         textView.defaultParagraphStyle = paragraph
         textView.textStorage?.addAttribute(.paragraphStyle, value: paragraph, range: NSRange(location: 0, length: (text as NSString).length))
         textView.typingAttributes[.paragraphStyle] = paragraph
@@ -367,7 +365,7 @@ struct MacComposerTextView: NSViewRepresentable {
             measuredWidth = tv.bounds.width
             measuredMaximum = parent.maxHeight
             layoutManager.ensureLayout(for: container)
-            let used = layoutManager.usedRect(for: container).height
+            let used = tv.contentLayoutHeight
             let inset = tv.textContainerInset.height * 2
             let target = min(max(used + inset, parent.minHeight), parent.maxHeight)
             if abs(parent.height - target) > 0.5 {
@@ -436,6 +434,29 @@ final class ComposerNSTextView: NSTextView {
     }
     var onFocusChange: ((Bool) -> Void)?
 
+    /// Use TextKit's natural line metrics for both glyphs and the insertion point.
+    /// Center short content in the viewport; overflowing content keeps its inset.
+    var contentLayoutHeight: CGFloat {
+        guard let layoutManager, let textContainer else { return 0 }
+        layoutManager.ensureLayout(for: textContainer)
+        let used = layoutManager.usedRect(for: textContainer).maxY
+        let extra = layoutManager.extraLineFragmentTextContainer === textContainer
+            ? layoutManager.extraLineFragmentRect.maxY : 0
+        return max(used, extra)
+    }
+
+    override var textContainerOrigin: NSPoint {
+        var origin = super.textContainerOrigin
+        let viewportHeight = min(bounds.height, enclosingScrollView?.contentSize.height ?? bounds.height)
+        origin.y = max(origin.y, (viewportHeight - contentLayoutHeight) / 2)
+        return origin
+    }
+
+    override func setFrameSize(_ newSize: NSSize) {
+        super.setFrameSize(newSize)
+        needsDisplay = true
+    }
+
     override func becomeFirstResponder() -> Bool {
         let result = super.becomeFirstResponder()
         if result { onFocusChange?(true) }
@@ -478,14 +499,14 @@ final class ComposerNSTextView: NSTextView {
             .font: font ?? .preferredFont(forTextStyle: .body),
         ]
         let padding = textContainer?.lineFragmentPadding ?? 0
-        let origin = NSPoint(x: textContainerInset.width + padding,
-                             y: textContainerInset.height)
-        let paragraph = NSMutableParagraphStyle()
+        let origin = NSPoint(x: textContainerOrigin.x + padding,
+                             y: textContainerOrigin.y)
+        let paragraph = (defaultParagraphStyle?.mutableCopy() as? NSMutableParagraphStyle) ?? NSMutableParagraphStyle()
         paragraph.lineBreakMode = .byTruncatingTail
         var displayAttrs = attrs
         displayAttrs[.paragraphStyle] = paragraph
         let markerWidth: CGFloat = suggestionText == nil ? 0 : 30
-        placeholder.draw(in: NSRect(x: origin.x, y: origin.y, width: max(0, bounds.width - origin.x - markerWidth), height: 24), withAttributes: displayAttrs)
+        placeholder.draw(in: NSRect(x: origin.x, y: origin.y, width: max(0, bounds.width - origin.x - markerWidth), height: max(0, bounds.height - origin.y)), withAttributes: displayAttrs)
         if suggestionText != nil {
             "⇥".draw(at: NSPoint(x: max(origin.x, bounds.width - 22), y: origin.y), withAttributes: attrs)
         }

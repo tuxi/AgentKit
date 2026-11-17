@@ -142,10 +142,15 @@ struct WorkspaceChipBar: View {
 
     private var compactNarrowRow: some View {
         HStack(spacing: 6) {
+#if os(macOS)
+            ComposerEnvironmentMenu(style: .icon).frame(width: 28)
+#else
             Button { openEnvironmentSettings?(.environment) } label: {
                 Image(systemName: environmentSymbol).frame(width: 24, height: 28)
             }
             .buttonStyle(.plain).help(environmentName).disabled(openEnvironmentSettings == nil)
+#endif
+
             switch mode {
             case .draftEmpty:
                 workspaceMenu {
@@ -293,12 +298,14 @@ struct WorkspaceChipBar: View {
     @ViewBuilder
     private var localChip: some View {
         if compactComposer {
+#if os(macOS)
+            ComposerEnvironmentMenu(style: .chip)
+#else
             Button { openEnvironmentSettings?(.environment) } label: {
                 chip(icon: environmentSymbol, text: environmentName)
             }
-            .buttonStyle(.plain)
-            .help(environmentName)
-            .disabled(openEnvironmentSettings == nil)
+            .buttonStyle(.plain).help(environmentName).disabled(openEnvironmentSettings == nil)
+#endif
         } else { chip(icon: "desktopcomputer", text: "Local") }
     }
 

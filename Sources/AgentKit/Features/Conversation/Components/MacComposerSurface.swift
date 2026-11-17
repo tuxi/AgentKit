@@ -60,7 +60,7 @@ struct MacComposerSurface: View {
     }
 
     private var submissionIssue: String? {
-        guard let issue = vm.workspaceStore.composerSubmissionIssue, issue.key == vm.loadedStateKey else { return nil }
+        guard !vm.isDraft, let issue = vm.workspaceStore.composerSubmissionIssue, issue.key == vm.loadedStateKey else { return nil }
         return issue.message
     }
 
@@ -103,7 +103,7 @@ struct MacComposerSurface: View {
 
                     MacComposerTextView(text: $vm.text, height: $vm.composerHeight,
                         placeholder: placeholder, isEnabled: !vm.isSubmitting,
-                        minHeight: 24, maxHeight: editorMaximum,
+                        minHeight: 28, maxHeight: editorMaximum,
                         onSend: { vm.send() },
                         onFileDrop: { urls in
                             guard !vm.isSubmitting, vm.workspaceStore.canStageLocalUserAssets else { return false }
@@ -133,7 +133,7 @@ struct MacComposerSurface: View {
                             if action == "permissions" { showPermissionPicker = true }
                             if action == "skills" { openSettings?(.skills) }
                         }, onFocusChange: { focused = $0 })
-                        .frame(height: min(vm.composerHeight, editorMaximum))
+                        .frame(height: max(28, min(vm.composerHeight, editorMaximum)))
                     primaryAction
                 }
                 .padding(.horizontal, 10)
