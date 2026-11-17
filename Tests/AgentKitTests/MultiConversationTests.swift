@@ -4,6 +4,66 @@ import XCTest
 
 final class MultiConversationTests: XCTestCase {
     @MainActor
+    func testRenameUpdatesMetadataWithoutReconnectAndAlsoUpdatesArchivedRows() async throws {
+        let active = ConversationRef(id: "rename-active", workspacePath: "/tmp/project", name: "before")
+        let archived = ConversationRef(id: "rename-archived", workspacePath: "/tmp/archive", name: "archive", archivedAt: "2026-11-17T00:00:00Z")
+        let client = MultiSessionRuntimeClient(activeConversations: [active], archivedConversations: [archived])
+        let store = WorkspaceStore(client: client, localStateStore: InMemoryConversationLocalStateStore())
+        await store.listViewModel.refresh()
+        await store.listViewModel.refreshArchived()
+        store.selectItem = .conversationDetail(conversation: active)
+        try await Task.sleep(for: .milliseconds(20))
+        let controller = try XCTUnwrap(store.activeConversationViewModel)
+        let connections = client.channel(for: active.id).connectCount
+        let result = await store.renameConversation(active, name: "after 🙂")
+        XCTAssertEqual(result?.workspacePath, active.workspacePath)
+        XCTAssertEqual(store.selectedConversation?.name, "after 🙂")
+        XCTAssertEqual(controller.conversation?.name, "after 🙂")
+        XCTAssertEqual(store.listViewModel.conversations.first?.name, "after 🙂")
+        XCTAssertTrue(store.activeConversationViewModel === controller)
+        XCTAssertEqual(client.channel(for: active.id).connectCount, connections)
+        _ = await store.renameConversation(archived, name: "archived rename")
+        XCTAssertEqual(store.listViewModel.archivedConversations.first?.name, "archived rename")
+        XCTAssertEqual(store.selectedConversation?.id, active.id)
+        await store.supervisor.disconnectAll()
+    }
+
+    @MainActor
+    func testLateRenameDoesNotChangeTheNewlySelectedConversation() async throws {
+        let first = ConversationRef(id: "first", workspacePath: "/tmp/first", name: "one")
+        let second = ConversationRef(id: "second", workspacePath: "/tmp/second", name: "two")
+        let client = MultiSessionRuntimeClient(activeConversations: [first, second])
+        client.renameDelay = .milliseconds(40)
+        let store = WorkspaceStore(client: client, localStateStore: InMemoryConversationLocalStateStore())
+        await store.listViewModel.refresh()
+        store.selectItem = .conversationDetail(conversation: first)
+        let rename = Task { await store.renameConversation(first, name: "renamed first") }
+        try await Task.sleep(for: .milliseconds(10))
+        store.selectItem = .conversationDetail(conversation: second)
+        _ = await rename.value
+        XCTAssertEqual(store.selectedConversation?.id, second.id)
+        XCTAssertEqual(store.selectedConversation?.name, "two")
+        XCTAssertEqual(store.activeConversationViewModel?.conversation?.id, second.id)
+        XCTAssertEqual(store.listViewModel.conversations.first { $0.id == first.id }?.name, "renamed first")
+        await store.supervisor.disconnectAll()
+    }
+
+    @MainActor
+    func testDeletingCurrentPageReturnsToDraftAndKeepsWorkspace() async throws {
+        let ref = ConversationRef(id: "delete-current", workspacePath: "/tmp/project", name: "delete", turnStatus: "done")
+        let client = MultiSessionRuntimeClient(activeConversations: [ref])
+        let store = WorkspaceStore(client: client, localStateStore: InMemoryConversationLocalStateStore())
+        store.selectItem = .conversationDetail(conversation: ref)
+        try await Task.sleep(for: .milliseconds(20))
+        try await store.deleteConversation(ref, worktreeDisposition: .keep)
+        XCTAssertEqual(client.deletedConversationIDs, [ref.id])
+        XCTAssertTrue(client.removeManagedWorktreeRequests.isEmpty)
+        XCTAssertNotNil(store.draft)
+        if case .draft = store.selectItem {} else { XCTFail("Deleted page must return to a usable draft") }
+        await store.supervisor.disconnectAll()
+    }
+
+    @MainActor
     func testPagedListRefreshKeepsLoadedOlderRowsAndStableContinuation() async {
         let client = MultiSessionRuntimeClient()
         let recent = ConversationRef(id: "recent", workspacePath: "/tmp/recent")
@@ -1499,6 +1559,7 @@ private final class MultiSessionChannelDouble: RuntimeSessionChannel, @unchecked
     let connectDelay: Duration
     var isConnected = false
     var disconnectCount = 0
+    var connectCount = 0
     var cancelCount = 0
     var sentInputs: [AgentInput] = []
     var capabilitiesValue: AgentCapabilityFlags = .default
@@ -1510,6 +1571,7 @@ private final class MultiSessionChannelDouble: RuntimeSessionChannel, @unchecked
     }
 
     func connect(since: Int) async throws -> AsyncStream<AgentEvent> {
+        connectCount += 1
         if connectDelay > .zero {
             try await Task.sleep(for: connectDelay)
         }
@@ -1558,6 +1620,7 @@ private final class MultiSessionRuntimeClient: RuntimeClient, @unchecked Sendabl
     private(set) var restoredConversationIDs: [String] = []
     private(set) var operationLog: [String] = []
     var removeManagedWorktreeError: Error?
+    var renameDelay: Duration = .zero
 
     init(
         connectDelays: [String: Duration] = [:],
@@ -1704,8 +1767,16 @@ private final class MultiSessionRuntimeClient: RuntimeClient, @unchecked Sendabl
         }
         return ConversationArchiveResponse(id: id)
     }
+    @MainActor
     func renameConversation(id: String, name: String) async throws -> ConversationRef {
-        ConversationRef(id: id, workspacePath: "", name: name)
+        if renameDelay > .zero { try await Task.sleep(for: renameDelay) }
+        var ref = activeConversations.first { $0.id == id }
+            ?? archivedConversations.first { $0.id == id }
+            ?? ConversationRef(id: id, workspacePath: "")
+        ref.name = name
+        activeConversations = activeConversations.map { $0.id == id ? ref : $0 }
+        archivedConversations = archivedConversations.map { $0.id == id ? ref : $0 }
+        return ref
     }
     func removeManagedWorktree(
         conversationID: String,

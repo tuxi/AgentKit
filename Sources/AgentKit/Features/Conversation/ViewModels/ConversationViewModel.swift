@@ -88,6 +88,13 @@ public final class ConversationViewModel {
     /// 当前会话引用。
     public private(set) var conversation: ConversationRef?
 
+    /// A title change is metadata, not a new connection or history load.
+    func updateConversationName(_ name: String?, conversationID: String) {
+        guard conversation?.id == conversationID else { return }
+        conversation?.name = name
+    }
+
+
     /// P5.0 — 本会话绑定的工作区（创建时锁定，不可变）。
     public let workspace: Workspace?
 

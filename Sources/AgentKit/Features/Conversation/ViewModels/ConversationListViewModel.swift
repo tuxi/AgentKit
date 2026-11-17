@@ -381,10 +381,12 @@ public final class ConversationListViewModel {
     @discardableResult
     public func renameConversation(_ ref: ConversationRef, name: String) async -> ConversationRef? {
         beginMutation()
+        errorMessage = nil
         do {
             var updated = try await client.renameConversation(id: ref.id, name: name)
             updated.name = name
             setConversations(conversations.map { $0.id == ref.id ? updated : $0 })
+            setArchivedConversations(archivedConversations.map { $0.id == ref.id ? updated : $0 })
             revision += 1
             endMutation()
             await refreshAfterMutation()

@@ -721,6 +721,19 @@ public final class WorkspaceStore {
         return response
     }
 
+    /// Rename both presentation sources without reinstalling a controller or
+    /// changing the currently selected session when an older request completes.
+    @discardableResult
+    public func renameConversation(_ conversation: ConversationRef, name: String) async -> ConversationRef? {
+        guard let updated = await listViewModel.renameConversation(conversation, name: name) else { return nil }
+        supervisor.controller(sessionID: updated.id)?.updateConversationName(updated.name, conversationID: updated.id)
+        if var selected = selectedConversation, selected.id == updated.id {
+            selected.name = updated.name
+            selectedConversation = selected
+        }
+        return updated
+    }
+
     public func canDeleteConversation(_ conversation: ConversationRef) -> Bool {
         switch supervisor.activity(for: conversation) {
         case .idle, .succeeded, .failed, .cancelled:
@@ -793,6 +806,10 @@ public final class WorkspaceStore {
         residentConversationViewModels.removeValue(forKey: conversation.id)
         #endif
         try? localStateStore.removeState(for: .session(conversation.id))
+        if case .conversationDetail(let page) = selectItem, page.id == conversation.id,
+           selectedConversation == nil {
+            beginDraft()
+        }
     }
 
     // MARK: - Runtime lifecycle

@@ -738,6 +738,7 @@ private struct ForcedWorktreeDeletion {
 }
 
 private struct ConversationListDialogModifier: ViewModifier {
+    @Environment(WorkspaceStore.self) private var store
     @Binding var renameTarget: ConversationRef?
     @Binding var renameText: String
     @Binding var deletionTarget: ConversationRef?
@@ -761,7 +762,7 @@ private struct ConversationListDialogModifier: ViewModifier {
                     let newName = renameText.trimmingCharacters(in: .whitespaces)
                     if let target = renameTarget, !newName.isEmpty {
                         Task {
-                            if let updated = await viewModel.renameConversation(target, name: newName),
+                            if let updated = await store.renameConversation(target, name: newName),
                                selected?.id == updated.id {
                                 selected = updated
                             }
