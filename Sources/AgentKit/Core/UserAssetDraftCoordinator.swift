@@ -273,7 +273,17 @@ extension ConversationLocalStateStore {
         key: ConversationLocalStateKey,
         input: AgentInput
     ) throws -> ComposerSubmissionSnapshot {
-        let current = try state(for: key)?.composerDraft ?? ComposerDraft()
+        let stored = try state(for: key)
+        if let record = stored?.localSubmissions.first(where: { $0.id == input.requestID }) {
+            var snapshot = ComposerSubmissionSnapshot(requestID: record.id,
+                revision: stored?.composerDraft.revision ?? 0, text: input.text ?? "", attachmentIDs: [],
+                model: input.model, assets: input.assets, localAssets: input.localAssets)
+            snapshot.presentation = .init(text: record.displayText, fileReferences: record.fileReferences, modelText: record.text)
+            let pending = snapshot
+            try updateState(for: key) { $0.composerDraft.pendingSubmission = pending }
+            return snapshot
+        }
+        let current = stored?.composerDraft ?? ComposerDraft()
         let referenceFiles = ComposerMessageContent.referenceFiles(files: current.fileReferences, attachments: current.attachments, imagesAsPaths: current.imagesAsPaths)
         let isComposerPayload = ComposerMessageContent.modelText(text: current.text, files: referenceFiles, tokens: current.tokens) == input.text
         var snapshot = ComposerSubmissionSnapshot(
@@ -326,6 +336,13 @@ extension ConversationLocalStateStore {
 
             if let turnID, !turnID.isEmpty, let presentation = snapshot.presentation {
                 state.composerMessages[turnID] = presentation
+            }
+            // Local submissions already detached their editor snapshot before
+            // preparation. Anything in the composer now is the NEXT draft.
+            if state.localSubmissions.contains(where: { $0.id == requestID }) {
+                state.composerDraft.pendingSubmission = nil
+                state.composerDraft.revision += 1
+                return
             }
             if state.composerDraft.text == (snapshot.draftText ?? snapshot.text) {
                 state.composerDraft.text = ""

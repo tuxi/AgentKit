@@ -8,6 +8,7 @@ import XCTest
 @MainActor @Observable
 private final class AppearanceRenderModel {
     var snapshot: RuntimeSnapshot = .empty(sessionID: "appearance")
+    var submissions: [LocalMessageSubmission] = []
 }
 
 @MainActor
@@ -15,7 +16,8 @@ private struct AppearanceRenderHost: View {
     let model: AppearanceRenderModel
     let store: WorkspaceStore
     var body: some View {
-        ConversationWebWorkbenchView(snapshot: model.snapshot, conversationID: "appearance", workspaceRoot: nil,
+        ConversationWebWorkbenchView(snapshot: model.snapshot, localSubmissions: model.submissions,
+            submissionKey: .session("appearance"), conversationID: "appearance", workspaceRoot: nil,
             previewViewerResolver: nil, previewAssetResolver: nil,
             extensionContributions: [:], timelineExtensions: [], isVisible: true, bottomInset: 0,
             onFatalFailure: { XCTFail("Workbench failed") })
@@ -95,6 +97,34 @@ final class MacConversationAppearanceTests: XCTestCase {
         }
         try FileManager.default.createDirectory(atPath: path, withIntermediateDirectories: true)
         try png.write(to: URL(fileURLWithPath: path).appendingPathComponent(name + ".png"))
+    }
+
+    func testLocalSubmissionIsVisibleBeforeAcceptanceAndAdoptsRuntimeTurnWithoutDuplicatingDOM() async throws {
+        let model = AppearanceRenderModel()
+        model.snapshot = .init(timeline: [], turns: [ConversationTurn(id: "older", userPrompt: .init(role: .user, text: "之前的消息"),
+            blocks: [.text(id: "answer", .init(role: .assistant, text: "上一轮已经完成。"))], footer: nil, isLive: false)], generation: 1)
+        var record = LocalMessageSubmission(id: "request", resourceID: "request", text: "立即显示的新消息",
+            displayText: "立即显示的新消息", fileReferences: [], model: nil, reasoningEffort: nil)
+        model.submissions = [record]
+        let web = try await present(model)
+        try await wait("document.querySelector('.submission-delivery')?.textContent.includes('发送中') === true", in: web)
+        _ = try await web.evaluateJavaScript("window.pendingMessage = document.querySelector('[data-turn-id=\"submission:request\"]'); true")
+        try await screenshot("submission-sending", web: web)
+        record.phase = .failed; record.failure = "发送失败，请重试"
+        model.submissions = [record]
+        try await wait("document.querySelector('.submission-delivery button') !== null", in: web)
+        try await screenshot("submission-failed", web: web)
+        record.phase = .accepted; record.failure = nil; record.turnID = "real"
+        model.submissions = [record]
+        try await wait("document.querySelector('.submission-delivery')?.textContent.includes('已接收') === true", in: web)
+        try await screenshot("submission-accepted", web: web)
+        let realTurn = ConversationTurn(id: "turn_real_user", userPrompt: .init(role: .user, text: record.text),
+            blocks: [], footer: nil, isLive: true)
+        model.snapshot = .init(timeline: [], turns: model.snapshot.turns + [realTurn], generation: 2)
+        try await wait("document.querySelector('[data-turn-id=\"turn_real_user\"]') !== null && !document.querySelector('.submission-delivery')", in: web)
+        try await assertJavaScript("document.querySelectorAll('.user-prompt').length", equals: 2, in: web)
+        try await assertJavaScript("window.pendingMessage === document.querySelector('[data-turn-id=\"turn_real_user\"]')", equals: true, in: web)
+        try await screenshot("submission-started", web: web)
     }
 
     func testReadingLayoutThemeFocusAndIncrementalDOMRemainStable() async throws {

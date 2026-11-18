@@ -21,6 +21,9 @@ import ClientToolProtocol
 @Observable
 public final class WorkspaceStore {
     public var composerSubmissionIssue: ComposerSubmissionIssue?
+    var localSubmissionRevision: UInt64 = 0
+    var draftSubmissionKey: ConversationLocalStateKey?
+    var localSubmissionTasks: Set<String> = []
     #if os(macOS)
     struct ContextManagementRequest: Equatable { let id: UUID; let conversationID: String }
     var contextManagementRequest: ContextManagementRequest?
@@ -617,6 +620,17 @@ public final class WorkspaceStore {
     ) async -> Bool {
         guard let conversation = viewModel.conversation else { return false }
         composerSubmissionIssue = nil
+#if os(macOS)
+        do {
+            let key = ConversationLocalStateKey.session(conversation.id)
+            let record = try beginLocalSubmission(key: key, text: text, model: model, effort: reasoningEffort)
+            viewModel.reloadLocalSubmissions()
+            return await submitLocalMessage(record, key: key, through: viewModel)
+        } catch {
+            composerSubmissionIssue = .init(key: .session(conversation.id), message: error.localizedDescription)
+            return false
+        }
+#else
         do {
             let key = ConversationLocalStateKey.session(conversation.id)
 #if os(macOS)
@@ -638,6 +652,7 @@ public final class WorkspaceStore {
             composerSubmissionIssue = ComposerSubmissionIssue(key: .session(conversation.id), message: (error as? AgentInputRejection)?.message ?? "无法发送，请检查引用文件与执行环境后重试。")
             return false
         }
+#endif
     }
 
     private func workspaceRoot(for key: ConversationLocalStateKey) -> URL? {
@@ -805,6 +820,9 @@ public final class WorkspaceStore {
         residentConversationIDs.removeAll { $0 == conversation.id }
         residentConversationViewModels.removeValue(forKey: conversation.id)
         #endif
+        for record in (try? localStateStore.state(for: .session(conversation.id)))?.localSubmissions ?? [] {
+            try? localStateStore.removeState(for: .submission(record.resourceID))
+        }
         try? localStateStore.removeState(for: .session(conversation.id))
         if case .conversationDetail(let page) = selectItem, page.id == conversation.id,
            selectedConversation == nil {
@@ -1064,6 +1082,7 @@ public final class WorkspaceStore {
 
     /// 点击「+」：不调用任何 API，仅创建本地草稿。预选最近使用的工作区。
     public func beginDraft() {
+        draftSubmissionKey = nil
         selectItem = .draft
         projects.reload()
 
@@ -1272,7 +1291,11 @@ public final class WorkspaceStore {
 
     /// 放弃当前草稿。
     public func cancelDraft() {
+        draftSubmissionKey = nil
         if let id = draft?.id {
+            for record in (try? localStateStore.state(for: .draft(id)))?.localSubmissions ?? [] {
+                try? localStateStore.removeState(for: .submission(record.resourceID))
+            }
             try? localStateStore.removeState(for: .draft(id))
         }
         draft = nil
@@ -1283,7 +1306,8 @@ public final class WorkspaceStore {
     public func commitDraft(
         firstMessage: String,
         model: UnifiedModel?,
-        assets: [UserAssetRef] = []
+        assets: [UserAssetRef] = [],
+        localSubmissionID: String? = nil
     ) async {
         guard let current = draft, let workspace = current.workspace else { return }
         if current.usesManagedWorktree && !supportsManagedWorktreeCreation {
@@ -1293,7 +1317,17 @@ public final class WorkspaceStore {
         composerSubmissionIssue = nil
         draft?.state = .committing
         var createdConversation: ConversationRef?
+        var localRecord: LocalMessageSubmission?
         do {
+#if os(macOS)
+            if let localSubmissionID {
+                localRecord = localSubmissions(for: .draft(current.id)).first { $0.id == localSubmissionID }
+                guard localRecord != nil else { throw ConversationLocalDraftError.turnNotAccepted }
+            } else {
+                localRecord = try beginLocalSubmission(key: .draft(current.id), text: firstMessage,
+                    model: model?.model, effort: model?.reasoningEffort)
+            }
+#endif
             let managedRequest = current.usesManagedWorktree
                 ? ManagedWorktreeCreateRequest(
                     // Never derive this from firstMessage. The draft owns one
@@ -1319,13 +1353,23 @@ public final class WorkspaceStore {
                 model: model
             )
             try localStateStore.migrateDraft(current.id, to: ref.id)
+            if draft?.id == current.id { draftSubmissionKey = .session(ref.id) }
+            localSubmissionRevision &+= 1
 #if os(macOS)
-            try await prepareComposerReferences(for: .session(ref.id), sessionID: ref.id, sourceRoot: workspace.url.path, finalRoot: ref.workspacePath)
+            guard let record = localRecord else { throw ConversationLocalDraftError.turnNotAccepted }
+            var readyRecord = try await prepareLocalSubmission(record, key: .session(ref.id),
+                session: ref, sourceRoot: workspace.url.path)
+            if readyRecord.assets.isEmpty && !assets.isEmpty {
+                readyRecord.assets = assets
+                let prepared = readyRecord
+                try localStateStore.updateLocalSubmission(key: .session(ref.id), id: record.id) { $0 = prepared }
+            }
+            localRecord = readyRecord
+            let preparedAssets = (assets: readyRecord.assets, localAssets: readyRecord.localAssets)
+#else
+            let preparedAssets = try await prepareUserAssets(for: .session(ref.id),
+                workspaceRoot: URL(fileURLWithPath: ref.workspacePath, isDirectory: true))
 #endif
-            let preparedAssets = try await prepareUserAssets(
-                for: .session(ref.id),
-                workspaceRoot: URL(fileURLWithPath: ref.workspacePath, isDirectory: true)
-            )
             // 加固：显式写入 selectedModelID 到 session state。
             // migrateDraft 已从 draft state merge，此处提供第二条恢复路径，
             // 防止因 WAL 时序或状态覆盖导致 active view 显示回退到默认模型（Bug 1）。
@@ -1344,13 +1388,15 @@ public final class WorkspaceStore {
                     state.reasoningEffort = nil
                 }
             }
-            await vm.connect(to: ref)
+            await vm.connect(to: ref, restoringLocalSubmissions: false)
+            vm.reloadLocalSubmissions()
             let firstInput = AgentInput.text(
                 firstMessage,
                 model: model?.model,
                 reasoningEffort: model?.reasoningEffort,
                 assets: preparedAssets.assets.isEmpty ? assets : preparedAssets.assets,
-                localAssets: preparedAssets.localAssets
+                localAssets: preparedAssets.localAssets,
+                requestID: localRecord?.id ?? UUID().uuidString
             )
             _ = try localStateStore.markSubmissionPending(
                 key: .session(ref.id),
@@ -1361,11 +1407,19 @@ public final class WorkspaceStore {
             }
             // 草稿 → 真实会话
             listViewModel.prepend(ref)
-            selectItem = .conversationDetail(conversation: ref)
-            // supervisor reuses the connected controller
-            draft = nil
+            if draft?.id == current.id {
+                selectItem = .conversationDetail(conversation: ref)
+                // supervisor reuses the connected controller
+                draft = nil
+            }
             await refreshConversationList()
         } catch {
+#if os(macOS)
+            if let record = localRecord {
+                let key: ConversationLocalStateKey = createdConversation.map { .session($0.id) } ?? .draft(current.id)
+                failLocalSubmission(key: key, id: record.id, error: error)
+            }
+#endif
             composerSubmissionIssue = ComposerSubmissionIssue(key: createdConversation.map { .session($0.id) } ?? .draft(current.id), message: (error as? AgentInputRejection)?.message ?? "任务未能提交，请检查引用文件与执行环境后重试。")
             if let createdConversation,
                (try? localStateStore.state(for: .session(createdConversation.id))) != nil {
@@ -1374,12 +1428,16 @@ public final class WorkspaceStore {
                 // attachment state remain retryable instead of pointing the UI at
                 // a migrated-away draft key.
                 listViewModel.prepend(createdConversation)
-                selectedConversation = createdConversation
-                draft = nil
+                if draft?.id == current.id {
+                    selectedConversation = createdConversation
+                    draft = nil
+                }
                 await refreshConversationList()
             } else {
-                draft?.state = .failed(error.localizedDescription)
-                persistDraftMetadata()
+                if draft?.id == current.id {
+                    draft?.state = .failed(error.localizedDescription)
+                    persistDraftMetadata()
+                }
             }
         }
     }

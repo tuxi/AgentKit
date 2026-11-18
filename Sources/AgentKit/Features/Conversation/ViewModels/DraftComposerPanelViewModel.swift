@@ -48,6 +48,8 @@ final class DraftComposerPanelViewModel {
         }
     }
     private(set) var hasPendingSubmission = false
+    private var hasDetachedSubmission = false
+    private var submissionGeneration: UInt64 = 0
     var isSending = false
     var isTurnRunning = false
     var isEnabled: Bool
@@ -104,7 +106,11 @@ final class DraftComposerPanelViewModel {
     
     var persistenceKey: ConversationLocalStateKey? {
         if isDraft, let id = workspaceStore.draft?.id {
+#if os(macOS)
+            return workspaceStore.draftSubmissionKey ?? .draft(id)
+#else
             return .draft(id)
+#endif
         }
         if let id = conversationViewModel?.conversation?.id ?? workspaceStore.selectedConversation?.id {
             return .session(id)
@@ -453,9 +459,11 @@ final class DraftComposerPanelViewModel {
         persistCurrentText()
 #endif
         isSending = true
-        
+        submissionGeneration &+= 1
+        let generation = submissionGeneration
         Task {
             let accepted = await onSend(toSend, modelForSubmission, sendingAssets)
+            guard generation == submissionGeneration else { return }
             if !accepted {
                 restoreSubmittedText(submittedRawText)
                 refreshAttachmentsFromLocalState()
@@ -484,6 +492,28 @@ final class DraftComposerPanelViewModel {
         persistCurrentText()
     }
     
+#if os(macOS)
+    func rebindLocalSubmissionKey() {
+        guard isDraft else { return }
+        pendingSaveTask?.cancel()
+        loadedStateKey = persistenceKey
+        persistCurrentDraft()
+    }
+
+    func reconcileLocalSubmission() {
+        guard let submittedTextSnapshot else { return }
+        hasDetachedSubmission = true
+        loadedStateKey = persistenceKey
+        if text == submittedTextSnapshot { text = ""; tokens = [] }
+        self.submittedTextSnapshot = nil
+        refreshAttachmentsFromLocalState()
+        if let key = loadedStateKey, let state = try? workspaceStore.localStateStore.state(for: key) {
+            fileReferences = state.composerDraft.fileReferences
+        } else { fileReferences = [] }
+        persistCurrentText()
+    }
+#endif
+
     func reconcileAcceptedSubmission() {
         hasPendingSubmission = false
         pendingSaveTask?.cancel()
@@ -495,6 +525,13 @@ final class DraftComposerPanelViewModel {
     }
 
     private func reconcileAcceptedDraft() {
+        if hasDetachedSubmission {
+            hasDetachedSubmission = false
+            // Flush the editor's latest value before a delayed autosave can be
+            // cancelled. Runtime acknowledgement owns no part of this draft.
+            persistCurrentText()
+            return
+        }
         // Compare the exact editor snapshot before accepting the next draft;
         // wire normalization must not determine whether the editor is cleared.
         if let submittedTextSnapshot, !submittedTextSnapshot.isEmpty {
@@ -770,6 +807,12 @@ final class DraftComposerPanelViewModel {
             persist(text: text, for: oldKey)
         }
         let key = persistenceKey
+        if loadedStateKey != key {
+            submissionGeneration &+= 1
+            isSending = false
+            submittedTextSnapshot = nil
+            hasDetachedSubmission = false
+        }
         loadedStateKey = key
         isRestoringLocalState = true
         defer { isRestoringLocalState = false }
@@ -825,6 +868,9 @@ final class DraftComposerPanelViewModel {
     }
     
     private func persist(text: String, for key: ConversationLocalStateKey) {
+#if os(macOS)
+        let key = isDraft && key.draftID != nil ? (workspaceStore.draftSubmissionKey ?? key) : key
+#endif
         let tokenSnapshot = tokens
         let fileSnapshot = fileReferences
         let pathDelivery = imagesAsPaths

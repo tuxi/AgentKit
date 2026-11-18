@@ -150,3 +150,6 @@ h1, h2, h3, h4 {
   .user-message:hover .user-message-actions,
   .user-message:focus-within .user-message-actions { opacity: 1; pointer-events: auto; }
 }
+
+.submission-delivery { display: flex; justify-content: flex-end; align-items: center; gap: 8px; color: var(--muted); font-size: var(--font-caption); line-height: 20px; margin: -16px 0 24px; }
+.turn:has(> .submission-delivery) .user-message-actions { display: none; }

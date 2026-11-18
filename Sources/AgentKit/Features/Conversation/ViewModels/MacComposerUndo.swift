@@ -7,6 +7,7 @@ extension DraftComposerPanelViewModel {
         switch key {
         case .draft(let id): return workspaceStore.draft?.id == id
         case .session(let id): return workspaceStore.selectedConversation?.id == id
+        case .submission: return false
         }
     }
 

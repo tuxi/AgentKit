@@ -15,6 +15,8 @@ import WebKit
 struct ConversationWebWorkbenchView: NSViewRepresentable {
     let snapshot: RuntimeSnapshot
     var composerPresentations: [String: ComposerMessagePresentation] = [:]
+    var localSubmissions: [LocalMessageSubmission] = []
+    var submissionKey: ConversationLocalStateKey? = nil
     let conversationID: String?
     let workspaceRoot: URL?
     var workspaceID: String? = nil
@@ -84,6 +86,7 @@ struct ConversationWebWorkbenchView: NSViewRepresentable {
         context.coordinator.replaceSnapshot(
             snapshot,
             composerPresentations: composerPresentations,
+            localSubmissions: localSubmissions, submissionKey: submissionKey,
             conversationID: conversationID,
             workspaceRoot: workspaceRoot,
             workspaceID: workspaceID,
@@ -102,6 +105,7 @@ struct ConversationWebWorkbenchView: NSViewRepresentable {
         context.coordinator.replaceSnapshot(
             snapshot,
             composerPresentations: composerPresentations,
+            localSubmissions: localSubmissions, submissionKey: submissionKey,
             conversationID: conversationID,
             workspaceRoot: workspaceRoot,
             workspaceID: workspaceID,
@@ -234,10 +238,14 @@ struct ConversationWebWorkbenchView: NSViewRepresentable {
         }
 
         private var sourceComposerPresentations: [String: ComposerMessagePresentation] = [:]
+        private var sourceLocalSubmissions: [LocalMessageSubmission] = []
+        private var sourceSubmissionKey: ConversationLocalStateKey?
 
         func replaceSnapshot(
             _ snapshot: RuntimeSnapshot,
             composerPresentations: [String: ComposerMessagePresentation] = [:],
+            localSubmissions: [LocalMessageSubmission] = [],
+            submissionKey: ConversationLocalStateKey? = nil,
             conversationID: String?,
             workspaceRoot: URL?,
             workspaceID: String?,
@@ -246,6 +254,9 @@ struct ConversationWebWorkbenchView: NSViewRepresentable {
             store: WorkspaceStore,
             openURL: OpenURLAction
         ) {
+            let submissionsChanged = sourceLocalSubmissions != localSubmissions || sourceSubmissionKey != submissionKey
+            sourceLocalSubmissions = localSubmissions
+            sourceSubmissionKey = submissionKey
             let presentationsChanged = sourceComposerPresentations != composerPresentations
             sourceComposerPresentations = composerPresentations
             workspaceStore = store
@@ -266,7 +277,7 @@ struct ConversationWebWorkbenchView: NSViewRepresentable {
                     || sourceWorkspaceID != workspaceID
                     || sourceExtensionContributions != extensionContributions
                     || previewArtifactsChanged
-                    || presentationsChanged else {
+                    || presentationsChanged || submissionsChanged else {
                 return
             }
 
@@ -663,7 +674,11 @@ struct ConversationWebWorkbenchView: NSViewRepresentable {
                     actionRegistry.register(action)
                 }
             )
-            let document = buildResult.document
+            var document = buildResult.document
+            if let key = sourceSubmissionKey {
+                ConversationSubmissionProjection.apply(to: &document, snapshot: latestSnapshot,
+                    submissions: sourceLocalSubmissions, key: key, registerAction: actionRegistry.register)
+            }
             actionRegistry.finishRevision(
                 retaining: ConversationWebDocumentBuilder.actionTokens(in: document)
             )
@@ -673,7 +688,7 @@ struct ConversationWebWorkbenchView: NSViewRepresentable {
                 update = ConversationWebDocumentDiffer.update(
                     from: acknowledgedDocument,
                     to: document,
-                    stableTurnIDs: buildResult.stableTurnIDs
+                    stableTurnIDs: buildResult.stableTurnIDs.subtracting(Set(document.turns.filter { $0.presentationID != nil }.map(\.id)))
                 )
             } else {
                 update = ConversationWebDocumentDiffer.reset(

@@ -42,6 +42,33 @@ final class ComposerDraftAcceptanceTests: XCTestCase {
         }
     }
 
+    func testLocalDeliveryAcceptanceFlushesNextDraftBeforeAutosave() async throws {
+        let (store, models, key) = try fixture()
+        let finished = expectation(description: "local delivery accepted")
+        var vm: DraftComposerPanelViewModel!
+        vm = DraftComposerPanelViewModel(workspaceStore: store, modelSettings: models,
+            conversationViewModel: nil, isDraft: true, isEnabled: true, onSend: { text, _, _ in
+                do {
+                    let record = try store.beginLocalSubmission(key: key, text: text, model: nil, effort: nil)
+                    vm.reconcileLocalSubmission()
+                    XCTAssertEqual(vm.text, "")
+                    vm.text = "尚未自动保存的下一条"
+                    vm.scheduleTextSave(vm.text, for: key)
+                    _ = try store.localStateStore.markSubmissionPending(key: key, input: record.input)
+                    try store.localStateStore.acceptSubmission(key: key, requestID: record.id, turnID: "t")
+                    vm.reconcileAcceptedSubmission()
+                    XCTAssertEqual(vm.text, "尚未自动保存的下一条")
+                    XCTAssertEqual(try store.localStateStore.state(for: key)?.composerDraft.text, vm.text)
+                } catch { XCTFail("\(error)") }
+                finished.fulfill()
+                return true
+            })
+        vm.restoreLocalState(persistOutgoingText: false)
+        vm.text = "已提交的内容"
+        vm.send()
+        await fulfillment(of: [finished], timeout: 2)
+    }
+
     func testRejectedLiveSendKeepsExactRawTextWithoutDuplicatePrefix() async throws {
         let (store, models, key) = try fixture()
         let dispatched = expectation(description: "dispatched")

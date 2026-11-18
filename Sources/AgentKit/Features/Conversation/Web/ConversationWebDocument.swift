@@ -15,7 +15,7 @@ struct ConversationWebDocument: Codable, Equatable, Sendable {
     let revision: UInt64
     let conversationID: String
     let todos: [Todo]
-    let turns: [Turn]
+    var turns: [Turn]
     let live: LiveState?
 
     struct Todo: Codable, Equatable, Sendable {
@@ -94,6 +94,9 @@ struct ConversationWebDocument: Codable, Equatable, Sendable {
         var modelRoute: String? = nil
         var processFailureText: String? = nil
         var userCopyActionID: String? = nil
+        var presentationID: String? = nil
+        var deliveryStatus: String? = nil
+        var retrySubmissionActionID: String? = nil
     }
 
     /// Presentation-only projection of a PreviewArtifact. Model-authored HTML
@@ -666,6 +669,7 @@ enum ConversationWebDocumentBuilder {
         for turn in document.turns {
             if let token = turn.copyActionID { tokens.insert(token) }
             if let token = turn.userCopyActionID { tokens.insert(token) }
+            if let token = turn.retrySubmissionActionID { tokens.insert(token) }
             if let token = turn.shareActionID { tokens.insert(token) }
             if let token = turn.assetsActionID { tokens.insert(token) }
             if let token = turn.forkActionID { tokens.insert(token) }

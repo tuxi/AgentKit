@@ -8,6 +8,7 @@
 import Foundation
 
 enum ConversationWebAction: Hashable {
+    case retryLocalSubmission(key: ConversationLocalStateKey, id: String)
     case transcript(turnID: String, action: TranscriptAction)
     case shareTurn(turnID: String)
     case showTurnAssets(turnID: String)
@@ -102,6 +103,10 @@ enum ConversationWebActionDispatcher {
         openURL: OpenURLAction
     ) {
         switch action {
+        case .retryLocalSubmission(let key, let id):
+#if os(macOS)
+            Task { await store.retryLocalSubmission(key: key, id: id) }
+#endif
         case .transcript(let turnID, let transcriptAction):
             guard let turn = turns.first(where: { $0.id == turnID }) else { return }
             TurnActionDispatcher(turn: turn, store: store, openURL: openURL)

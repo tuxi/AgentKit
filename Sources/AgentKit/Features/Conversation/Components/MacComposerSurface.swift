@@ -102,7 +102,7 @@ struct MacComposerSurface: View {
                     .disabled(vm.isSubmitting || vm.attachments.count + vm.fileReferences.count >= vm.maxFilesCount || !vm.workspaceStore.canSelectUserAssets)
 
                     MacComposerTextView(text: $vm.text, height: $vm.composerHeight,
-                        placeholder: placeholder, isEnabled: !vm.isSubmitting,
+                        placeholder: placeholder, isEnabled: vm.isEnabled,
                         minHeight: 28, maxHeight: editorMaximum,
                         onSend: { vm.send() },
                         onFileDrop: { urls in

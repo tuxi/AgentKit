@@ -704,7 +704,12 @@ final class MultiConversationTests: XCTestCase {
         XCTAssertNil(store.draft)
         XCTAssertNil(try localState.state(for: .draft(draftID)))
         let session = try XCTUnwrap(localState.state(for: .session(sessionID)))
+#if os(macOS)
+        XCTAssertEqual(session.composerDraft.text, "", "submitted content moves out of the editor immediately")
+        XCTAssertEqual(session.localSubmissions.first?.text, "persist while sending")
+#else
         XCTAssertEqual(session.composerDraft.text, "persist while sending")
+#endif
         XCTAssertEqual(session.composerDraft.pendingSubmission?.text, "persist while sending")
         XCTAssertFalse(session.composerDraft.pendingSubmission?.requestID.isEmpty ?? true)
         XCTAssertEqual(session.selectedModelID, "model-a")

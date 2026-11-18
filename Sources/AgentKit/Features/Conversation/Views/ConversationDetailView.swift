@@ -84,8 +84,20 @@ public struct ConversationDetailView: View {
             }
 #else
             VStack(spacing: 0) {
-                MacDraftLandingView()
-                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+                if let draft = store.draft,
+                   !store.localSubmissions(for: store.draftSubmissionKey ?? .draft(draft.id)).isEmpty {
+                    let key = store.draftSubmissionKey ?? .draft(draft.id)
+                    ConversationWebWorkbenchView(snapshot: .empty(sessionID: "draft"),
+                        localSubmissions: store.localSubmissions(for: key), submissionKey: key,
+                        conversationID: "draft:\(draft.id)", workspaceRoot: draft.workspace?.url,
+                        previewViewerResolver: nil, previewAssetResolver: nil,
+                        extensionContributions: [:], timelineExtensions: [], isVisible: true,
+                        bottomInset: 0, onFatalFailure: {})
+                        .padding(.horizontal, MacConversationLayout.outerInset)
+                } else {
+                    MacDraftLandingView()
+                        .frame(maxWidth: .infinity, maxHeight: .infinity)
+                }
 
                 // Keep the editor at the same bottom edge as an active chat;
                 // only the welcome content participates in scrolling.
@@ -132,6 +144,15 @@ public struct ConversationDetailView: View {
 #endif
     }
 
+    private var draftHasLocalSubmission: Bool {
+#if os(macOS)
+        guard let draft = store.draft else { return false }
+        return !store.localSubmissions(for: store.draftSubmissionKey ?? .draft(draft.id)).isEmpty
+#else
+        return false
+#endif
+    }
+
     private var draftComposer: some View {
         DraftComposerPanel(
             workspaceStore: store,
@@ -139,11 +160,15 @@ public struct ConversationDetailView: View {
             viewModel: viewModel,
             draftRevision: store.draftNavigationRevision,
             placeholder: store.isPreparingWorkspace ? AgentKitLocalized.string("conversation.preparing_workspace") : AgentKitLocalized.string("conversation.describe_placeholder"),
-            isEnabled: (store.draft?.canCommit ?? false) && !store.isPreparingWorkspace && !draftConnectionBlocksSubmission,
+            isEnabled: ((store.draft?.canCommit ?? false) || draftHasLocalSubmission) && !store.isPreparingWorkspace && !draftConnectionBlocksSubmission,
             isDraft: true,
             onSend: { text, model, assets in
                 await store.commitDraft(firstMessage: text, model: model, assets: assets)
+#if os(macOS)
+                return store.draft == nil || draftHasLocalSubmission
+#else
                 return store.draft == nil
+#endif
             },
         )
         .id(viewModel?.conversation?.id)

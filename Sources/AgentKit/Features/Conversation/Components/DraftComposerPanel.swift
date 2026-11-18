@@ -202,6 +202,14 @@ struct DraftComposerPanel: View {
         .onChange(of: modelSettings.availableModelIDs) { _, newIDs in
             vm.handleModelSettingsChange(newIDs: newIDs)
         }
+#if os(macOS)
+        .onChange(of: workspaceStore.draftSubmissionKey) { _, _ in
+            vm.rebindLocalSubmissionKey()
+        }
+        .onChange(of: workspaceStore.localSubmissionRevision) { _, _ in
+            vm.reconcileLocalSubmission()
+        }
+#endif
         .onChange(of: viewModel?.lastAcceptedSubmissionRequestID) { _, _ in
             vm.reconcileAcceptedSubmission()
         }

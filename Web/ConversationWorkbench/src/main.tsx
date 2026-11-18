@@ -3775,6 +3775,11 @@ const Turn = memo(function Turn({
         <CollapsibleUserPrompt turnID={turn.id} text={turn.userPrompt}
           copyActionID={turn.userCopyActionID} startedAtMilliseconds={turn.startedAtMilliseconds} />
       ) : null}
+      {turn.deliveryStatus ? <div className="submission-delivery" role="status">
+        <span>{turn.deliveryStatus}</span>
+        {turn.retrySubmissionActionID ? <ActionButton actionID={turn.retrySubmissionActionID}
+          tooltip="重试发送">重试</ActionButton> : null}
+      </div> : null}
       <TurnDisclosureContext.Provider value={disclosureContext}>
       <div className="assistant-lane">
         {!turn.isLive && turn.elapsedText ? (
@@ -4172,7 +4177,7 @@ function App(): React.JSX.Element {
     <main className="conversation-shell" aria-label="Conversation">
       {conversation.turns.map((turn) => (
         <Turn
-          key={turn.id}
+          key={turn.presentationID ?? turn.id}
           turn={turn}
           conversationID={conversation.conversationID}
         />

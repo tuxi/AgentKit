@@ -277,6 +277,9 @@ enum ConversationWebDocumentDiffer {
         lhs.id == rhs.id
             && lhs.userPrompt == rhs.userPrompt
             && lhs.userCopyActionID == rhs.userCopyActionID
+            && lhs.presentationID == rhs.presentationID
+            && lhs.deliveryStatus == rhs.deliveryStatus
+            && lhs.retrySubmissionActionID == rhs.retrySubmissionActionID
             && lhs.userAssets == rhs.userAssets
             && lhs.localAssets == rhs.localAssets
             && lhs.fileReferences == rhs.fileReferences

@@ -14,6 +14,8 @@ import SwiftUI
 
 public struct TurnTimelineView: View {
     let snapshot: RuntimeSnapshot
+    let localSubmissions: [LocalMessageSubmission]
+    let submissionKey: ConversationLocalStateKey?
     let composerPresentations: [String: ComposerMessagePresentation]
     let timelineExtensions: [any TimelineExtension]
     /// Stable conversation identity. The Web renderer uses this to distinguish
@@ -38,6 +40,8 @@ public struct TurnTimelineView: View {
     public init(
         snapshot: RuntimeSnapshot,
         composerPresentations: [String: ComposerMessagePresentation] = [:],
+        localSubmissions: [LocalMessageSubmission] = [],
+        submissionKey: ConversationLocalStateKey? = nil,
         timelineExtensions: [any TimelineExtension] = [],
         conversationID: String? = nil,
         workspaceRoot: URL? = nil,
@@ -50,6 +54,8 @@ public struct TurnTimelineView: View {
     ) {
         self.snapshot = snapshot
         self.composerPresentations = composerPresentations
+        self.localSubmissions = localSubmissions
+        self.submissionKey = submissionKey
         self.timelineExtensions = timelineExtensions
         self.conversationID = conversationID
         self.workspaceRoot = workspaceRoot
@@ -92,6 +98,7 @@ public struct TurnTimelineView: View {
             ConversationWebWorkbenchView(
                 snapshot: snapshot,
                 composerPresentations: composerPresentations,
+                localSubmissions: localSubmissions, submissionKey: submissionKey,
                 conversationID: conversationID,
                 workspaceRoot: workspaceRoot,
                 workspaceID: workspaceID,

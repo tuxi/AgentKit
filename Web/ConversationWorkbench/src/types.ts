@@ -322,6 +322,9 @@ export interface ConversationWebPreview {
 
 export interface ConversationWebTurn {
   id: string;
+  presentationID?: string;
+  deliveryStatus?: string;
+  retrySubmissionActionID?: string;
   userPrompt?: string;
   userCopyActionID?: string;
   fileReferences?: { id: string; path: string; relativePath?: string; isDirectory: boolean }[];

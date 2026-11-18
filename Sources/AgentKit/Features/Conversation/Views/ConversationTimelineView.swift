@@ -25,6 +25,8 @@ public struct ConversationTimelineView: View {
         TurnTimelineView(
             snapshot: viewModel.snapshot,
             composerPresentations: viewModel.composerMessagePresentations,
+            localSubmissions: viewModel.localSubmissions,
+            submissionKey: viewModel.conversation.map { .session($0.id) },
             timelineExtensions: viewModel.timelineExtensions,
             conversationID: viewModel.conversation?.id,
             workspaceRoot: viewModel.workspaceRootURL,

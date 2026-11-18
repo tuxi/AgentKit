@@ -12,11 +12,13 @@ import SQLite3
 public enum ConversationLocalStateKey: Hashable, Sendable {
     case draft(UUID)
     case session(String)
+    case submission(String)
 
     public var storageKey: String {
         switch self {
         case .draft(let id): return "draft:\(id.uuidString.lowercased())"
         case .session(let id): return "session:\(id)"
+        case .submission(let id): return "submission:\(id)"
         }
     }
 
@@ -271,6 +273,7 @@ public enum ComposerModelSelectionMode: String, Codable, Sendable {
 
 public struct ConversationLocalState: Codable, Sendable, Equatable {
     public var composerMessages: [String: ComposerMessagePresentation] = [:]
+    public var localSubmissions: [LocalMessageSubmission] = []
     /// Bump when the meaning of `modelSelectionMode` changes. Versioned explicit
     /// choices are trusted; unversioned explicit values came from older,
     /// ambiguous migration paths and must be normalized once.
@@ -322,7 +325,7 @@ public struct ConversationLocalState: Codable, Sendable, Equatable {
     }
 
     private enum CodingKeys: String, CodingKey {
-        case composerDraft, selectedModelID, modelSelectionMode, composerSelectionVersion, composerMessages
+        case composerDraft, selectedModelID, modelSelectionMode, composerSelectionVersion, composerMessages, localSubmissions
         case reasoningEffort, recentModelIDs, lastReadSequence
         case lastSeenTerminalSequence, lastNotifiedTerminalSequence
         case lastNotifiedApprovalSequence, updatedAt
@@ -332,6 +335,7 @@ public struct ConversationLocalState: Codable, Sendable, Equatable {
         let values = try decoder.container(keyedBy: CodingKeys.self)
         composerDraft = try values.decodeIfPresent(ComposerDraft.self, forKey: .composerDraft) ?? ComposerDraft()
         composerMessages = try values.decodeIfPresent([String: ComposerMessagePresentation].self, forKey: .composerMessages) ?? [:]
+        localSubmissions = try values.decodeIfPresent([LocalMessageSubmission].self, forKey: .localSubmissions) ?? []
         selectedModelID = try values.decodeIfPresent(String.self, forKey: .selectedModelID)
         modelSelectionMode = try values.decodeIfPresent(ComposerModelSelectionMode.self, forKey: .modelSelectionMode)
         composerSelectionVersion = try values.decodeIfPresent(Int.self, forKey: .composerSelectionVersion)
@@ -640,6 +644,7 @@ public final class SQLiteConversationLocalStateStore: ConversationLocalStateStor
     ) -> ConversationLocalState {
         guard var session else { return draft }
         session.composerDraft = draft.composerDraft
+        session.localSubmissions += draft.localSubmissions.filter { incoming in !session.localSubmissions.contains { $0.id == incoming.id } }
         if let mode = draft.modelSelectionMode {
             session.modelSelectionMode = mode
             session.composerSelectionVersion = draft.composerSelectionVersion
@@ -724,6 +729,7 @@ public final class InMemoryConversationLocalStateStore: ConversationLocalStateSt
             if let draft = values[draftKey] {
                 var session = values[.session(sessionID)] ?? ConversationLocalState()
                 session.composerDraft = draft.composerDraft
+                session.localSubmissions += draft.localSubmissions.filter { incoming in !session.localSubmissions.contains { $0.id == incoming.id } }
                 if let mode = draft.modelSelectionMode {
                     session.modelSelectionMode = mode
                     session.composerSelectionVersion = draft.composerSelectionVersion

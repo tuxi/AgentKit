@@ -108,6 +108,26 @@ public final class ConversationViewModel {
     public private(set) var isAwaitingTurnAcceptance = false
     public private(set) var lastInputRejection: AgentInputRejection?
     public private(set) var lastAcceptedSubmissionRequestID: String?
+    public private(set) var localSubmissions: [LocalMessageSubmission] = []
+
+    func reloadLocalSubmissions() {
+        guard let id = conversation?.id else { return }
+        localSubmissions = (try? localStateStore.state(for: .session(id)))?.localSubmissions ?? []
+    }
+
+    private func markLocalSubmissionsPresented(in snapshot: RuntimeSnapshot) {
+        guard let id = conversation?.id else { return }
+        let turnIDs = Set(snapshot.turns.map(\.runtimeTurnID))
+        guard localSubmissions.contains(where: { !$0.wasPresentedByRuntime && $0.turnID.map(turnIDs.contains) == true }) else { return }
+        try? localStateStore.updateState(for: .session(id)) { state in
+            for index in state.localSubmissions.indices {
+                if state.localSubmissions[index].turnID.map(turnIDs.contains) == true {
+                    state.localSubmissions[index].wasPresentedByRuntime = true
+                }
+            }
+        }
+        reloadLocalSubmissions()
+    }
 
     public var isTurnActive: Bool {
         isLocallyQueued || isAwaitingTurnAcceptance
@@ -376,7 +396,7 @@ public final class ConversationViewModel {
     ///   Phase 1: HTTP fetch history → RuntimeEngine.importHistory()
     ///   Phase 2: WebSocket stream → RuntimeEngine.ingest() per event
     ///   UI subscribes to RuntimeEngine.stateStream() for snapshots
-    public func connect(to conversation: ConversationRef, historyLimit: Int? = nil) async {
+    public func connect(to conversation: ConversationRef, historyLimit: Int? = nil, restoringLocalSubmissions: Bool = true) async {
         guard !Task.isCancelled else { return }
         if self.conversation?.id == conversation.id, isConnected || isConnecting {
             return
@@ -385,6 +405,7 @@ public final class ConversationViewModel {
         isConnecting = true
         defer { isConnecting = false }
         self.conversation = conversation
+        reloadLocalSubmissions()
         backgroundJobs.select(conversation.id)
         if isDifferentConversation {
             inFlightClientToolCallIDs.removeAll()
@@ -453,6 +474,7 @@ public final class ConversationViewModel {
             for await snap in stream {
                 guard let self else { return }
                 self.snapshot = snap
+                self.markLocalSubmissionsPresented(in: snap)
                 self.backgroundJobs.hasHistoricalJobs = snap.timeline.contains { node in
                     if case .childStream(let payload) = node.kind { return payload.kind == .job }
                     return false
@@ -465,6 +487,19 @@ public final class ConversationViewModel {
         let sinceCursor = await fetchHistory(conversationID: conversation.id, engine: eng,
                                              limit: historyLimit ?? historyPageSize)
         guard !Task.isCancelled else { return }
+        if restoringLocalSubmissions {
+            let pendingID = (try? localStateStore.state(for: .session(conversation.id)))?.composerDraft.pendingSubmission?.requestID
+            try? localStateStore.updateState(for: .session(conversation.id)) { state in
+                for index in state.localSubmissions.indices {
+                    let record = state.localSubmissions[index]
+                    if (record.phase == .preparing || record.phase == .sending), record.id != pendingID {
+                        state.localSubmissions[index].phase = .failed
+                        state.localSubmissions[index].failure = "上次发送尚未完成，请重试"
+                    }
+                }
+            }
+            reloadLocalSubmissions()
+        }
         Task { await backgroundJobs.refresh() }
         reconcileRuntimeActivityBaseline(historyCursor: sinceCursor)
         let pendingAtConnect = try? localStateStore.state(for: .session(conversation.id))?
@@ -565,6 +600,10 @@ public final class ConversationViewModel {
         let ticket = await turnCoordinator.enqueue(sessionID: channel.sessionID)
         queuedTicket = ticket
         isLocallyQueued = true
+        if let requestID = input.requestID {
+            try? localStateStore.updateLocalSubmission(key: .session(channel.sessionID), id: requestID) { $0.phase = .queued }
+            reloadLocalSubmissions()
+        }
 
         turnDispatchTask = Task { [weak self, channel, turnCoordinator] in
             while !Task.isCancelled {
@@ -828,6 +867,7 @@ public final class ConversationViewModel {
                    let requestID {
                     handleSubmissionAccepted(requestID: requestID, turnID: turnID)
                 }
+                reconcileLocalSubmissionEvent(event)
                 await forwardToTimelineExtensions(event)
                 forwardWorkflowEvent(event)
             }
@@ -896,6 +936,7 @@ public final class ConversationViewModel {
     /// v2: delegate to engine. ViewModel does NOT reduce.
     private func handleEvent(_ event: AgentEvent, engine: RuntimeEngine) async {
         updateLifecycle(from: event)
+        reconcileLocalSubmissionEvent(event)
         await engine.ingest(event)
         switch event {
         case .jobStarted, .jobFinished, .turnFinished, .turnFailed, .turnCancelled:
@@ -953,18 +994,50 @@ public final class ConversationViewModel {
               let stored = try? localStateStore.state(for: .session(channel.sessionID)),
               stored.composerDraft.pendingSubmission?.requestID == pending.requestID else { return }
 
-        let input = AgentInput.text(
-            pending.text,
-            model: pending.model,
-            assets: pending.assets,
-            requestID: pending.requestID
-        )
+        let input = localSubmissions.first(where: { $0.id == pending.requestID && $0.prepared })?.input
+            ?? AgentInput.text(pending.text, model: pending.model, assets: pending.assets,
+                               localAssets: pending.localAssets, requestID: pending.requestID)
         let ticket = await channel.submit(input: input)
         await observeSubmission(ticket)
     }
 
+    private func reconcileLocalSubmissionEvent(_ event: AgentEvent) {
+        guard let sessionID = conversation?.id else { return }
+        let turnID: String?
+        let phase: LocalMessageSubmission.Phase
+        let message: String?
+        switch event {
+        case .turnQueued(let id, _, _): turnID = id; phase = .queued; message = nil
+        case .turnFailed(let id, _, let error, _, _): turnID = id; phase = .failed; message = error
+        case .turnCancelled(let id, _, _): turnID = id; phase = .failed; message = "任务已取消"
+        default: return
+        }
+        guard let turnID, let record = localSubmissions.first(where: { $0.turnID == turnID }) else { return }
+        try? localStateStore.updateLocalSubmission(key: .session(sessionID), id: record.id) {
+            $0.phase = phase; $0.failure = message
+        }
+        reloadLocalSubmissions()
+    }
+
     private func handleSubmissionAccepted(requestID: String, turnID: String) {
         guard let sessionID = conversation?.id else { return }
+        try? localStateStore.updateState(for: .session(sessionID)) { state in
+            if let index = state.localSubmissions.firstIndex(where: { $0.id == requestID }) {
+                let previous = state.localSubmissions[index]
+                let preserveLaterState = previous.turnID == turnID && (previous.phase == .queued || previous.phase == .failed)
+                if !preserveLaterState {
+                    state.localSubmissions[index].phase = .accepted
+                    state.localSubmissions[index].failure = nil
+                }
+                state.localSubmissions[index].turnID = turnID.isEmpty ? nil : turnID
+                let record = state.localSubmissions[index]
+                if !turnID.isEmpty {
+                    state.composerMessages[turnID] = .init(text: record.displayText,
+                        fileReferences: record.fileReferences, modelText: record.text)
+                }
+            }
+        }
+        reloadLocalSubmissions()
         let matchingPendingRequestID = try? localStateStore
             .state(for: .session(sessionID))?
             .composerDraft.pendingSubmission?.requestID
@@ -985,6 +1058,12 @@ public final class ConversationViewModel {
 
     private func handleSubmissionRejected(requestID: String?, rejection: AgentInputRejection) {
         if let sessionID = conversation?.id {
+            if let requestID {
+                try? localStateStore.updateLocalSubmission(key: .session(sessionID), id: requestID) {
+                    $0.phase = .failed; $0.failure = rejection.message
+                }
+                reloadLocalSubmissions()
+            }
             try? localStateStore.rejectSubmission(key: .session(sessionID), requestID: requestID)
         }
         lastInputRejection = rejection
