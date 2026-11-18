@@ -2879,7 +2879,8 @@ final class ConversationWebDocumentTests: XCTestCase {
         let activeExpanded = try await webView.evaluateJavaScript("""
             (() => {
               const group = document.querySelector('.tool-group');
-              const groupIcon = group.querySelector(':scope > summary .tool-group-title');
+              const groupIcon = group.querySelector(':scope > summary .tool-group-running');
+              groupIcon.style.animation = 'none';
               const toolIcon = group.querySelector('.tool-group-tools .tool-title');
               return { open: group.open,
                 toolRows: group.querySelectorAll('.tool-summary').length,
@@ -2892,7 +2893,7 @@ final class ConversationWebDocumentTests: XCTestCase {
         XCTAssertEqual(activeExpanded?["open"] as? Bool, true, "user can expand a live activity")
         XCTAssertEqual(activeExpanded?["toolRows"] as? Int, 1)
         XCTAssertEqual(activeExpanded?["toolOpen"] as? Bool, false, "tool detail stays collapsed by default")
-        XCTAssertEqual(activeExpanded?["aligned"] as? Bool, true, "group title has no horizontal inset")
+        XCTAssertEqual(activeExpanded?["aligned"] as? Bool, true, "running control starts at the content left edge")
         XCTAssertEqual(activeExpanded?["header"] as? String, ToolTranscriptText().text("active.running", ToolTranscriptText().text("desktop.readNamed", "App.swift")))
         XCTAssertFalse((activeExpanded?["header"] as? String)?.contains("operations") ?? true, "expanded header names the actual operation")
         _ = try await webView.evaluateJavaScript("document.querySelector('.tool-group-summary').click()")
@@ -2916,6 +2917,7 @@ final class ConversationWebDocumentTests: XCTestCase {
               const process = document.querySelector('.turn-process');
               const answer = document.querySelector('[data-block-id="after"]');
               return { open: group.open, title: group.querySelector('summary').textContent,
+                completedAligned: !group.querySelector(':scope > summary .tool-group-running') && Math.abs(group.querySelector('.tool-group-title').getBoundingClientRect().left - group.querySelector(':scope > summary').getBoundingClientRect().left) < 0.5,
                 processOpen: process?.open, groupInProcess: !!group.closest('.turn-process'),
                 processLabel: document.querySelector('.turn-process-summary .turn-process-label')?.textContent,
                 failed: group.querySelector(':scope > summary [data-tone="failed"]')?.textContent,
@@ -2926,6 +2928,7 @@ final class ConversationWebDocumentTests: XCTestCase {
             })()
             """) as? [String: Any]
         XCTAssertEqual(inspection?["open"] as? Bool, true, "inner group preference survives completion")
+        XCTAssertEqual(inspection?["completedAligned"] as? Bool, true, "completion removes the indicator and returns the title to the content left edge")
         XCTAssertNil(inspection?["processOpen"] as? Bool)
         XCTAssertEqual(inspection?["groupInProcess"] as? Bool, false)
         XCTAssertEqual(inspection?["processLabel"] as? String, "用时 48秒")

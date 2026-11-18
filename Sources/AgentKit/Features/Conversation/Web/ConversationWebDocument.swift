@@ -1421,7 +1421,9 @@ enum ConversationWebDocumentBuilder {
         } else {
             waitingReason = nil
         }
-        guard snapshot.isLive || liveTurn != nil || waitingReason != nil else { return nil }
+        // isLive describes the session's stream connection, which stays open
+        // between turns. Only execution or an actionable wait belongs here.
+        guard snapshot.turnStartedAt != nil || liveTurn != nil || waitingReason != nil else { return nil }
         return ConversationWebDocument.LiveState(
             isThinking: snapshot.modelStartedAt != nil,
             startedAtMilliseconds: (snapshot.turnStartedAt ?? liveTurn?.startedAt).map {

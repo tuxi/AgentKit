@@ -623,15 +623,16 @@ final class MacToolGroupRenderTests: XCTestCase {
         let groupInset = try await web.evaluateJavaScript("""
         (() => {
           const header = document.querySelector('.tool-group-summary');
+          header.querySelector('.tool-group-running').style.animation = 'none';
           return [getComputedStyle(header).paddingLeft, getComputedStyle(header).paddingRight,
-            header.querySelector('.tool-group-title').getBoundingClientRect().left - header.getBoundingClientRect().left,
+            header.querySelector('.tool-group-running').getBoundingClientRect().left - header.getBoundingClientRect().left,
             header.querySelector('.tool-group-running').getBoundingClientRect().right - header.querySelector('.tool-group-title').getBoundingClientRect().left];
         })()
         """) as? [Any]
         XCTAssertEqual(groupInset?[0] as? String, "0px")
         XCTAssertEqual(groupInset?[1] as? String, "0px")
         XCTAssertEqual(groupInset?[2] as? Double ?? -1, 0, accuracy: 0.5)
-        XCTAssertLessThanOrEqual(groupInset?[3] as? Double ?? 999, -2, "running indicator stays in its gutter without overlapping the flush title")
+        XCTAssertEqual(groupInset?[3] as? Double ?? 999, -6, accuracy: 0.5, "running indicator occupies inline space before the title")
         try await click(".tool-group-summary", in: web)
         try await wait("document.querySelector('.thinking-summary') !== null", in: web)
         let row = try await web.evaluateJavaScript("""

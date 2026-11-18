@@ -180,6 +180,25 @@ final class MacConversationAppearanceTests: XCTestCase {
                      generation: generation, turnStartedAt: live ? start : nil)
     }
 
+    func testConnectedStreamDoesNotKeepCompletedTurnProcessing() async throws {
+        let model = AppearanceRenderModel()
+        model.snapshot = executionFixture()
+        let web = try await present(model)
+        try await wait("document.querySelector('.live-indicator')?.textContent.includes('正在处理') === true", in: web)
+
+        // The session stream remains connected after the turn terminates.
+        let completed = executionFixture(live: false, generation: 2)
+        model.snapshot = .init(timeline: [], turns: completed.turns, isLive: true, generation: 2)
+        try await wait("document.body.innerText.includes('版本 2') && !document.querySelector('.live-indicator')", in: web)
+        XCTAssertNil(ConversationWebDocumentBuilder.build(snapshot: model.snapshot,
+            conversationID: "connected-idle", revision: 2).live)
+        XCTAssertNil(ConversationWebDocumentBuilder.build(snapshot: .init(timeline: [], isLive: true),
+            conversationID: "connected-empty", revision: 1).live)
+
+        model.snapshot = executionFixture(generation: 3)
+        try await wait("document.body.innerText.includes('版本 3') && document.querySelector('.live-indicator') !== null", in: web)
+    }
+
     func testTasksAndWaitingFollowFactsThroughCompletion() async throws {
         let model = AppearanceRenderModel()
         model.snapshot = executionFixture()
@@ -244,6 +263,133 @@ final class MacConversationAppearanceTests: XCTestCase {
         let update = try XCTUnwrap(ConversationWebDocumentDiffer.update(from: old, to: result.document))
         XCTAssertEqual(update.patch?.operations.map(\.kind), [.setLive])
         XCTAssertEqual(result.document.live?.waitingReason, "approval")
+    }
+
+    private func scrollFixture(generation: UInt64 = 1) -> RuntimeSnapshot {
+        let blocks: [TurnBlock] = (0..<32).map { index in
+            .text(id: "scroll-block-\(index)", .init(role: .assistant,
+                text: "## 检查项目 \(index)\n\n" + String(repeating: "这一段用于验证长对话的阅读位置与动态布局。\n\n", count: 4)))
+        }
+        let turn = ConversationTurn(id: "scroll-turn", userPrompt: .init(role: .user, text: "验证长对话滚动"),
+            blocks: blocks, todos: [.init(content: "读取文件", status: .completed), .init(content: "验证布局", status: .inProgress)],
+            footer: nil, isLive: false)
+        return .init(timeline: [], turns: [turn], generation: generation)
+    }
+
+    func testAsyncLayoutGrowthKeepsVisibleBlockWithinOneLongTurn() async throws {
+        let model = AppearanceRenderModel()
+        model.snapshot = scrollFixture()
+        let web = try await present(model)
+        _ = try await web.evaluateJavaScript("""
+        (() => {
+          const target = document.querySelector('[data-block-id="scroll-block-16"]');
+          window.dispatchEvent(new WheelEvent('wheel', {deltaY:-120}));
+          window.scrollTo(0, window.scrollY + target.getBoundingClientRect().top - 80);
+        })()
+        """)
+        try await wait("window.AgentKitWorkbench.viewportDiagnostics().interacting === false", in: web)
+        let before = try await web.evaluateJavaScript("document.querySelector('[data-block-id=\"scroll-block-16\"]').getBoundingClientRect().top") as? Double
+        // A delayed image/output above the viewport changes height without a document revision.
+        _ = try await web.evaluateJavaScript("""
+        (() => {
+          const above = document.querySelector('[data-block-id="scroll-block-2"]');
+          const delayed = document.createElement('div');
+          delayed.style.height = '240px'; above.append(delayed);
+        })()
+        """)
+        try await Task.sleep(for: .milliseconds(200))
+        let after = try await web.evaluateJavaScript("document.querySelector('[data-block-id=\"scroll-block-16\"]').getBoundingClientRect().top") as? Double
+        XCTAssertEqual(try XCTUnwrap(after), try XCTUnwrap(before), accuracy: 1)
+        try await assertJavaScript("window.AgentKitWorkbench.viewportDiagnostics().pinned", equals: false, in: web)
+        // Native composer/approval height changes must not pull a historical reader to the tail.
+        _ = try await web.evaluateJavaScript("window.AgentKitWorkbench.setBottomInset(240)")
+        try await Task.sleep(for: .milliseconds(100))
+        let afterInset = try await web.evaluateJavaScript("document.querySelector('[data-block-id=\"scroll-block-16\"]').getBoundingClientRect().top") as? Double
+        XCTAssertEqual(try XCTUnwrap(afterInset), try XCTUnwrap(before), accuracy: 1)
+        _ = try await web.evaluateJavaScript("document.querySelector('.jump-to-latest').click()")
+        try await wait("window.AgentKitWorkbench.viewportDiagnostics().pinned === true", in: web)
+        _ = try await web.evaluateJavaScript("window.AgentKitWorkbench.setBottomInset(420)")
+        try await wait("Math.abs(window.AgentKitWorkbench.viewportDiagnostics().distanceFromBottom) <= 1", in: web)
+        print("READING_ANCHOR_PERFORMANCE before=\(before ?? -1) afterGrowth=\(after ?? -1) afterInset=\(afterInset ?? -1)")
+    }
+
+    func testTasksExpansionKeepsSummaryAndPausesTailFollowing() async throws {
+        let model = AppearanceRenderModel()
+        model.snapshot = scrollFixture()
+        let web = try await present(model)
+        try await wait("document.querySelector('.todo-panel')?.open === false", in: web)
+        try await wait("Math.abs(window.AgentKitWorkbench.viewportDiagnostics().distanceFromBottom) <= 1", in: web)
+        let before = try await web.evaluateJavaScript("document.querySelector('.todo-panel-summary').getBoundingClientRect().top") as? Double
+        _ = try await web.evaluateJavaScript("document.querySelector('.todo-panel-summary').click()")
+        try await wait("document.querySelector('.todo-panel')?.open === true", in: web)
+        try await Task.sleep(for: .milliseconds(200))
+        let after = try await web.evaluateJavaScript("document.querySelector('.todo-panel-summary').getBoundingClientRect().top") as? Double
+        XCTAssertEqual(try XCTUnwrap(after), try XCTUnwrap(before), accuracy: 1)
+        try await assertJavaScript("window.AgentKitWorkbench.viewportDiagnostics().pinned", equals: false, in: web)
+        _ = try await web.evaluateJavaScript("document.querySelector('.jump-to-latest').click()")
+        try await wait("window.AgentKitWorkbench.viewportDiagnostics().pinned === true", in: web)
+    }
+
+    func testLongUserMessageExpansionDoesNotJumpToItsEnd() async throws {
+        let model = AppearanceRenderModel()
+        let turn = ConversationTurn(id: "long-user-turn", userPrompt: .init(role: .user,
+            text: String(repeating: "逐项检查对话内容和执行状态。\n", count: 60)),
+            blocks: [.text(id: "long-user-answer", .init(role: .assistant, text: "我会先检查布局，再验证交互。"))],
+            footer: nil, isLive: false)
+        model.snapshot = .init(timeline: [], turns: [turn], generation: 1)
+        let web = try await present(model)
+        try await wait("document.querySelector('.user-prompt-toggle') !== null", in: web)
+        let before = try await web.evaluateJavaScript("document.querySelector('.user-message').getBoundingClientRect().top") as? Double
+        _ = try await web.evaluateJavaScript("document.querySelector('.user-prompt-toggle').click()")
+        try await wait("document.querySelector('.user-prompt-content.is-expanded') !== null", in: web)
+        try await Task.sleep(for: .milliseconds(200))
+        let after = try await web.evaluateJavaScript("document.querySelector('.user-message').getBoundingClientRect().top") as? Double
+        XCTAssertEqual(try XCTUnwrap(after), try XCTUnwrap(before), accuracy: 1)
+        try await assertJavaScript("window.AgentKitWorkbench.viewportDiagnostics().pinned", equals: false, in: web)
+        // The user explicitly moves to the expanded message's collapse control.
+        _ = try await web.evaluateJavaScript("window.dispatchEvent(new WheelEvent('wheel', {deltaY:120})); document.querySelector('.user-prompt-toggle').scrollIntoView({block:'center'})")
+        try await wait("window.AgentKitWorkbench.viewportDiagnostics().interacting === false", in: web)
+        _ = try await web.evaluateJavaScript("document.querySelector('.user-prompt-toggle').click()")
+        try await wait("document.querySelector('.user-prompt-content.is-expanded') === null", in: web)
+        try await assertJavaScript("window.AgentKitWorkbench.viewportDiagnostics().pinned", equals: false, in: web)
+    }
+
+    func testWindowResizePreservesVisibleBlockInHistoricalReading() async throws {
+        let model = AppearanceRenderModel()
+        model.snapshot = scrollFixture()
+        let web = try await present(model)
+        _ = try await web.evaluateJavaScript("window.dispatchEvent(new WheelEvent('wheel', {deltaY:-120})); document.querySelector('[data-block-id=\"scroll-block-16\"]').scrollIntoView({block:'start'})")
+        try await wait("window.AgentKitWorkbench.viewportDiagnostics().interacting === false", in: web)
+        let before = try await web.evaluateJavaScript("document.querySelector('[data-block-id=\"scroll-block-16\"]').getBoundingClientRect().top") as? Double
+        window?.setContentSize(NSSize(width: 520, height: 960))
+        try await wait("innerWidth <= 520", in: web)
+        try await Task.sleep(for: .milliseconds(160))
+        let after = try await web.evaluateJavaScript("document.querySelector('[data-block-id=\"scroll-block-16\"]').getBoundingClientRect().top") as? Double
+        XCTAssertEqual(try XCTUnwrap(after), try XCTUnwrap(before), accuracy: 1)
+        try await assertJavaScript("window.AgentKitWorkbench.viewportDiagnostics().pinned", equals: false, in: web)
+    }
+
+    func testPointerHoldKeepsOwnershipUntilRelease() async throws {
+        let model = AppearanceRenderModel()
+        model.snapshot = scrollFixture()
+        let web = try await present(model)
+        _ = try await web.evaluateJavaScript("window.dispatchEvent(new WheelEvent('wheel', {deltaY:-120})); document.querySelector('[data-block-id=\"scroll-block-16\"]').scrollIntoView({block:'start'})")
+        try await wait("window.AgentKitWorkbench.viewportDiagnostics().interacting === false", in: web)
+        _ = try await web.evaluateJavaScript("window.dispatchEvent(new PointerEvent('pointerdown', {pointerId:42}))")
+        try await Task.sleep(for: .milliseconds(240))
+        try await assertJavaScript("window.AgentKitWorkbench.viewportDiagnostics().interacting", equals: true, in: web)
+        let before = try await web.evaluateJavaScript("window.scrollY") as? Double
+        _ = try await web.evaluateJavaScript("document.querySelector('[data-block-id=\"scroll-block-2\"]').style.paddingBottom = '200px'")
+        try await Task.sleep(for: .milliseconds(80))
+        let during = try await web.evaluateJavaScript("window.scrollY") as? Double
+        XCTAssertEqual(try XCTUnwrap(during), try XCTUnwrap(before), accuracy: 1,
+                       "An asynchronous resize must not correct scroll underneath a held pointer")
+        _ = try await web.evaluateJavaScript("window.dispatchEvent(new PointerEvent('pointerup', {pointerId:42}))")
+        try await wait("window.AgentKitWorkbench.viewportDiagnostics().interacting === false", in: web)
+        _ = try await web.evaluateJavaScript("window.dispatchEvent(new PointerEvent('pointerdown', {pointerId:43})); window.dispatchEvent(new Event('blur'))")
+        try await wait("window.AgentKitWorkbench.viewportDiagnostics().interacting === false", in: web)
+        _ = try await web.evaluateJavaScript("document.querySelector('.jump-to-latest').click()")
+        try await wait("window.AgentKitWorkbench.viewportDiagnostics().pinned === true", in: web)
     }
 }
 #endif

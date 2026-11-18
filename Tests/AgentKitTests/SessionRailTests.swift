@@ -506,6 +506,31 @@ private struct RailLifecycleFixture: View {
 }
 
 extension SessionRailTests {
+    @MainActor func testHostedRailUsesNativeOverlayScroller() async throws {
+        let store = WorkspaceStore(usesEmbeddedRuntime: false)
+        let host = NSHostingView(rootView: RailLifecycleFixture(visible: false).environment(store))
+        host.frame = NSRect(x: 0, y: 0, width: 340, height: 600)
+        let window = NSWindow(contentRect: host.frame, styleMask: [.borderless], backing: .buffered, defer: false)
+        window.isReleasedWhenClosed = false
+        window.contentView = host
+        window.orderFront(nil)
+        defer { window.close() }
+        func findScrollView(_ view: NSView) -> NSScrollView? {
+            if let scroll = view as? NSScrollView { return scroll }
+            return view.subviews.lazy.compactMap(findScrollView).first
+        }
+        for _ in 0..<100 {
+            host.layoutSubtreeIfNeeded()
+            if let scroll = findScrollView(host), scroll.scrollerStyle == .overlay {
+                XCTAssertTrue(scroll.autohidesScrollers)
+                XCTAssertEqual(scroll.verticalScroller?.controlSize, .small)
+                return
+            }
+            try await Task.sleep(for: .milliseconds(20))
+        }
+        XCTFail("The rail must resolve its enclosing native overlay scroll view")
+    }
+
     @MainActor func testHostedRailUpdatesAfterResponsesAndVisibilityTransactions() async throws {
         _ = NSApplication.shared
         let client = RailModelClient()

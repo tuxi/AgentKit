@@ -16,6 +16,27 @@
 }
 
 .turn { margin-bottom: 36px; }
+/* Only the document scroller; tool logs retain their own overflow styling. */
+html {
+  scrollbar-width: thin;
+  scrollbar-color: light-dark(rgb(0 0 0 / 18%), rgb(255 255 255 / 22%)) transparent;
+}
+html::-webkit-scrollbar { width: 6px; height: 6px; }
+html::-webkit-scrollbar-track { background: transparent; }
+html::-webkit-scrollbar-thumb {
+  border-radius: 6px;
+  background: light-dark(rgb(0 0 0 / 18%), rgb(255 255 255 / 22%));
+}
+html::-webkit-scrollbar-thumb:hover {
+  background: light-dark(rgb(0 0 0 / 30%), rgb(255 255 255 / 36%));
+}
+html::-webkit-scrollbar-thumb:active {
+  background: light-dark(rgb(0 0 0 / 42%), rgb(255 255 255 / 48%));
+}
+/* Standards scrollbar properties otherwise override WebKit thumb states. */
+@supports selector(::-webkit-scrollbar) {
+  html { scrollbar-width: auto; scrollbar-color: auto; }
+}
 .user-message {
   width: fit-content;
   max-width: min(86%, 620px);

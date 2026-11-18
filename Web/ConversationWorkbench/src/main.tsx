@@ -570,6 +570,8 @@ class ViewportController {
   private readingActivity = false;
   private programmaticUntil = 0;
   private interacting = false;
+  private heldPointers = new Set<number>();
+  private touching = false;
   private interactionEpoch = 0;
   private lastAnchor: ViewportAnchor | null = null;
   private interactionTimer: number | undefined;
@@ -606,17 +608,27 @@ class ViewportController {
       if (event.deltaY > 0 && !(event.target as HTMLElement)?.closest?.(".tool-output-frame")) this.readingActivity = false;
       beginInteraction(event.deltaY < 0);
     };
-    const handlePointerDown = () => {
+    const handlePointerDown = (event: PointerEvent) => {
+      this.heldPointers.add(event.pointerId);
       beginInteraction(false);
     };
-    const handlePointerEnd = () => {
+    const handlePointerEnd = (event: PointerEvent) => {
+      this.heldPointers.delete(event.pointerId);
       this.scheduleInteractionEnd(80);
     };
-    const handleTouchStart = () => {
+    const handleTouchStart = (event: TouchEvent) => {
+      this.touching = event.touches.length > 0;
       beginInteraction(false);
     };
-    const handleTouchEnd = () => {
+    const handleTouchEnd = (event: TouchEvent) => {
+      this.touching = event.touches.length > 0;
       this.scheduleInteractionEnd(100);
+    };
+    const handleBlur = () => {
+      // A release outside the window must not leave the timeline locked.
+      this.heldPointers.clear();
+      this.touching = false;
+      this.scheduleInteractionEnd(0);
     };
     const markKeyboardIntent = (event: KeyboardEvent) => {
       if (!["ArrowUp", "ArrowDown", "PageUp", "PageDown", "Home", "End", " "].includes(event.key)) return;
@@ -641,8 +653,8 @@ class ViewportController {
     };
     const handleResize = () => {
       if (this.interacting) return;
-      if (this.pinned && !this.isExactlyAtBottom()) {
-        this.scheduleFollow();
+      if (this.pinned) {
+        if (!this.isExactlyAtBottom()) this.scheduleFollow();
       } else if (this.lastAnchor) {
         this.restoreAnchor(this.lastAnchor);
       }
@@ -652,18 +664,24 @@ class ViewportController {
     window.addEventListener("wheel", handleWheel, { passive: true });
     window.addEventListener("touchstart", handleTouchStart, { passive: true });
     window.addEventListener("touchend", handleTouchEnd, { passive: true });
+    window.addEventListener("touchcancel", handleTouchEnd, { passive: true });
     window.addEventListener("pointerdown", handlePointerDown, { passive: true });
     window.addEventListener("pointerup", handlePointerEnd, { passive: true });
     window.addEventListener("pointercancel", handlePointerEnd, { passive: true });
     window.addEventListener("keydown", markKeyboardIntent);
     window.addEventListener("scroll", handleScroll, { passive: true });
     window.addEventListener("resize", handleResize);
+    window.addEventListener("blur", handleBlur);
     this.resizeObserver = new ResizeObserver(() => {
       // Height growth follows only while the viewport was already following.
       // User interaction or a reading position cancels this path immediately.
       if (this.pinned && !this.interacting && !this.isExactlyAtBottom()) {
         this.lastEvent = "resize-follow";
         this.scheduleFollow();
+      } else if (!this.pinned && !this.interacting && this.lastAnchor) {
+        // Images/output can grow outside a React document transaction. Keep
+        // the visible block stationary instead of waiting for the next patch.
+        this.restoreAnchor(this.lastAnchor);
       }
     });
     this.resizeObserver.observe(document.body);
@@ -674,12 +692,16 @@ class ViewportController {
       window.removeEventListener("wheel", handleWheel);
       window.removeEventListener("touchstart", handleTouchStart);
       window.removeEventListener("touchend", handleTouchEnd);
+      window.removeEventListener("touchcancel", handleTouchEnd);
       window.removeEventListener("pointerdown", handlePointerDown);
       window.removeEventListener("pointerup", handlePointerEnd);
       window.removeEventListener("pointercancel", handlePointerEnd);
       window.removeEventListener("keydown", markKeyboardIntent);
       window.removeEventListener("scroll", handleScroll);
       window.removeEventListener("resize", handleResize);
+      window.removeEventListener("blur", handleBlur);
+      this.heldPointers.clear();
+      this.touching = false;
       this.resizeObserver?.disconnect();
       this.resizeObserver = undefined;
       if (this.interactionTimer !== undefined) window.clearTimeout(this.interactionTimer);
@@ -787,6 +809,7 @@ class ViewportController {
     if (this.interactionTimer !== undefined) window.clearTimeout(this.interactionTimer);
     this.interactionTimer = window.setTimeout(() => {
       this.interactionTimer = undefined;
+      if (this.heldPointers.size > 0 || this.touching) return;
       this.interacting = false;
       this.setPinned(!this.readingActivity && this.isAtBottom());
       this.lastEvent = this.pinned ? "interaction-ended-at-bottom" : "interaction-ended-reading";
@@ -831,9 +854,10 @@ class ViewportController {
       `[data-anchor-id="${CSS.escape(anchor.id)}"]`,
     );
     if (!element) return;
-    this.performProgrammaticScroll(() => {
-      window.scrollBy(0, element.getBoundingClientRect().top - anchor.top);
-    });
+    const delta = element.getBoundingClientRect().top - anchor.top;
+    if (Math.abs(delta) > 0.5) {
+      this.performProgrammaticScroll(() => window.scrollBy(0, delta));
+    }
   }
 
   private performProgrammaticScroll(operation: () => void): void {
@@ -908,6 +932,20 @@ class ViewportController {
 }
 
 const viewportController = new ViewportController();
+
+/** Local disclosures are reading intent, just like existing tool expansion. */
+function useReadingLayoutAnchor(layoutValue: boolean) {
+  const saved = useRef<{ element: HTMLElement; top: number } | null>(null);
+  useLayoutEffect(() => {
+    const anchor = saved.current;
+    saved.current = null;
+    if (anchor?.element.isConnected) viewportController.preserveReadingAnchor(anchor.element, anchor.top);
+  }, [layoutValue]);
+  return (element: HTMLElement) => {
+    saved.current = { element, top: element.getBoundingClientRect().top };
+    viewportController.beginReadingActivity();
+  };
+}
 
 type RestorationSnapshot = {
   revision: number;
@@ -1426,6 +1464,7 @@ function TodoPanel({
   const completed = todos.filter((todo) => todo.status === "completed").length;
   const isComplete = completed === todos.length;
   const [isExpanded, setIsExpanded] = useState(isLive && !isComplete);
+  const preserveLayout = useReadingLayoutAnchor(isExpanded);
   const progress = todos.length ? (completed / todos.length) * 100 : 0;
 
   useEffect(() => {
@@ -1446,7 +1485,10 @@ function TodoPanel({
         data-focus-id={`todo:${turnID}`}
         onClick={(event) => {
           event.preventDefault();
-          if (window.getSelection()?.isCollapsed) setIsExpanded((value) => !value);
+          if (window.getSelection()?.isCollapsed) {
+            preserveLayout(event.currentTarget);
+            setIsExpanded((value) => !value);
+          }
         }}
       >
         <span className="todo-panel-title">Tasks</span>
@@ -2919,6 +2961,7 @@ const CollapsibleUserPrompt = memo(function CollapsibleUserPrompt({
   const [expanded, setExpanded] = useState(false);
   const [canToggle, setCanToggle] = useState(false);
   const contentRef = useRef<HTMLDivElement>(null);
+  const preserveLayout = useReadingLayoutAnchor(expanded);
 
   useLayoutEffect(() => {
     const element = contentRef.current;
@@ -2937,7 +2980,7 @@ const CollapsibleUserPrompt = memo(function CollapsibleUserPrompt({
   }, [text, expanded]);
 
   return (
-    <div className="user-message">
+    <div className="user-message" data-anchor-id={`user:${turnID}`}>
       <div className="user-prompt">
         <div
           ref={contentRef}
@@ -2953,7 +2996,14 @@ const CollapsibleUserPrompt = memo(function CollapsibleUserPrompt({
             className="user-prompt-toggle"
             data-focus-id={`user-prompt-toggle:${turnID}`}
             aria-expanded={expanded}
-            onClick={() => setExpanded((value) => !value)}
+            onClick={(event) => {
+              // Expanding reveals content below the message's beginning;
+              // collapsing keeps the clicked control in the reading context.
+              const anchor = expanded ? event.currentTarget
+                : contentRef.current?.closest<HTMLElement>('.user-message');
+              if (anchor) preserveLayout(anchor);
+              setExpanded((value) => !value);
+            }}
           >
             {expanded ? "收起" : "显示更多"}
           </button>
@@ -3587,6 +3637,7 @@ const Turn = memo(function Turn({
       <div
         className="turn-block"
         data-block-id={block.id}
+        data-anchor-id={`block:${turn.id}:${block.id}`}
         data-block-kind={block.kind}
         data-selection-id={`block:${block.id}`}
         key={block.id}

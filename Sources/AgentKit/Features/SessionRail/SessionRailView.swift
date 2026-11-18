@@ -48,6 +48,7 @@ public struct SessionRailView: View {
                         if let snapshot = model.snapshot { root(snapshot) }
                     }
                 }.padding(14).frame(maxWidth: .infinity, alignment: .leading)
+                    .background(SessionRailOverlayScroller())
             }
             .accessibilityIdentifier("session-rail.content")
         }
@@ -589,6 +590,35 @@ private struct SessionRailPreview: NSViewRepresentable {
         func webView(_ webView: WKWebView, decidePolicyFor action: WKNavigationAction) async -> WKNavigationActionPolicy {
             action.request.url?.absoluteString == "about:blank" ? .allow : .cancel
         }
+    }
+}
+/// Configure only this pane's enclosing native scroll view, keeping AppKit's
+/// hit testing, accessibility, hover expansion and automatic fading.
+private struct SessionRailOverlayScroller: NSViewRepresentable {
+    func makeNSView(context: Context) -> ScrollerAnchor { ScrollerAnchor() }
+    func updateNSView(_ view: ScrollerAnchor, context: Context) { view.configureScroller() }
+
+    final class ScrollerAnchor: NSView {
+        override func viewDidMoveToWindow() {
+            super.viewDidMoveToWindow()
+            configureScroller()
+        }
+
+        override func layout() {
+            super.layout()
+            configureScroller()
+        }
+
+        func configureScroller() {
+            guard let scrollView = enclosingScrollView else { return }
+            if scrollView.scrollerStyle != .overlay { scrollView.scrollerStyle = .overlay }
+            if !scrollView.autohidesScrollers { scrollView.autohidesScrollers = true }
+            if let scroller = scrollView.verticalScroller, scroller.controlSize != .small {
+                scroller.controlSize = .small
+            }
+        }
+
+        override func hitTest(_ point: NSPoint) -> NSView? { nil }
     }
 }
 #endif

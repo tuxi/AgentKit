@@ -389,8 +389,9 @@ summary:active {
 
 /* Only the group-level indicator communicates live activity. Status text
    remains readable, including failure counts while other tools are running. */
-/* One group-level indicator, outside the title's alignment and hit target. */
-.tool-group-running { position: absolute; left: -15px; width: 12px; height: 12px; color: light-dark(rgb(199 112 78), rgb(225 151 119)); pointer-events: none; animation: activity-orbit 2.8s linear infinite; }
+/* Align the whole control with the reading column. Removing the inline
+   indicator lets the completed title return to that same left edge. */
+.tool-group-running { position: relative; flex: 0 0 12px; width: 12px; height: 12px; color: light-dark(rgb(199 112 78), rgb(225 151 119)); pointer-events: none; animation: activity-orbit 2.8s linear infinite; }
 .tool-group-running > span { position: absolute; width: 3px; height: 3px; border-radius: 50%; background: currentColor; animation: activity-breathe 1.6s ease-in-out infinite; }
 .tool-group-running > span:nth-child(1) { left: 1.5px; top: 1.5px; }
 .tool-group-running > span:nth-child(2) { right: 1.5px; top: 1.5px; animation-delay: -.4s; }
