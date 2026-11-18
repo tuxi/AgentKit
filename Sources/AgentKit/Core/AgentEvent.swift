@@ -16,6 +16,7 @@ import ClientToolProtocol
 /// UI 层消费的事件。由 `AgentWireSocket` 从原始 JSON 帧解码并转换。
 /// `turnID` 和 `callID` 来自协议层，是 ConversationState reducer 的唯一 key。
 public enum AgentEvent: Sendable {
+    case supplementApplied(SupplementApplicationReceipt)
     case backgroundContinuation(BackgroundContinuationStatus)
     // ── Turn 生命周期 ──
     /// Request validation completed and a stable turn identity was persisted.
@@ -289,6 +290,11 @@ extension AgentEvent {
         let callID = wire.callId ?? wire.step.map { "call_\($0)" }
 
         switch kind {
+        case "user_supplement_applied":
+            guard let receipt = wire.supplementApplication,
+                  receipt.requestID == wire.requestId, receipt.turnID == turnID,
+                  receipt.sequence > 0 else { return nil }
+            return .supplementApplied(receipt)
         case "turn_accepted":
             return .turnAccepted(turnID: turnID ?? "", requestID: wire.requestId, text: wire.text)
 

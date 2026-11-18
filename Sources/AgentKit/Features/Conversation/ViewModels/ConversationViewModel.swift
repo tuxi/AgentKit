@@ -109,6 +109,46 @@ public final class ConversationViewModel {
     public private(set) var lastInputRejection: AgentInputRejection?
     public private(set) var lastAcceptedSubmissionRequestID: String?
     public private(set) var localSubmissions: [LocalMessageSubmission] = []
+    private var textSupplementDelivery: TextSupplementDeliveryCoordinator?
+
+    private func supplementDeliveryCoordinator() -> TextSupplementDeliveryCoordinator? {
+        if let textSupplementDelivery { return textSupplementDelivery }
+        guard let port = client as? any TextSupplementClient else { return nil }
+        let coordinator = TextSupplementDeliveryCoordinator(client: port, store: localStateStore)
+        textSupplementDelivery = coordinator
+        return coordinator
+    }
+
+#if os(macOS) && DEBUG
+    var debugSupplementTargetID: String? {
+        guard ["running", "resuming"].contains(lifecycleStatus ?? "") else { return nil }
+        return currentTurnID
+    }
+    func debugSupplementSupported() async -> Bool {
+        guard let port = client as? any TextSupplementClient else { return false }
+        return (try? await port.runtimeCapabilities().capabilities["user_supplement_text_v1"]) == true
+    }
+    func debugSupplementDeliveries() -> [TextSupplementDelivery] {
+        guard let id = conversation?.id else { return [] }
+        return (try? localStateStore.state(for: .session(id)))?.textSupplementDeliveries ?? []
+    }
+    func debugRecoverSupplements() async throws {
+        guard let id = conversation?.id, let coordinator = supplementDeliveryCoordinator() else { throw RuntimeHTTPError.unsupported }
+        try await coordinator.recover(sessionID: id)
+    }
+#endif
+
+    func submitTextSupplement(_ text: String, expectedTurnID: String, requestID: String = UUID().uuidString) async throws {
+        guard !isArchived, isTurnActive, currentTurnID == expectedTurnID,
+              let sessionID = conversation?.id, let coordinator = supplementDeliveryCoordinator() else { throw RuntimeHTTPError.unsupported }
+        try await coordinator.submit(sessionID: sessionID, request: .init(requestID: requestID, expectedTurnID: expectedTurnID, text: text))
+    }
+
+    private func reconcileSupplementApplication(_ event: AgentEvent, sessionID: String) {
+        guard case .supplementApplied(let receipt) = event, let coordinator = supplementDeliveryCoordinator() else { return }
+        Task { try? await coordinator.apply(receipt, sessionID: sessionID) }
+    }
+
 
     func reloadLocalSubmissions() {
         guard let id = conversation?.id else { return }
@@ -535,6 +575,9 @@ public final class ConversationViewModel {
             isConnected = true
             Task { await backgroundJobs.refresh(rediscover: true) }
             await eng.markLive()
+            if let coordinator = supplementDeliveryCoordinator() {
+                Task { try? await coordinator.recover(sessionID: conversation.id) }
+            }
 
             streamTask = Task { [weak self] in
                 guard let self else { return }
@@ -868,6 +911,7 @@ public final class ConversationViewModel {
                     handleSubmissionAccepted(requestID: requestID, turnID: turnID)
                 }
                 reconcileLocalSubmissionEvent(event)
+                reconcileSupplementApplication(event, sessionID: conversationID)
                 await forwardToTimelineExtensions(event)
                 forwardWorkflowEvent(event)
             }
@@ -935,6 +979,7 @@ public final class ConversationViewModel {
 
     /// v2: delegate to engine. ViewModel does NOT reduce.
     private func handleEvent(_ event: AgentEvent, engine: RuntimeEngine) async {
+        if let sessionID = conversation?.id { reconcileSupplementApplication(event, sessionID: sessionID) }
         updateLifecycle(from: event)
         reconcileLocalSubmissionEvent(event)
         await engine.ingest(event)

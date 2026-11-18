@@ -50,7 +50,7 @@ public struct ExecutionReducer: Sendable {
 
         switch event {
         // ── Turn lifecycle ──
-        case .turnAccepted, .turnQueued, .agentInputRejected:
+        case .turnAccepted, .turnQueued, .agentInputRejected, .supplementApplied:
             return []
 
         case .turnStarted(let turnID, let text, let userAssets, let localAssets):

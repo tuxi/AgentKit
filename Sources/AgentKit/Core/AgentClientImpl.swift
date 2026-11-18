@@ -195,7 +195,7 @@ public final class CodeAgentSessionChannel: RuntimeSessionChannel, @unchecked Se
 /// 组合 `RuntimeHTTPClient`（HTTP） + `AgentWireSocket`（WebSocket）。
 ///
 /// 替换此类即可接入不同 backend：`DreamAITransport` / `MockTransport`。
-public final class CodeAgentTransport: AgentTransport, CodingTaskReading, CodingTaskWriting, CodingTaskModelReading, @unchecked Sendable {
+public final class CodeAgentTransport: AgentTransport, TextSupplementClient, CodingTaskReading, CodingTaskWriting, CodingTaskModelReading, @unchecked Sendable {
 
     private let http: RuntimeHTTPClient
     private var socket: AgentWireSocket?
@@ -272,6 +272,8 @@ public final class CodeAgentTransport: AgentTransport, CodingTaskReading, Coding
         )
     }
 
+    public func submitTextSupplement(sessionID: String, request: TextSupplementRequest, runtimeIdentity: String) async throws -> TextSupplementReceipt { try await http.submitTextSupplement(sessionID: sessionID, request: request, runtimeIdentity: runtimeIdentity) }
+    public func queryTextSupplement(sessionID: String, requestID: String, runtimeIdentity: String) async throws -> TextSupplementReceipt { try await http.queryTextSupplement(sessionID: sessionID, requestID: requestID, runtimeIdentity: runtimeIdentity) }
     public func runtimeCapabilities() async throws -> RuntimeCapabilitySnapshot {
         try await http.runtimeCapabilities()
     }
@@ -817,7 +819,7 @@ public final class CodeAgentTransport: AgentTransport, CodingTaskReading, Coding
 ///
 /// UI 通过 `AgentDependencies` 拿到 `RuntimeClient` 协议实例。
 /// 要替换 backend，替换 `transport` 即可，不修改 UI 层。
-public final class DefaultAgentClient: RuntimeClient, CodingTaskReading, CodingTaskWriting, CodingTaskModelReading, SkillPluginManaging, @unchecked Sendable {
+public final class DefaultAgentClient: RuntimeClient, TextSupplementClient, CodingTaskReading, CodingTaskWriting, CodingTaskModelReading, SkillPluginManaging, @unchecked Sendable {
 
     private let transport: any AgentTransport
     private let managementHTTP: RuntimeHTTPClient?
@@ -945,6 +947,14 @@ public final class DefaultAgentClient: RuntimeClient, CodingTaskReading, CodingT
         transport.makeSessionChannel(sessionID: conversationID)
     }
 
+    public func submitTextSupplement(sessionID: String, request: TextSupplementRequest, runtimeIdentity: String) async throws -> TextSupplementReceipt {
+        guard let port = transport as? any TextSupplementClient else { throw RuntimeHTTPError.unsupported }
+        return try await port.submitTextSupplement(sessionID: sessionID, request: request, runtimeIdentity: runtimeIdentity)
+    }
+    public func queryTextSupplement(sessionID: String, requestID: String, runtimeIdentity: String) async throws -> TextSupplementReceipt {
+        guard let port = transport as? any TextSupplementClient else { throw RuntimeHTTPError.unsupported }
+        return try await port.queryTextSupplement(sessionID: sessionID, requestID: requestID, runtimeIdentity: runtimeIdentity)
+    }
     public func runtimeCapabilities() async throws -> RuntimeCapabilitySnapshot {
         try await transport.runtimeCapabilities()
     }

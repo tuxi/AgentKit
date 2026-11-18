@@ -14,6 +14,7 @@ import ClientToolProtocol
 /// 一帧的原始 JSON 结构。所有字段可选；通过 `type` vs `kind` 分流。
 /// 对照：`docs/client_integration_v1.md` §3.1、§3.3、§3.4。
 struct WireFrame: Decodable {
+    let supplementApplication: SupplementApplicationReceipt?
     // ── 控制帧字段（有 `type`）──
     let type: String?
     let id: String?
@@ -129,6 +130,7 @@ struct WireFrame: Decodable {
     let diffstat: WireDiffStat?
 
     enum CodingKeys: String, CodingKey {
+        case supplementApplication = "supplement_application"
         case type, kind, at, step, id, server, seq, background
         case contextMaintenance = "context_maintenance"
         case contextOperationID = "context_operation_id"

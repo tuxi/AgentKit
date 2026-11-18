@@ -239,6 +239,24 @@ struct RuntimeHTTPClient: Sendable {
         return try decodeEnvelope(RuntimeCapabilitySnapshot.self, from: data)
     }
 
+    func submitTextSupplement(sessionID: String, request value: TextSupplementRequest, runtimeIdentity: String) async throws -> TextSupplementReceipt {
+        guard try await runtimeCapabilities().capabilities["user_supplement_text_v1"] == true else { throw RuntimeHTTPError.unsupported }
+        let request = try await buildRequest("POST", pathArray: ["v1", "conversations", sessionID, "supplements"], body: value, timeout: 20)
+        try await validateJobScope(request, identity: runtimeIdentity)
+        let (data, response) = try await session.data(for: request)
+        try validateHTTP(response, data: data)
+        try await validateJobScope(request, identity: runtimeIdentity)
+        return try decoder.decode(TextSupplementReceipt.self, from: data)
+    }
+    func queryTextSupplement(sessionID: String, requestID: String, runtimeIdentity: String) async throws -> TextSupplementReceipt {
+        let request = try await buildRequest("GET", pathArray: ["v1", "conversations", sessionID, "supplements", requestID], timeout: 20)
+        try await validateJobScope(request, identity: runtimeIdentity)
+        let (data, response) = try await session.data(for: request)
+        try validateHTTP(response, data: data)
+        try await validateJobScope(request, identity: runtimeIdentity)
+        return try decoder.decode(TextSupplementReceipt.self, from: data)
+    }
+
     func composerValidatePaths(_ scope: ComposerQuery, paths: [String]) async throws {
         struct Body: Encodable { let session_id: String?; let workspace_path: String?; let paths: [String] }
         let request = try await buildRequest("POST", pathComponents: "v1/composer/paths/validate", body: Body(session_id: scope.sessionID, workspace_path: scope.workspacePath, paths: paths), timeout: 15)
