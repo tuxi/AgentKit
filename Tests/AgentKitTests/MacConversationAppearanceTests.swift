@@ -26,6 +26,7 @@ private struct AppearanceRenderHost: View {
 @MainActor
 final class MacConversationAppearanceTests: XCTestCase {
     private var window: NSWindow?
+    private let executionStart = Date().addingTimeInterval(-24)
 
     override func tearDown() async throws {
         window?.orderOut(nil)
@@ -151,6 +152,98 @@ final class MacConversationAppearanceTests: XCTestCase {
         registry.beginRevision(2)
         registry.finishRevision(retaining: ConversationWebDocumentBuilder.actionTokens(in: document))
         XCTAssertNotNil(registry.resolve(token, revision: 2), "The copy action must survive stable turn reuse")
+    }
+
+    private func executionFixture(live: Bool = true, allComplete: Bool = false,
+                                  approval: Bool = false, failedPlanUpdate: Bool = false,
+                                  generation: UInt64 = 1) -> RuntimeSnapshot {
+        let todos: [TodoItem] = [
+            .init(content: "检查布局", status: .completed),
+            .init(content: "验证构建", activeForm: "正在验证构建", status: allComplete ? .completed : .inProgress)
+        ]
+        var blocks: [TurnBlock] = [.text(id: "execution-text", .init(role: .assistant,
+            text: live ? "正在检查页面显示。版本 \(generation)" : "本轮检查已结束。版本 \(generation)"))]
+        if failedPlanUpdate {
+            blocks.append(.toolGroup(.init(id: "plan-update", tools: [
+                .init(callID: "failed-plan", toolName: "TodoWrite",
+                      args: .object(["items": .array([.object(["content": .string("验证构建"), "status": .string("completed")])])]),
+                      status: .failed, output: "missing scope", exitCode: 1)
+            ])))
+        }
+        let start = executionStart
+        let turn = ConversationTurn(id: "execution-turn", userPrompt: .init(role: .user, text: "检查对话详情的显示"),
+            blocks: blocks, todos: todos, footer: nil, isLive: live,
+            startedAt: start, finishedAt: live ? nil : start.addingTimeInterval(48))
+        let requests: [ApprovalRequest] = approval ? [.init(id: "build-approval", toolName: "exec_command",
+            toolArgs: .object(["cmd": .string("swift build")]), deadlineMs: nil, sessionId: "appearance", turnId: turn.id)] : []
+        return .init(timeline: [], turns: [turn], pendingApprovals: requests, isLive: live,
+                     generation: generation, turnStartedAt: live ? start : nil)
+    }
+
+    func testTasksAndWaitingFollowFactsThroughCompletion() async throws {
+        let model = AppearanceRenderModel()
+        model.snapshot = executionFixture()
+        let web = try await present(model)
+        try await wait("document.querySelector('.todo-panel')?.open === true", in: web)
+        try await wait("document.querySelector('.turn-live-header') !== null", in: web)
+        try await assertJavaScript("document.querySelectorAll('.live-indicator').length", equals: 1, in: web)
+        try await screenshot("execution-running", web: web)
+        _ = try await web.evaluateJavaScript("document.querySelector('.todo-panel-summary').click()")
+        try await wait("document.querySelector('.todo-panel')?.open === false", in: web)
+        model.snapshot = executionFixture(generation: 2)
+        try await wait("document.body.innerText.includes('版本 2')", in: web)
+        try await assertJavaScript("document.querySelector('.todo-panel').open", equals: false, in: web)
+
+        // Waiting changes only snapshot control state, not the turn's content.
+        // Runtime snapshots increment generation even if only control state changes.
+        model.snapshot = .init(timeline: [], turns: model.snapshot.turns,
+            pendingApprovals: executionFixture(approval: true).pendingApprovals,
+            isLive: true, generation: 3, turnStartedAt: executionStart)
+        try await wait("document.querySelector('.live-indicator')?.textContent.includes('等待你的确认') === true", in: web)
+        try await assertJavaScript("document.querySelectorAll('.turn-live-elapsed').length", equals: 0, in: web)
+        try await screenshot("execution-waiting", web: web)
+
+        model.snapshot = executionFixture(live: false, failedPlanUpdate: true, generation: 4)
+        try await wait("document.body.innerText.includes('版本 4') && !document.querySelector('.live-indicator')", in: web)
+        try await assertJavaScript("document.querySelector('.todo-count').textContent", equals: "1/2", in: web)
+        try await assertJavaScript("document.querySelector('.todo-panel').open", equals: false, in: web)
+        try await assertJavaScript("document.querySelector('.todo-ended-note').textContent", equals: "仍有未完成项", in: web)
+        let errorKept = try await web.evaluateJavaScript("document.querySelector('[data-block-id=\"plan-update\"]') !== null") as? Bool
+        XCTAssertEqual(errorKept, true, "A failed plan update must remain inspectable")
+        _ = try await web.evaluateJavaScript("document.querySelector('.todo-panel-summary').click()")
+        try await wait("document.querySelector('.todo-panel').open === true", in: web)
+        try await assertJavaScript("document.querySelector('.todo-row[data-status=\"in_progress\"] .todo-row-text').textContent",
+                                   equals: "验证构建", in: web)
+        _ = try await web.evaluateJavaScript("document.querySelector('.todo-panel-summary').click()")
+        try await screenshot("execution-partial", web: web)
+
+        model.snapshot = executionFixture(live: false, allComplete: true, generation: 5)
+        try await wait("document.querySelector('.todo-count')?.textContent === '2/2'", in: web)
+        try await assertJavaScript("document.querySelector('.todo-panel').open", equals: false, in: web)
+        try await assertJavaScript("document.querySelectorAll('.todo-ended-note').length", equals: 0, in: web)
+        try await screenshot("execution-complete", web: web)
+        _ = try await web.evaluateJavaScript("document.querySelector('.todo-panel-summary').click()")
+        try await wait("document.querySelector('.todo-panel').open === true", in: web)
+        model.snapshot = executionFixture(live: false, allComplete: true, generation: 6)
+        try await wait("document.body.innerText.includes('版本 6')", in: web)
+        try await assertJavaScript("document.querySelector('.todo-panel').open", equals: true, in: web)
+    }
+
+    private func assertJavaScript<T: Equatable>(_ script: String, equals expected: T, in web: WKWebView,
+                                               file: StaticString = #filePath, line: UInt = #line) async throws {
+        let actual = try await web.evaluateJavaScript(script) as? T
+        XCTAssertEqual(actual, expected, script, file: file, line: line)
+    }
+
+    func testWaitingMetadataDoesNotRequireReplacingStableTurns() throws {
+        let old = ConversationWebDocumentBuilder.build(snapshot: executionFixture(), conversationID: "appearance", revision: 1)
+        let result = ConversationWebDocumentBuilder.buildWithStableTurns(snapshot: executionFixture(approval: true),
+            conversationID: "appearance", revision: 2,
+            reusing: .init(snapshot: executionFixture(), document: old, extensionContributions: [:]))
+        XCTAssertEqual(result.stableTurnIDs, ["execution-turn"])
+        let update = try XCTUnwrap(ConversationWebDocumentDiffer.update(from: old, to: result.document))
+        XCTAssertEqual(update.patch?.operations.map(\.kind), [.setLive])
+        XCTAssertEqual(result.document.live?.waitingReason, "approval")
     }
 }
 #endif

@@ -375,6 +375,31 @@ final class ExecutionReducerTests: XCTestCase {
         XCTAssertEqual(snapshot.turns.first?.todos, todos)
     }
 
+    func testFailedPlanCompletionCannotReplaceAcceptedTasksInLiveOrReplay() async {
+        let accepted = [TodoItem(content: "检查构建", status: .inProgress)]
+        let events: [AgentEvent] = [
+            .turnStarted(turnID: "t1", text: "检查构建"),
+            .todoUpdated(turnID: "t1", todos: accepted),
+            .toolStarted(turnID: "t1", callID: "plan-failed", tool: .init(
+                callID: "plan-failed", toolName: "TodoWrite", toolArgs: .object([
+                    "todos": .array([.object(["content": .string("检查构建"), "status": .string("completed")])])
+                ]))),
+            .toolFinished(turnID: "t1", callID: "plan-failed", result: .init(
+                callID: "plan-failed", toolName: "TodoWrite", observation: "missing scope", error: "missing scope")),
+            .turnFinished(turnID: "t1", text: "报告已交付", textAnnotations: [])
+        ]
+        let live = RuntimeEngine(sessionID: "plan-live")
+        for event in events { await live.ingest(event) }
+        let replay = RuntimeEngine(sessionID: "plan-replay")
+        await replay.importHistory(events)
+        for engine in [live, replay] {
+            let snapshot = await engine.currentSnapshot()
+            XCTAssertFalse(snapshot.isLive)
+            XCTAssertEqual(snapshot.turns.last?.todos, accepted)
+            XCTAssertEqual(snapshot.latestTodos, accepted)
+        }
+    }
+
     func testCanonicalTodoEventWinsOverToolFallback() async {
         let engine = RuntimeEngine(sessionID: "session_1")
         await engine.ingest(.turnStarted(turnID: "t1", text: "plan"))

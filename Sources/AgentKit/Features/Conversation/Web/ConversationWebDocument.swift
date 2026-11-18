@@ -491,6 +491,7 @@ struct ConversationWebDocument: Codable, Equatable, Sendable {
         let isThinking: Bool
         let startedAtMilliseconds: Int64?
         let modelRetrying: ModelRetryState?
+        var waitingReason: String? = nil
     }
 }
 
@@ -1407,13 +1408,27 @@ enum ConversationWebDocumentBuilder {
     }
 
     private static func makeLiveState(_ snapshot: RuntimeSnapshot) -> ConversationWebDocument.LiveState? {
-        guard snapshot.isLive, snapshot.turnStartedAt != nil else { return nil }
+        let liveTurn = snapshot.turns.last(where: \.isLive)
+        let waitingReason: String?
+        if snapshot.pendingApproval != nil {
+            waitingReason = "approval"
+        } else if snapshot.pendingPlanApproval != nil {
+            waitingReason = "plan"
+        } else if snapshot.pendingAskUser != nil {
+            waitingReason = "question"
+        } else if snapshot.backgroundContinuation?.isWaiting == true {
+            waitingReason = snapshot.backgroundContinuation?.state == "needs_attention" ? "background_attention" : "background"
+        } else {
+            waitingReason = nil
+        }
+        guard snapshot.isLive || liveTurn != nil || waitingReason != nil else { return nil }
         return ConversationWebDocument.LiveState(
             isThinking: snapshot.modelStartedAt != nil,
-            startedAtMilliseconds: snapshot.turnStartedAt.map {
+            startedAtMilliseconds: (snapshot.turnStartedAt ?? liveTurn?.startedAt).map {
                 Int64($0.timeIntervalSince1970 * 1_000)
             },
-            modelRetrying: snapshot.modelRetrying
+            modelRetrying: snapshot.modelRetrying,
+            waitingReason: waitingReason
         )
     }
 

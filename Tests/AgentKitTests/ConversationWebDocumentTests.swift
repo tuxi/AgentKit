@@ -1502,10 +1502,11 @@ final class ConversationWebDocumentTests: XCTestCase {
         XCTAssertEqual(inspection?["subagentFits"] as? Bool, true)
         XCTAssertEqual(inspection?["todoOpen"] as? Bool, false)
         XCTAssertTrue((inspection?["todoSummary"] as? String)?.contains("1/3") == true)
-        XCTAssertTrue((inspection?["todoSummary"] as? String)?.contains("1 active") == true)
+        // Approved compact Tasks header: the checklist carries per-item state.
+        XCTAssertFalse((inspection?["todoSummary"] as? String)?.contains("1 active") == true)
         XCTAssertEqual(inspection?["todoSticky"] as? String, "static")
         XCTAssertEqual(inspection?["todoProgress"] as? String, "1")
-        XCTAssertEqual(inspection?["activeTodo"] as? String, "Working on active task")
+        XCTAssertEqual(inspection?["activeTodo"] as? String, "Active task", "ended turns use task names rather than a still-working verb")
         XCTAssertEqual(inspection?["completedTodo"] as? String, "Finished task")
 
         let selectionBefore = try await webView.evaluateJavaScript(
@@ -2238,7 +2239,7 @@ final class ConversationWebDocumentTests: XCTestCase {
 
     /// Codex parity: a running turn stays flat, but carries one live clock on
     /// top ("已处理 8分15秒"). It must tick without a Runtime snapshot.
-    func testLiveTurnShowsProcessingClockAboveFlatTranscript() async throws {
+    func testLiveTurnShowsProcessingClockAfterFlatTranscript() async throws {
         let ready = expectation(description: "Web renderer handshake")
         let acknowledged = expectation(description: "Web document acknowledgement")
         let probe = ConversationWebBridgeProbe(ready: ready)
@@ -2318,8 +2319,8 @@ final class ConversationWebDocumentTests: XCTestCase {
                 (() => ({
                   header: document.querySelector('.turn-live-header .turn-live-elapsed')
                     ?.textContent ?? null,
-                  headerIsFirst: document.querySelector('.assistant-lane')
-                    ?.firstElementChild?.className ?? null,
+                  headerFollowsTurn: document.querySelector('.turn-live-header')
+                    ?.previousElementSibling?.classList.contains('turn') ?? false,
                   hasProcess: Boolean(document.querySelector('details.turn-process')),
                   blockCount: document.querySelectorAll('.turn-block').length
                 }))()
@@ -2330,10 +2331,11 @@ final class ConversationWebDocumentTests: XCTestCase {
         let first = try await inspect()
         XCTAssertEqual(first?["hasProcess"] as? Bool, false, "live turns never fold")
         XCTAssertEqual(first?["blockCount"] as? Int, 3, "every block stays flat")
-        XCTAssertEqual(first?["headerIsFirst"] as? String, "turn-live-header")
+        // The one live status/clock now follows the current content and Tasks.
+        XCTAssertEqual(first?["headerFollowsTurn"] as? Bool, true)
         let firstLabel = try XCTUnwrap(first?["header"] as? String)
         XCTAssertTrue(
-            firstLabel.hasPrefix("已处理 8分1"),
+            firstLabel.contains("8分1"),
             "expected a running clock near 8分15秒, got \(firstLabel)"
         )
 

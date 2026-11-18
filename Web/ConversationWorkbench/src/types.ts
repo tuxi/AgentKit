@@ -404,6 +404,7 @@ export interface ConversationWebDocument {
   turns: ConversationWebTurn[];
   live?: {
     isThinking: boolean;
+    waitingReason?: "approval" | "plan" | "question" | "background" | "background_attention";
     startedAtMilliseconds?: number;
     modelRetrying?: {
       attempt: number;

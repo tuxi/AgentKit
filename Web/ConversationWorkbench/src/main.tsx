@@ -1424,42 +1424,37 @@ function TodoPanel({
   isLive: boolean;
 }): React.JSX.Element {
   const completed = todos.filter((todo) => todo.status === "completed").length;
-  const active = todos.filter((todo) => todo.status === "in_progress").length;
   const isComplete = completed === todos.length;
   const [isExpanded, setIsExpanded] = useState(isLive && !isComplete);
-  const activeTodo = todos.find((todo) => todo.status === "in_progress");
   const progress = todos.length ? (completed / todos.length) * 100 : 0;
 
   useEffect(() => {
-    if (isLive && !isComplete) setIsExpanded(true);
-    if (!isLive && isComplete) setIsExpanded(false);
+    setIsExpanded(isLive && !isComplete);
   }, [isComplete, isLive]);
 
   return (
+    <>
     <details
       className="todo-panel"
+      data-live={isLive}
       data-anchor-id={`todo:${turnID}`}
       data-disclosure-id={`todo:${turnID}`}
       open={isExpanded}
-      onToggle={(event) => setIsExpanded(event.currentTarget.open)}
     >
       <summary
         className="interactive todo-panel-summary"
         data-focus-id={`todo:${turnID}`}
         onClick={(event) => {
-          if (!window.getSelection()?.isCollapsed) event.preventDefault();
+          event.preventDefault();
+          if (window.getSelection()?.isCollapsed) setIsExpanded((value) => !value);
         }}
       >
         <span className="todo-panel-title">Tasks</span>
         <span className="todo-count">{completed}/{todos.length}</span>
-        {active ? <span className="todo-active">{active} active</span> : null}
-        <span className="todo-panel-current">
-          {activeTodo ? (activeTodo.activeForm || activeTodo.content) : null}
-        </span>
         <span className="disclosure-chevron" aria-hidden="true">›</span>
       </summary>
       <div
-        className="todo-progress"
+        className="todo-progress visually-hidden"
         role="progressbar"
         aria-label="Task progress"
         aria-valuemin={0}
@@ -1470,7 +1465,7 @@ function TodoPanel({
       </div>
       <div className="todo-list">
         {todos.map((todo, index) => {
-          const text = todo.status === "in_progress" && todo.activeForm
+          const text = isLive && todo.status === "in_progress" && todo.activeForm
             ? todo.activeForm
             : todo.content;
           return (
@@ -1485,6 +1480,8 @@ function TodoPanel({
         })}
       </div>
     </details>
+    {!isLive && !isComplete ? <p className="todo-ended-note">仍有未完成项</p> : null}
+    </>
   );
 }
 
@@ -3345,26 +3342,35 @@ function formatDuration(totalSeconds: number): string {
 /// The counter ticks locally from the turn's start stamp — asking the Runtime
 /// for a snapshot every second would repaint the whole transcript.
 function LiveTurnHeader({
-  startedAtMilliseconds,
+  live,
+  hasCurrentAction,
 }: {
-  startedAtMilliseconds?: number;
+  live: NonNullable<ConversationWebDocument["live"]>;
+  hasCurrentAction: boolean;
 }) {
+  const { startedAtMilliseconds, waitingReason } = live;
   const [now, setNow] = useState(() => Date.now());
 
   useEffect(() => {
-    if (startedAtMilliseconds === undefined) return;
+    if (startedAtMilliseconds === undefined || waitingReason) return;
     setNow(Date.now());
     const id = window.setInterval(() => setNow(Date.now()), 1_000);
     return () => window.clearInterval(id);
-  }, [startedAtMilliseconds]);
+  }, [startedAtMilliseconds, waitingReason]);
 
-  if (startedAtMilliseconds === undefined) return null;
-  const elapsedSeconds = (now - startedAtMilliseconds) / 1_000;
+  const waitingLabel = waitingReason === "approval" ? "等待你的确认"
+    : waitingReason === "plan" ? "等待计划审批"
+    : waitingReason === "question" ? "等待你的回答"
+    : waitingReason === "background_attention" ? "后台任务需要处理"
+    : waitingReason === "background" ? "等待后台结果" : undefined;
+  const label = waitingLabel ?? (hasCurrentAction || live.modelRetrying ? undefined : live.isThinking ? "正在思考" : "正在处理");
+  const elapsedSeconds = startedAtMilliseconds === undefined ? undefined : Math.max(0, (now - startedAtMilliseconds) / 1_000);
+  if (!label && elapsedSeconds === undefined) return null;
   return (
-    <div className="turn-live-header">
-      <span className="turn-live-elapsed">
-        已处理 {formatDuration(elapsedSeconds)}
-      </span>
+    <div className="turn-live-header live-indicator" data-anchor-id="live-indicator"
+      data-waiting={waitingReason ?? undefined}>
+      {label ? <><span className={waitingReason ? "waiting-marker" : "status-dot"} aria-hidden="true" /><span role="status" aria-live="polite" aria-atomic="true">{label}</span></> : null}
+      {!waitingReason && elapsedSeconds !== undefined ? <span className="turn-live-elapsed">{label ? "· " : "已处理 "}{formatDuration(elapsedSeconds)}</span> : null}
     </div>
   );
 }
@@ -3720,7 +3726,7 @@ const Turn = memo(function Turn({
       ) : null}
       <TurnDisclosureContext.Provider value={disclosureContext}>
       <div className="assistant-lane">
-        {turn.isLive ? <LiveTurnHeader startedAtMilliseconds={turn.startedAtMilliseconds} /> : turn.elapsedText ? (
+        {!turn.isLive && turn.elapsedText ? (
           <div className="turn-process-summary"><span className="turn-process-label">{processSummaryLabel(turn)}</span></div>
         ) : null}
         {renderBlocks(turn.blocks)}
@@ -4120,19 +4126,10 @@ function App(): React.JSX.Element {
           conversationID={conversation.conversationID}
         />
       ))}
-      {conversation.live ? (
-        <div
-          className="live-indicator"
-          role="status"
-          aria-live="polite"
-          aria-atomic="true"
-          data-anchor-id="live-indicator"
-        >
-          <span className="status-dot" aria-hidden="true" />
-          {conversation.live.isThinking ? "Thinking" : "Working"}
-        </div>
-      ) : null}
-      {conversation.live?.modelRetrying ? (
+      {conversation.live ? <LiveTurnHeader live={conversation.live}
+        hasCurrentAction={conversation.turns.some((turn) => turn.isLive && turn.blocks.some((block) =>
+          block.kind === "toolGroup" && block.tools.some((tool) => tool.status === "running")))} /> : null}
+      {conversation.live?.modelRetrying && !conversation.live.waitingReason ? (
         <RetryBanner retry={conversation.live.modelRetrying} />
       ) : null}
       {!isPinned ? (

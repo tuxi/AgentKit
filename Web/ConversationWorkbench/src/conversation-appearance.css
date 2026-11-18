@@ -90,6 +90,35 @@ h1, h2, h3, h4 {
 .turn-live-header { margin-bottom: 16px; }
 .turn-process-summary { margin-bottom: 16px; }
 .turn-actions { margin-top: 7px; font-size: var(--font-caption); line-height: 20px; }
+/* Tasks is a quiet, turn-owned plan. Its count is not execution progress. */
+.todo-panel {
+  margin: 24px 0 18px;
+  background: transparent;
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  font-size: var(--font-ui);
+  line-height: 22px;
+}
+.todo-panel-summary { min-height: 44px; gap: 10px; padding: 11px 14px; }
+.todo-panel-title { font-size: inherit; font-weight: 500; }
+.todo-count { padding: 0; background: transparent; color: var(--muted); font-size: inherit; font-weight: 400; font-variant-numeric: tabular-nums; }
+.todo-panel-summary > .disclosure-chevron { margin-left: auto; }
+.todo-list { padding: 0 14px 12px; }
+.todo-row { padding: 5px 0; gap: 10px; font-size: inherit; line-height: 22px; }
+.todo-row-text { min-width: 0; overflow-wrap: anywhere; }
+.todo-status-marker { margin-top: 4px; font-weight: 400; }
+.todo-row[data-status="completed"] > .todo-status-marker {
+  background: transparent; border-color: transparent;
+  color: light-dark(#268145, #84c793); font-size: 14px;
+}
+.todo-row[data-status="completed"] > .todo-row-text { color: var(--muted); text-decoration: none; }
+.todo-panel[data-live="false"] .todo-row[data-status="in_progress"] > .todo-status-marker { border-color: var(--muted); }
+.todo-panel[data-live="false"] .todo-row[data-status="in_progress"] > .todo-status-marker::after { background: transparent; }
+.todo-ended-note { color: var(--muted); font-size: var(--font-caption); line-height: 20px; margin: -10px 0 18px; }
+.turn-live-header.live-indicator { margin: 0; padding: 0 0 18px; gap: 8px; line-height: 22px; }
+.turn:has(+ .live-indicator) { margin-bottom: 0; }
+.turn-live-elapsed { color: var(--muted); font-size: var(--font-caption); }
+.waiting-marker { width: 8px; height: 8px; border: 1px solid var(--muted); border-radius: 50%; }
 /* Keep geometry and tab stops intact; keyboard focus reveals the controls.
    Open action menus remain visible even when the pointer leaves the turn. */
 @media (hover: hover) {
