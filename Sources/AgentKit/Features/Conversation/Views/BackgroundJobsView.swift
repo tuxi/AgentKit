@@ -11,14 +11,16 @@ struct BackgroundJobsEntry: View {
     var body: some View {
         Group {
             if model.shouldShow {
-                Button { presented = true } label: {
+                Button {
+                    presented = true
+                } label: {
                     HStack(spacing: 7) {
                         Image(systemName: "terminal")
                         Text(model.canControl && model.runningCount > 0
                              ? text.text("jobs.runningCount", model.runningCount)
                              : text.text(model.isStale ? "jobs.unavailable" : "jobs.title"))
-                        Spacer(minLength: 8)
-                        Image(systemName: "chevron.up").font(.caption2)
+//                        Spacer(minLength: 8)
+//                        Image(systemName: "chevron.up").font(.caption2)
                     }
                     .font(.system(size: 13))
                     .foregroundStyle(.secondary)

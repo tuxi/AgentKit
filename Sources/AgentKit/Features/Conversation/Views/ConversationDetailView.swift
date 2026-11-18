@@ -371,22 +371,21 @@ public struct ConversationDetailView: View {
                     .transition(.move(edge: .bottom).combined(with: .opacity))
                 }
             }
-            
-            //            #if os(macOS)
-            //            WorkspaceChipBar()
-            //            #endif
+
             
             if !railOwnsTasks {
-            if let status = vm.snapshot.backgroundContinuation, status.isWaiting {
-                BackgroundContinuationBanner(status: status, isCancelling: vm.isCancelling) {
-                    Task { await vm.cancelTurn() }
+                if let status = vm.snapshot.backgroundContinuation, status.isWaiting {
+                    BackgroundContinuationBanner(status: status, isCancelling: vm.isCancelling) {
+                        Task { await vm.cancelTurn() }
+                    }
                 }
-            }
-
-            BackgroundJobsEntry(model: vm.backgroundJobs) { job in
-                store.showInspector(.childStream(.init(childID: job.jobID, kind: .job,
-                    title: BackgroundJobPresentation.summary(job.command, text: .init()))))
-            }
+                
+                if !vm.backgroundJobs.jobs.isEmpty {
+                    BackgroundJobsEntry(model: vm.backgroundJobs) { job in
+                        store.showInspector(.childStream(.init(childID: job.jobID, kind: .job,
+                                                               title: BackgroundJobPresentation.summary(job.command, text: .init()))))
+                    }
+                }
 
             }
 

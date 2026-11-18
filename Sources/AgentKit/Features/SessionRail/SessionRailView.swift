@@ -25,20 +25,40 @@ public struct SessionRailView: View {
         VStack(spacing: 0) {
             if let route = model.route, model.conversationID == conversationID {
                 HStack(spacing: 8) {
-                    Button { model.back(); search = "" } label: { Image(systemName: "chevron.left").frame(width: 24, height: 26) }
-                        .help("返回上一层").accessibilityLabel("返回上一层")
-                    Text(title(route)).font(.system(size: 13, weight: .medium)).lineLimit(1).truncationMode(.middle)
+                    Button {
+                        model.back(); search = ""
+                    } label: {
+                        Image(systemName: "chevron.left")
+                            .frame(width: 24, height: 26)
+                    }
+                    .help("返回上一层").accessibilityLabel("返回上一层")
+                    Text(title(route))
+                        .font(.system(size: 13, weight: .medium))
+                        .lineLimit(1)
+                        .truncationMode(.middle)
                     Spacer(minLength: 4)
-                    Button { Task { await model.loadDetail() } } label: { Image(systemName: "arrow.clockwise") }
-                        .help("刷新详情").disabled(model.detailLoading)
-                }.buttonStyle(.plain).padding(.horizontal, 10).frame(height: 38)
+                    Button { Task { await model.loadDetail() } } label: {
+                        Image(systemName: "arrow.clockwise")
+                    }
+                    .help("刷新详情").disabled(model.detailLoading)
+                }
+                .buttonStyle(.plain)
+                .padding(.horizontal, 10)
+                .frame(height: 38)
                 Divider()
             }
             ScrollView {
                 VStack(alignment: .leading, spacing: 10) {
                     if model.conversationID != conversationID || (model.snapshot == nil && model.error == nil) {
-                        if conversationID == nil { note("选择对话后查看会话信息") }
-                        else { HStack { ProgressView().controlSize(.small); note("正在读取会话信息…") } }
+                        if conversationID == nil {
+                            note("选择对话后查看会话信息")
+                        } else {
+                            HStack {
+                                ProgressView()
+                                    .controlSize(.small)
+                                note("正在读取会话信息…")
+                            }
+                        }
                     } else if let route = model.route {
                         if model.detailLoading { ProgressView().controlSize(.small).frame(maxWidth: .infinity) }
                         if let error = model.detailError { message(error) { Task { await model.loadDetail() } } }
