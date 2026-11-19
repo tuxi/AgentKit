@@ -69,6 +69,14 @@ public struct SessionDraft: Equatable, Sendable {
         self.state = workspace == nil ? .drafting : .ready
     }
 
+    mutating func selectWorkspace(_ workspace: Workspace, preserveWorktreeIntent: Bool = false) {
+        self.workspace = workspace
+        if workspace.branch == nil && !preserveWorktreeIntent {
+            usesManagedWorktree = false
+        }
+        state = .ready
+    }
+
     /// 是否可以提交（发送首条消息）。
     public var canCommit: Bool {
         if case .committing = state { return false }

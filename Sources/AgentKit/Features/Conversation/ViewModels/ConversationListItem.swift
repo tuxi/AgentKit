@@ -6,16 +6,22 @@ import Foundation
 /// changing the row's stable identity.
 public struct ConversationListItem: Identifiable, Equatable, Sendable {
     public let ref: ConversationRef
+    private let presentationID: String
+    let workspaceGroupingID: String
+    let workspaceGroupingName: String
 
     public var id: String { ref.id }
 
     public init(ref: ConversationRef) {
         self.ref = ref
+        self.presentationID = ref.presentationID
+        self.workspaceGroupingID = ref.workspaceGroupingID
+        self.workspaceGroupingName = ref.workspaceGroupingName
     }
 
     public static func == (lhs: Self, rhs: Self) -> Bool {
-        lhs.ref.presentationID == rhs.ref.presentationID
-            && lhs.ref.workspaceGroupingID == rhs.ref.workspaceGroupingID
-            && lhs.ref.workspaceGroupingName == rhs.ref.workspaceGroupingName
+        lhs.presentationID == rhs.presentationID
+            && lhs.workspaceGroupingID == rhs.workspaceGroupingID
+            && lhs.workspaceGroupingName == rhs.workspaceGroupingName
     }
 }

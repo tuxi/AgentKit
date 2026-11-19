@@ -21,6 +21,8 @@ public final class RecentWorkspacesStore {
     private let defaults: UserDefaults
     private let key = "code_agent.recent_workspaces.bookmarks"
     private let maxCount = 8
+    private var bookmarks: [URL: Data] = [:]
+    private var bookmarkTask: Task<Void, Never>?
 
     /// 当前持有 security scope 的目录（path → url）。
     /// iOS：从 document picker / bookmark 取得的「沙盒外」目录需在访问期间持有 scope，
@@ -55,13 +57,10 @@ public final class RecentWorkspacesStore {
     /// 标记一个工作区为「刚使用」：移到队首并持久化。
     public func touch(_ workspace: Workspace) {
         beginAccess(to: workspace.url)
-        workspaces.removeAll { $0.id == workspace.id }
-        workspaces.insert(workspace, at: 0)
-        if workspaces.count > maxCount {
-            // 被挤出的工作区释放其 scope（id == url.path）。
-            for ws in workspaces[maxCount...] { endAccess(ws.id) }
-            workspaces = Array(workspaces.prefix(maxCount))
-        }
+        let updated = [workspace] + workspaces.filter { $0.id != workspace.id }
+        for evicted in updated.dropFirst(maxCount) { endAccess(evicted.id) }
+        let retained = Array(updated.prefix(maxCount))
+        if workspaces != retained { workspaces = retained }
         persist()
     }
 
@@ -69,6 +68,7 @@ public final class RecentWorkspacesStore {
     /// 关键：bookmark 解析得到的是 security-scoped URL，必须重新 `startAccessing…`，
     /// 否则重启后 recents 虽在列表里却无访问权（旧实现遗漏了这一步）。
     public func load() {
+        bookmarks.removeAll()
         guard let datas = defaults.array(forKey: key) as? [Data] else {
             workspaces = []
             return
@@ -79,7 +79,8 @@ public final class RecentWorkspacesStore {
         // The previous order constructed Workspace first, so every restored sandboxed
         // Git project lost its branch and the Worktree control disappeared from drafts.
         workspaces = datas.compactMap { data in
-            guard let url = Self.resolveBookmarkURL(data) else { return nil }
+            guard let (url, isStale) = Self.resolveBookmarkURL(data) else { return nil }
+            if !isStale { bookmarks[url] = data }
             beginAccess(to: url)
             return Workspace(url: url)
         }
@@ -88,11 +89,43 @@ public final class RecentWorkspacesStore {
     // MARK: - Persistence
 
     private func persist() {
-        let datas = workspaces.compactMap { Self.makeBookmark(for: $0.url) }
-        defaults.set(datas, forKey: key)
+        let urls = workspaces.map(\.url)
+        let retained = Set(urls)
+        bookmarks = bookmarks.filter { retained.contains($0.key) }
+        let missing = urls.filter { bookmarks[$0] == nil }
+        guard !missing.isEmpty else {
+            defaults.set(urls.compactMap { bookmarks[$0] }, forKey: key)
+            return
+        }
+        guard bookmarkTask == nil else { return }
+
+        // A bookmark may involve disk access or security-scoped services. Reordering
+        // existing bookmarks is immediate, and only previously unseen URLs need I/O.
+        bookmarkTask = Task { [weak self] in
+            let created = await Task.detached(priority: .utility) {
+                var data: [URL: Data] = [:]
+                for url in missing {
+                    let scoped = url.startAccessingSecurityScopedResource()
+                    defer { if scoped { url.stopAccessingSecurityScopedResource() } }
+                    data[url] = Self.makeBookmark(for: url)
+                }
+                return data
+            }.value
+            guard let self else { return }
+            bookmarkTask = nil
+            let current = workspaces.map(\.url)
+            for url in current where bookmarks[url] == nil {
+                bookmarks[url] = created[url]
+            }
+            defaults.set(current.compactMap { bookmarks[$0] }, forKey: key)
+            let attempted = Set(missing)
+            if current.contains(where: { bookmarks[$0] == nil && !attempted.contains($0) }) {
+                persist()
+            }
+        }
     }
 
-    private static func makeBookmark(for url: URL) -> Data? {
+    private nonisolated static func makeBookmark(for url: URL) -> Data? {
         #if os(macOS)
         // 沙盒应用用 security-scoped bookmark；非沙盒（开发态）会失败，回退到普通 bookmark。
         if let data = try? url.bookmarkData(
@@ -110,7 +143,7 @@ public final class RecentWorkspacesStore {
         )
     }
 
-    private static func resolveBookmarkURL(_ data: Data) -> URL? {
+    private static func resolveBookmarkURL(_ data: Data) -> (URL, Bool)? {
         var isStale = false
         #if os(macOS)
         if let url = try? URL(
@@ -119,14 +152,15 @@ public final class RecentWorkspacesStore {
             relativeTo: nil,
             bookmarkDataIsStale: &isStale
         ) {
-            return url
+            return (url, isStale)
         }
         #endif
-        return try? URL(
+        guard let url = try? URL(
             resolvingBookmarkData: data,
             options: [],
             relativeTo: nil,
             bookmarkDataIsStale: &isStale
-        )
+        ) else { return nil }
+        return (url, isStale)
     }
 }

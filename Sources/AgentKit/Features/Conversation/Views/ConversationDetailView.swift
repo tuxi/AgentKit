@@ -154,13 +154,18 @@ public struct ConversationDetailView: View {
     }
 
     private var draftComposer: some View {
-        DraftComposerPanel(
+        #if os(macOS)
+        let preparingWorkspace = store.isPreparingWorkspace || store.isResolvingDraftWorkspace
+        #else
+        let preparingWorkspace = store.isPreparingWorkspace
+        #endif
+        return DraftComposerPanel(
             workspaceStore: store,
             modelSettings: modelSettings,
             viewModel: viewModel,
             draftRevision: store.draftNavigationRevision,
-            placeholder: store.isPreparingWorkspace ? AgentKitLocalized.string("conversation.preparing_workspace") : AgentKitLocalized.string("conversation.describe_placeholder"),
-            isEnabled: ((store.draft?.canCommit ?? false) || draftHasLocalSubmission) && !store.isPreparingWorkspace && !draftConnectionBlocksSubmission,
+            placeholder: preparingWorkspace ? AgentKitLocalized.string("conversation.preparing_workspace") : AgentKitLocalized.string("conversation.describe_placeholder"),
+            isEnabled: ((store.draft?.canCommit ?? false) || draftHasLocalSubmission) && !preparingWorkspace && !draftConnectionBlocksSubmission,
             isDraft: true,
             onSend: { text, model, assets in
                 await store.commitDraft(firstMessage: text, model: model, assets: assets)

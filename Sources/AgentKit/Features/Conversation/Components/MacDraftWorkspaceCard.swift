@@ -58,8 +58,17 @@ struct MacDraftWorkspaceCard: View {
                                     }
                                 }
                                 Spacer(minLength: 8)
-                                Image(systemName: "checkmark")
-                                    .opacity(store.draft?.workspace?.id == workspace.id ? 1 : 0)
+                                let selected = store.draft?.workspace?.id == workspace.id
+                                if selected && store.isResolvingDraftWorkspace {
+                                    ProgressView()
+                                        .controlSize(.small)
+                                        .accessibilityLabel(AgentKitLocalized.string("conversation.preparing_workspace"))
+                                        .frame(width: 16)
+                                } else {
+                                    Image(systemName: "checkmark")
+                                        .opacity(selected ? 1 : 0)
+                                        .frame(width: 16)
+                                }
                             }
                             .frame(minHeight: 36)
                             .padding(.horizontal, 12)
@@ -93,7 +102,7 @@ struct MacDraftWorkspaceCard: View {
         .fileImporter(isPresented: $showingFolderPicker, allowedContentTypes: [.folder]) { result in
             guard case .success(let url) = result, !locked else { return }
             store.recentWorkspaces.beginAccess(to: url)
-            choose(Workspace(url: url))
+            store.selectDraftWorkspace(at: url)
         }
     }
 

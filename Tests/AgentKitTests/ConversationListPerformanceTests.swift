@@ -146,6 +146,46 @@ final class ConversationListPerformanceTests: XCTestCase {
         store.supervisor.stopActivityMonitoring()
     }
 
+    func testListItemEqualityDetectsPresentationAndGroupingChanges() {
+        func item(path: String, name: String = "Task") -> ConversationListItem {
+            ConversationListItem(ref: ConversationRef(id: "task", workspacePath: path, name: name))
+        }
+
+        let original = item(path: "/projects/main")
+        XCTAssertEqual(original, item(path: "/projects/main"))
+        XCTAssertNotEqual(original, item(path: "/projects/main", name: "Renamed"))
+        XCTAssertNotEqual(original, item(path: "/other/main"))
+        XCTAssertEqual(original, item(path: "/projects/main/.codeagent/worktrees/checkout"))
+    }
+
+    @MainActor
+    func testOpeningDraftInSpecifiedWorkspaceRestoresTextAndPersistsDestination() throws {
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: "draft-destination-" + UUID().uuidString))
+        let states = InMemoryConversationLocalStateStore()
+        let recent = RecentWorkspacesStore(defaults: defaults)
+        let draftID = UUID()
+        try states.updateState(for: .draft(draftID)) {
+            $0.composerDraft.text = "Keep this draft"
+            $0.composerDraft.workspacePath = "/previous/project"
+            $0.composerDraft.clientRequestID = "existing-request"
+        }
+        let target = Workspace(url: URL(fileURLWithPath: "/target/project"), branch: "main")
+        let store = WorkspaceStore(client: ListPerformanceClient(), localStateStore: states,
+                                   recentWorkspaces: recent, projects: ProjectsStore(root: nil))
+
+        store.beginDraft(in: target)
+
+        XCTAssertEqual(store.draft?.id, draftID)
+        XCTAssertEqual(store.draft?.workspace, target)
+        XCTAssertEqual(store.draft?.state, .ready)
+        XCTAssertEqual(store.draft?.clientRequestID, "existing-request")
+        XCTAssertEqual(store.draftNavigationRevision, 1)
+        XCTAssertEqual(recent.mostRecent, target)
+        let persisted = try states.state(for: .draft(draftID))?.composerDraft
+        XCTAssertEqual(persisted?.text, "Keep this draft")
+        XCTAssertEqual(persisted?.workspacePath, target.url.path)
+    }
+
     func testProjectionPreservesServerOrderAndFiltersBothPartitions() {
         let items = [
             ConversationRef(id: "newest", workspacePath: "/tmp/project", name: "Needle newest", turnStatus: "running"),

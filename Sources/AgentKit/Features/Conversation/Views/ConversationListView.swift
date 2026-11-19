@@ -344,8 +344,7 @@ public struct ConversationListView: View {
             .listRowBackground(Color.clear)
         ForEach(visibleProjectWorkspaces) { workspace in
                 Button {
-                    store.beginDraft()
-                    store.selectWorkspace(workspace)
+                    store.beginDraft(in: workspace)
                 } label: {
                     Label(workspace.name, systemImage: "folder")
                 }
@@ -398,11 +397,8 @@ public struct ConversationListView: View {
             #if os(macOS)
             Button {
                 let workspacePath = group.descriptor.workspacePath
-                let url = URL(fileURLWithPath: workspacePath)
-                store.beginDraft()
-                DispatchQueue.main.async {
-                    store.selectWorkspace(Workspace(url: url))
-                }
+                let url = URL(fileURLWithPath: workspacePath, isDirectory: true)
+                store.beginDraft(at: url)
             } label: {
                 Label("新建任务", systemImage: "square.and.pencil")
             }
@@ -876,8 +872,9 @@ struct ConversationListProjection {
             indices[descriptor.id] = groups.count
             groups.append(ConversationWorkspaceGroup(descriptor: descriptor, conversations: []))
         }
-        for conversation in conversations {
-            let descriptor = ConversationWorkspaceGroup.Descriptor(conversation: conversation)
+        for item in recentItems {
+            let conversation = item.ref
+            let descriptor = ConversationWorkspaceGroup.Descriptor(item: item)
             let index: Int
             if let existing = indices[descriptor.id] {
                 index = existing
@@ -900,7 +897,8 @@ struct ConversationWorkspaceGroup: Identifiable {
         let systemImage: String
         let workspacePath: String
 
-        init(conversation: ConversationRef) {
+        init(item: ConversationListItem) {
+            let conversation = item.ref
             // 通用会话没有绑定路径，固定显示在「聊天」分组中。
             guard !conversation.workspacePath.isEmpty else {
                 id = "chat"
@@ -912,8 +910,8 @@ struct ConversationWorkspaceGroup: Identifiable {
 
             // Managed worktrees stay under their source project. ConversationRef
             // also preserves the legacy workspace/path grouping fallback.
-            id = conversation.workspaceGroupingID
-            title = conversation.workspaceGroupingName
+            id = item.workspaceGroupingID
+            title = item.workspaceGroupingName
             systemImage = "folder"
             workspacePath = conversation.workspacePath
         }

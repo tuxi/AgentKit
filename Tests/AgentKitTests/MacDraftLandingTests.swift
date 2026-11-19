@@ -10,6 +10,64 @@ final class MacDraftLandingTests: XCTestCase {
         Workspace(url: URL(fileURLWithPath: path), branch: "main")
     }
 
+    func testSidebarDraftSelectsDestinationBeforeResolvingCheckout() async throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString, isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let git = root.appendingPathComponent(".git", isDirectory: true)
+        try FileManager.default.createDirectory(at: git, withIntermediateDirectories: true)
+        try "ref: refs/heads/feature\n".write(to: git.appendingPathComponent("HEAD"), atomically: true, encoding: .utf8)
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: "draft-switch-" + UUID().uuidString))
+        let states = InMemoryConversationLocalStateStore()
+        let store = WorkspaceStore(usesEmbeddedRuntime: false, localStateStore: states,
+                                   recentWorkspaces: RecentWorkspacesStore(defaults: defaults), projects: ProjectsStore(root: nil))
+
+        store.beginDraft(at: root)
+
+        XCTAssertEqual(store.draft?.workspace?.url, root)
+        XCTAssertEqual(store.selectItem, .draft)
+        XCTAssertTrue(store.isResolvingDraftWorkspace)
+        XCTAssertNil(store.draft?.workspace?.branch)
+        try await waitFor { !store.isResolvingDraftWorkspace }
+        XCTAssertEqual(store.draft?.workspace?.branch, "feature")
+        let draftID = try XCTUnwrap(store.draft?.id)
+        XCTAssertEqual(try states.state(for: .draft(draftID))?.composerDraft.workspaceBranch, "feature")
+
+        store.beginDraft(at: root)
+        let other = workspace("/another/project")
+        store.selectWorkspace(other)
+        XCTAssertFalse(store.isResolvingDraftWorkspace)
+        XCTAssertEqual(store.draft?.workspace, other)
+    }
+
+    func testRecentBookmarksPersistLatestOrderAfterBackgroundCreation() async throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString, isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let urls = ["One", "Two"].map { root.appendingPathComponent($0, isDirectory: true) }
+        for url in urls { try FileManager.default.createDirectory(at: url, withIntermediateDirectories: true) }
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: "recent-switch-" + UUID().uuidString))
+        let recent = RecentWorkspacesStore(defaults: defaults)
+        let first = Workspace(url: urls[0], branch: "main")
+        let second = Workspace(url: urls[1], branch: "main")
+
+        recent.touch(first)
+        recent.touch(second)
+        recent.touch(first)
+
+        XCTAssertEqual(recent.workspaces, [first, second])
+        try await waitFor { (defaults.array(forKey: "code_agent.recent_workspaces.bookmarks")?.count ?? 0) == 2 }
+        XCTAssertEqual(RecentWorkspacesStore(defaults: defaults).workspaces.map(\.name), ["One", "Two"])
+        recent.touch(second)
+        XCTAssertEqual(RecentWorkspacesStore(defaults: defaults).workspaces.map(\.name), ["Two", "One"])
+    }
+
+    private func waitFor(_ condition: () -> Bool) async throws {
+        let deadline = ContinuousClock.now + .seconds(3)
+        while !condition(), ContinuousClock.now < deadline {
+            try await Task.sleep(for: .milliseconds(10))
+        }
+        XCTAssertTrue(condition())
+    }
+
     func testChoicesIncludeSelectionAndDoNotReorderOnClick() {
         let recent = [workspace("/a/one"), workspace("/b/two"), workspace("/c/three"), workspace("/d/four")]
         var choices = MacDraftWorkspaceChoices()

@@ -22,8 +22,12 @@ public struct Workspace: Identifiable, Hashable, Sendable {
     public var branch: String?
 
     public init(url: URL, branch: String? = nil) {
+        self.init(url: url, resolvedBranch: branch ?? Self.resolveBranch(at: url))
+    }
+
+    init(url: URL, resolvedBranch: String?) {
         self.url = url
-        self.branch = branch ?? Workspace.resolveBranch(at: url)
+        self.branch = resolvedBranch
     }
 
     /// 目录显示名（最后一段路径）。

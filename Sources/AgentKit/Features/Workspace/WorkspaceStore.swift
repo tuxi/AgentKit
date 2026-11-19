@@ -67,6 +67,9 @@ public final class WorkspaceStore {
             supervisor.setSelectedSessionID(selectedConversation?.id)
             if let conversation = selectedConversation {
                 // 选中一个真实会话即丢弃未提交的草稿。
+                #if os(macOS)
+                cancelDraftWorkspaceResolution()
+                #endif
                 draft = nil
                 let controller = supervisor.controller(for: conversation, model: nil)
                 #if os(macOS)
@@ -133,6 +136,10 @@ public final class WorkspaceStore {
     /// 是否正在准备草稿的工作区（clone / import 进行中）。
     /// 此间 workspace 尚未就绪 → UI 应禁止再选目录、禁止发消息。
     public private(set) var isPreparingWorkspace = false
+    #if os(macOS)
+    public private(set) var isResolvingDraftWorkspace = false
+    @ObservationIgnored private var draftWorkspaceResolution: Task<Void, Never>?
+    #endif
 
     public private(set) var inspectorSelection: InspectorSelection? {
         didSet {
@@ -248,6 +255,8 @@ public final class WorkspaceStore {
     public private(set) var workspaceGitCheckout: WorkspaceGitCheckoutState?
     public private(set) var isLoadingWorkspaceGitBranches = false
     public private(set) var workspaceGitErrorMessage: String?
+    @ObservationIgnored private var workspaceGitRefreshRevision = 0
+    @ObservationIgnored private var workspaceGitRefreshPath: String?
 
     public var runtimeProjectsRoot: String? {
         supervisor.runtimeCapabilities.projectsRoot
@@ -1082,41 +1091,52 @@ public final class WorkspaceStore {
 
     /// 点击「+」：不调用任何 API，仅创建本地草稿。预选最近使用的工作区。
     public func beginDraft() {
+        beginDraft(in: nil)
+    }
+
+    /// Opens or restores the draft with the destination already selected.
+    func beginDraft(in workspace: Workspace?, preserveWorktreeIntent: Bool = false) {
+        #if os(macOS)
+        if workspace != nil { cancelDraftWorkspaceResolution() }
+        #endif
         draftSubmissionKey = nil
-        selectItem = .draft
         projects.reload()
 
-        if draft == nil {
-            if let recovered = try? localStateStore.latestDraft() {
-                let restoredDraft = makeSessionDraft(from: recovered)
-                draft = restoredDraft
+        var nextDraft: SessionDraft
+        var shouldPersist = false
+        if let draft {
+            nextDraft = draft
+        } else if let recovered = try? localStateStore.latestDraft() {
+            nextDraft = makeSessionDraft(from: recovered, workspace: workspace)
+            let oldPath = recovered.state.composerDraft.workspacePath
 
-                let oldPath = recovered.state.composerDraft.workspacePath
-                let newPath = restoredDraft.workspace?.url.path
-                let oldBranch = recovered.state.composerDraft.workspaceBranch
-                let newBranch = restoredDraft.workspace?.branch
-
-                // Restore the refreshed checkout metadata as well as a remapped
-                // sandbox path. The persisted branch is intentionally treated as
-                // a snapshot, so a branch change outside the app must be saved.
-                if let oldPath,
-                   let newPath,
-                   !oldPath.isEmpty,
-                   (oldPath != newPath || oldBranch != newBranch) {
-                    persistDraftMetadata()
-                }
-            } else {
-                // RecentWorkspacesStore keeps a durable Workspace value, whose
-                // branch can be stale after an IDE/Terminal checkout. Resolve
-                // the current HEAD whenever a new draft is created.
-                let currentWorkspace = recentWorkspaces.mostRecent.map {
-                    Workspace(url: $0.url)
-                }
-                draft = SessionDraft(workspace: currentWorkspace)
-                persistDraftMetadata()
+            // A remapped sandbox path or a refreshed Git HEAD must be saved.
+            if let oldPath, let newPath = nextDraft.workspace?.url.path, !oldPath.isEmpty {
+                shouldPersist = oldPath != newPath
+                    || recovered.state.composerDraft.workspaceBranch != nextDraft.workspace?.branch
             }
+        } else {
+            // Refresh the cached HEAD when using the most recent workspace.
+            let initialWorkspace = workspace ?? recentWorkspaces.mostRecent.map {
+                Workspace(url: $0.url)
+            }
+            nextDraft = SessionDraft(workspace: initialWorkspace)
+            shouldPersist = true
         }
 
+        if let workspace {
+            nextDraft.selectWorkspace(workspace, preserveWorktreeIntent: preserveWorktreeIntent)
+            recentWorkspaces.touch(workspace)
+            shouldPersist = true
+        }
+        if draft == nil || workspace != nil {
+            draft = nextDraft
+        }
+        if shouldPersist {
+            persistDraftMetadata()
+        }
+
+        selectItem = .draft
         draftNavigationRevision += 1
 
         Task {
@@ -1126,6 +1146,48 @@ public final class WorkspaceStore {
             await refreshDraftWorkspaceGitBranches()
         }
     }
+
+    #if os(macOS)
+    /// Show the destination immediately and inspect its local checkout off the main actor.
+    func beginDraft(at url: URL) {
+        let cached = recentWorkspaces.workspaces.first { $0.id == url.path }
+        let workspace = cached ?? Workspace(url: url, resolvedBranch: nil)
+        beginDraft(in: workspace, preserveWorktreeIntent: true)
+        resolveDraftWorkspaceBranch(workspace)
+    }
+
+    func selectDraftWorkspace(at url: URL) {
+        let workspace = Workspace(url: url, resolvedBranch: nil)
+        selectWorkspace(workspace, preserveWorktreeIntent: true)
+        resolveDraftWorkspaceBranch(workspace)
+    }
+
+    private func resolveDraftWorkspaceBranch(_ workspace: Workspace) {
+        guard let draftID = draft?.id else { return }
+        isResolvingDraftWorkspace = true
+        draftWorkspaceResolution = Task {
+            let branch = await Task.detached(priority: .userInitiated) {
+                Workspace.resolveBranch(at: workspace.url)
+            }.value
+            guard !Task.isCancelled else { return }
+            draftWorkspaceResolution = nil
+            isResolvingDraftWorkspace = false
+            guard var current = draft, current.id == draftID, current.workspace?.id == workspace.id else { return }
+            let resolved = Workspace(url: workspace.url, resolvedBranch: branch)
+            guard current.workspace != resolved || (branch == nil && current.usesManagedWorktree) else { return }
+            current.selectWorkspace(resolved)
+            draft = current
+            recentWorkspaces.touch(resolved)
+            persistDraftMetadata()
+        }
+    }
+
+    private func cancelDraftWorkspaceResolution() {
+        draftWorkspaceResolution?.cancel()
+        draftWorkspaceResolution = nil
+        isResolvingDraftWorkspace = false
+    }
+    #endif
 
     /// Cold-start entry used by the empty detail page. It restores the most recent
     /// unsent draft before creating a new one, so App restarts never flash an empty
@@ -1184,12 +1246,18 @@ public final class WorkspaceStore {
 
     /// 在草稿中选择/切换工作区（仅草稿期可变）。
     public func selectWorkspace(_ workspace: Workspace) {
-        guard draft != nil else { return }
-        draft?.workspace = workspace
-        if workspace.branch == nil {
-            draft?.usesManagedWorktree = false
-        }
-        draft?.state = .ready
+        selectWorkspace(workspace, preserveWorktreeIntent: false)
+    }
+
+    private func selectWorkspace(_ workspace: Workspace, preserveWorktreeIntent: Bool) {
+        guard let draft else { return }
+        #if os(macOS)
+        if !preserveWorktreeIntent, isResolvingDraftWorkspace, draft.workspace?.id == workspace.id { return }
+        cancelDraftWorkspaceResolution()
+        #endif
+        guard preserveWorktreeIntent || draft.workspace != workspace || draft.state != .ready
+            || recentWorkspaces.mostRecent != workspace else { return }
+        self.draft?.selectWorkspace(workspace, preserveWorktreeIntent: preserveWorktreeIntent)
         recentWorkspaces.touch(workspace)
         persistDraftMetadata()
         Task { await refreshDraftWorkspaceGitBranches() }
@@ -1199,21 +1267,34 @@ public final class WorkspaceStore {
     /// authority for branch enumeration and checkout state; local Workspace
     /// values only cache the display branch.
     public func refreshDraftWorkspaceGitBranches() async {
-        guard supportsWorkspaceGitBranch, let workspace = draft?.workspace else {
+        workspaceGitRefreshRevision += 1
+        let revision = workspaceGitRefreshRevision
+        let draftID = draft?.id
+        let path = draft?.workspace?.id
+        if workspaceGitRefreshPath != path || !supportsWorkspaceGitBranch {
+            workspaceGitRefreshPath = path
             workspaceGitBranches = []
             workspaceGitCheckout = nil
+        }
+        workspaceGitErrorMessage = nil
+        guard supportsWorkspaceGitBranch, let path else {
+            isLoadingWorkspaceGitBranches = false
             return
         }
         isLoadingWorkspaceGitBranches = true
-        workspaceGitErrorMessage = nil
-        defer { isLoadingWorkspaceGitBranches = false }
+        defer {
+            if workspaceGitRefreshRevision == revision { isLoadingWorkspaceGitBranches = false }
+        }
+
         do {
-            let result = try await client.listWorkspaceGitBranches(workspacePath: workspace.url.path)
+            let result = try await client.listWorkspaceGitBranches(workspacePath: path)
+            guard !Task.isCancelled, workspaceGitRefreshRevision == revision,
+                  draft?.id == draftID, draft?.workspace?.id == path else { return }
             applyWorkspaceGitBranchResult(result)
         } catch {
-            if !error.isRequestCancelled {
-                workspaceGitErrorMessage = error.localizedDescription
-            }
+            guard !Task.isCancelled, !error.isRequestCancelled, workspaceGitRefreshRevision == revision,
+                  draft?.id == draftID, draft?.workspace?.id == path else { return }
+            workspaceGitErrorMessage = error.localizedDescription
         }
     }
 
@@ -1309,6 +1390,9 @@ public final class WorkspaceStore {
         assets: [UserAssetRef] = [],
         localSubmissionID: String? = nil
     ) async {
+        #if os(macOS)
+        guard !isResolvingDraftWorkspace else { return }
+        #endif
         guard let current = draft, let workspace = current.workspace else { return }
         if current.usesManagedWorktree && !supportsManagedWorktreeCreation {
             draft?.state = .failed("当前 Runtime 暂不支持托管 Worktree。")
@@ -1463,10 +1547,11 @@ public final class WorkspaceStore {
     }
 
     private func makeSessionDraft(
-        from recovered: (id: UUID, state: ConversationLocalState)
+        from recovered: (id: UUID, state: ConversationLocalState),
+        workspace selectedWorkspace: Workspace?
     ) -> SessionDraft {
         let composer = recovered.state.composerDraft
-        let workspace = composer.workspacePath.flatMap { path -> Workspace? in
+        let workspace = selectedWorkspace ?? composer.workspacePath.flatMap { path -> Workspace? in
             guard !path.isEmpty else { return nil }
             let newPath = path.resolvingCurrentSandboxPath
             var isDirectory: ObjCBool = false
