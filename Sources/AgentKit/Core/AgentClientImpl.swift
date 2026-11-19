@@ -195,7 +195,7 @@ public final class CodeAgentSessionChannel: RuntimeSessionChannel, @unchecked Se
 /// 组合 `RuntimeHTTPClient`（HTTP） + `AgentWireSocket`（WebSocket）。
 ///
 /// 替换此类即可接入不同 backend：`DreamAITransport` / `MockTransport`。
-public final class CodeAgentTransport: AgentTransport, TextSupplementClient, CodingTaskReading, CodingTaskWriting, CodingTaskModelReading, @unchecked Sendable {
+public final class CodeAgentTransport: AgentTransport, TextSupplementClient, UserQueueClient, CodingTaskReading, CodingTaskWriting, CodingTaskModelReading, @unchecked Sendable {
 
     private let http: RuntimeHTTPClient
     private var socket: AgentWireSocket?
@@ -270,6 +270,26 @@ public final class CodeAgentTransport: AgentTransport, TextSupplementClient, Cod
             credentialTarget: credentialTarget,
             trustPolicy: trustPolicy
         )
+    }
+
+    public func userQueueServerID() async throws -> String {
+        try await http.userQueueServerID()
+    }
+
+    public func enqueueUserMessage(sessionID: String, value: UserQueueRequest, serverID: String) async throws -> UserQueueReceipt {
+        try await http.enqueueUserMessage(sessionID: sessionID, value: value, serverID: serverID)
+    }
+
+    public func queryUserQueueMessage(sessionID: String, requestID: String, serverID: String) async throws -> UserQueueReceipt {
+        try await http.queryUserQueueMessage(sessionID: sessionID, requestID: requestID, serverID: serverID)
+    }
+
+    public func listUserQueue(sessionID: String, cursor: UserQueuePage.Cursor?, serverID: String) async throws -> UserQueuePage {
+        try await http.listUserQueue(sessionID: sessionID, cursor: cursor, serverID: serverID)
+    }
+
+    public func controlUserQueue(sessionID: String, change: UserQueueChange, serverID: String) async throws {
+        try await http.controlUserQueue(sessionID: sessionID, change: change, serverID: serverID)
     }
 
     public func submitTextSupplement(sessionID: String, request: TextSupplementRequest, runtimeIdentity: String) async throws -> TextSupplementReceipt { try await http.submitTextSupplement(sessionID: sessionID, request: request, runtimeIdentity: runtimeIdentity) }
@@ -819,7 +839,7 @@ public final class CodeAgentTransport: AgentTransport, TextSupplementClient, Cod
 ///
 /// UI 通过 `AgentDependencies` 拿到 `RuntimeClient` 协议实例。
 /// 要替换 backend，替换 `transport` 即可，不修改 UI 层。
-public final class DefaultAgentClient: RuntimeClient, TextSupplementClient, CodingTaskReading, CodingTaskWriting, CodingTaskModelReading, SkillPluginManaging, @unchecked Sendable {
+public final class DefaultAgentClient: RuntimeClient, TextSupplementClient, UserQueueClient, CodingTaskReading, CodingTaskWriting, CodingTaskModelReading, SkillPluginManaging, @unchecked Sendable {
 
     private let transport: any AgentTransport
     private let managementHTTP: RuntimeHTTPClient?
@@ -945,6 +965,31 @@ public final class DefaultAgentClient: RuntimeClient, TextSupplementClient, Codi
 
     public func makeSessionChannel(conversationID: String) -> any RuntimeSessionChannel {
         transport.makeSessionChannel(sessionID: conversationID)
+    }
+
+    public func userQueueServerID() async throws -> String {
+        guard let port = transport as? any UserQueueClient else { throw RuntimeHTTPError.unsupported }
+        return try await port.userQueueServerID()
+    }
+
+    public func enqueueUserMessage(sessionID: String, value: UserQueueRequest, serverID: String) async throws -> UserQueueReceipt {
+        guard let port = transport as? any UserQueueClient else { throw RuntimeHTTPError.unsupported }
+        return try await port.enqueueUserMessage(sessionID: sessionID, value: value, serverID: serverID)
+    }
+
+    public func queryUserQueueMessage(sessionID: String, requestID: String, serverID: String) async throws -> UserQueueReceipt {
+        guard let port = transport as? any UserQueueClient else { throw RuntimeHTTPError.unsupported }
+        return try await port.queryUserQueueMessage(sessionID: sessionID, requestID: requestID, serverID: serverID)
+    }
+
+    public func listUserQueue(sessionID: String, cursor: UserQueuePage.Cursor?, serverID: String) async throws -> UserQueuePage {
+        guard let port = transport as? any UserQueueClient else { throw RuntimeHTTPError.unsupported }
+        return try await port.listUserQueue(sessionID: sessionID, cursor: cursor, serverID: serverID)
+    }
+
+    public func controlUserQueue(sessionID: String, change: UserQueueChange, serverID: String) async throws {
+        guard let port = transport as? any UserQueueClient else { throw RuntimeHTTPError.unsupported }
+        try await port.controlUserQueue(sessionID: sessionID, change: change, serverID: serverID)
     }
 
     public func submitTextSupplement(sessionID: String, request: TextSupplementRequest, runtimeIdentity: String) async throws -> TextSupplementReceipt {

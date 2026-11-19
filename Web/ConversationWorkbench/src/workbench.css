@@ -2573,3 +2573,21 @@ html { overflow-anchor: none; }
 }
 .user-attachment-strip .user-file-reference-name { font-size: 13px; }
 .user-attachment-strip .user-file-reference-kind { font-size: 11px; }
+
+.supplement-block {
+  width: fit-content;
+  max-width: 100%;
+  padding: 8px 12px;
+  border-radius: 10px;
+  background: color-mix(in srgb, currentColor 5%, transparent);
+  text-align: start;
+}
+
+.supplement-label {
+  font-size: 0.88em;
+  opacity: 0.72;
+}
+
+.supplement-block summary { cursor: pointer; }
+.supplement-block ol { margin: 6px 0 0; padding-inline-start: 1.4em; }
+.supplement-message { white-space: pre-wrap; overflow-wrap: anywhere; }

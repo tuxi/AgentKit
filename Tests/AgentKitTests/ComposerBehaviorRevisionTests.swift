@@ -22,6 +22,17 @@ final class ComposerBehaviorRevisionTests: XCTestCase {
         return (store, models, vm, .draft(try XCTUnwrap(store.draft?.id)))
     }
 
+    func testInTurnDeliveryRejectsDraftsWithLocalResources() throws {
+        let (_, _, vm, _) = try fixture()
+        vm.text = "补充文字"
+        XCTAssertTrue(vm.canDeliverPlainText)
+        vm.fileReferences = [.init(path: "/project/readme.md", workspacePath: "/project", isDirectory: false)]
+        XCTAssertFalse(vm.canDeliverPlainText)
+        vm.fileReferences = []
+        vm.attachments = [.init(id: "image", displayName: "image.png", resourceURI: "file:///project/image.png")]
+        XCTAssertFalse(vm.canDeliverPlainText)
+    }
+
     func testNonVisionImagesUsePathsWithoutChangingOriginalAttachments() async throws {
         let (store, _, vm, key) = try fixture()
         vm.text = "这是测试"

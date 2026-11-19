@@ -110,6 +110,7 @@ public final class ConversationViewModel {
     public private(set) var lastAcceptedSubmissionRequestID: String?
     public private(set) var localSubmissions: [LocalMessageSubmission] = []
     private var textSupplementDelivery: TextSupplementDeliveryCoordinator?
+    private var pendingComposerSupplementsByTurn: [String: Int] = [:]
 
     private func supplementDeliveryCoordinator() -> TextSupplementDeliveryCoordinator? {
         if let textSupplementDelivery { return textSupplementDelivery }
@@ -119,34 +120,115 @@ public final class ConversationViewModel {
         return coordinator
     }
 
-#if os(macOS) && DEBUG
-    var debugSupplementTargetID: String? {
+#if os(macOS)
+    func queueServerID() async throws -> String {
+        guard let port = client as? any UserQueueClient else { throw RuntimeHTTPError.unsupported }
+        return try await port.userQueueServerID()
+    }
+
+    func queuePage(serverID: String, cursor: UserQueuePage.Cursor? = nil, expectedSessionID: String? = nil) async throws -> UserQueuePage {
+        guard let id = conversation?.id, expectedSessionID == nil || id == expectedSessionID,
+              let port = client as? any UserQueueClient else { throw RuntimeHTTPError.unsupported }
+        return try await port.listUserQueue(sessionID: id, cursor: cursor, serverID: serverID)
+    }
+
+    func controlUserQueue(sessionID: String, change: UserQueueChange, serverID: String) async throws {
+        guard conversation?.id == sessionID, !isArchived,
+              let port = client as? any UserQueueClient else { throw RuntimeHTTPError.unsupported }
+        try await port.controlUserQueue(sessionID: sessionID, change: change, serverID: serverID)
+    }
+
+    func queuePending(serverID: String) -> [PendingUserQueueRequest] {
+        guard let id = conversation?.id else { return [] }
+        return (try? localStateStore.state(for: .session(id)))?.pendingUserQueueRequests.filter { $0.serverID == serverID } ?? []
+    }
+
+    func enqueueText(_ request: UserQueueRequest, serverID: String) async throws -> UserQueueReceipt {
+        guard let id = conversation?.id, let port = client as? any UserQueueClient else { throw RuntimeHTTPError.unsupported }
+        let key = ConversationLocalStateKey.session(id)
+        let record = PendingUserQueueRequest(serverID: serverID, request: request)
+        try localStateStore.updateState(for: key) { $0.pendingUserQueueRequests.append(record) }
+        let receipt: UserQueueReceipt
+        do {
+            receipt = try await port.enqueueUserMessage(sessionID: id, value: request, serverID: serverID)
+        } catch {
+            if case RuntimeHTTPError.unexpectedStatus(let status, _) = error, [400, 403, 409, 501].contains(status) {
+                try localStateStore.updateState(for: key) { $0.pendingUserQueueRequests.removeAll { $0 == record } }
+            }
+            throw error
+        }
+        try localStateStore.updateState(for: key) { $0.pendingUserQueueRequests.removeAll { $0 == record } }
+        return receipt
+    }
+
+    func recoverQueueRequest(_ record: PendingUserQueueRequest) async throws -> UserQueueReceipt {
+        guard let id = conversation?.id, let port = client as? any UserQueueClient else { throw RuntimeHTTPError.unsupported }
+        let receipt = try await port.queryUserQueueMessage(sessionID: id, requestID: record.request.requestID, serverID: record.serverID)
+        guard receipt.matches(record.request, sessionID: id) else { throw RuntimeHTTPError.invalidResponse }
+        try localStateStore.updateState(for: .session(id)) { $0.pendingUserQueueRequests.removeAll { $0 == record } }
+        return receipt
+    }
+
+    var composerSupplementTargetID: String? {
         guard ["running", "resuming"].contains(lifecycleStatus ?? "") else { return nil }
         return currentTurnID
     }
-    func debugSupplementSupported() async -> Bool {
+    func composerSupplementSupported() async -> Bool {
         guard let port = client as? any TextSupplementClient else { return false }
         return (try? await port.runtimeCapabilities().capabilities["user_supplement_text_v1"]) == true
     }
-    func debugSupplementDeliveries() -> [TextSupplementDelivery] {
+    func composerSupplementDeliveries() -> [TextSupplementDelivery] {
         guard let id = conversation?.id else { return [] }
         return (try? localStateStore.state(for: .session(id)))?.textSupplementDeliveries ?? []
     }
-    func debugRecoverSupplements() async throws {
+    var pendingComposerSupplementCount: Int {
+        guard let currentTurnID, isTurnActive else { return 0 }
+        return pendingComposerSupplementsByTurn[currentTurnID, default: 0]
+    }
+
+    func recoverComposerSupplements() async throws {
         guard let id = conversation?.id, let coordinator = supplementDeliveryCoordinator() else { throw RuntimeHTTPError.unsupported }
+        defer { refreshPendingComposerSupplements(sessionID: id) }
         try await coordinator.recover(sessionID: id)
     }
 #endif
 
+    private func refreshPendingComposerSupplements(sessionID: String) {
+        guard conversation?.id == sessionID else { return }
+        let deliveries = (try? localStateStore.state(for: .session(sessionID)))?.textSupplementDeliveries ?? []
+        pendingComposerSupplementsByTurn = Dictionary(grouping: deliveries.filter { $0.state == "pending_apply" }) {
+            $0.request.expectedTurnID
+        }.mapValues(\.count)
+    }
+
     func submitTextSupplement(_ text: String, expectedTurnID: String, requestID: String = UUID().uuidString) async throws {
         guard !isArchived, isTurnActive, currentTurnID == expectedTurnID,
               let sessionID = conversation?.id, let coordinator = supplementDeliveryCoordinator() else { throw RuntimeHTTPError.unsupported }
+        defer { refreshPendingComposerSupplements(sessionID: sessionID) }
         try await coordinator.submit(sessionID: sessionID, request: .init(requestID: requestID, expectedTurnID: expectedTurnID, text: text))
+    }
+
+    private func supplementTimelineEvents(_ events: [AgentEvent], sessionID: String) -> [AgentEvent] {
+        guard events.contains(where: {
+            if case .supplementApplied(let receipt) = $0 { return receipt.text == nil }
+            return false
+        }), let local = try? localStateStore.state(for: .session(sessionID)) else { return events }
+        let requests = Dictionary(local.textSupplementDeliveries.map { ($0.request.requestID, $0.request) },
+                                  uniquingKeysWith: { first, _ in first })
+        return events.map { event in
+            guard case .supplementApplied(let receipt) = event, receipt.text == nil,
+                  let request = requests[receipt.requestID], request.expectedTurnID == receipt.turnID else { return event }
+            return .supplementApplied(.init(requestID: receipt.requestID, turnID: receipt.turnID,
+                sequence: receipt.sequence, appliedAt: receipt.appliedAt, text: request.text))
+        }
     }
 
     private func reconcileSupplementApplication(_ event: AgentEvent, sessionID: String) {
         guard case .supplementApplied(let receipt) = event, let coordinator = supplementDeliveryCoordinator() else { return }
-        Task { try? await coordinator.apply(receipt, sessionID: sessionID) }
+        Task {
+            try? await coordinator.apply(receipt, sessionID: sessionID)
+            refreshPendingComposerSupplements(sessionID: sessionID)
+        }
     }
 
 
@@ -445,6 +527,7 @@ public final class ConversationViewModel {
         isConnecting = true
         defer { isConnecting = false }
         self.conversation = conversation
+        refreshPendingComposerSupplements(sessionID: conversation.id)
         reloadLocalSubmissions()
         backgroundJobs.select(conversation.id)
         if isDifferentConversation {
@@ -576,7 +659,10 @@ public final class ConversationViewModel {
             Task { await backgroundJobs.refresh(rediscover: true) }
             await eng.markLive()
             if let coordinator = supplementDeliveryCoordinator() {
-                Task { try? await coordinator.recover(sessionID: conversation.id) }
+                Task {
+                    try? await coordinator.recover(sessionID: conversation.id)
+                    refreshPendingComposerSupplements(sessionID: conversation.id)
+                }
             }
 
             streamTask = Task { [weak self] in
@@ -902,7 +988,7 @@ public final class ConversationViewModel {
             historyMayBeIncomplete = batch.replayTruncated && !hasMoreOlderHistory
 
             // v2: import into engine (replays through reducer → projects timeline)
-            await engine.importHistory(batch.events, wallClock: batch.turnWallClock)
+            await engine.importHistory(supplementTimelineEvents(batch.events, sessionID: conversationID), wallClock: batch.turnWallClock)
             for event in batch.events {
                 backgroundTracker.reduce(event)
                 modelIdentity.apply(event)
@@ -940,7 +1026,7 @@ public final class ConversationViewModel {
             oldestHistorySeq = result.oldestSeq
             hasMoreOlderHistory = result.hasMoreOlder
             historyMayBeIncomplete = result.isIncomplete
-            await engine.importOlderHistory(result.events, wallClock: result.turnWallClock)
+            await engine.importOlderHistory(supplementTimelineEvents(result.events, sessionID: conversationID), wallClock: result.turnWallClock)
             await engine.reconcileBackgroundJobs(backgroundJobs.canControl ? backgroundJobs.jobs : nil)
             for timelineExtension in timelineExtensions {
                 await timelineExtension.handleOlderHistory(result.events)
@@ -982,7 +1068,11 @@ public final class ConversationViewModel {
         if let sessionID = conversation?.id { reconcileSupplementApplication(event, sessionID: sessionID) }
         updateLifecycle(from: event)
         reconcileLocalSubmissionEvent(event)
-        await engine.ingest(event)
+        if case .supplementApplied = event, let id = conversation?.id {
+            for resolved in supplementTimelineEvents([event], sessionID: id) { await engine.ingest(resolved) }
+        } else {
+            await engine.ingest(event)
+        }
         switch event {
         case .jobStarted, .jobFinished, .turnFinished, .turnFailed, .turnCancelled:
             Task { await backgroundJobs.refresh() }

@@ -1522,7 +1522,7 @@ function TodoPanel({
         })}
       </div>
     </details>
-    {!isLive && !isComplete ? <p className="todo-ended-note">仍有未完成项</p> : null}
+    {!isLive && !isComplete ? <p className="todo-ended-note">任务清单仍有未完成项</p> : null}
     </>
   );
 }
@@ -2822,6 +2822,22 @@ const Block = memo(function Block({
         </section>
       );
     case "system":
+      if (block.systemKind === "supplementApplied") {
+        const count = Math.max(1, Number(block.metadata?.count) || 1);
+        const messages = Array.from({ length: count }, (_, index) => block.metadata?.[`message${index}`] || "暂无正文");
+        const label = `你补充了 ${count} 条消息 · 已加入当前任务`;
+        return count === 1 ? (
+          <aside className="supplement-block">
+            <span className="supplement-label">{label}</span>
+            <div className="supplement-message">{messages[0]}</div>
+          </aside>
+        ) : (
+          <details className="supplement-block" data-disclosure-id={`supplement:${block.id}`}>
+            <summary className="supplement-label">{label}</summary>
+            <ol>{messages.map((message, index) => <li className="supplement-message" key={index}>{message}</li>)}</ol>
+          </details>
+        );
+      }
       if (block.outcome) return <TurnOutcome block={block} />;
       if (block.systemKind === "contextEdited"
         || block.systemKind === "contextPruned"

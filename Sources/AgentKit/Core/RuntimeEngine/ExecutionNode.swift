@@ -153,6 +153,7 @@ public struct SystemNodePayload: Sendable, Equatable {
 }
 
 public enum SystemNodeKind: String, Sendable {
+    case supplementApplied
     case observation
     case reflection
     case modelActivity

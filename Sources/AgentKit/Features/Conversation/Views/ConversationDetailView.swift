@@ -30,9 +30,6 @@ public struct ConversationDetailView: View {
     /// content just above this bar instead of hiding it behind the bar, while
     /// the scroll range still extends behind the bar for manual scrolling.
     @State private var bottomBarHeight: CGFloat = 0
-#if os(macOS) && DEBUG
-    @State private var showSupplementDebug = false
-#endif
     
     public init(conversation: ConversationRef? = nil) {
         self.conversation = conversation
@@ -417,18 +414,7 @@ public struct ConversationDetailView: View {
             }
 
             
-#if os(macOS) && DEBUG
-            if ProcessInfo.processInfo.environment["TALKIFY_DEBUG_TEXT_SUPPLEMENTS"] == "1" {
-                HStack {
-                    Spacer()
-                    Button("补充联调…") { showSupplementDebug = true }
-                        .buttonStyle(.plain).font(.caption).foregroundStyle(.secondary)
-                }
-                .sheet(isPresented: $showSupplementDebug) {
-                    TextSupplementDebugPanel(viewModel: vm)
-                }
-            }
-#endif
+
             if !railOwnsTasks {
                 if let status = vm.snapshot.backgroundContinuation, status.isWaiting {
                     BackgroundContinuationBanner(status: status, isCancelling: vm.isCancelling) {

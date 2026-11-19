@@ -51,6 +51,10 @@ final class DraftComposerPanelViewModel {
     private var hasDetachedSubmission = false
     private var submissionGeneration: UInt64 = 0
     var isSending = false
+#if os(macOS)
+    var inTurnDeliveryNotice: String?
+#endif
+
     var isTurnRunning = false
     var isEnabled: Bool
     
@@ -429,6 +433,12 @@ final class DraftComposerPanelViewModel {
         }
         
         guard canSend else { return }
+#if os(macOS)
+        if hasUnconfirmedDelivery(matching: trimmed) {
+            inTurnDeliveryNotice = "这段消息仍待确认，请先查询原请求。"
+            return
+        }
+#endif
         let modelForSubmission = submissionModel
 
 #if os(macOS)

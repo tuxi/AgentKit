@@ -40,6 +40,12 @@ struct MacComposerSurface: View {
     @State private var permissions: WorkspacePermissions?
     @State private var permissionError: String?
     @State private var permissionUpdating = false
+    @State private var supplementSupported = false
+    @State private var queueServerID: String?
+    @State private var queuePage: UserQueuePage?
+    @State private var showQueue = false
+    @State private var hasPendingDelivery = false
+
 
     private var workspacePath: String? {
         vm.isDraft ? vm.workspaceStore.draft?.workspace?.url.path : vm.conversationViewModel?.workspacePermissionPath
@@ -134,10 +140,31 @@ struct MacComposerSurface: View {
                             if action == "skills" { openSettings?(.skills) }
                         }, onFocusChange: { focused = $0 })
                         .frame(height: max(28, min(vm.composerHeight, editorMaximum)))
+                    if showsDeliveryMenu { deliveryMenu }
                     primaryAction
                 }
                 .padding(.horizontal, 10)
                 .padding(.vertical, 10)
+                let pendingSupplements = vm.conversationViewModel?.pendingComposerSupplementCount ?? 0
+                if pendingSupplements > 0 {
+                    Text("\(pendingSupplements) 条补充已接收，等待加入当前任务")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .padding(.horizontal, 16).padding(.bottom, 10)
+                }
+                if let notice = vm.inTurnDeliveryNotice {
+                    HStack(spacing: 8) {
+                        Text(notice).font(.caption).foregroundStyle(.secondary)
+                        if hasPendingDelivery {
+                            Button("查询") { recoverDelivery() }.disabled(vm.isSubmitting)
+                        }
+                        Spacer(minLength: 0)
+                        Button("关闭") { vm.inTurnDeliveryNotice = nil }
+                    }
+                    .buttonStyle(.plain).font(.caption)
+                    .padding(.horizontal, 16).padding(.bottom, 10)
+                }
                 if let issue = vm.attachmentIssue ?? vm.imageInputIssue ?? vm.referenceLimitIssue ?? submissionIssue {
                     HStack {
                         Text(issue).font(.caption).foregroundStyle(.red).lineLimit(1).help(issue)
@@ -194,6 +221,24 @@ struct MacComposerSurface: View {
             }
 
             HStack(spacing: 8) {
+                if let queueStatus = queueStatus ?? (showQueue ? "消息队列" : nil), let sessionID = vm.sessionID, let serverID = queueServerID,
+                   let conversation = vm.conversationViewModel {
+                    Button(queueStatus) { showQueue.toggle() }
+                        .buttonStyle(.plain)
+                        .foregroundStyle(queuePage?.state == "paused" ? Color.orange : Color.secondary)
+                        .lineLimit(1)
+                        .help("查看消息队列")
+                        .popover(isPresented: $showQueue, arrowEdge: .bottom) {
+                            MacUserQueuePanel(conversation: conversation, sessionID: sessionID, serverID: serverID,
+                                              page: queuePage, updatePage: { page in
+                                if vm.sessionID == sessionID, queueServerID == serverID,
+                                   page.revision >= (queuePage?.revision ?? 0) {
+                                    queuePage = page
+                                }
+                            })
+                                .id(sessionID)
+                        }
+                }
                 if vm.isDraft {
                     WorkspaceChipBar(compactComposer: true, forceCompactComposer: true, iconOnlyComposer: vm.contentWidth < 480)
                         .frame(minWidth: 0, maxWidth: .infinity, alignment: .leading)
@@ -204,6 +249,24 @@ struct MacComposerSurface: View {
             .font(.system(size: 12))
             .frame(minHeight: 28)
             .disabled(vm.isSubmitting)
+        }
+        .task(id: vm.sessionID) {
+            showQueue = false
+            queuePage = nil
+            queueServerID = nil
+            guard !vm.isDraft, let conversation = vm.conversationViewModel else { return }
+            async let supplement = conversation.composerSupplementSupported()
+            let server = try? await conversation.queueServerID()
+            let supported = await supplement
+            guard !Task.isCancelled else { return }
+            supplementSupported = supported
+            queueServerID = server
+            updatePendingDelivery()
+            await refreshQueue()
+        }
+        .task(id: vm.conversationViewModel?.lifecycleStatus) {
+            await refreshQueue()
+            updatePendingDelivery()
         }
         .task(id: suggestionSource) {
             suggestion = nil
@@ -251,6 +314,82 @@ struct MacComposerSurface: View {
         }
         .frame(height: 96 * scale + 8)
         .disabled(vm.isSubmitting)
+    }
+
+    private var supplementTarget: String? {
+        supplementSupported ? vm.conversationViewModel?.composerSupplementTargetID : nil
+    }
+
+    private var showsDeliveryMenu: Bool {
+        guard !vm.isDraft, vm.conversationViewModel?.isArchived == false else { return false }
+        return hasPendingDelivery || ((vm.conversationViewModel?.isTurnActive == true)
+            && (supplementTarget != nil || queueServerID != nil))
+    }
+
+    private var deliveryMenu: some View {
+        Menu {
+            if let target = supplementTarget {
+                Button("补充当前任务") {
+                    Task { await vm.sendInTurn(supplementTarget: target, queueServerID: nil); updatePendingDelivery() }
+                }.disabled(!vm.canDeliverPlainText)
+            }
+            if let serverID = queueServerID, vm.conversationViewModel?.isTurnActive == true {
+                Button("排队下一条") {
+                    Task {
+                        await vm.sendInTurn(supplementTarget: nil, queueServerID: serverID)
+                        await refreshQueue()
+                        updatePendingDelivery()
+                    }
+                }.disabled(!vm.canDeliverPlainText || vm.submissionModel == nil)
+            }
+            if !vm.attachments.isEmpty || !vm.fileReferences.isEmpty || !vm.tokens.isEmpty {
+                Text("补充与排队目前仅支持纯文本")
+            }
+            if hasPendingDelivery {
+                Button("查询待确认消息") { recoverDelivery() }.disabled(vm.isSubmitting)
+            }
+        } label: {
+            Image(systemName: "ellipsis.circle")
+                .frame(width: 24, height: 28)
+        }
+        .menuStyle(.borderlessButton)
+        .menuIndicator(.hidden)
+        .fixedSize()
+        .accessibilityLabel("运行中消息操作")
+        .help("补充当前任务或排队下一条")
+    }
+
+    private var queueStatus: String? {
+        guard let queuePage else { return nil }
+        let waiting = "\(queuePage.items.count)\(queuePage.next == nil ? "" : "+") 条待执行"
+        if queuePage.state == "paused" {
+            return queuePage.items.isEmpty ? "队列已暂停" : "队列已暂停 · \(waiting)"
+        }
+        return queuePage.items.isEmpty ? nil : waiting
+    }
+
+    private func refreshQueue() async {
+        guard let conversation = vm.conversationViewModel, let queueServerID, let sessionID = vm.sessionID else { return }
+        let next = try? await conversation.queuePage(serverID: queueServerID, expectedSessionID: sessionID)
+        if !Task.isCancelled, vm.sessionID == sessionID, self.queueServerID == queueServerID,
+           let next, next.revision >= (queuePage?.revision ?? 0) {
+            queuePage = next
+        }
+    }
+
+    private func updatePendingDelivery() {
+        guard let conversation = vm.conversationViewModel else { return }
+        hasPendingDelivery = queueServerID.map { !conversation.queuePending(serverID: $0).isEmpty } == true
+            || vm.pendingComposerSupplementID != nil
+            || conversation.composerSupplementDeliveries().contains { $0.state == "unconfirmed" }
+    }
+
+    private func recoverDelivery() {
+        Task {
+            await vm.recoverInTurnDelivery(queueServerID: queueServerID)
+            updatePendingDelivery()
+            await refreshQueue()
+        }
     }
 
     private var primaryAction: some View {

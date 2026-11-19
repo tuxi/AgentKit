@@ -286,6 +286,24 @@ public struct TimelineProjection: Sendable {
                     plans.append(plan)
                 }
             case .system(let p):
+                if p.kind == .supplementApplied {
+                    flushActivity()
+                    let batch = p.metadata["appliedAt"] ?? ""
+                    if case .system(let id, let previous)? = blocks.last,
+                       previous.kind == .supplementApplied,
+                       !batch.isEmpty, previous.metadata["appliedAt"] == batch,
+                       previous.metadata["turnID"] == node.turnID {
+                        var metadata = previous.metadata
+                        let count = metadata["count"].flatMap(Int.init) ?? 1
+                        metadata["message\(count)"] = p.text
+                        metadata["count"] = String(count + 1)
+                        blocks[blocks.count - 1] = .system(id: id, .init(kind: .supplementApplied, text: previous.text, metadata: metadata))
+                    } else {
+                        blocks.append(.system(id: node.id, .init(kind: .supplementApplied, text: p.text,
+                            metadata: ["count": "1", "message0": p.text, "appliedAt": batch, "turnID": node.turnID])))
+                    }
+                    continue
+                }
                 #if os(macOS)
                 if p.kind == .preMutation {
                     if pendingActivity.isEmpty { activityAnchor = node.id }
@@ -507,6 +525,7 @@ public struct TimelineProjection: Sendable {
                 switch payload.kind {
                 case .modelActivity:
                     return .modelActivity
+                case .supplementApplied: return .supplementApplied
                 case .contextCompact: return .contextCompact
                 case .contextEdited: return .contextEdited
                 case .contextPruned: return .contextPruned

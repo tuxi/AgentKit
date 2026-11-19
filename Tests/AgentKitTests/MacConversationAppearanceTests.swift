@@ -256,7 +256,7 @@ final class MacConversationAppearanceTests: XCTestCase {
         try await wait("document.body.innerText.includes('版本 4') && !document.querySelector('.live-indicator')", in: web)
         try await assertJavaScript("document.querySelector('.todo-count').textContent", equals: "1/2", in: web)
         try await assertJavaScript("document.querySelector('.todo-panel').open", equals: false, in: web)
-        try await assertJavaScript("document.querySelector('.todo-ended-note').textContent", equals: "仍有未完成项", in: web)
+        try await assertJavaScript("document.querySelector('.todo-ended-note').textContent", equals: "任务清单仍有未完成项", in: web)
         let errorKept = try await web.evaluateJavaScript("document.querySelector('[data-block-id=\"plan-update\"]') !== null") as? Bool
         XCTAssertEqual(errorKept, true, "A failed plan update must remain inspectable")
         _ = try await web.evaluateJavaScript("document.querySelector('.todo-panel-summary').click()")

@@ -50,8 +50,17 @@ public struct ExecutionReducer: Sendable {
 
         switch event {
         // ── Turn lifecycle ──
-        case .turnAccepted, .turnQueued, .agentInputRejected, .supplementApplied:
+        case .turnAccepted, .turnQueued, .agentInputRejected:
             return []
+
+        case .supplementApplied(let receipt):
+            let id = "supplement:\(receipt.turnID):\(receipt.requestID)"
+            guard graph.nodes[id] == nil else { return [] }
+            let payload = SystemPayload(kind: .supplementApplied, text: receipt.text ?? "",
+                                        metadata: ["appliedAt": receipt.appliedAt])
+            appendNode(GraphNode(id: id, kind: .system, payload: .system(payload),
+                                 status: .completed, timestamp: ts, turnID: receipt.turnID), to: &graph)
+            return [id]
 
         case .turnStarted(let turnID, let text, let userAssets, let localAssets):
             return handleTurnStarted(

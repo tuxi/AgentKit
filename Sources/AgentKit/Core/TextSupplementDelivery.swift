@@ -27,7 +27,15 @@ public struct SupplementApplicationReceipt: Codable, Sendable, Equatable {
     public let turnID: String
     public let sequence: Int64
     public let appliedAt: String
-    enum CodingKeys: String, CodingKey { case requestID = "request_id", turnID = "turn_id", sequence, appliedAt = "applied_at" }
+    public let text: String?
+    public init(requestID: String, turnID: String, sequence: Int64, appliedAt: String, text: String? = nil) {
+        self.requestID = requestID
+        self.turnID = turnID
+        self.sequence = sequence
+        self.appliedAt = appliedAt
+        self.text = text
+    }
+    enum CodingKeys: String, CodingKey { case requestID = "request_id", turnID = "turn_id", sequence, appliedAt = "applied_at", text }
 }
 public protocol TextSupplementClient: Sendable {
     func runtimeCapabilities() async throws -> RuntimeCapabilitySnapshot

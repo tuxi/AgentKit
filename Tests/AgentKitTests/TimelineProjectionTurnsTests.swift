@@ -40,6 +40,29 @@ final class TimelineProjectionTurnsTests: XCTestCase {
         }
     }
 
+    func testAppliedSupplementBatchSeparatesToolsAndDeduplicatesReplay() throws {
+        let first = AgentEvent.supplementApplied(.init(requestID: "s1", turnID: "t", sequence: 1, appliedAt: "batch", text: "第一条"))
+        let second = AgentEvent.supplementApplied(.init(requestID: "s2", turnID: "t", sequence: 2, appliedAt: "batch", text: "第二条"))
+        let graph = reduce([
+            .turnStarted(turnID: "t", text: "主任务"),
+            .toolStarted(turnID: "t", callID: "c1", tool: tool("c1", "run_command")),
+            .toolFinished(turnID: "t", callID: "c1", result: result("c1", "run_command")),
+            first, second, first,
+            .toolStarted(turnID: "t", callID: "c2", tool: tool("c2", "list_files")),
+            .toolFinished(turnID: "t", callID: "c2", result: result("c2", "list_files")),
+            .turnFinished(turnID: "t", text: "完成", textAnnotations: []),
+        ])
+        let turns = TimelineProjection().projectTurns(graph)
+        XCTAssertEqual(turns.count, 1)
+        let turn = try XCTUnwrap(turns.first)
+        XCTAssertEqual(tags(turn.blocks), ["tools", "system", "tools", "text"])
+        guard case .system(_, let batch) = turn.blocks[1] else { return XCTFail("missing supplement batch") }
+        XCTAssertEqual(batch.kind, .supplementApplied)
+        XCTAssertEqual(batch.metadata["count"], "2")
+        XCTAssertEqual(batch.metadata["message0"], "第一条")
+        XCTAssertEqual(batch.metadata["message1"], "第二条")
+    }
+
     // Live turn: thinking → text → tool → text. Lifecycle → footer, not blocks.
     // After backend fix: `thinking` carries reasoning (not assistant narration),
     // so it appears as a separate collapsible thinking block, not inline text.

@@ -339,6 +339,7 @@ public struct SystemPayload: Sendable {
 }
 
 public enum SystemPayloadKind: String, Sendable {
+    case supplementApplied
     case modelActivity
     case contextCompact
     case contextEdited

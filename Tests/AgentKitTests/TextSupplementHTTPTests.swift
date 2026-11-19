@@ -53,3 +53,36 @@ final class TextSupplementHTTPTests: XCTestCase {
         do { _ = try await client().submitTextSupplement(sessionID: "s", request: .init(expectedTurnID: "t", text: "keep"), runtimeIdentity: "http://localhost:1234"); XCTFail("unsupported") } catch RuntimeHTTPError.unsupported {} catch { XCTFail("unexpected error: \(error)") }
     }
 }
+
+extension TextSupplementHTTPTests {
+    func testUserQueueChecksRuntimeIdentityBeforePosting() async throws {
+        SupplementHTTPProtocol.handler = { request in
+            XCTAssertEqual(request.httpMethod, "GET")
+            XCTAssertEqual(request.url?.path, "/v1/runtime/info")
+            return Data(#"{"code":0,"msg":"ok","data":{"schema":"v1","server_id":"other","display_name":"Test","product":"codeagent","runtime_version":"1.0","agent_wire_protocol":{"major":1,"revision":"1.2"},"runtime_profile":"headless"}}"#.utf8)
+        }
+        do {
+            _ = try await client().enqueueUserMessage(sessionID: "s", value: .init(text: "next", model: "selected"), serverID: "original")
+            XCTFail("posting to a different runtime must fail")
+        } catch RuntimeHTTPError.invalidResponse {}
+    }
+
+    func testUserQueueListCarriesRevisionAndCursor() async throws {
+        SupplementHTTPProtocol.handler = { request in
+            switch request.url?.path {
+            case "/v1/runtime/info":
+                return Data(#"{"code":0,"msg":"ok","data":{"schema":"v1","server_id":"runtime","display_name":"Test","product":"codeagent","runtime_version":"1.0","agent_wire_protocol":{"major":1,"revision":"1.2"},"runtime_profile":"headless"}}"#.utf8)
+            case "/v1/runtime/capabilities":
+                return Data(#"{"code":0,"msg":"ok","data":{"capabilities":{"user_queue_text_v1":true}}}"#.utf8)
+            default:
+                XCTAssertEqual(request.url?.path, "/v1/conversations/s/queue")
+                let query = URLComponents(url: try XCTUnwrap(request.url), resolvingAgainstBaseURL: false)?.queryItems
+                XCTAssertEqual(query, [.init(name: "revision", value: "3"), .init(name: "after_sequence", value: "2")])
+                return Data(#"{"revision":3,"state":"enabled","items":[{"input":{"session_id":"s","request_id":"r","text":"next","context":{"wire_model":"selected"}},"sequence":3,"revision":3,"state":"queued"}]}"#.utf8)
+            }
+        }
+        let cursor = try JSONDecoder().decode(UserQueuePage.Cursor.self, from: Data(#"{"session_id":"s","revision":3,"after_sequence":2}"#.utf8))
+        let page = try await client().listUserQueue(sessionID: "s", cursor: cursor, serverID: "runtime")
+        XCTAssertEqual(page.items.first?.input.requestID, "r")
+    }
+}

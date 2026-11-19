@@ -274,6 +274,8 @@ public enum ComposerModelSelectionMode: String, Codable, Sendable {
 public struct ConversationLocalState: Codable, Sendable, Equatable {
     public var composerMessages: [String: ComposerMessagePresentation] = [:]
     public var localSubmissions: [LocalMessageSubmission] = []
+    var composerSupplementRequestID: String?
+    public var pendingUserQueueRequests: [PendingUserQueueRequest] = []
     public var textSupplementDeliveries: [TextSupplementDelivery] = []
     /// Bump when the meaning of `modelSelectionMode` changes. Versioned explicit
     /// choices are trusted; unversioned explicit values came from older,
@@ -326,7 +328,7 @@ public struct ConversationLocalState: Codable, Sendable, Equatable {
     }
 
     private enum CodingKeys: String, CodingKey {
-        case composerDraft, selectedModelID, modelSelectionMode, composerSelectionVersion, composerMessages, localSubmissions, textSupplementDeliveries
+        case composerDraft, selectedModelID, modelSelectionMode, composerSelectionVersion, composerMessages, localSubmissions, textSupplementDeliveries, pendingUserQueueRequests, composerSupplementRequestID
         case reasoningEffort, recentModelIDs, lastReadSequence
         case lastSeenTerminalSequence, lastNotifiedTerminalSequence
         case lastNotifiedApprovalSequence, updatedAt
@@ -337,6 +339,8 @@ public struct ConversationLocalState: Codable, Sendable, Equatable {
         composerDraft = try values.decodeIfPresent(ComposerDraft.self, forKey: .composerDraft) ?? ComposerDraft()
         composerMessages = try values.decodeIfPresent([String: ComposerMessagePresentation].self, forKey: .composerMessages) ?? [:]
         localSubmissions = try values.decodeIfPresent([LocalMessageSubmission].self, forKey: .localSubmissions) ?? []
+        composerSupplementRequestID = try values.decodeIfPresent(String.self, forKey: .composerSupplementRequestID)
+        pendingUserQueueRequests = try values.decodeIfPresent([PendingUserQueueRequest].self, forKey: .pendingUserQueueRequests) ?? []
         textSupplementDeliveries = try values.decodeIfPresent([TextSupplementDelivery].self, forKey: .textSupplementDeliveries) ?? []
         selectedModelID = try values.decodeIfPresent(String.self, forKey: .selectedModelID)
         modelSelectionMode = try values.decodeIfPresent(ComposerModelSelectionMode.self, forKey: .modelSelectionMode)

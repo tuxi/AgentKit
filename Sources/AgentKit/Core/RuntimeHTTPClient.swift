@@ -239,6 +239,81 @@ struct RuntimeHTTPClient: Sendable {
         return try decodeEnvelope(RuntimeCapabilitySnapshot.self, from: data)
     }
 
+    func userQueueServerID() async throws -> String {
+        let request = try await buildRequest("GET", pathArray: ["v1", "runtime", "info"], timeout: 15)
+        let id = try await verifyUserQueueRuntime(request, expectedID: nil)
+        return id
+    }
+
+    private func verifyUserQueueRuntime(_ request: URLRequest, expectedID: String?) async throws -> String {
+        guard let url = request.url, var origin = URLComponents(url: url, resolvingAgainstBaseURL: false) else {
+            throw RuntimeHTTPError.invalidResponse
+        }
+        func probe(_ path: String) async throws -> Data {
+            origin.path = path
+            origin.query = nil
+            var probe = request
+            probe.url = origin.url
+            probe.httpMethod = "GET"
+            probe.httpBody = nil
+            let (data, response) = try await session.data(for: probe)
+            try validateHTTP(response, data: data)
+            return data
+        }
+        let info = try decodeEnvelope(RuntimeServerInfo.self, from: await probe("/v1/runtime/info"))
+        guard !info.serverID.isEmpty, expectedID == nil || info.serverID == expectedID else {
+            throw RuntimeHTTPError.invalidResponse
+        }
+        let caps = try decodeEnvelope(RuntimeCapabilitySnapshot.self, from: await probe("/v1/runtime/capabilities"))
+        guard caps.capabilities["user_queue_text_v1"] == true else { throw RuntimeHTTPError.unsupported }
+        return info.serverID
+    }
+
+    private func userQueueRequest<T: Decodable>(_ type: T.Type, request: URLRequest, serverID: String) async throws -> T {
+        _ = try await verifyUserQueueRuntime(request, expectedID: serverID)
+        try Task.checkCancellation()
+        let (data, response) = try await session.data(for: request)
+        try validateHTTP(response, data: data)
+        return try decoder.decode(type, from: data)
+    }
+
+    func enqueueUserMessage(sessionID: String, value: UserQueueRequest, serverID: String) async throws -> UserQueueReceipt {
+        let request = try await buildRequest("POST", pathArray: ["v1", "conversations", sessionID, "queue"], body: value, timeout: 20)
+        let receipt = try await userQueueRequest(UserQueueReceipt.self, request: request, serverID: serverID)
+        guard receipt.matches(value, sessionID: sessionID), receipt.sequence > 0 else { throw RuntimeHTTPError.invalidResponse }
+        return receipt
+    }
+
+    func queryUserQueueMessage(sessionID: String, requestID: String, serverID: String) async throws -> UserQueueReceipt {
+        let request = try await buildRequest("GET", pathArray: ["v1", "conversations", sessionID, "queue", requestID], timeout: 20)
+        let receipt = try await userQueueRequest(UserQueueReceipt.self, request: request, serverID: serverID)
+        guard receipt.input.sessionID == sessionID, receipt.input.requestID == requestID, receipt.sequence > 0 else {
+            throw RuntimeHTTPError.invalidResponse
+        }
+        return receipt
+    }
+
+    func listUserQueue(sessionID: String, cursor: UserQueuePage.Cursor?, serverID: String) async throws -> UserQueuePage {
+        var query: [URLQueryItem] = []
+        if let cursor {
+            guard cursor.sessionID == sessionID else { throw RuntimeHTTPError.invalidResponse }
+            query = [.init(name: "revision", value: String(cursor.revision)), .init(name: "after_sequence", value: String(cursor.afterSequence))]
+        }
+        let request = try await buildRequest("GET", pathArray: ["v1", "conversations", sessionID, "queue"], queryItems: query, timeout: 20)
+        let page = try await userQueueRequest(UserQueuePage.self, request: request, serverID: serverID)
+        guard page.items.allSatisfy({ $0.input.sessionID == sessionID }), cursor == nil || cursor?.revision == page.revision else {
+            throw RuntimeHTTPError.invalidResponse
+        }
+        return page
+    }
+
+    func controlUserQueue(sessionID: String, change: UserQueueChange, serverID: String) async throws {
+        struct Acknowledgment: Decodable { let ok: Bool }
+        let request = try await buildRequest("POST", pathArray: ["v1", "conversations", sessionID, "queue", "control"], body: change, timeout: 20)
+        let result = try await userQueueRequest(Acknowledgment.self, request: request, serverID: serverID)
+        guard result.ok else { throw RuntimeHTTPError.invalidResponse }
+    }
+
     func submitTextSupplement(sessionID: String, request value: TextSupplementRequest, runtimeIdentity: String) async throws -> TextSupplementReceipt {
         guard try await runtimeCapabilities().capabilities["user_supplement_text_v1"] == true else { throw RuntimeHTTPError.unsupported }
         let request = try await buildRequest("POST", pathArray: ["v1", "conversations", sessionID, "supplements"], body: value, timeout: 20)

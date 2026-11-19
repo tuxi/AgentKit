@@ -19,15 +19,19 @@ struct SystemMessageView: View {
                 .foregroundStyle(tintColor)
                 .padding(.top, 1)
 
-            VStack(alignment: .leading, spacing: 2) {
-                Text(kindLabel)
-                    .font(.caption.weight(.semibold))
-                    .foregroundStyle(tintColor)
-                if !payload.text.isEmpty {
-                    Text(payload.text)
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                        .lineLimit(8)
+            if payload.kind == .supplementApplied {
+                supplementContent
+            } else {
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(kindLabel)
+                        .font(.caption.weight(.semibold))
+                        .foregroundStyle(tintColor)
+                    if !payload.text.isEmpty {
+                        Text(payload.text)
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                            .lineLimit(8)
+                    }
                 }
             }
         }
@@ -38,6 +42,27 @@ struct SystemMessageView: View {
             RoundedRectangle(cornerRadius: 6)
                 .fill(tintColor.opacity(0.08))
         )
+    }
+
+    @ViewBuilder
+    private var supplementContent: some View {
+        let count = max(1, payload.metadata["count"].flatMap(Int.init) ?? 1)
+        let label = "你补充了 \(count) 条消息 · 已加入当前任务"
+        if count == 1 {
+            VStack(alignment: .leading, spacing: 3) {
+                Text(label).font(.caption).foregroundStyle(.secondary)
+                Text(payload.text.isEmpty ? "暂无正文" : payload.text).font(.callout)
+            }
+        } else {
+            DisclosureGroup(label) {
+                VStack(alignment: .leading, spacing: 5) {
+                    ForEach(0..<count, id: \.self) { index in
+                        let text = payload.metadata["message\(index)"] ?? ""
+                        Text(text.isEmpty ? "暂无正文" : text).font(.callout)
+                    }
+                }
+            }.font(.caption)
+        }
     }
 
     // MARK: - Style mapping
@@ -55,6 +80,7 @@ struct SystemMessageView: View {
         case .verified: return "验证结果"
         case .skillLoaded: return "技能加载"
         case .modelRetrying: return "模型重试"
+        case .supplementApplied: return "你补充了消息"
         }
     }
 
@@ -71,6 +97,7 @@ struct SystemMessageView: View {
         case .verified: return "terminal"
         case .skillLoaded: return "sparkles"
         case .modelRetrying: return "arrow.clockwise"
+        case .supplementApplied: return "text.bubble"
         }
     }
 
@@ -87,6 +114,7 @@ struct SystemMessageView: View {
         case .verified: return .teal
         case .skillLoaded: return .green
         case .modelRetrying: return .orange
+        case .supplementApplied: return .secondary
         }
     }
 }
