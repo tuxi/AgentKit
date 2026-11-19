@@ -48,6 +48,10 @@ public struct TextSupplementDelivery: Codable, Sendable, Equatable {
     public let request: TextSupplementRequest
     public var state: String
     public var sequence: Int64?
+
+    var needsConfirmation: Bool {
+        !["pending_apply", "applied", "cancelled", "failed", "rejected"].contains(state)
+    }
 }
 
 /// Recovery only queries; loss of a response is not permission to submit again.
@@ -88,14 +92,21 @@ public actor TextSupplementDeliveryCoordinator {
         }
     }
 
-    public func recover(sessionID: String) async throws {
-        guard try await client.runtimeCapabilities().capabilities["user_supplement_text_v1"] == true else { return }
+    @discardableResult
+    public func recover(sessionID: String) async throws -> Bool {
+        guard try await client.runtimeCapabilities().capabilities["user_supplement_text_v1"] == true else { return false }
         let identity = try await client.backgroundJobRuntimeIdentity()
         let records = try store.state(for: .session(sessionID))?.textSupplementDeliveries ?? []
-        for record in records where record.runtimeIdentity == identity && record.state != "applied" {
+        var allConfirmed = true
+        for record in records where !["applied", "cancelled", "failed", "rejected"].contains(record.state) {
+            guard record.runtimeIdentity == identity else {
+                allConfirmed = false
+                continue
+            }
             do { try merge(try await client.queryTextSupplement(sessionID: sessionID, requestID: record.request.requestID, runtimeIdentity: identity), sessionID: sessionID, identity: identity) }
-            catch { /* Keep uncertain input and continue recovering independent messages. */ }
+            catch { allConfirmed = false }
         }
+        return allConfirmed
     }
 
     public func apply(_ receipt: SupplementApplicationReceipt, sessionID: String) async throws {

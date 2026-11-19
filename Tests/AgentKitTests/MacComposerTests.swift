@@ -127,6 +127,42 @@ final class MacComposerEditorTests: XCTestCase {
         XCTAssertFalse(vm.canSend)
     }
 
+    func testNativeCommandReturnReachesSubmissionCallback() throws {
+        let tv = ComposerNSTextView()
+        tv.isEditable = true
+        var modifiers: NSEvent.ModifierFlags?
+        tv.onCommandReturn = { modifiers = $0 }
+        let event = try XCTUnwrap(NSEvent.keyEvent(with: .keyDown, location: .zero,
+            modifierFlags: .command, timestamp: 0, windowNumber: 0, context: nil,
+            characters: "\r", charactersIgnoringModifiers: "\r", isARepeat: false, keyCode: 36))
+        XCTAssertTrue(tv.performKeyEquivalent(with: event))
+        XCTAssertEqual(modifiers, .command)
+    }
+
+    func testSubmissionModifiersKeepQueueNewlineAndIMESeparate() throws {
+        var sent = 0
+        var queued = 0
+        let editor = MacComposerTextView(text: .constant("测试"), height: .constant(28),
+            placeholder: "", isEnabled: true, minHeight: 28, maxHeight: 200,
+            onSend: { sent += 1 }, onQueue: { queued += 1 })
+        let coordinator = editor.makeCoordinator()
+        let tv = ComposerNSTextView()
+        tv.string = "测试"
+        coordinator.submit(tv, modifiers: [])
+        XCTAssertEqual(sent, 1)
+        coordinator.submit(tv, modifiers: .command)
+        XCTAssertEqual(queued, 1)
+        coordinator.submit(tv, modifiers: [.command, .shift])
+        XCTAssertEqual(sent, 1)
+        XCTAssertEqual(queued, 1)
+        XCTAssertTrue(tv.string.contains("\n"))
+        tv.setMarkedText("pin", selectedRange: NSRange(location: 3, length: 0),
+            replacementRange: NSRange(location: 0, length: tv.string.utf16.count))
+        coordinator.submit(tv, modifiers: .command)
+        XCTAssertEqual(queued, 1)
+        tv.unmarkText()
+    }
+
     func testTabAcceptsSuggestionWithoutSendingAndMarkedTextKeepsPriority() throws {
         var text = ""
         var sent = 0

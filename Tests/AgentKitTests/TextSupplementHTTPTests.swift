@@ -86,3 +86,37 @@ extension TextSupplementHTTPTests {
         XCTAssertEqual(page.items.first?.input.requestID, "r")
     }
 }
+
+extension TextSupplementHTTPTests {
+    func testInterruptedQueueResumeCarriesOriginalIdentityAndRevision() async throws {
+        SupplementHTTPProtocol.handler = { request in
+            switch request.url?.path {
+            case "/v1/runtime/info":
+                return Data(#"{"code":0,"msg":"ok","data":{"schema":"v1","server_id":"runtime","display_name":"Test","product":"codeagent","runtime_version":"1.0","agent_wire_protocol":{"major":1,"revision":"1.2"},"runtime_profile":"headless"}}"#.utf8)
+            case "/v1/runtime/capabilities":
+                return Data(#"{"code":0,"msg":"ok","data":{"capabilities":{"user_queue_text_v1":true}}}"#.utf8)
+            default:
+                XCTAssertEqual(request.url?.path, "/v1/conversations/s/queue/control")
+                XCTAssertEqual(request.httpMethod, "POST")
+                var payload = request.httpBody ?? Data()
+                if payload.isEmpty, let stream = request.httpBodyStream {
+                    stream.open()
+                    defer { stream.close() }
+                    var buffer = [UInt8](repeating: 0, count: 4096)
+                    while stream.hasBytesAvailable {
+                        let count = stream.read(&buffer, maxLength: buffer.count)
+                        if count <= 0 { break }
+                        payload.append(contentsOf: buffer.prefix(count))
+                    }
+                }
+                let body = try XCTUnwrap(JSONSerialization.jsonObject(with: payload) as? [String: Any])
+                XCTAssertEqual(body["action"] as? String, "resume_interrupted")
+                XCTAssertEqual(body["request_id"] as? String, "original")
+                XCTAssertEqual(body["revision"] as? Int, 9)
+                return Data(#"{"ok":true}"#.utf8)
+            }
+        }
+        try await client().controlUserQueue(sessionID: "s",
+            change: .init(revision: 9, action: .resumeInterrupted, requestID: "original"), serverID: "runtime")
+    }
+}

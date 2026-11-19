@@ -301,7 +301,8 @@ struct RuntimeHTTPClient: Sendable {
         }
         let request = try await buildRequest("GET", pathArray: ["v1", "conversations", sessionID, "queue"], queryItems: query, timeout: 20)
         let page = try await userQueueRequest(UserQueuePage.self, request: request, serverID: serverID)
-        guard page.items.allSatisfy({ $0.input.sessionID == sessionID }), cursor == nil || cursor?.revision == page.revision else {
+        guard page.items.allSatisfy({ $0.input.sessionID == sessionID }),
+              page.interrupted == nil || page.interrupted?.input.sessionID == sessionID, cursor == nil || cursor?.revision == page.revision else {
             throw RuntimeHTTPError.invalidResponse
         }
         return page

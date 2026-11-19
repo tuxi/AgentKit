@@ -482,7 +482,19 @@ public struct ExecutionReducer: Sendable {
         //    projection layer looks it up with the same id its nodes carry.
         graph.setTurnChanges(changes, for: turnID)
         internalState.currentTurnID = nil
-        return []
+
+        // Restored history can contain tool starts from before an interruption
+        // with no corresponding tool result. The turn is terminal, but the
+        // outcome of those calls is unknown.
+        var closedCalls: [NodeID] = []
+        for callID in internalState.activeToolCallIDs {
+            guard var node = graph.nodes[callID], node.turnID == turnID, node.status == .running else { continue }
+            node.status = .cancelled
+            graph.upsertNode(node)
+            closedCalls.append(callID)
+        }
+        internalState.activeToolCallIDs.subtract(closedCalls)
+        return closedCalls
     }
 
     /// A failed turn is terminal just like a finished turn.  In particular,

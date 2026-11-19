@@ -12,6 +12,7 @@ struct MacUserQueuePanel: View {
     @State private var loading = false
     @State private var issue: String?
     @State private var pendingRemoval: UserQueueChange?
+    @State private var pendingResume: UserQueueChange?
 
     private var canControl: Bool { page?.controls == true && !conversation.isArchived }
 
@@ -21,10 +22,12 @@ struct MacUserQueuePanel: View {
         switch page?.pauseReason {
         case "cancelled": "上次任务已取消，队列已暂停。"
         case "failed": "上次任务失败，队列已暂停。"
-        case "execution_context_changed": "执行环境已变化。继续时将重新校验。"
-        case "execution_interrupted": "上次执行被中断，队列需要先确认那轮的状态。"
-        case "execution_validation_failed": "执行环境未通过校验，队列已暂停。"
-        default: "队列已暂停。"
+        case "execution_context_changed": "模型、推理强度、权限或工作区已变化。请恢复排队时的设置后继续，或移除消息重新提交。"
+        case "execution_interrupted": "任务执行中断，后续消息已保留。请先核对已执行的操作，再继续中断任务。"
+        case "resume_validation_failed": "上次恢复未能通过执行校验，请检查模型、权限与工作区后重试。"
+        case "resume_requested": "恢复请求已接收，正在等待执行环境校验与调度。"
+        case "execution_validation_failed": "无法验证执行环境。请检查模型连接、凭据与工作区权限后继续。"
+        default: "队列暂停原因暂未识别，请刷新状态。"
         }
     }
 
@@ -38,8 +41,38 @@ struct MacUserQueuePanel: View {
             }
             if page?.state == "paused" {
                 Text(pauseDescription).font(.caption).foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
             }
             if let issue { Text(issue).font(.caption).foregroundStyle(.secondary) }
+            if let interrupted = page?.interrupted {
+                Text("中断任务").font(.caption).foregroundStyle(.secondary)
+                Text(interrupted.input.text).font(.callout).lineLimit(3)
+                if page?.resumeSupported != true {
+                    Text("这项任务带有后台续接状态，需要先处理后台任务的恢复。")
+                        .font(.caption).foregroundStyle(.secondary)
+                }
+                if canControl, let page, page.resumeSupported == true, ["execution_interrupted", "resume_validation_failed"].contains(page.pauseReason ?? "") {
+                    if let pendingResume {
+                        Text("将从已保存的对话继续。中断前的外部操作可能已经完成，请先核对执行结果。")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                            .fixedSize(horizontal: false, vertical: true)
+                        HStack {
+                            Button("取消") { self.pendingResume = nil }
+                            Button("确认继续") {
+                                self.pendingResume = nil
+                                Task { await change(pendingResume) }
+                            }
+                        }
+                    } else {
+                        Button("继续中断任务") {
+                            pendingResume = .init(revision: page.revision, action: .resumeInterrupted,
+                                requestID: interrupted.input.requestID)
+                        }
+                    }
+                }
+                Divider()
+            }
             if items.isEmpty {
                 Text(page == nil ? "正在读取队列…" : "没有待执行的消息")
                     .font(.callout).foregroundStyle(.secondary)
@@ -73,7 +106,7 @@ struct MacUserQueuePanel: View {
                 }
                 .frame(height: min(238, CGFloat(items.count + (next == nil ? 0 : 1)) * 45))
             }
-            if canControl, let page, page.state == "paused", page.pauseReason != "execution_interrupted" {
+            if canControl, let page, page.state == "paused", ["cancelled", "failed", "execution_context_changed", "execution_validation_failed"].contains(page.pauseReason ?? "") {
                 Button("继续队列") { Task { await change(.init(revision: page.revision, action: .resume)) } }
             }
         }
@@ -81,7 +114,25 @@ struct MacUserQueuePanel: View {
         .frame(width: 320)
         .disabled(loading)
         .task { await load() }
+        .task(id: page?.pauseReason) {
+            guard page?.pauseReason == "resume_requested" else { return }
+            while !Task.isCancelled {
+                do {
+                    try await Task.sleep(for: .seconds(1))
+                    let current = try await conversation.queuePage(serverID: serverID, expectedSessionID: sessionID)
+                    guard !Task.isCancelled else { return }
+                    updatePage(current)
+                    if current.pauseReason != "resume_requested" { return }
+                } catch is CancellationError {
+                    return
+                } catch {
+                    issue = "暂时无法确认恢复进度，请刷新后核对。"
+                    return
+                }
+            }
+        }
         .onChange(of: page?.revision, initial: true) { _, _ in
+            pendingResume = nil
             moreItems = []
             next = page?.next
         }
@@ -91,6 +142,7 @@ struct MacUserQueuePanel: View {
         ), titleVisibility: .visible, presenting: pendingRemoval) { change in
             Button("移除", role: .destructive) { Task { await self.change(change) } }
         }
+
     }
 
     private func load(cursor: UserQueuePage.Cursor? = nil) async {
@@ -122,10 +174,17 @@ struct MacUserQueuePanel: View {
         defer { loading = false }
         do {
             try await conversation.controlUserQueue(sessionID: sessionID, change: change, serverID: serverID)
-        } catch RuntimeHTTPError.unexpectedStatus(409, _) {
-            issue = "队列已变化，或消息已进入执行流程。请查看最新状态。"
+        } catch RuntimeHTTPError.unexpectedStatus(let status, let body) {
+            let code = (try? JSONSerialization.jsonObject(with: Data(body.utf8)) as? [String: String])?["code"]
+            switch code {
+            case "queue_revision_changed": issue = "队列已更新，请查看最新列表后重试。"
+            case "queue_unavailable": issue = "消息可能已进入执行流程，或队列暂时无法继续。请查看最新状态。"
+            case "queue_unauthorized": issue = "当前连接无权管理此队列，请检查执行环境与凭据。"
+            case "queue_unsupported": issue = "当前执行环境尚不支持队列管理。"
+            default: issue = status >= 500 ? "服务端暂时无法确认操作结果，请刷新后核对。" : "操作未完成，请刷新队列后核对。"
+            }
         } catch {
-            issue = "操作结果暂未确认，请查看最新队列。"
+            issue = "连接中断，操作结果尚未确认。请刷新队列后核对。"
         }
         if let current = try? await conversation.queuePage(serverID: serverID, expectedSessionID: sessionID), !Task.isCancelled {
             updatePage(current)

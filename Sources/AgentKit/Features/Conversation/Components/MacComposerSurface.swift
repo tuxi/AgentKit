@@ -44,6 +44,7 @@ struct MacComposerSurface: View {
     @State private var queueServerID: String?
     @State private var queuePage: UserQueuePage?
     @State private var showQueue = false
+    @State private var showSupplementStatus = false
     @State private var hasPendingDelivery = false
 
 
@@ -108,9 +109,10 @@ struct MacComposerSurface: View {
                     .disabled(vm.isSubmitting || vm.attachments.count + vm.fileReferences.count >= vm.maxFilesCount || !vm.workspaceStore.canSelectUserAssets)
 
                     MacComposerTextView(text: $vm.text, height: $vm.composerHeight,
-                        placeholder: placeholder, isEnabled: vm.isEnabled,
+                        placeholder: placeholder, isEnabled: vm.isEnabled && !(hasActiveTurn && vm.isSubmitting),
                         minHeight: 28, maxHeight: editorMaximum,
-                        onSend: { vm.send() },
+                        onSend: { submitComposer() },
+                        onQueue: { submitComposer(queue: true) },
                         onFileDrop: { urls in
                             guard !vm.isSubmitting, vm.workspaceStore.canStageLocalUserAssets else { return false }
                             vm.handleDroppedImages(urls)
@@ -145,13 +147,19 @@ struct MacComposerSurface: View {
                 }
                 .padding(.horizontal, 10)
                 .padding(.vertical, 10)
-                let pendingSupplements = vm.conversationViewModel?.pendingComposerSupplementCount ?? 0
-                if pendingSupplements > 0 {
-                    Text("\(pendingSupplements) 条补充已接收，等待加入当前任务")
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                        .frame(maxWidth: .infinity, alignment: .leading)
-                        .padding(.horizontal, 16).padding(.bottom, 10)
+                if let conversation = vm.conversationViewModel,
+                   conversation.composerSupplementRecords.contains(where: { $0.state != "applied" }),
+                   let sessionID = vm.sessionID {
+                    let pending = conversation.pendingComposerSupplementCount
+                    Button(pending > 0 ? "\(pending) 条补充等待应用" : "查看补充消息状态") {
+                        showSupplementStatus.toggle()
+                    }
+                    .buttonStyle(.plain).font(.caption).foregroundStyle(.secondary)
+                    .padding(.horizontal, 16).padding(.bottom, 10)
+                    .popover(isPresented: $showSupplementStatus, arrowEdge: .bottom) {
+                        MacSupplementStatusPanel(conversation: conversation, vm: vm, sessionID: sessionID)
+                            .id(sessionID)
+                    }
                 }
                 if let notice = vm.inTurnDeliveryNotice {
                     HStack(spacing: 8) {
@@ -252,6 +260,7 @@ struct MacComposerSurface: View {
         }
         .task(id: vm.sessionID) {
             showQueue = false
+            showSupplementStatus = false
             queuePage = nil
             queueServerID = nil
             guard !vm.isDraft, let conversation = vm.conversationViewModel else { return }
@@ -266,6 +275,9 @@ struct MacComposerSurface: View {
         }
         .task(id: vm.conversationViewModel?.lifecycleStatus) {
             await refreshQueue()
+            if let conversation = vm.conversationViewModel, !conversation.isTurnActive {
+                try? await conversation.recoverComposerSupplements()
+            }
             updatePendingDelivery()
         }
         .task(id: suggestionSource) {
@@ -381,7 +393,7 @@ struct MacComposerSurface: View {
         guard let conversation = vm.conversationViewModel else { return }
         hasPendingDelivery = queueServerID.map { !conversation.queuePending(serverID: $0).isEmpty } == true
             || vm.pendingComposerSupplementID != nil
-            || conversation.composerSupplementDeliveries().contains { $0.state == "unconfirmed" }
+            || conversation.composerSupplementDeliveries().contains { $0.needsConfirmation }
     }
 
     private func recoverDelivery() {
@@ -392,20 +404,61 @@ struct MacComposerSurface: View {
         }
     }
 
-    private var primaryAction: some View {
-        Button {
-            if vm.isTurnRunning { vm.stop() } else { vm.send() }
-        } label: {
-            Group {
-                if vm.isSubmitting { ProgressView().controlSize(.small) }
-                else { Image(systemName: vm.isTurnRunning ? "stop.fill" : "return") }
-            }
-            .frame(width: 28, height: 28)
+    private func submitComposer(queue: Bool = false) {
+        guard vm.isEnabled, !vm.isSubmitting else { return }
+        guard vm.conversationViewModel?.isTurnActive == true else {
+            vm.send()
+            return
         }
-        .buttonStyle(.plain)
-        .disabled(!vm.isTurnRunning && !vm.canSend)
-        .accessibilityLabel(AgentKitLocalized.string(vm.isTurnRunning ? "composer.stop" : "composer.send"))
-        .help(AgentKitLocalized.string(vm.isTurnRunning ? "composer.stop" : "composer.send"))
+        guard vm.canDeliverPlainText else {
+            if !vm.attachments.isEmpty || !vm.fileReferences.isEmpty || !vm.tokens.isEmpty {
+                vm.inTurnDeliveryNotice = "运行中补充和排队暂只支持纯文本，附件与引用已保留。"
+            }
+            return
+        }
+        let target = supplementTarget
+        let server = queueServerID
+        guard queue ? server != nil : target != nil else {
+            vm.inTurnDeliveryNotice = queue
+                ? "当前执行环境暂不支持排队，草稿已保留。"
+                : "当前任务暂不能接收补充，可通过菜单选择排队下一条。"
+            return
+        }
+        Task {
+            await vm.sendInTurn(supplementTarget: queue ? nil : target, queueServerID: queue ? server : nil)
+            updatePendingDelivery()
+            await refreshQueue()
+        }
+    }
+
+    private var hasActiveTurn: Bool {
+        vm.conversationViewModel?.isTurnActive == true || vm.isTurnRunning
+    }
+
+    private var primaryAction: some View {
+        HStack(spacing: 4) {
+            if hasActiveTurn {
+                Button { vm.stop() } label: {
+                    Image(systemName: "stop.fill").frame(width: 28, height: 28)
+                }
+                .buttonStyle(.plain)
+                .accessibilityLabel(AgentKitLocalized.string("composer.stop"))
+                .help(AgentKitLocalized.string("composer.stop"))
+            }
+            if !hasActiveTurn || !vm.trimmed.isEmpty {
+                Button { submitComposer() } label: {
+                    Group {
+                        if vm.isSubmitting { ProgressView().controlSize(.small) }
+                        else { Image(systemName: hasActiveTurn ? "arrow.up" : "return") }
+                    }
+                    .frame(width: 28, height: 28)
+                }
+                .buttonStyle(.plain)
+                .disabled(vm.isSubmitting || (hasActiveTurn ? !vm.canDeliverPlainText || supplementTarget == nil : !vm.canSend))
+                .accessibilityLabel(hasActiveTurn ? "补充当前任务" : AgentKitLocalized.string("composer.send"))
+                .help(hasActiveTurn ? "补充当前任务 ↩ · 排队下一条 ⌘↩ · 换行 ⇧↩" : "发送 ↩ · 换行 ⇧↩")
+            }
+        }
     }
 
     private var environmentControls: some View {

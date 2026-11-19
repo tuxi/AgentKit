@@ -29,6 +29,7 @@ struct MacComposerTextView: NSViewRepresentable {
     let maxHeight: CGFloat
     /// 回车发送。是否满足发送条件由调用方在闭包内判断。
     let onSend: () -> Void
+    var onQueue: (() -> Void)? = nil
     /// Host classifies dropped images and path references without uploading.
     /// A missing callback preserves plain path insertion for legacy callers.
     var onFileDrop: (([URL]) -> Bool)? = nil
@@ -76,6 +77,10 @@ struct MacComposerTextView: NSViewRepresentable {
         textView.onFocusChange = { focused in
             onFocusChange?(focused)
             if !focused { context.coordinator.closeCompletions() }
+        }
+        textView.onCommandReturn = { [weak textView] modifiers in
+            guard let textView else { return }
+            context.coordinator.submit(textView, modifiers: modifiers)
         }
         textView.onSend = onSend
         textView.onDropTargetChange = onDropTargetChange
@@ -392,7 +397,9 @@ struct MacComposerTextView: NSViewRepresentable {
                     return true
                 }
                 if commandSelector == #selector(NSResponder.cancelOperation(_:)) { closeCompletions(); return true }
-                if commandSelector == #selector(NSResponder.insertNewline(_:)) || commandSelector == #selector(NSResponder.insertTab(_:)) {
+                if commandSelector == #selector(NSResponder.insertNewline(_:))
+                    || commandSelector == #selector(NSResponder.insertNewlineIgnoringFieldEditor(_:))
+                    || commandSelector == #selector(NSResponder.insertTab(_:)) {
                     if completionState.items.indices.contains(completionState.selected) { chooseCompletion(completionState.items[completionState.selected]) }
                     return true
                 }
@@ -406,16 +413,28 @@ struct MacComposerTextView: NSViewRepresentable {
                 }
                 if commandSelector == #selector(NSResponder.cancelOperation(_:)) { parent.onDismissSuggestion?(); return true }
             }
-            if commandSelector == #selector(NSResponder.insertNewline(_:)) {
-                let shiftHeld = NSApp.currentEvent?.modifierFlags.contains(.shift) ?? false
-                if shiftHeld {
-                    textView.insertNewline(nil)   // 真正换行
-                } else {
-                    parent.onSend()               // 发送
-                }
+            if commandSelector == #selector(NSResponder.insertNewline(_:))
+                || commandSelector == #selector(NSResponder.insertNewlineIgnoringFieldEditor(_:)) {
+                submit(textView, modifiers: NSApp.currentEvent?.modifierFlags ?? [])
                 return true
             }
             return false
+        }
+        func submit(_ textView: NSTextView, modifiers: NSEvent.ModifierFlags) {
+            guard !textView.hasMarkedText(), parent.isEnabled else { return }
+            if completionPanel?.isVisible == true {
+                if completionState.items.indices.contains(completionState.selected) {
+                    chooseCompletion(completionState.items[completionState.selected])
+                }
+                return
+            }
+            if modifiers.contains(.shift) {
+                textView.insertText("\n", replacementRange: textView.selectedRange())
+            } else if modifiers.contains(.command), let onQueue = parent.onQueue {
+                onQueue()
+            } else {
+                parent.onSend()
+            }
         }
     }
 }
@@ -467,6 +486,17 @@ final class ComposerNSTextView: NSTextView {
         let result = super.resignFirstResponder()
         if result { onFocusChange?(false) }
         return result
+    }
+
+    var onCommandReturn: ((NSEvent.ModifierFlags) -> Void)?
+
+    override func performKeyEquivalent(with event: NSEvent) -> Bool {
+        if event.modifierFlags.contains(.command), [36, 76].contains(event.keyCode),
+           isEditable, !hasMarkedText(), let onCommandReturn {
+            onCommandReturn(event.modifierFlags)
+            return true
+        }
+        return super.performKeyEquivalent(with: event)
     }
 
     var onSend: (() -> Void)?

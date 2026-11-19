@@ -288,7 +288,7 @@ struct ApprovalBar: View {
     // 三态回调映射图中的按钮
     let onDeny: () -> Void          // Deny 1
     let onAlwaysAllow: (String) -> Void    // Always allow 2 — 参数为 scope ("local" | "user")
-    let onAllowOnce: () -> Void      // Allow once 3 ↩
+    let onAllowOnce: () -> Void      // Allow once via its dedicated shortcut
     
     @State private var scope: ApprovalScope = .local
     @State private var contentHeight: CGFloat = 0
@@ -434,14 +434,15 @@ struct ApprovalBar: View {
                         }
                     }
                     
-                    // Allow once 3 ↩ (高亮主按钮)
+                    // Allow once via its dedicated shortcut (高亮主按钮)
                     Button(action: onAllowOnce) {
                         HStack(spacing: 4) {
-                            Text("Allow once ") + Text("3 ⌘↩")
+                            Text("Allow once ") + Text("⌘3")
                         }
                         .foregroundStyle(colorScheme == .light ? .white.opacity(0.7) : .black.opacity(0.7) )
                     }
                     .buttonStyle(.borderedProminent)
+                    .keyboardShortcut("3", modifiers: .command)
                     .controlSize(.small)
                     .tint(.primary)
                 }

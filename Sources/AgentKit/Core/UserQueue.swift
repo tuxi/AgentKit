@@ -66,8 +66,10 @@ public struct UserQueuePage: Decodable, Sendable {
     public let items: [UserQueueReceipt]
     public let next: Cursor?
     public let controls: Bool?
+    public let interrupted: UserQueueReceipt?
+    public let resumeSupported: Bool?
     enum CodingKeys: String, CodingKey {
-        case revision, state, pauseReason = "pause_reason", items, next, controls
+        case revision, state, pauseReason = "pause_reason", items, next, controls, interrupted, resumeSupported = "resume_supported"
     }
 }
 
@@ -76,7 +78,9 @@ public struct UserQueueChange: Encodable, Sendable {
     public let action: Action
     public let requestID: String?
 
-    public enum Action: String, Encodable, Sendable { case resume, remove }
+    public enum Action: String, Encodable, Sendable { case resume, remove
+        case resumeInterrupted = "resume_interrupted"
+    }
 
     public init(revision: Int64, action: Action, requestID: String? = nil) {
         self.revision = revision

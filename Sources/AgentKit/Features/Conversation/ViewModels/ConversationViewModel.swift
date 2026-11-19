@@ -110,7 +110,7 @@ public final class ConversationViewModel {
     public private(set) var lastAcceptedSubmissionRequestID: String?
     public private(set) var localSubmissions: [LocalMessageSubmission] = []
     private var textSupplementDelivery: TextSupplementDeliveryCoordinator?
-    private var pendingComposerSupplementsByTurn: [String: Int] = [:]
+    private(set) var composerSupplementRecords: [TextSupplementDelivery] = []
 
     private func supplementDeliveryCoordinator() -> TextSupplementDeliveryCoordinator? {
         if let textSupplementDelivery { return textSupplementDelivery }
@@ -181,24 +181,26 @@ public final class ConversationViewModel {
         guard let id = conversation?.id else { return [] }
         return (try? localStateStore.state(for: .session(id)))?.textSupplementDeliveries ?? []
     }
+    var activeSupplementTurnID: String? { isTurnActive ? currentTurnID : nil }
+
     var pendingComposerSupplementCount: Int {
         guard let currentTurnID, isTurnActive else { return 0 }
-        return pendingComposerSupplementsByTurn[currentTurnID, default: 0]
+        return composerSupplementRecords.filter {
+            $0.request.expectedTurnID == currentTurnID && $0.state == "pending_apply"
+        }.count
     }
 
     func recoverComposerSupplements() async throws {
         guard let id = conversation?.id, let coordinator = supplementDeliveryCoordinator() else { throw RuntimeHTTPError.unsupported }
         defer { refreshPendingComposerSupplements(sessionID: id) }
-        try await coordinator.recover(sessionID: id)
+        guard try await coordinator.recover(sessionID: id) else { throw RuntimeHTTPError.invalidResponse }
     }
 #endif
 
     private func refreshPendingComposerSupplements(sessionID: String) {
         guard conversation?.id == sessionID else { return }
         let deliveries = (try? localStateStore.state(for: .session(sessionID)))?.textSupplementDeliveries ?? []
-        pendingComposerSupplementsByTurn = Dictionary(grouping: deliveries.filter { $0.state == "pending_apply" }) {
-            $0.request.expectedTurnID
-        }.mapValues(\.count)
+        composerSupplementRecords = deliveries
     }
 
     func submitTextSupplement(_ text: String, expectedTurnID: String, requestID: String = UUID().uuidString) async throws {
@@ -660,7 +662,7 @@ public final class ConversationViewModel {
             await eng.markLive()
             if let coordinator = supplementDeliveryCoordinator() {
                 Task {
-                    try? await coordinator.recover(sessionID: conversation.id)
+                    _ = try? await coordinator.recover(sessionID: conversation.id)
                     refreshPendingComposerSupplements(sessionID: conversation.id)
                 }
             }
@@ -1298,7 +1300,8 @@ public final class ConversationViewModel {
             queuePosition = nil
             pausedAt = Date()
             releaseTurnPermit()
-        case .turnResumed:
+        case .turnResumed(let turnID, _):
+            if let turnID, !turnID.isEmpty { currentTurnID = turnID }
             lifecycleStatus = "resuming"
             pausedAt = nil
         case .turnFailed(let turnID, _, _, _, _):

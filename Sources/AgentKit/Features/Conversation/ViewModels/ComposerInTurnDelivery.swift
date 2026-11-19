@@ -12,7 +12,7 @@ extension DraftComposerPanelViewModel {
               let state = try? workspaceStore.localStateStore.state(for: key) else { return false }
         return state.pendingUserQueueRequests.contains { $0.request.text == content }
             || state.textSupplementDeliveries.contains {
-                ($0.state == "unconfirmed" || $0.request.requestID == state.composerSupplementRequestID)
+                ($0.needsConfirmation || $0.request.requestID == state.composerSupplementRequestID)
                     && $0.request.text == content
             }
     }
@@ -57,7 +57,9 @@ extension DraftComposerPanelViewModel {
         } catch {
             if let supplementID {
                 let record = conversation.composerSupplementDeliveries().first { $0.request.requestID == supplementID }
-                if record == nil || record?.state == "rejected" { clearSupplementLink(supplementID, key: key) }
+                if record == nil || ["rejected", "cancelled", "failed"].contains(record?.state ?? "") {
+                    clearSupplementLink(supplementID, key: key)
+                }
             }
             inTurnDeliveryNotice = hasUnconfirmedDelivery(matching: content)
                 ? "提交状态待确认，请查询原请求。"
@@ -73,19 +75,22 @@ extension DraftComposerPanelViewModel {
         isSending = true
         defer { isSending = false }
         var confirmed = false
+        var queryFailed = false
         if let queueServerID {
             for record in conversation.queuePending(serverID: queueServerID) {
-                if (try? await conversation.recoverQueueRequest(record)) != nil {
-                    confirmed = confirmed || record.request.text == content
-                }
+                do {
+                    let receipt = try await conversation.recoverQueueRequest(record)
+                    confirmed = confirmed || (record.request.text == content && ["queued", "claimed", "started"].contains(receipt.state))
+                } catch { queryFailed = true }
             }
         }
         let linkedID = pendingComposerSupplementID
         let oldSupplements = conversation.composerSupplementDeliveries().filter {
-            $0.state == "unconfirmed" || $0.request.requestID == linkedID
+            $0.needsConfirmation || $0.request.requestID == linkedID
         }
         if !oldSupplements.isEmpty {
-            try? await conversation.recoverComposerSupplements()
+            do { try await conversation.recoverComposerSupplements() }
+            catch { queryFailed = true }
             let current = conversation.composerSupplementDeliveries()
             confirmed = confirmed || oldSupplements.contains { old in
                 old.request.text == content && current.contains {
@@ -98,11 +103,13 @@ extension DraftComposerPanelViewModel {
         }
         if let linkedID, let key {
             let record = conversation.composerSupplementDeliveries().first { $0.request.requestID == linkedID }
-            if record == nil || record.map({ ["pending_apply", "applied", "rejected"].contains($0.state) }) == true {
+            if record == nil || record.map({ ["pending_apply", "applied", "rejected", "cancelled", "failed"].contains($0.state) }) == true {
                 clearSupplementLink(linkedID, key: key)
             }
         }
-        inTurnDeliveryNotice = hasUnconfirmedDelivery(matching: content) ? "仍待确认，草稿已保留。" : "查询完成"
+        let unsettled = conversation.composerSupplementDeliveries().contains { $0.needsConfirmation }
+            || queueServerID.map { !conversation.queuePending(serverID: $0).isEmpty } == true
+        inTurnDeliveryNotice = queryFailed || unsettled ? "仍有消息待确认，请稍后再次查询。" : "查询完成"
     }
 
     private func clearSupplementLink(_ id: String, key: ConversationLocalStateKey) {

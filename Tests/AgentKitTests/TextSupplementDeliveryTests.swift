@@ -10,6 +10,8 @@ private actor SupplementClientFixture: TextSupplementClient {
     var state = "pending_apply"
     var sent: [TextSupplementRequest] = []
     var queries = 0
+    var queryFails = false
+    func failQueries() { queryFails = true }
     var continuation: CheckedContinuation<TextSupplementReceipt, Error>?
     func configure(identity: String? = nil, enabled: Bool? = nil, lost: Bool? = nil, hold: Bool? = nil, state: String? = nil) {
         if let identity { self.identity = identity }; if let enabled { self.enabled = enabled }
@@ -27,10 +29,63 @@ private actor SupplementClientFixture: TextSupplementClient {
         return receipt(request)
     }
     func release() { continuation?.resume(returning: receipt(sent[0])); continuation = nil }
-    func queryTextSupplement(sessionID: String, requestID: String, runtimeIdentity: String) async throws -> TextSupplementReceipt { queries += 1; return receipt(sent[0]) }
+    func queryTextSupplement(sessionID: String, requestID: String, runtimeIdentity: String) async throws -> TextSupplementReceipt {
+        queries += 1
+        if queryFails { throw URLError(.networkConnectionLost) }
+        return receipt(sent[0])
+    }
 }
 
 final class TextSupplementDeliveryTests: XCTestCase {
+    func testCancelledReceiptIsRetainedWithoutResubmission() async throws {
+        let client = SupplementClientFixture()
+        let store = InMemoryConversationLocalStateStore()
+        let coordinator = TextSupplementDeliveryCoordinator(client: client, store: store)
+        try await coordinator.submit(sessionID: "s", request: .init(requestID: "cancelled", expectedTurnID: "t", text: "保留原文"))
+        await client.configure(state: "cancelled")
+        let confirmed = try await coordinator.recover(sessionID: "s")
+        XCTAssertTrue(confirmed)
+        let record = try XCTUnwrap(store.state(for: .session("s"))?.textSupplementDeliveries.first)
+        XCTAssertEqual(record.state, "cancelled")
+        XCTAssertEqual(record.request.text, "保留原文")
+        let sends = await client.sent
+        XCTAssertEqual(sends.count, 1)
+        #if os(macOS)
+        XCTAssertTrue(SupplementStatusPresentation.canRestore(record.state))
+        XCTAssertFalse(SupplementStatusPresentation.canRestore("unconfirmed"))
+        XCTAssertFalse(SupplementStatusPresentation.canRestore("future_state"))
+        #endif
+    }
+
+    func testFailedQueryPreservesUnknownRequestAndReportsIncomplete() async throws {
+        let client = SupplementClientFixture()
+        let store = InMemoryConversationLocalStateStore()
+        let coordinator = TextSupplementDeliveryCoordinator(client: client, store: store)
+        await client.configure(lost: true)
+        try? await coordinator.submit(sessionID: "s", request: .init(requestID: "uncertain", expectedTurnID: "t", text: "待确认原文"))
+        await client.failQueries()
+        let confirmed = try await coordinator.recover(sessionID: "s")
+        XCTAssertFalse(confirmed)
+        let record = try XCTUnwrap(store.state(for: .session("s"))?.textSupplementDeliveries.first)
+        XCTAssertTrue(record.needsConfirmation)
+        XCTAssertEqual(record.request.requestID, "uncertain")
+        let sends = await client.sent
+        XCTAssertEqual(sends.count, 1)
+    }
+
+    func testRuntimeChangeLeavesQueryIncomplete() async throws {
+        let client = SupplementClientFixture()
+        let store = InMemoryConversationLocalStateStore()
+        let coordinator = TextSupplementDeliveryCoordinator(client: client, store: store)
+        try await coordinator.submit(sessionID: "s", request: .init(requestID: "pending", expectedTurnID: "t", text: "原消息"))
+        await client.configure(identity: "another-runtime")
+        let confirmed = try await coordinator.recover(sessionID: "s")
+        XCTAssertFalse(confirmed)
+        XCTAssertEqual(try store.state(for: .session("s"))?.textSupplementDeliveries.first?.state, "pending_apply")
+        let queries = await client.queries
+        XCTAssertEqual(queries, 0)
+    }
+
     func testLostResponseRecoversByQueryWithoutResubmitting() async throws {
         let client = SupplementClientFixture(); await client.configure(lost: true)
         let store = InMemoryConversationLocalStateStore()

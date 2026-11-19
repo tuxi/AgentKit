@@ -146,6 +146,29 @@ final class ExecutionReducerTests: XCTestCase {
         nodes.firstIndex(where: predicate)
     }
 
+    func testResumedTurnFinishesWithoutLeavingInterruptedToolRunning() {
+        var reducer = ExecutionReducer()
+        var graph = ExecutionGraph()
+        let turn = "resumed-turn"
+        let events: [AgentEvent] = [
+            .turnStarted(turnID: turn, text: "wait"),
+            .toolStarted(turnID: turn, callID: "interrupted",
+                         tool: ToolCall(callID: "interrupted", toolName: "run_command", toolArgs: nil)),
+            .turnResumed(turnID: turn, text: nil),
+            .toolStarted(turnID: turn, callID: "retried",
+                         tool: ToolCall(callID: "retried", toolName: "run_command", toolArgs: nil)),
+            .toolFinished(turnID: turn, callID: "retried",
+                          result: ToolResult(callID: "retried", toolName: "run_command", observation: "ok", error: nil)),
+        ]
+        for event in events { _ = reducer.reduce(event, into: &graph) }
+
+        let changed = reducer.reduce(.turnFinished(turnID: turn, text: "Done.", textAnnotations: []), into: &graph)
+
+        XCTAssertEqual(changed, ["interrupted"])
+        XCTAssertEqual(graph.nodes["interrupted"]?.status, .cancelled)
+        XCTAssertEqual(graph.nodes["retried"]?.status, .completed)
+    }
+
     func testTurnFailedFinalizesRunningNodesAndAppendsError() {
         var reducer = ExecutionReducer()
         var graph = ExecutionGraph()
