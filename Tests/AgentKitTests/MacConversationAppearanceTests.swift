@@ -343,6 +343,32 @@ final class MacConversationAppearanceTests: XCTestCase {
         print("READING_ANCHOR_PERFORMANCE before=\(before ?? -1) afterGrowth=\(after ?? -1) afterInset=\(afterInset ?? -1)")
     }
 
+    func testJumpToLatestClearsFloatingComposerInset() async throws {
+        let model = AppearanceRenderModel()
+        model.snapshot = scrollFixture()
+        let web = try await present(model)
+        // Leave the pinned tail so the jump pill is offered in history.
+        _ = try await web.evaluateJavaScript("""
+        window.dispatchEvent(new WheelEvent('wheel', {deltaY:-120}));
+        window.scrollTo(0, 0);
+        """)
+        try await wait("window.AgentKitWorkbench.viewportDiagnostics().interacting === false", in: web)
+        try await wait("document.querySelector('.jump-to-latest') !== null", in: web)
+
+        _ = try await web.evaluateJavaScript("window.AgentKitWorkbench.setBottomInset(240)")
+        let geometry = try await web.evaluateJavaScript("""
+        (() => {
+          const button = document.querySelector('.jump-to-latest').getBoundingClientRect();
+          return { bottom: button.bottom, viewportHeight: window.innerHeight };
+        })()
+        """) as? [String: Double]
+        let bottom = try XCTUnwrap(geometry?["bottom"])
+        let viewportHeight = try XCTUnwrap(geometry?["viewportHeight"])
+        // The pill must sit above the floating composer, not behind it.
+        XCTAssertLessThanOrEqual(bottom, viewportHeight - 240 + 1,
+                                 "Jump-to-latest overlaps the composer inset")
+    }
+
     func testTasksExpansionKeepsSummaryAndPausesTailFollowing() async throws {
         let model = AppearanceRenderModel()
         model.snapshot = scrollFixture()

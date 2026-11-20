@@ -1811,7 +1811,10 @@ button.turn-actions-menu-item:hover {
   position: fixed;
   z-index: 30;
   right: 20px;
-  bottom: 18px;
+  /* The native macOS composer floats over the timeline; its height arrives as
+     --workbench-bottom-inset. The pill must clear it, or the composer swallows
+     the button. */
+  bottom: calc(18px + var(--workbench-bottom-inset, 0px));
   padding: 7px 11px;
   border: 1px solid var(--border);
   border-radius: 999px;
