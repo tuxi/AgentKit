@@ -65,6 +65,7 @@ struct MacComposerTextView: NSViewRepresentable {
         textView.typingAttributes[.paragraphStyle] = paragraph
         textView.drawsBackground = false
         textView.isRichText = false
+        textView.typingAttributes[.foregroundColor] = NSColor.labelColor
         textView.allowsUndo = true
         textView.textContainerInset = NSSize(width: 0, height: 2)
         textView.isVerticallyResizable = true
@@ -216,6 +217,7 @@ struct MacComposerTextView: NSViewRepresentable {
         func applyTokenAppearance() {
             guard let tv = textView, !tv.hasMarkedText(), let storage = tv.textStorage else { return }
             let tokens = parent.tokens.wrappedValue
+            guard !tokens.isEmpty || appliedTokens?.isEmpty == false else { return }
             guard appliedTokens != tokens || appearanceText != tv.string else { return }
             appliedTokens = tokens; appearanceText = tv.string
             var coloredRanges: [NSRange] = []
@@ -248,18 +250,8 @@ struct MacComposerTextView: NSViewRepresentable {
             let text = tv.string as NSString
             let caret = tv.selectedRange().location
             guard tv.selectedRange().length == 0, caret <= text.length else { closeCompletions(); return }
-            let prefix = text.substring(to: caret)
-            let word = prefix.split(whereSeparator: { $0.isWhitespace }).last.map(String.init) ?? ""
-            let kind: String
-            let queryText: String
-            let range: NSRange
-            if prefix.trimmingCharacters(in: .whitespaces).hasPrefix("/"), !prefix.trimmingCharacters(in: .whitespaces).contains(where: { $0.isWhitespace }) {
-                let value = prefix.trimmingCharacters(in: .whitespaces)
-                kind = "command"; queryText = String(value.dropFirst()); range = NSRange(location: caret - (value as NSString).length, length: (value as NSString).length)
-            } else if word.hasPrefix("@"), !prefix.hasSuffix(" "), !prefix.hasSuffix("\n") {
-                kind = "reference"; queryText = String(word.dropFirst()); range = NSRange(location: caret - (word as NSString).length, length: (word as NSString).length)
-            } else { closeCompletions(); return }
-            guard queryText.utf8.count <= 512 else { closeCompletions(); return }
+            guard let completion = Self.completionQuery(in: text, caret: caret) else { closeCompletions(); return }
+            let (kind, queryText, range) = completion
             closeCompletions()
             completionRange = range
             let revision = completionRevision
@@ -279,6 +271,31 @@ struct MacComposerTextView: NSViewRepresentable {
                     self.showCompletions(kind: kind)
                 }
             }
+        }
+
+        static func completionQuery(in text: NSString, caret: Int) -> (String, String, NSRange)? {
+            guard caret > 0, caret <= text.length else { return nil }
+            // A valid trigger and query fit in 513 UTF-16 units, since the wire
+            // limit is 512 UTF-8 bytes after the trigger.
+            let lower = max(0, caret - 514)
+            let window = NSRange(location: lower, length: caret - lower)
+            let separator = text.rangeOfCharacter(from: .whitespacesAndNewlines, options: .backwards, range: window)
+            guard separator.location != NSNotFound || lower == 0 else { return nil }
+            let start = separator.location == NSNotFound ? 0 : NSMaxRange(separator)
+            guard start < caret, caret - start <= 513 else { return nil }
+            let kind: String
+            switch text.character(at: start) {
+            case 64: kind = "reference"
+            case 47:
+                guard start == 0 || text.rangeOfCharacter(from: CharacterSet.whitespaces.inverted,
+                    range: NSRange(location: 0, length: start)).location == NSNotFound else { return nil }
+                kind = "command"
+            default: return nil
+            }
+            let range = NSRange(location: start, length: caret - start)
+            let query = text.substring(with: NSRange(location: start + 1, length: range.length - 1))
+            guard query.utf8.count <= 512 else { return nil }
+            return (kind, query, range)
         }
 
         private func showCompletions(kind: String) {
@@ -362,25 +379,23 @@ struct MacComposerTextView: NSViewRepresentable {
 
         /// 基于 layoutManager 的实际排版高度做自适应，clamp 到 [min, max]。
         func recalculateHeight() {
-            guard let tv = textView,
-                  let layoutManager = tv.layoutManager,
-                  let container = tv.textContainer else { return }
-            guard measuredText != tv.string || measuredWidth != tv.bounds.width || measuredMaximum != parent.maxHeight else { return }
-            measuredText = tv.string
+            guard let tv = textView else { return }
+            let currentText = tv.string
+            guard measuredText != currentText || measuredWidth != tv.bounds.width || measuredMaximum != parent.maxHeight else { return }
+            measuredText = currentText
             measuredWidth = tv.bounds.width
             measuredMaximum = parent.maxHeight
-            layoutManager.ensureLayout(for: container)
-            let used = tv.contentLayoutHeight
             let inset = tv.textContainerInset.height * 2
+            let used = tv.layoutHeight(upTo: max(1, parent.maxHeight - inset))
+            tv.measuredContentHeight = used
             let target = min(max(used + inset, parent.minHeight), parent.maxHeight)
+            heightRevision += 1
+            let revision = heightRevision
             if abs(parent.height - target) > 0.5 {
-                heightRevision += 1
-                let revision = heightRevision
-                let newHeight = target
-                // 延后一拍，避免在 SwiftUI 视图更新周期内直接改 @Binding。
+                // Publish after the SwiftUI update, and ignore superseded measurements.
                 Task { @MainActor [weak self] in
                     guard let self, self.heightRevision == revision else { return }
-                    self.parent.height = newHeight
+                    self.parent.height = target
                 }
             }
         }
@@ -455,19 +470,27 @@ final class ComposerNSTextView: NSTextView {
 
     /// Use TextKit's natural line metrics for both glyphs and the insertion point.
     /// Center short content in the viewport; overflowing content keeps its inset.
-    var contentLayoutHeight: CGFloat {
-        guard let layoutManager, let textContainer else { return 0 }
-        layoutManager.ensureLayout(for: textContainer)
+    var measuredContentHeight: CGFloat? {
+        didSet {
+            if oldValue != measuredContentHeight { needsDisplay = true }
+        }
+    }
+
+    func layoutHeight(upTo maximum: CGFloat) -> CGFloat {
+        guard let layoutManager, let textContainer, textContainer.containerSize.width > 0 else { return 0 }
+        layoutManager.ensureLayout(forBoundingRect: CGRect(x: 0, y: 0,
+            width: textContainer.containerSize.width, height: maximum), in: textContainer)
         let used = layoutManager.usedRect(for: textContainer).maxY
         let extra = layoutManager.extraLineFragmentTextContainer === textContainer
             ? layoutManager.extraLineFragmentRect.maxY : 0
-        return max(used, extra)
+        return min(max(used, extra), maximum)
     }
 
     override var textContainerOrigin: NSPoint {
         var origin = super.textContainerOrigin
+        guard let measuredContentHeight else { return origin }
         let viewportHeight = min(bounds.height, enclosingScrollView?.contentSize.height ?? bounds.height)
-        origin.y = max(origin.y, (viewportHeight - contentLayoutHeight) / 2)
+        origin.y = max(origin.y, (viewportHeight - measuredContentHeight) / 2)
         return origin
     }
 

@@ -206,6 +206,41 @@ final class MacComposerEditorTests: XCTestCase {
         XCTAssertEqual(tokens.first?.item.id, "file:1")
     }
 
+    func testLogHeightMeasurementStopsAtVisibleBudgetAndShrinksAfterReplacement() throws {
+        let view = ComposerNSTextView(frame: NSRect(x: 0, y: 0, width: 340, height: 100))
+        let scroll = NSScrollView(frame: view.frame)
+        scroll.documentView = view
+        view.isVerticallyResizable = true
+        let budget: CGFloat = 180
+        view.string = String(repeating: "INFO synthetic log line with enough text to wrap in a narrow editor\n", count: 1_400)
+        let manager = try XCTUnwrap(view.layoutManager)
+        let documentLength = (view.string as NSString).length
+        manager.invalidateLayout(forCharacterRange: NSRange(location: 0, length: documentLength), actualCharacterRange: nil)
+        XCTAssertEqual(view.layoutHeight(upTo: budget), budget)
+        XCTAssertLessThan(manager.firstUnlaidCharacterIndex(), documentLength)
+
+        view.string = "短输入"
+        let singleLine = view.layoutHeight(upTo: budget)
+        XCTAssertGreaterThan(singleLine, 0)
+        XCTAssertLessThan(singleLine, budget)
+        view.string += "\n"
+        XCTAssertGreaterThan(view.layoutHeight(upTo: budget), singleLine)
+    }
+
+    func testCompletionQueriesUseTheLocalTokenInLongDrafts() {
+        let search = MacComposerTextView.Coordinator.completionQuery
+        let log = String(repeating: "INFO this is a synthetic log\n", count: 3_000)
+        let reference = (log + "@" + String(repeating: "a", count: 512)) as NSString
+        XCTAssertEqual(search(reference, reference.length)?.0, "reference")
+        XCTAssertEqual(search(reference, reference.length)?.1.utf8.count, 512)
+        let largeWord = (log + "@" + String(repeating: "a", count: 513)) as NSString
+        XCTAssertNil(search(largeWord, largeWord.length))
+        XCTAssertNil(search(log as NSString, (log as NSString).length))
+        XCTAssertEqual(search("  /model", 8)?.1, "model")
+        XCTAssertNil(search("hello /model", 12))
+        XCTAssertEqual(search("日志 @文件", 6)?.1, "文件")
+    }
+
     func testComposerRendersEmptyLongAndFileStatesWithoutExpandingPastBudget() throws {
         let states = InMemoryConversationLocalStateStore()
         let defaults = try XCTUnwrap(UserDefaults(suiteName: "composer-render-" + UUID().uuidString))

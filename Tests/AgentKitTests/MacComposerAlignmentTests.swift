@@ -47,7 +47,11 @@ final class MacComposerAlignmentTests: XCTestCase {
             let scroll = try XCTUnwrap(editor.enclosingScrollView)
             window.makeFirstResponder(editor)
             editor.setSelectedRange(NSRange(location: text.utf16.count, length: 0))
-            let used = editor.contentLayoutHeight
+            let manager = try XCTUnwrap(editor.layoutManager)
+            let container = try XCTUnwrap(editor.textContainer)
+            manager.ensureLayout(for: container)
+            let extra = manager.extraLineFragmentTextContainer === container ? manager.extraLineFragmentRect.maxY : 0
+            let used = max(manager.usedRect(for: container).maxY, extra)
             if ["empty", "chinese", "mixed"].contains(name) {
                 XCTAssertEqual(scroll.contentSize.height, 28, accuracy: 0.5, name)
                 XCTAssertEqual(editor.textContainerOrigin.y + used / 2, scroll.contentSize.height / 2, accuracy: 0.5, name)
