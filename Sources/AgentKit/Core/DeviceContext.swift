@@ -25,15 +25,28 @@ public enum DeviceContext {
     private static let deviceIDKey = "device_id"
     private static let keychain = KeychainStore(service: "com.codeagent.device")
 
+    /// 进程内缓存。`deviceID` 会在每个 HTTP 请求的 header 注入时读取；不缓存
+    /// 就意味着每个请求都查一次 login.keychain，在 ACL 未持久授权时反复弹窗。
+    private static let deviceIDLock = NSLock()
+    nonisolated(unsafe) private static var cachedDeviceID: String?
+
     // MARK: - Device ID
 
     /// 稳定不变的设备标识符。首次生成后持久化到 Keychain。
     public static var deviceID: String {
+        deviceIDLock.lock()
+        defer { deviceIDLock.unlock() }
+
+        if let cachedDeviceID, !cachedDeviceID.isEmpty {
+            return cachedDeviceID
+        }
         if let existing = keychain.string(for: deviceIDKey), !existing.isEmpty {
+            cachedDeviceID = existing
             return existing
         }
         let new = UUID().uuidString
         keychain.set(new, for: deviceIDKey)
+        cachedDeviceID = new
         return new
     }
 
