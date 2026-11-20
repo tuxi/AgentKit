@@ -69,6 +69,80 @@ final class ComposerDraftAcceptanceTests: XCTestCase {
         await fulfillment(of: [finished], timeout: 2)
     }
 
+    func testDraftRebindBeforeRevisionDoesNotRestoreSubmittedResources() async throws {
+        let (store, models, draftKey) = try fixture()
+        let sessionKey = ConversationLocalStateKey.session("activated-session")
+        let image = DraftAttachmentReference(id: "image", displayName: "image.png", resourceURI: "file:///tmp/image.png")
+        let file = ComposerFileReference(path: "/tmp/reference.txt", workspacePath: nil, isDirectory: false)
+        let finished = expectation(description: "draft migrated")
+        var vm: DraftComposerPanelViewModel!
+        vm = DraftComposerPanelViewModel(workspaceStore: store, modelSettings: models,
+            conversationViewModel: nil, isDraft: true, isEnabled: true, onSend: { text, _, _ in
+                do {
+                    let record = try store.beginLocalSubmission(key: draftKey, text: text, model: nil, effort: nil)
+                    vm.rebindLocalSubmissionKey()
+                    try store.localStateStore.migrateDraft(try XCTUnwrap(draftKey.draftID), to: "activated-session")
+                    store.draftSubmissionKey = sessionKey
+                    vm.rebindLocalSubmissionKey()
+                    vm.reconcileLocalSubmission()
+
+                    let draft = try XCTUnwrap(store.localStateStore.state(for: sessionKey)?.composerDraft)
+                    XCTAssertEqual(draft.text, "")
+                    XCTAssertTrue(draft.attachments.isEmpty)
+                    XCTAssertTrue(draft.fileReferences.isEmpty)
+                    XCTAssertTrue(vm.attachments.isEmpty)
+                    XCTAssertTrue(vm.fileReferences.isEmpty)
+                    let submitted = try XCTUnwrap(store.localStateStore.state(for: .submission(record.resourceID))?.composerDraft)
+                    XCTAssertEqual(submitted.attachments, [image])
+                    XCTAssertEqual(submitted.fileReferences, [file])
+                } catch { XCTFail("\(error)") }
+                finished.fulfill()
+                return true
+            })
+        vm.restoreLocalState(persistOutgoingText: false)
+        vm.text = "first message"
+        vm.attachments = [image]
+        vm.fileReferences = [file]
+        vm.persistCurrentDraft()
+        vm.send()
+        await fulfillment(of: [finished], timeout: 2)
+    }
+
+    func testConfirmedQueueTakeBackAppendsOnceToLiveDraft() throws {
+        let (store, models, _) = try fixture()
+        let ref = ConversationRef(id: "take-back", workspacePath: "/tmp")
+        store.selectItem = .conversationDetail(conversation: ref)
+        let key = ConversationLocalStateKey.session(ref.id)
+        let file = ComposerFileReference(path: "/tmp/keep.txt", workspacePath: "/tmp", isDirectory: false)
+        let pending = PendingUserQueueTakeBack(serverID: "server", requestID: "queued",
+            text: "取回的文字", operation: .init(id: "take-back", revision: 2))
+        try store.localStateStore.updateState(for: key) { $0.pendingUserQueueTakeBack = pending }
+        let vm = DraftComposerPanelViewModel(workspaceStore: store, modelSettings: models,
+            conversationViewModel: nil, isDraft: false, isEnabled: true, onSend: { _, _, _ in false })
+        vm.restoreLocalState(persistOutgoingText: false)
+        vm.text = "正在编辑的草稿"
+        vm.fileReferences = [file]
+        vm.applyTakenBackQueueDraft(serverID: "server")
+        XCTAssertEqual(vm.text, "正在编辑的草稿")
+
+        try store.localStateStore.updateState(for: key) { $0.pendingUserQueueTakeBack?.confirmed = true }
+        vm.isSending = true
+        vm.applyTakenBackQueueDraft(serverID: "server")
+        XCTAssertEqual(vm.text, "正在编辑的草稿")
+        vm.isSending = false
+        vm.applyTakenBackQueueDraft(serverID: "other")
+        XCTAssertEqual(vm.text, "正在编辑的草稿")
+        vm.applyTakenBackQueueDraft(serverID: "server")
+        vm.applyTakenBackQueueDraft(serverID: "server")
+
+        let merged = "正在编辑的草稿\n\n取回的文字"
+        XCTAssertEqual(vm.text, merged)
+        let state = try XCTUnwrap(store.localStateStore.state(for: key))
+        XCTAssertEqual(state.composerDraft.text, merged)
+        XCTAssertEqual(state.composerDraft.fileReferences, [file])
+        XCTAssertNil(state.pendingUserQueueTakeBack)
+    }
+
     func testRejectedLiveSendKeepsExactRawTextWithoutDuplicatePrefix() async throws {
         let (store, models, key) = try fixture()
         let dispatched = expectation(description: "dispatched")

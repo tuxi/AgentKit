@@ -88,6 +88,40 @@ extension TextSupplementHTTPTests {
 }
 
 extension TextSupplementHTTPTests {
+    func testQueuePriorityEncodesVersionAndOperationIdentity() throws {
+        let change = UserQueueChange(revision: 7, action: .prioritize,
+            requestID: "queued-message", operationID: "original-operation")
+        let body = try XCTUnwrap(JSONSerialization.jsonObject(with: JSONEncoder().encode(change)) as? [String: Any])
+        XCTAssertEqual(body["action"] as? String, "prioritize")
+        XCTAssertEqual(body["revision"] as? Int, 7)
+        XCTAssertEqual(body["request_id"] as? String, "queued-message")
+        XCTAssertEqual(body["operation_id"] as? String, "original-operation")
+    }
+
+    func testQueueTakeBackRejectsReceiptForDifferentOperation() async throws {
+        SupplementHTTPProtocol.handler = { request in
+            switch request.url?.path {
+            case "/v1/runtime/info":
+                return Data(#"{"code":0,"msg":"ok","data":{"schema":"v1","server_id":"runtime","display_name":"Test","product":"codeagent","runtime_version":"1.0","agent_wire_protocol":{"major":1,"revision":"1.2"},"runtime_profile":"headless"}}"#.utf8)
+            case "/v1/runtime/capabilities":
+                return Data(#"{"code":0,"msg":"ok","data":{"capabilities":{"user_queue_text_v1":true}}}"#.utf8)
+            default:
+                XCTAssertEqual(request.url?.path, "/v1/conversations/s/queue/original/take-back")
+                XCTAssertEqual(request.httpMethod, "POST")
+                return Data(#"{"input":{"session_id":"s","request_id":"original","text":"next","context":{"wire_model":"selected"}},"sequence":1,"revision":2,"state":"removed","take_back_id":"different"}"#.utf8)
+            }
+        }
+        let http = client()
+        do {
+            _ = try await http.takeBackUserQueueMessage(sessionID: "s", requestID: "original",
+                operation: .init(id: "expected", revision: 2), serverID: "runtime")
+            XCTFail("an operation from another client cannot confirm this take-back")
+        } catch RuntimeHTTPError.invalidResponse {}
+        let receipt = try await http.takeBackUserQueueMessage(sessionID: "s", requestID: "original",
+            operation: .init(id: "different", revision: 2), serverID: "runtime")
+        XCTAssertEqual(receipt.takeBackID, "different")
+    }
+
     func testInterruptedQueueResumeCarriesOriginalIdentityAndRevision() async throws {
         SupplementHTTPProtocol.handler = { request in
             switch request.url?.path {

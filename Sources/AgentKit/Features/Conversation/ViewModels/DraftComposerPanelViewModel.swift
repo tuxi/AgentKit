@@ -503,11 +503,40 @@ final class DraftComposerPanelViewModel {
     }
     
 #if os(macOS)
+    func applyTakenBackQueueDraft(serverID: String?) {
+        guard !isSubmitting, let key = loadedStateKey, key == persistenceKey,
+              let record = pendingQueueTakeBack, record.confirmed, record.serverID == serverID else { return }
+        let merged = text.isEmpty ? record.text : text + "\n\n" + record.text
+        let tokenSnapshot = tokens
+        let fileSnapshot = fileReferences
+        do {
+            try workspaceStore.localStateStore.updateState(for: key) { state in
+                guard state.pendingUserQueueTakeBack == record else { return }
+                state.composerDraft.text = merged
+                state.composerDraft.tokens = tokenSnapshot
+                state.composerDraft.fileReferences = fileSnapshot
+                state.pendingUserQueueTakeBack = nil
+            }
+            pendingSaveTask?.cancel()
+            text = merged
+            inTurnDeliveryNotice = "已取回草稿"
+            workspaceStore.queueTakeBackRevision &+= 1
+        } catch {
+            inTurnDeliveryNotice = "取回已确认，暂时无法保存草稿。"
+        }
+    }
+
     func rebindLocalSubmissionKey() {
-        guard isDraft else { return }
+        guard isDraft, let key = persistenceKey, key != loadedStateKey else { return }
         pendingSaveTask?.cancel()
-        loadedStateKey = persistenceKey
-        persistCurrentDraft()
+        loadedStateKey = key
+        // The store has already migrated the detached draft. SwiftUI may
+        // deliver the key change before the submission revision change.
+        if submittedTextSnapshot != nil {
+            reconcileLocalSubmission()
+        } else {
+            persistCurrentText()
+        }
     }
 
     func reconcileLocalSubmission() {

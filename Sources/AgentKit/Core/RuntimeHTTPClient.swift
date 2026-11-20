@@ -308,6 +308,16 @@ struct RuntimeHTTPClient: Sendable {
         return page
     }
 
+    func takeBackUserQueueMessage(sessionID: String, requestID: String, operation: UserQueueTakeBack, serverID: String) async throws -> UserQueueReceipt {
+        let request = try await buildRequest("POST", pathArray: ["v1", "conversations", sessionID, "queue", requestID, "take-back"], body: operation, timeout: 20)
+        let receipt = try await userQueueRequest(UserQueueReceipt.self, request: request, serverID: serverID)
+        guard receipt.input.sessionID == sessionID, receipt.input.requestID == requestID,
+              receipt.sequence > 0, receipt.state == "removed", receipt.takeBackID == operation.id else {
+            throw RuntimeHTTPError.invalidResponse
+        }
+        return receipt
+    }
+
     func controlUserQueue(sessionID: String, change: UserQueueChange, serverID: String) async throws {
         struct Acknowledgment: Decodable { let ok: Bool }
         let request = try await buildRequest("POST", pathArray: ["v1", "conversations", sessionID, "queue", "control"], body: change, timeout: 20)

@@ -3,6 +3,7 @@ import SwiftUI
 
 struct MacUserQueuePanel: View {
     let conversation: ConversationViewModel
+    let vm: DraftComposerPanelViewModel
     let sessionID: String
     let serverID: String
     let page: UserQueuePage?
@@ -13,10 +14,17 @@ struct MacUserQueuePanel: View {
     @State private var issue: String?
     @State private var pendingRemoval: UserQueueChange?
     @State private var pendingResume: UserQueueChange?
+    @State private var pendingPriority: UserQueueChange?
 
     private var canControl: Bool { page?.controls == true && !conversation.isArchived }
 
     private var items: [UserQueueReceipt] { (page?.items ?? []) + moreItems }
+
+    private func canPrioritize(_ item: UserQueueReceipt) -> Bool {
+        page?.prioritizeSupported == true && page?.state == "enabled"
+            && item.state == "queued" && pendingPriority == nil
+            && items.first(where: { $0.state == "queued" })?.input.requestID != item.input.requestID
+    }
 
     private var pauseDescription: String {
         switch page?.pauseReason {
@@ -44,6 +52,18 @@ struct MacUserQueuePanel: View {
                     .fixedSize(horizontal: false, vertical: true)
             }
             if let issue { Text(issue).font(.caption).foregroundStyle(.secondary) }
+            if let pendingPriority {
+                Button("重试排序") { Task { await change(pendingPriority) } }
+                    .help("使用原操作编号确认结果")
+            }
+            if let record = vm.pendingQueueTakeBack, record.serverID == serverID {
+                if record.confirmed {
+                    Button("保存取回的草稿") { vm.applyTakenBackQueueDraft(serverID: serverID) }
+                } else {
+                    Button("重试取回") { Task { await takeBack() } }
+                        .help("使用原操作编号再次确认取回结果")
+                }
+            }
             if let interrupted = page?.interrupted {
                 Text("中断任务").font(.caption).foregroundStyle(.secondary)
                 Text(interrupted.input.text).font(.callout).lineLimit(3)
@@ -87,6 +107,27 @@ struct MacUserQueuePanel: View {
                                     Text("准备执行").font(.caption).foregroundStyle(.secondary)
                                 }
                                 if canControl, let revision = page?.revision {
+                                    if canPrioritize(item) {
+                                        Button {
+                                            let priority = UserQueueChange(revision: revision, action: .prioritize,
+                                                requestID: item.input.requestID, operationID: UUID().uuidString)
+                                            Task { await change(priority) }
+                                        } label: {
+                                            Image(systemName: "arrow.up.to.line")
+                                        }
+                                        .buttonStyle(.borderless)
+                                        .help("下一条执行").accessibilityLabel("下一条执行")
+                                        .accessibilityIdentifier("userQueue.prioritize.\(item.input.requestID)")
+                                    }
+                                    if page?.takeBackSupported == true, item.state == "queued", vm.pendingQueueTakeBack == nil {
+                                        Button {
+                                            Task { await takeBack(item, revision: revision) }
+                                        } label: {
+                                            Image(systemName: "arrow.uturn.backward")
+                                        }
+                                        .buttonStyle(.borderless)
+                                        .help("取回草稿").accessibilityLabel("取回草稿")
+                                    }
                                     Button {
                                         pendingRemoval = .init(revision: revision, action: .remove, requestID: item.input.requestID)
                                     } label: {
@@ -167,14 +208,43 @@ struct MacUserQueuePanel: View {
         }
     }
 
-    private func change(_ change: UserQueueChange) async {
+    private func takeBack(_ item: UserQueueReceipt? = nil, revision: Int64? = nil) async {
         guard !loading else { return }
         loading = true
         issue = nil
         defer { loading = false }
         do {
+            if let item, let revision {
+                try await vm.takeBackQueueItem(item, revision: revision, serverID: serverID)
+            } else {
+                try await vm.recoverQueueTakeBack(serverID: serverID, retry: true)
+            }
+        } catch {
+            issue = vm.pendingQueueTakeBack == nil
+                ? "无法取回这条消息，它可能已进入执行。请查看最新队列。"
+                : "取回状态待确认，可以重试原操作。"
+        }
+        if let current = try? await conversation.queuePage(serverID: serverID, expectedSessionID: sessionID) {
+            updatePage(current)
+        }
+    }
+
+    private func change(_ change: UserQueueChange) async {
+        guard !loading else { return }
+        loading = true
+        issue = nil
+        defer { loading = false }
+        let prioritizing = change.action == .prioritize
+        if prioritizing { pendingPriority = change }
+        var priorityConfirmed = false
+        do {
             try await conversation.controlUserQueue(sessionID: sessionID, change: change, serverID: serverID)
+            if prioritizing {
+                pendingPriority = nil
+                priorityConfirmed = true
+            }
         } catch RuntimeHTTPError.unexpectedStatus(let status, let body) {
+            if prioritizing, status < 500 { pendingPriority = nil }
             let code = (try? JSONSerialization.jsonObject(with: Data(body.utf8)) as? [String: String])?["code"]
             switch code {
             case "queue_revision_changed": issue = "队列已更新，请查看最新列表后重试。"
@@ -188,6 +258,8 @@ struct MacUserQueuePanel: View {
         }
         if let current = try? await conversation.queuePage(serverID: serverID, expectedSessionID: sessionID), !Task.isCancelled {
             updatePage(current)
+        } else if priorityConfirmed {
+            issue = "顺序已更新，暂时无法刷新队列。"
         }
     }
 }

@@ -288,6 +288,10 @@ public final class CodeAgentTransport: AgentTransport, TextSupplementClient, Use
         try await http.listUserQueue(sessionID: sessionID, cursor: cursor, serverID: serverID)
     }
 
+    public func takeBackUserQueueMessage(sessionID: String, requestID: String, operation: UserQueueTakeBack, serverID: String) async throws -> UserQueueReceipt {
+        try await http.takeBackUserQueueMessage(sessionID: sessionID, requestID: requestID, operation: operation, serverID: serverID)
+    }
+
     public func controlUserQueue(sessionID: String, change: UserQueueChange, serverID: String) async throws {
         try await http.controlUserQueue(sessionID: sessionID, change: change, serverID: serverID)
     }
@@ -985,6 +989,11 @@ public final class DefaultAgentClient: RuntimeClient, TextSupplementClient, User
     public func listUserQueue(sessionID: String, cursor: UserQueuePage.Cursor?, serverID: String) async throws -> UserQueuePage {
         guard let port = transport as? any UserQueueClient else { throw RuntimeHTTPError.unsupported }
         return try await port.listUserQueue(sessionID: sessionID, cursor: cursor, serverID: serverID)
+    }
+
+    public func takeBackUserQueueMessage(sessionID: String, requestID: String, operation: UserQueueTakeBack, serverID: String) async throws -> UserQueueReceipt {
+        guard let port = transport as? any UserQueueClient else { throw RuntimeHTTPError.unsupported }
+        return try await port.takeBackUserQueueMessage(sessionID: sessionID, requestID: requestID, operation: operation, serverID: serverID)
     }
 
     public func controlUserQueue(sessionID: String, change: UserQueueChange, serverID: String) async throws {

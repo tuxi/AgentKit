@@ -22,6 +22,7 @@ import ClientToolProtocol
 public final class WorkspaceStore {
     public var composerSubmissionIssue: ComposerSubmissionIssue?
     var localSubmissionRevision: UInt64 = 0
+    var queueTakeBackRevision: UInt64 = 0
     var draftSubmissionKey: ConversationLocalStateKey?
     var localSubmissionTasks: Set<String> = []
     #if os(macOS)

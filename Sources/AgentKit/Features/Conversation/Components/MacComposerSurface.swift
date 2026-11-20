@@ -237,7 +237,7 @@ struct MacComposerSurface: View {
                         .lineLimit(1)
                         .help("查看消息队列")
                         .popover(isPresented: $showQueue, arrowEdge: .bottom) {
-                            MacUserQueuePanel(conversation: conversation, sessionID: sessionID, serverID: serverID,
+                            MacUserQueuePanel(conversation: conversation, vm: vm, sessionID: sessionID, serverID: serverID,
                                               page: queuePage, updatePage: { page in
                                 if vm.sessionID == sessionID, queueServerID == serverID,
                                    page.revision >= (queuePage?.revision ?? 0) {
@@ -263,7 +263,8 @@ struct MacComposerSurface: View {
             showSupplementStatus = false
             queuePage = nil
             queueServerID = nil
-            guard !vm.isDraft, let conversation = vm.conversationViewModel else { return }
+            guard !vm.isDraft, let sessionID = vm.sessionID,
+                  let conversation = vm.conversationViewModel else { return }
             async let supplement = conversation.composerSupplementSupported()
             let server = try? await conversation.queueServerID()
             let supported = await supplement
@@ -271,7 +272,14 @@ struct MacComposerSurface: View {
             supplementSupported = supported
             queueServerID = server
             updatePendingDelivery()
+            if let server { try? await vm.recoverQueueTakeBack(serverID: server) }
+            guard !Task.isCancelled, vm.sessionID == sessionID else { return }
+            vm.applyTakenBackQueueDraft(serverID: queueServerID)
             await refreshQueue()
+        }
+        .onChange(of: vm.workspaceStore.queueTakeBackRevision) { _, _ in vm.applyTakenBackQueueDraft(serverID: queueServerID) }
+        .onChange(of: vm.isSubmitting) { _, submitting in
+            if !submitting { vm.applyTakenBackQueueDraft(serverID: queueServerID) }
         }
         .task(id: vm.conversationViewModel?.lifecycleStatus) {
             await refreshQueue()
@@ -372,6 +380,9 @@ struct MacComposerSurface: View {
     }
 
     private var queueStatus: String? {
+        if let record = vm.pendingQueueTakeBack, record.serverID == queueServerID {
+            return "查看取回状态"
+        }
         guard let queuePage else { return nil }
         let waiting = "\(queuePage.items.count)\(queuePage.next == nil ? "" : "+") 条待执行"
         if queuePage.state == "paused" {
