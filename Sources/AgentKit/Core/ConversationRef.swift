@@ -26,6 +26,19 @@ public struct ConversationRef: Identifiable, Hashable, Sendable, Codable {
     public let workspacePath: String
     public let workspace: WorkspaceAnchor?
     public var name: String?
+    public var preview: String?
+    public var nameSeq: Int?
+
+    public var displayTitle: String { title.displayTitle }
+
+    var title: ConversationTitle {
+        get { .init(name: name, preview: preview, nameSeq: nameSeq) }
+        set {
+            name = newValue.name
+            preview = newValue.preview
+            nameSeq = newValue.nameSeq
+        }
+    }
     /// v1.2 lifecycle status from backend metadata: running / paused / resuming / done / failed.
     public let turnStatus: String?
     /// Unix seconds when the session was marked paused. Used for cold-start "continue" UI.
@@ -62,7 +75,7 @@ public struct ConversationRef: Identifiable, Hashable, Sendable, Codable {
     public var presentationID: String {
         [
             id,
-            name ?? "-",
+            displayTitle,
             turnStatus ?? "-",
             worktree?.state ?? "-",
             worktree?.branch ?? "-",
@@ -76,7 +89,8 @@ public struct ConversationRef: Identifiable, Hashable, Sendable, Codable {
         case id
         case workspacePath = "workspace_path"
         case workspace
-        case name
+        case name, preview
+        case nameSeq = "name_seq"
         case turnStatus = "turn_status"
         case pausedAt = "paused_at"
         case executionPolicy = "execution_policy"
@@ -91,6 +105,8 @@ public struct ConversationRef: Identifiable, Hashable, Sendable, Codable {
         workspacePath: String,
         workspace: WorkspaceAnchor? = nil,
         name: String? = nil,
+        preview: String? = nil,
+        nameSeq: Int? = nil,
         turnStatus: String? = nil,
         pausedAt: Int64? = nil,
         executionPolicy: String? = nil,
@@ -104,6 +120,8 @@ public struct ConversationRef: Identifiable, Hashable, Sendable, Codable {
         self.workspacePath = workspacePath
         self.workspace = workspace
         self.name = name
+        self.preview = preview
+        self.nameSeq = nameSeq
         self.turnStatus = turnStatus
         self.pausedAt = pausedAt
         self.executionPolicy = executionPolicy
@@ -120,6 +138,8 @@ public struct ConversationRef: Identifiable, Hashable, Sendable, Codable {
             workspacePath: workspacePath,
             workspace: workspace,
             name: name,
+            preview: preview,
+            nameSeq: nameSeq,
             turnStatus: turnStatus,
             pausedAt: pausedAt,
             executionPolicy: executionPolicy,
@@ -184,5 +204,31 @@ public struct ConversationRef: Identifiable, Hashable, Sendable, Codable {
     
     public func hash(into hasher: inout Hasher) {
         hasher.combine(id)
+    }
+}
+
+/// Metadata shared by list, detail, rename responses and session events.
+struct ConversationTitle: Equatable {
+    var name: String?
+    var preview: String?
+    var nameSeq: Int?
+
+    var displayTitle: String {
+        name.flatMap { $0.isEmpty ? nil : $0 }
+            ?? preview.flatMap { $0.isEmpty ? nil : $0 }
+            ?? "对话"
+    }
+
+    func merging(_ incoming: Self) -> Self {
+        var result = self
+        if let preview = incoming.preview, !preview.isEmpty {
+            result.preview = preview
+        }
+        if let name = incoming.name, !name.isEmpty,
+           (nameSeq ?? 0) == 0 || (incoming.nameSeq ?? 0) > (nameSeq ?? 0) {
+            result.name = name
+            result.nameSeq = incoming.nameSeq
+        }
+        return result
     }
 }

@@ -30,7 +30,7 @@ public struct MacConversationToolbarTitle: View {
             ?? conversation
     }
 
-    private var title: String { current.name.flatMap { $0.isEmpty ? nil : $0 } ?? "对话" }
+    private var title: String { current.displayTitle }
     private var busy: Bool { editor.isSaving || deleting }
 
     public var body: some View {

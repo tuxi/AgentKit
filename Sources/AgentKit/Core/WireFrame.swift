@@ -33,6 +33,7 @@ struct WireFrame: Decodable {
     let eventId: String?
     let requestId: String?
     let sessionId: String?
+    let name: String?
     let parentSessionId: String?
     let turnId: String?
     let reason: String?
@@ -147,6 +148,7 @@ struct WireFrame: Decodable {
         case eventId = "event_id"
         case requestId = "request_id"
         case sessionId = "session_id"
+        case name
         case parentSessionId = "parent_session_id"
         case turnId = "turn_id"
         case callId = "call_id"

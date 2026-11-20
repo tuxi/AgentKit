@@ -18,6 +18,7 @@ import ClientToolProtocol
 public enum AgentEvent: Sendable {
     case supplementApplied(SupplementApplicationReceipt)
     case backgroundContinuation(BackgroundContinuationStatus)
+    case conversationNameUpdated(sessionID: String, name: String, seq: Int)
     // ── Turn 生命周期 ──
     /// Request validation completed and a stable turn identity was persisted.
     case turnAccepted(turnID: String, requestID: String?, text: String?)
@@ -295,6 +296,12 @@ extension AgentEvent {
                   receipt.requestID == wire.requestId, receipt.turnID == turnID,
                   receipt.sequence > 0 else { return nil }
             return .supplementApplied(receipt)
+        case "conversation_name_updated":
+            guard let sessionID = wire.sessionId, !sessionID.isEmpty,
+                  let name = wire.name, !name.isEmpty,
+                  let seq = wire.seq, seq > 0 else { return nil }
+            return .conversationNameUpdated(sessionID: sessionID, name: name, seq: seq)
+
         case "turn_accepted":
             return .turnAccepted(turnID: turnID ?? "", requestID: wire.requestId, text: wire.text)
 

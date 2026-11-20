@@ -69,6 +69,7 @@ public final class ConversationSupervisor {
     private let turnCoordinator = ConversationTurnCoordinator()
     private let capabilityRegistry = RuntimeCapabilityRegistry()
     private let workflowStore: WorkflowStore?
+    @ObservationIgnored var onConversationTitle: ((String, ConversationTitle) -> ConversationTitle)?
     private var selectedSessionID: String?
     private var knownConversations: [String: ConversationRef] = [:]
     private var isRefreshingActivity = false
@@ -130,6 +131,7 @@ public final class ConversationSupervisor {
             },
             workflowStore: workflowStore
         )
+        controller.onConversationTitle = onConversationTitle
         controllers[conversation.id] = controller
         // Seed a fresh controller with the latest sampled runtime activity BEFORE
         // the host calls connect(). A completed session's terminal state is a
@@ -415,7 +417,7 @@ public final class ConversationSupervisor {
         if conversation == nil, let detail = try? await client.getConversationDetail(id: sessionID) {
             conversation = ConversationRef(
                 id: detail.id, workspacePath: detail.workspacePath ?? "", workspace: detail.workspace,
-                name: detail.name, turnStatus: detail.turnStatus,
+                name: detail.name, preview: detail.preview, nameSeq: detail.nameSeq, turnStatus: detail.turnStatus,
                 executionPolicy: detail.executionPolicy, workspaceID: detail.workspaceID,
                 baseWorkspaceID: detail.baseWorkspaceID, worktree: detail.worktree
             )
@@ -571,7 +573,7 @@ public final class ConversationSupervisor {
     public var pendingApprovals: [PendingConversationApproval] {
         controllers.values.compactMap { controller -> PendingConversationApproval? in
             guard let conversation = controller.conversation else { return nil }
-            let name = conversation.name ?? conversation.id
+            let name = conversation.displayTitle
             if let request = controller.snapshot.pendingAskUser {
                 return PendingConversationApproval(
                     sessionID: conversation.id,

@@ -58,6 +58,44 @@ public final class ConversationListViewModel {
     /// They must never overwrite the mutation's authoritative response.
     private var mutationGeneration = 0
     private var activeMutationCount = 0
+    @ObservationIgnored private var titles: [String: ConversationTitle] = [:]
+    @ObservationIgnored var onTitleChanged: ((String, ConversationTitle) -> Void)?
+
+    private func mergeTitle(_ incoming: ConversationTitle, for id: String) -> ConversationTitle {
+        let current = titles[id] ?? ConversationTitle()
+        let merged = current.merging(incoming)
+        if merged != current {
+            titles[id] = merged
+            onTitleChanged?(id, merged)
+        }
+        return merged
+    }
+
+    private func reconcileTitle(in ref: ConversationRef) -> ConversationRef {
+        var result = ref
+        result.title = mergeTitle(ref.title, for: ref.id)
+        return result
+    }
+
+    func withKnownTitle(_ ref: ConversationRef) -> ConversationRef {
+        var result = ref
+        result.title = titles[ref.id] ?? ref.title
+        return result
+    }
+
+    @discardableResult
+    func updateTitle(_ incoming: ConversationTitle, for id: String) -> ConversationTitle {
+        let previous = titles[id]
+        let merged = mergeTitle(incoming, for: id)
+        guard previous != merged else { return merged }
+        if conversations.contains(where: { $0.id == id }) {
+            publishConversations(conversations.map { $0.id == id ? withKnownTitle($0) : $0 })
+        }
+        if archivedConversations.contains(where: { $0.id == id }) {
+            publishArchivedConversations(archivedConversations.map { $0.id == id ? withKnownTitle($0) : $0 })
+        }
+        return merged
+    }
 
     // MARK: - Init
 
@@ -70,9 +108,10 @@ public final class ConversationListViewModel {
 
     /// 将一个新会话插入列表顶部（P5.0：commitDraft 创建后调用）。
     public func prepend(_ ref: ConversationRef) {
+        mutationGeneration += 1
         var updated = conversations
         updated.removeAll { $0.id == ref.id }
-        updated.insert(ref, at: 0)
+        updated.insert(reconcileTitle(in: ref), at: 0)
         setConversations(updated)
         revision += 1
     }
@@ -286,14 +325,16 @@ public final class ConversationListViewModel {
     }
 
     private func publishConversations(_ incoming: [ConversationRef]) {
-        guard conversationsChanged(conversations, incoming) else { return }
-        setConversations(incoming)
+        let merged = incoming.map(reconcileTitle(in:))
+        guard conversationsChanged(conversations, merged) else { return }
+        setConversations(merged)
         revision += 1
     }
 
     private func publishArchivedConversations(_ incoming: [ConversationRef]) {
-        guard conversationsChanged(archivedConversations, incoming) else { return }
-        setArchivedConversations(incoming)
+        let merged = incoming.map(reconcileTitle(in:))
+        guard conversationsChanged(archivedConversations, merged) else { return }
+        setArchivedConversations(merged)
         revision += 1
     }
 
@@ -302,6 +343,7 @@ public final class ConversationListViewModel {
         return zip(old, new).contains { current, replacement in
             current.id != replacement.id
                 || current.uiID != replacement.uiID
+                || current.title != replacement.title
                 || current.workspaceGroupingID != replacement.workspaceGroupingID
                 || current.workspaceGroupingName != replacement.workspaceGroupingName
                 || current.workspacePath != replacement.workspacePath
@@ -362,7 +404,7 @@ public final class ConversationListViewModel {
         do {
             let ref = try await client.createConversation(request: request)
             var updated = conversations
-            updated.insert(ref, at: 0)
+            updated.insert(reconcileTitle(in: ref), at: 0)
             setConversations(updated)
             revision += 1
             endMutation()
@@ -383,14 +425,11 @@ public final class ConversationListViewModel {
         beginMutation()
         errorMessage = nil
         do {
-            var updated = try await client.renameConversation(id: ref.id, name: name)
-            updated.name = name
-            setConversations(conversations.map { $0.id == ref.id ? updated : $0 })
-            setArchivedConversations(archivedConversations.map { $0.id == ref.id ? updated : $0 })
-            revision += 1
+            let updated = try await client.renameConversation(id: ref.id, name: name)
+            updateTitle(updated.title, for: ref.id)
             endMutation()
             await refreshAfterMutation()
-            return updated
+            return withKnownTitle(updated)
         } catch {
             endMutation()
             errorMessage = error.localizedDescription
@@ -425,6 +464,7 @@ public final class ConversationListViewModel {
                 )
             }
             try await client.deleteConversation(id: ref.id)
+            titles.removeValue(forKey: ref.id)
             setConversations(conversations.filter { $0.id != ref.id })
             setArchivedConversations(archivedConversations.filter { $0.id != ref.id })
             revision += 1
@@ -449,7 +489,7 @@ public final class ConversationListViewModel {
             guard let archivedAt = response.archivedAt, !archivedAt.isEmpty else {
                 throw RuntimeHTTPError.invalidResponse
             }
-            let archived = ref.withArchivedAt(archivedAt)
+            let archived = withKnownTitle(ref).withArchivedAt(archivedAt)
             setConversations(conversations.filter { $0.id != ref.id })
             var updatedArchived = archivedConversations.filter { $0.id != ref.id }
             updatedArchived.insert(archived, at: 0)
@@ -474,7 +514,7 @@ public final class ConversationListViewModel {
 
         do {
             _ = try await client.restoreConversation(id: ref.id)
-            let restored = ref.withArchivedAt(nil)
+            let restored = withKnownTitle(ref).withArchivedAt(nil)
             setArchivedConversations(archivedConversations.filter { $0.id != ref.id })
             var updatedConversations = conversations.filter { $0.id != ref.id }
             updatedConversations.insert(restored, at: 0)

@@ -452,6 +452,12 @@ public final class AgentWireSocket: @unchecked Sendable {
     private func yieldEventFrame(_ frame: WireFrame) {
         if let seq = frame.seq {
             // 与历史批 / 补缺批重叠的重复帧：丢弃（v1.2 §4，token_delta 无 seq 直通）。
+            // A name may be published after a higher-sequence turn event.
+            // Its own revision is reconciled with metadata at the consumer.
+            if seq <= maxSeq, frame.kind == "conversation_name_updated" {
+                if let event = AgentEvent.from(wire: frame) { continuation?.yield(event) }
+                return
+            }
             guard seq > maxSeq else { return }
             // 游标来自原始帧：未知 kind 被下面 from(wire:) 丢弃也照样推进。
             maxSeq = seq

@@ -50,7 +50,7 @@ public final class WorkspaceStore {
             guard oldValue != selectItem else { return }
             switch selectItem {
             case .conversationDetail(let conversation):
-                selectedConversation = conversation
+                selectedConversation = listViewModel.withKnownTitle(conversation)
             case .draft:
                 selectedConversation = nil
             case .automation:
@@ -420,6 +420,14 @@ public final class WorkspaceStore {
             onAttentionEvent: onAttentionEvent,
             workflowStore: workflowStore
         )
+        supervisor.onConversationTitle = { [weak listViewModel] id, title in
+            listViewModel?.updateTitle(title, for: id) ?? title
+        }
+        listViewModel.onTitleChanged = { [weak self] id, title in
+            guard let self else { return }
+            self.supervisor.controller(sessionID: id)?.updateConversationTitle(title, conversationID: id)
+            if self.selectedConversation?.id == id { self.selectedConversation?.title = title }
+        }
     }
 
     /// Canonical dependency-container bridge used by Host app factories.
@@ -750,13 +758,7 @@ public final class WorkspaceStore {
     /// changing the currently selected session when an older request completes.
     @discardableResult
     public func renameConversation(_ conversation: ConversationRef, name: String) async -> ConversationRef? {
-        guard let updated = await listViewModel.renameConversation(conversation, name: name) else { return nil }
-        supervisor.controller(sessionID: updated.id)?.updateConversationName(updated.name, conversationID: updated.id)
-        if var selected = selectedConversation, selected.id == updated.id {
-            selected.name = updated.name
-            selectedConversation = selected
-        }
-        return updated
+        await listViewModel.renameConversation(conversation, name: name)
     }
 
     public func canDeleteConversation(_ conversation: ConversationRef) -> Bool {
@@ -1383,7 +1385,7 @@ public final class WorkspaceStore {
         draft = nil
     }
 
-    /// 提交草稿（发送首条消息）：创建真实 Session → 连接 → 发送首条消息 → 替换为活跃会话。
+    /// 提交草稿（发送首条消息）：创建真实 Session → 连接 → 显示预览 → 发送首条消息。
     /// 这是唯一的 Session 创建点。失败时草稿进入 `.failed`，保留用户输入以便重试。
     public func commitDraft(
         firstMessage: String,
@@ -1400,6 +1402,9 @@ public final class WorkspaceStore {
             return
         }
         composerSubmissionIssue = nil
+        let text = firstMessage.split(whereSeparator: \.isWhitespace).joined(separator: " ")
+        let preview = text.isEmpty ? nil : String(text.prefix(80))
+        draft?.submissionPreview = preview
         draft?.state = .committing
         var createdConversation: ConversationRef?
         var localRecord: LocalMessageSubmission?
@@ -1430,7 +1435,7 @@ public final class WorkspaceStore {
                 baseWorkspaceID: workspace.id,
                 worktree: managedRequest
             ))
-            ref.name = String(firstMessage.trimmingCharacters(in: .whitespacesAndNewlines).prefix(18))
+            if ref.preview?.isEmpty != false { ref.preview = preview }
             createdConversation = ref
             let vm = supervisor.controller(
                 for: ref,
@@ -1487,15 +1492,13 @@ public final class WorkspaceStore {
                 key: .session(ref.id),
                 input: firstInput
             )
-            guard await vm.send(input: firstInput) else {
-                throw ConversationLocalDraftError.turnNotAccepted
-            }
-            // 草稿 → 真实会话
+            // Publish the first-message preview before dispatching the input.
             listViewModel.prepend(ref)
             if draft?.id == current.id {
                 selectItem = .conversationDetail(conversation: ref)
-                // supervisor reuses the connected controller
-                draft = nil
+            }
+            guard await vm.send(input: firstInput) else {
+                throw ConversationLocalDraftError.turnNotAccepted
             }
             await refreshConversationList()
         } catch {
@@ -1514,8 +1517,7 @@ public final class WorkspaceStore {
                 // a migrated-away draft key.
                 listViewModel.prepend(createdConversation)
                 if draft?.id == current.id {
-                    selectedConversation = createdConversation
-                    draft = nil
+                    selectItem = .conversationDetail(conversation: createdConversation)
                 }
                 await refreshConversationList()
             } else {

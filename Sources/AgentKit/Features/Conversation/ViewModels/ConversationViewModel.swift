@@ -89,9 +89,24 @@ public final class ConversationViewModel {
     public private(set) var conversation: ConversationRef?
 
     /// A title change is metadata, not a new connection or history load.
-    func updateConversationName(_ name: String?, conversationID: String) {
+    @ObservationIgnored var onConversationTitle: ((String, ConversationTitle) -> ConversationTitle)?
+
+    func updateConversationTitle(_ title: ConversationTitle, conversationID: String) {
         guard conversation?.id == conversationID else { return }
-        conversation?.name = name
+        if conversation?.title != title { conversation?.title = title }
+        if let detail, detail.title != title { self.detail?.title = title }
+    }
+
+    private func reconcileConversationTitle(_ title: ConversationTitle, sessionID: String) {
+        guard let current = conversation, current.id == sessionID else { return }
+        let merged = current.title.merging(title)
+        let shared = onConversationTitle?(sessionID, merged) ?? merged
+        updateConversationTitle(shared, conversationID: sessionID)
+    }
+
+    private func applyConversationNameEvent(_ event: AgentEvent) {
+        guard case .conversationNameUpdated(let id, let name, let seq) = event else { return }
+        reconcileConversationTitle(.init(name: name, nameSeq: seq), sessionID: id)
     }
 
 
@@ -528,7 +543,11 @@ public final class ConversationViewModel {
         let isDifferentConversation = self.conversation?.id != conversation.id
         isConnecting = true
         defer { isConnecting = false }
-        self.conversation = conversation
+        var reference = conversation
+        if let current = self.conversation, current.id == conversation.id {
+            reference.title = current.title.merging(conversation.title)
+        }
+        self.conversation = reference
         refreshPendingComposerSupplements(sessionID: conversation.id)
         reloadLocalSubmissions()
         backgroundJobs.select(conversation.id)
@@ -567,6 +586,7 @@ public final class ConversationViewModel {
                   self.conversation?.id == conversation.id,
                   let result else { return }
             self.detail = result
+            self.reconcileConversationTitle(result.title, sessionID: result.id)
             if self.lifecycleStatus == nil || self.lifecycleStatus == conversation.turnStatus {
                 self.lifecycleStatus = result.turnStatus ?? self.lifecycleStatus
                 self.pausedAt = result.pausedAt.map {
@@ -992,6 +1012,7 @@ public final class ConversationViewModel {
             // v2: import into engine (replays through reducer → projects timeline)
             await engine.importHistory(supplementTimelineEvents(batch.events, sessionID: conversationID), wallClock: batch.turnWallClock)
             for event in batch.events {
+                applyConversationNameEvent(event)
                 backgroundTracker.reduce(event)
                 modelIdentity.apply(event)
                 if case .turnAccepted(let turnID, let requestID, _) = event,
@@ -1030,6 +1051,7 @@ public final class ConversationViewModel {
             historyMayBeIncomplete = result.isIncomplete
             await engine.importOlderHistory(supplementTimelineEvents(result.events, sessionID: conversationID), wallClock: result.turnWallClock)
             await engine.reconcileBackgroundJobs(backgroundJobs.canControl ? backgroundJobs.jobs : nil)
+            for event in result.events { applyConversationNameEvent(event) }
             for timelineExtension in timelineExtensions {
                 await timelineExtension.handleOlderHistory(result.events)
             }
@@ -1067,6 +1089,10 @@ public final class ConversationViewModel {
 
     /// v2: delegate to engine. ViewModel does NOT reduce.
     private func handleEvent(_ event: AgentEvent, engine: RuntimeEngine) async {
+        if case .conversationNameUpdated = event {
+            applyConversationNameEvent(event)
+            return
+        }
         if let sessionID = conversation?.id { reconcileSupplementApplication(event, sessionID: sessionID) }
         updateLifecycle(from: event)
         reconcileLocalSubmissionEvent(event)

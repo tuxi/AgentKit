@@ -22,7 +22,18 @@ public struct ConversationDetail: Sendable, Codable, Hashable {
     public let workspace: WorkspaceAnchor?
 
     /// 会话名称（用户自定义）。
-    public let name: String?
+    public internal(set) var name: String?
+    public internal(set) var preview: String?
+    public internal(set) var nameSeq: Int?
+
+    var title: ConversationTitle {
+        get { .init(name: name, preview: preview, nameSeq: nameSeq) }
+        set {
+            name = newValue.name
+            preview = newValue.preview
+            nameSeq = newValue.nameSeq
+        }
+    }
 
     /// v1.2 lifecycle status from backend metadata.
     public let turnStatus: String?
@@ -50,7 +61,8 @@ public struct ConversationDetail: Sendable, Codable, Hashable {
         case updatedAt = "updated_at"
         case workspacePath = "workspace_path"
         case workspace
-        case name
+        case name, preview
+        case nameSeq = "name_seq"
         case turnStatus = "turn_status"
         case pausedAt = "paused_at"
         case executionPolicy = "execution_policy"
@@ -72,6 +84,8 @@ public struct ConversationDetail: Sendable, Codable, Hashable {
         workspacePath = try c.decodeIfPresent(String.self, forKey: .workspacePath)
         workspace = try c.decodeIfPresent(WorkspaceAnchor.self, forKey: .workspace)
         name = try c.decodeIfPresent(String.self, forKey: .name)
+        preview = try c.decodeIfPresent(String.self, forKey: .preview)
+        nameSeq = try c.decodeIfPresent(Int.self, forKey: .nameSeq)
         turnStatus = try c.decodeIfPresent(String.self, forKey: .turnStatus)
         pausedAt = try c.decodeIfPresent(Int64.self, forKey: .pausedAt)
         executionPolicy = try c.decodeIfPresent(String.self, forKey: .executionPolicy)

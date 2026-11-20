@@ -855,7 +855,7 @@ struct ConversationListProjection {
         let query = searchText.trimmingCharacters(in: .whitespacesAndNewlines)
         func matches(_ ref: ConversationRef) -> Bool {
             query.isEmpty || ref.id.localizedCaseInsensitiveContains(query)
-                || (ref.name ?? "").localizedCaseInsensitiveContains(query)
+                || ref.displayTitle.localizedCaseInsensitiveContains(query)
         }
         recentItems = items.filter { matches($0.ref) }
         conversations = recentItems.map(\.ref)
@@ -957,7 +957,7 @@ private struct ConversationRow: View {
     var body: some View {
         HStack(spacing: 8) {
             VStack(alignment: .leading, spacing: 2) {
-                Text(ref.name ?? ref.id)
+                Text(ref.displayTitle)
                     .font(.system(size: 14, weight: .medium))
                     .foregroundStyle(.primary)
                     .lineLimit(1)

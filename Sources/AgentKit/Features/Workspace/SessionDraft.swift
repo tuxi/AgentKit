@@ -50,6 +50,7 @@ public struct SessionDraft: Equatable, Sendable {
 
     /// 当前草稿状态。
     public var state: State
+    public internal(set) var submissionPreview: String?
 
     public init(
         id: UUID = UUID(),

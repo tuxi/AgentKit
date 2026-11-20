@@ -215,6 +215,7 @@ final class LocalMessageSubmissionTests: XCTestCase {
         await client.delay.enable()
         let sending = Task { await store.commitDraft(firstMessage: "new task", model: nil) }
         try await wait { await client.delay.entered }
+        XCTAssertEqual(store.draft?.submissionPreview, "new task")
         XCTAssertEqual(store.localSubmissions(for: .draft(id)).first?.displayText, "new task")
         try store.localStateStore.updateState(for: .draft(id)) { $0.composerDraft.text = "next draft" }
         await client.delay.release()

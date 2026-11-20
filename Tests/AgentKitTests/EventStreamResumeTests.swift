@@ -57,6 +57,22 @@ final class EventStreamResumeTests: XCTestCase {
         socket.disconnect()
     }
 
+    func testConversationNameEventCanArriveBehindTurnCursor() async {
+        let socket = makeSocket(since: 20)
+        var events = socket.connect().makeAsyncIterator()
+        socket.handleFrame(data: helloData)
+        socket.handleFrame(data: Data(
+            #"{"kind":"conversation_name_updated","session_id":"c1","name":"正式标题","seq":19}"#.utf8
+        ))
+        socket.disconnect()
+        guard case .conversationNameUpdated(let id, let name, let seq)? = await events.next() else {
+            return XCTFail("Expected a conversation name update")
+        }
+        XCTAssertEqual(id, "c1")
+        XCTAssertEqual(name, "正式标题")
+        XCTAssertEqual(seq, 19)
+    }
+
     // MARK: - 握手后补缺口：缺口先行、直播缓冲、重叠去重
 
     /// 历史到 seq=5，缺口是 6/7。backfill 期间直播已送到 7（重叠）和 8：

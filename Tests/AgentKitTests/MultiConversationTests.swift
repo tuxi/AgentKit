@@ -29,6 +29,56 @@ final class MultiConversationTests: XCTestCase {
     }
 
     @MainActor
+    func testTitleKeepsLocalPreviewAndRejectsOlderEventAndHTTPSnapshots() async throws {
+        let client = MultiSessionRuntimeClient()
+        let store = WorkspaceStore(client: client, localStateStore: InMemoryConversationLocalStateStore())
+        store.beginDraft()
+        store.selectWorkspace(Workspace(url: URL(fileURLWithPath: "/tmp")))
+
+        await store.commitDraft(firstMessage: "你好，你能做什么", model: nil)
+        let id = try XCTUnwrap(store.selectedConversation?.id)
+        let controller = try XCTUnwrap(store.activeConversationViewModel)
+        XCTAssertEqual(store.selectedConversation?.displayTitle, "你好，你能做什么")
+        XCTAssertEqual(store.listViewModel.conversations.first?.displayTitle, "你好，你能做什么")
+        XCTAssertNil(store.selectedConversation?.name)
+
+        client.channel(for: id).yield(.conversationNameUpdated(sessionID: id, name: "自动标题", seq: 11))
+        for _ in 0..<100 where store.selectedConversation?.nameSeq != 11 {
+            try await Task.sleep(for: .milliseconds(5))
+        }
+        XCTAssertEqual(store.selectedConversation?.nameSeq, 11)
+        XCTAssertEqual(store.listViewModel.conversations.first?.displayTitle, "自动标题")
+
+        client.renameNameSeq = 12
+        let rename = await store.renameConversation(try XCTUnwrap(store.selectedConversation), name: "手动标题")
+        XCTAssertEqual(rename?.nameSeq, 12)
+
+        let stale = ConversationRef(id: id, workspacePath: "/tmp", name: "自动标题", nameSeq: 11)
+        client.setConversationLists(active: [stale], archived: [])
+        client.channel(for: id).yield(.conversationNameUpdated(sessionID: id, name: "自动标题", seq: 11))
+        await store.listViewModel.refresh()
+
+        // Reconnect to fetch an older detail after the hand-renamed title is installed.
+        client.detailResponse = try JSONDecoder().decode(ConversationDetail.self, from: Data(
+            """
+            {"id":"\(id)","turn_count":1,"message_count":1,"created_at":"","updated_at":"",
+             "name":"自动标题","name_seq":11}
+            """.utf8
+        ))
+        XCTAssertEqual(client.detailResponse?.nameSeq, 11)
+        await controller.disconnect()
+        await controller.connect(to: try XCTUnwrap(store.selectedConversation))
+        for _ in 0..<100 where controller.detail == nil { try await Task.sleep(for: .milliseconds(5)) }
+        XCTAssertEqual(controller.detail?.name, "手动标题")
+        XCTAssertEqual(controller.detail?.nameSeq, 12)
+        XCTAssertEqual(controller.conversation?.nameSeq, 12)
+        XCTAssertEqual(store.selectedConversation?.displayTitle, "手动标题")
+        XCTAssertEqual(store.listViewModel.conversations.first?.displayTitle, "手动标题")
+        XCTAssertEqual(store.listViewModel.conversations.first?.preview, "你好，你能做什么")
+        await store.supervisor.disconnectAll()
+    }
+
+    @MainActor
     func testLateRenameDoesNotChangeTheNewlySelectedConversation() async throws {
         let first = ConversationRef(id: "first", workspacePath: "/tmp/first", name: "one")
         let second = ConversationRef(id: "second", workspacePath: "/tmp/second", name: "two")
@@ -1604,6 +1654,8 @@ private final class MultiSessionChannelDouble: RuntimeSessionChannel, @unchecked
 
 private final class MultiSessionRuntimeClient: RuntimeClient, @unchecked Sendable {
     var listPages: [String: ConversationListPage] = [:]
+    var renameNameSeq: Int?
+    var detailResponse: ConversationDetail?
     private(set) var listPageRequests: [String] = []
     private(set) var tailPageLimits: [Int] = []
     private var channels: [String: MultiSessionChannelDouble] = [:]
@@ -1779,6 +1831,7 @@ private final class MultiSessionRuntimeClient: RuntimeClient, @unchecked Sendabl
             ?? archivedConversations.first { $0.id == id }
             ?? ConversationRef(id: id, workspacePath: "")
         ref.name = name
+        ref.nameSeq = renameNameSeq ?? ref.nameSeq
         activeConversations = activeConversations.map { $0.id == id ? ref : $0 }
         archivedConversations = archivedConversations.map { $0.id == id ? ref : $0 }
         return ref
@@ -1813,7 +1866,8 @@ private final class MultiSessionRuntimeClient: RuntimeClient, @unchecked Sendabl
     func disconnect() async {}
 
     func getConversationDetail(id: String) async throws -> ConversationDetail {
-        throw TestError.unavailable
+        guard let detailResponse else { throw TestError.unavailable }
+        return detailResponse
     }
     func getMessages(conversationID: String) async throws -> [Message] { [] }
     func getEvents(conversationID: String) async throws -> [AgentEvent] { [] }
